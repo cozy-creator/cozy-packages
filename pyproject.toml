@@ -23,6 +23,27 @@ module = [
 ]
 ignore_missing_imports = true
 
+# `cozy_runtime` is the author surface, and it SHIPS types — this is not an untyped
+# dependency, it is a private repo GitHub Actions has no credential for (see
+# .github/workflows/ci.yaml). So CI checks this code with the surface as Any, and the
+# builder checks it against the real thing in `.venv-check`. Recorded here beside the
+# config rather than hidden, because the difference is real: the CI run cannot catch a
+# wrong argument to `loader.construct` and the local one can.
+[[tool.mypy.overrides]]
+module = ["cozy_runtime", "cozy_runtime.*"]
+ignore_missing_imports = true
+
+# The two consequences of the line above, loosened HERE rather than papered over at each
+# site: with the author surface untyped, `Model` is an Any base class and `@app.entrypoint`
+# is an untyped decorator, so strict mode reports every model class and every handler. Both
+# are true statements about the CI environment and false statements about the code —
+# cozy-eval loosens the identical pair for the two modules that subclass a torch class.
+# Everything else stays strict, and no module carries `ignore_errors`.
+[[tool.mypy.overrides]]
+module = ["quality_judge"]
+disallow_subclassing_any = false
+disallow_untyped_decorators = false
+
 [tool.ruff]
 line-length = 100
 src = ["quality-judge", "scripts"]

@@ -1,11 +1,19 @@
 name: ci
-# Fences + static analysis + descriptor staleness. There are no test steps anywhere in v2
-# (tracker README #160): verification is running the real endpoint on the real card and
-# recording the transcript and benchmarks in the issue.
+# Fences + static analysis. There are no test steps anywhere in v2 (tracker README #160):
+# verification is running the real endpoint on the real card and recording the transcript
+# and benchmarks in the issue.
 #
-# No GPU, no weights and no CUDA image are needed here, and that is a PROPERTY being
-# checked rather than a convenience: `describe` imports the endpoint and reads its surface,
-# so this job passing is the proof that endpoint module scope stayed light.
+# No GPU and no weights are needed here, and that is a PROPERTY being checked rather than a
+# convenience: endpoint module scope must stay light enough for `describe` to read the
+# surface in a disposable container.
+#
+# THE ONE THING CI CANNOT DO TODAY, said out loud rather than skipped quietly:
+# `cozy-runtime-v2` is a PRIVATE repo and this workflow has no credential for it (the org
+# holds no cross-repo token; `GITHUB_TOKEN` is scoped to this repository). So the steps
+# that need the author surface installed — `describe --check` and a mypy that can SEE
+# `cozy_runtime.author`'s types — run only when an owner adds `COZY_CI_TOKEN`. Until then
+# they are the builder's, run against a pinned checkout in `.venv-check` (README), and the
+# descriptor digest is recorded on ev-003. The steps below need nothing and are real.
 on: [push, pull_request]
 
 jobs:
@@ -19,27 +27,40 @@ jobs:
           version: "latest"
       - run: uv python install 3.13
 
-      - name: Environment — cozy-runtime only, nothing heavy
+      - name: Environment
         run: |
           uv venv --python 3.13
-          uv pip install msgspec 'protobuf>=6.31' 'grpcio>=1.76' mypy ruff
-          uv pip install --no-deps \
-            "cozy-runtime @ git+https://github.com/cozy-creator/cozy-runtime-v2@${COZY_RUNTIME_SHA}"
-        env:
-          # PINNED, and recorded on ev-003: the endpoint's surface is only meaningful
-          # against the author surface it was written for.
-          COZY_RUNTIME_SHA: bf0442ddf91617449a37ea1d129c890cc35b5345
+          uv pip install msgspec mypy ruff
 
+      # Structural rules about the SOURCE: no runtime import, no artifact identifier in
+      # code, nothing heavy at module scope, no test suite. These parse the files and need
+      # no dependency at all.
       - name: Fences
         run: uv run --no-project python scripts/fence.py
 
       - name: Lint
         run: uv run --no-project ruff check quality-judge/ scripts/
 
+      # Static analysis is REQUIRED (tracker README, owner directive 2026-08-25). Without
+      # the private runtime installed, `cozy_runtime.*` resolves to Any here — the same
+      # treatment cozy-eval gives torch, and recorded the same way rather than hidden
+      # behind a per-module ignore_errors. The STRONG run, with the author surface's real
+      # types, is `.venv-check/bin/python -m mypy` against the pinned checkout.
       - name: Types
         run: uv run --no-project mypy
+
+      - name: Install the pinned author surface
+        if: ${{ secrets.COZY_CI_TOKEN != '' }}
+        env:
+          GIT_ASKPASS: /bin/true
+          COZY_RUNTIME_SHA: bf0442ddf91617449a37ea1d129c890cc35b5345
+        run: |
+          uv pip install 'protobuf>=6.31' 'grpcio>=1.76'
+          uv pip install --no-deps \
+            "cozy-runtime @ git+https://${{ secrets.COZY_CI_TOKEN }}@github.com/cozy-creator/cozy-runtime-v2@${COZY_RUNTIME_SHA}"
 
       # The committed descriptor IS the surface contract. `--check` exits 13 naming the
       # pair that diverged, so a schema change that was not reviewed in a diff fails here.
       - name: Descriptor is current
+        if: ${{ secrets.COZY_CI_TOKEN != '' }}
         run: uv run --no-project cozy-runtime describe --dir quality-judge --check
