@@ -20,6 +20,10 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The `secrets` context is not available in an `if:` expression, so the token's
+    # PRESENCE is lifted into the environment once and the two gated steps read that.
+    env:
+      COZY_CI_TOKEN: ${{ secrets.COZY_CI_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -50,17 +54,16 @@ jobs:
         run: uv run --no-project mypy
 
       - name: Install the pinned author surface
-        if: ${{ secrets.COZY_CI_TOKEN != '' }}
+        if: env.COZY_CI_TOKEN != ''
         env:
-          GIT_ASKPASS: /bin/true
           COZY_RUNTIME_SHA: bf0442ddf91617449a37ea1d129c890cc35b5345
         run: |
           uv pip install 'protobuf>=6.31' 'grpcio>=1.76'
           uv pip install --no-deps \
-            "cozy-runtime @ git+https://${{ secrets.COZY_CI_TOKEN }}@github.com/cozy-creator/cozy-runtime-v2@${COZY_RUNTIME_SHA}"
+            "cozy-runtime @ git+https://${COZY_CI_TOKEN}@github.com/cozy-creator/cozy-runtime-v2@${COZY_RUNTIME_SHA}"
 
       # The committed descriptor IS the surface contract. `--check` exits 13 naming the
       # pair that diverged, so a schema change that was not reviewed in a diff fails here.
       - name: Descriptor is current
-        if: ${{ secrets.COZY_CI_TOKEN != '' }}
+        if: env.COZY_CI_TOKEN != ''
         run: uv run --no-project cozy-runtime describe --dir quality-judge --check
