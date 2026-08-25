@@ -11,12 +11,17 @@ No automated tests (decisions.md #160): verification = live runs + benchmarks.
 
 | path | what |
 |---|---|
+| `sdxl/` | the SDXL launch endpoint (se-008): `generate`, text to image, four components |
+| `sdxl/tokenizer`, `sdxl/tokenizer_2` | the two CLIP vocabularies this endpoint BUNDLES — its own asset, like the model library it imports |
 | `quality-judge/` | the eval judge family (ev-003): `judge`, `soft`, `pairwise`, `transcribe` |
-| `quality-judge/endpoint.toml` | the in-repo DEFAULT bindings — never a source of truth |
-| `quality-judge/endpoint.descriptor.json` | the committed surface contract; `describe --check` is the CI gate |
+| `*/endpoint.toml` | the in-repo DEFAULT bindings — never a source of truth |
+| `*/endpoint.descriptor.json` | the committed surface contract; `describe --check` is the CI gate |
 | `scripts/prepare.py` | HF checkpoint -> TensorFS store + artifact config (the artifact writer's stand-in) |
 | `scripts/slice.py` | the local transport: ONE request through `run_slice`, no hub, no gRPC |
 | `scripts/judge-live.py` | ev-003's live verification, on the RTX 4070 |
+| `scripts/sdxl-release.sh` | build the SDXL release archive `cozy install --from --digest` verifies |
+| `scripts/pack.py` | tree -> release archive (the pre-hub stand-in for `cozy deploy`) |
+| `scripts/sdxl-live.py` | se-008's live verification, on the RTX 4070 |
 | `scripts/fence.py` | four structural fences |
 
 ## Running an endpoint locally
@@ -45,13 +50,33 @@ uv pip install --python .venv-check/bin/python --no-deps <the pinned cozy-runtim
 
 .venv-check/bin/python scripts/fence.py
 .venv-check/bin/python -m mypy
-.venv-check/bin/ruff check quality-judge/ scripts/
+.venv-check/bin/ruff check quality-judge/ sdxl/ scripts/
 .venv-check/bin/cozy-runtime describe --dir quality-judge --check
+.venv-check/bin/cozy-runtime describe --dir sdxl --check
 ```
 
-Weights live OUTSIDE this repo (`~/cozy_v2/eval-models`) and are never committed. The
-judge and transcriber checkpoints, their licences and their pinned revisions are declared
-in `scripts/prepare.py` and bound in `endpoint.toml`; no endpoint module names any of them.
+Weights live OUTSIDE this repo (`~/cozy_v2/eval-models` for the judge, `/tmp/cozy-sdxl4`
+for SDXL) and are never committed. Checkpoints, their licences and their pinned revisions
+are declared in `scripts/prepare.py` and bound in each `endpoint.toml`; no endpoint module
+names any of them.
+
+## Serving SDXL through the product
+
+The launch endpoint is installed and run the way a user's endpoint is — as a release
+archive through `cozy install`, not from this tree:
+
+```bash
+nice -n 19 ./scripts/sdxl-release.sh                              # the bf16/fp16 rung
+nice -n 19 ./scripts/sdxl-release.sh --endpoint cozy/sdxl-fp8 --artifact-release fp8
+
+nice -n 19 .venv-check/bin/python scripts/sdxl-live.py product arms variants clamp
+nice -n 19 .venv/bin/python       scripts/sdxl-live.py judge     # the caller-side venv
+```
+
+The release pins its peers by read-only `git archive` — cozy-runtime and the compiled
+`tensorfs` facade, whose ENCODING REGISTRY is what decides which lanes the endpoint can
+read. It declares `torch`/`diffusers`/`transformers` as its OWN dependencies: a model
+architecture is the endpoint's, never the runtime's.
 
 ## The three rules an endpoint here obeys
 

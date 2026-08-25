@@ -1,0 +1,21 @@
+# The in-repo DEFAULT bindings — what a bare-venv run with no --model uses, and never a
+# source of truth (cozy-runtime.md §1.0). Production authority is the deploy binding alone.
+#
+# Code states CAPABILITY; bindings state SELECTION. Nothing in sdxl.py names a repo,
+# release, checkpoint or revision — the artifact, its release and its lane live here and in
+# the catalog row.
+#
+# THE RUNG IS A RELEASE OF THE SAME MODEL REPO. `cozy/sdxl@fp8` is cr-006's encoded UNet
+# over the same three other components, byte-identical and deduped in the CAS; releasing
+# this endpoint against it changes one line here and nothing in the source. Selecting a
+# rung WITHOUT a second release wants `--lane` (cl-005) and, for both rungs offered under
+# ONE binding with the delivery ladder choosing between them, the `variants`/`objective`
+# record shape cr-008c built — neither of which the local coordinator writes yet. Both are
+# recorded on se-008 with their owners.
+
+[application]
+object = "sdxl:app"
+
+[bindings."SdxlModel"]
+repo = "cozy/sdxl"
+release = "se-008"
