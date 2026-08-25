@@ -43,7 +43,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "quality-judge"))
 
-from cozy_eval import corpus, detail, frames, video, wire  # noqa: E402
+from cozy_eval import contract, corpus, detail, frames, video, wire  # noqa: E402
 from cozy_eval.errors import BackendError  # noqa: E402
 from cozy_eval.metrics import temporal  # noqa: E402
 from cozy_eval.metrics.adherence import ask_judge  # noqa: E402
@@ -114,6 +114,19 @@ def strip_of(path: Path, count: int = STRIP) -> list[Any]:
     pool = np.stack(kept)
     sampled: list[Any] = temporal.frame_images(pool[temporal.sample_indices(len(pool), count)])
     return sampled
+
+
+def clip_of(path: Path) -> Any:
+    """The whole clip as a uint8 `(T, H, W, 3)` array — what `run_video` scores.
+
+    uint8 rather than the decoder's float32: `as_frames` accepts both and normalizes what
+    it touches, and a 5 s 1344x768 render is 370 MiB one way and 1.5 GiB the other.
+    """
+    import numpy as np
+
+    return np.stack([
+        np.clip(frame * 255.0, 0, 255).astype(np.uint8) for frame in frames.iter_video(path)
+    ])
 
 
 def degrade(strip: list[Any], kind: str) -> list[Any]:
@@ -550,12 +563,133 @@ def section_bench(j: Judges) -> None:
           f"{float(run.get('metrics', {}).get('peak_vram_bytes', 0)) / (1 << 20):.0f} MiB")
 
 
+def section_report(j: Judges) -> None:
+    """The score-benchmark shape: a real pass -> a digest-stable contract document.
+
+    And the INTERCHANGEABILITY arm the issue asks for: the same pass, driven by a stub
+    that replays exactly what the wire judge said, must produce the SAME bytes. That is
+    what "eval-job code is identical local or remote" has to mean — not that two different
+    models agree, but that the report does not depend on which OBJECT produced the text.
+    """
+    head("report — a score-benchmark-shaped pass folded into a digest-stable document")
+    loaded = corpus.load(CORPUS)
+    # The two SHORT rows: `run_video` scores whole clips, and a 5 s 1344x768 render is
+    # 370 MiB of uint8 apiece. Three 10 s clips would be a memory benchmark, not a report.
+    rows = [r for r in loaded.rows if r.id.endswith("-5s")][:2]
+    clips = [clip_of(loaded.blob(r.exemplar, snapshot_root=str(SAMPLES))) for r in rows]
+    samples = [
+        video.VideoSample(prompt=r.prompt, seed=r.seed, checklist_id=r.id) for r in rows
+    ]
+
+    class Recorder:
+        """The wire judge, remembering every (prompt, reply) it saw."""
+
+        model_ref = ""
+
+        def __init__(self, inner: Any) -> None:
+            self.inner = inner
+            self.script: list[tuple[str, str]] = []
+
+        # The report's cost fields read these off whatever judge it was given
+        # (`cozy_eval.judge.ACCOUNTING_ATTRS`), so a wrapper that swallowed them would
+        # make `judge_calls` read 0 for a pass that made calls.
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self.inner, name)
+
+        def ask(self, images: list[Any], prompt: str) -> str:
+            reply = str(self.inner.ask(images, prompt))
+            self.script.append((prompt, reply))
+            self.model_ref = str(self.inner.model_ref)
+            return reply
+
+    class Replay:
+        """A LOCAL judge with no endpoint behind it, answering from the same script."""
+
+        def __init__(self, script: list[tuple[str, str]], model_ref: str) -> None:
+            self.script = list(script)
+            self.model_ref = model_ref
+            self.n = 0
+
+        def ask(self, images: list[Any], prompt: str) -> str:
+            prompt_seen, reply = self.script[self.n]
+            if prompt_seen != prompt:
+                raise AssertionError(f"replay diverged at call {self.n}")
+            self.n += 1
+            return reply
+
+    started = time.perf_counter()
+    recorder = Recorder(j.judge)
+    wire_report = video.run_video(
+        samples, clips, checklists=loaded.checklist_set(), judge=recorder,
+        use_ocr=False, use_detail=True, detail_judge=recorder, use_tracks=False,
+        judge_frames=STRIP, recall_windows=1,
+    )
+    took = time.perf_counter() - started
+    print(f"  {len(clips)} real clips scored in {took:.1f}s, "
+          f"{recorder.inner.call_count} judge calls over "
+          f"{recorder.inner.requests} request(s)", flush=True)
+
+    # ONE Replay for both roles, exactly as ONE recorder served both: the script is a
+    # single ordered sequence of calls and it must be replayed as one.
+    replay = Replay(recorder.script, recorder.model_ref)
+    local_report = video.run_video(
+        samples, clips, checklists=loaded.checklist_set(), judge=replay,
+        use_ocr=False, use_detail=True, detail_judge=replay,
+        use_tracks=False, judge_frames=STRIP, recall_windows=1,
+    )
+
+    # A single-arm pass over vendor renders has no reference arm, no change kind and no
+    # exposed seed or step count, so it stamps the ABSENCE with its reason rather than
+    # inventing a protocol — the same call ev-005's corpus pass makes.
+    absent = (
+        "single-arm judge pass over judge-v1 exemplars: vendor renders, no reference arm "
+        "and no exposed seed or step count to declare (ev-003)"
+    )
+    document = contract.dump(wire_report, protocol_absent=absent)
+    digest = contract.digest_bytes(document)
+    print(f"  document {len(document)} bytes  {digest}", flush=True)
+    print(f"  {len(wire_report.contract_metrics())} metrics measured, "
+          f"{len(wire_report.unmeasured)} unmeasured, "
+          f"{wire_report.judge_calls} judge calls stamped", flush=True)
+    for summary in wire_report.dimensions:
+        print(f"    {summary.dimension:<16} {summary.metric:<26} "
+              f"{'—' if summary.mean is None else f'{summary.mean:.4f}'}", flush=True)
+    print(f"  element_recall per clip: "
+          f"{[round(r.element_recall_cand, 3) for r in wire_report.rows]}", flush=True)
+
+    check("the pass produced a contract document", len(document) > 0, digest)
+    check("dump(load(document)) is byte-identical",
+          contract.dump(contract.load(document).body, protocol_absent=absent) == document)
+    same = _comparable(wire_report) == _comparable(local_report)
+    check("the wire judge and a local judge produce the SAME report on the same fixtures",
+          same, "byte-identical measurements" if same else "they diverged")
+    check("the model-backed adherence lane is MEASURED, not unmeasured",
+          any(r.element_recall_cand > 0 for r in wire_report.rows),
+          f"element_recall present on {sum(1 for r in wire_report.rows if r.element_recall_cand)} "
+          f"of {len(wire_report.rows)} rows")
+
+
+def _comparable(report: Any) -> bytes:
+    """A report's MEASUREMENTS, without the wall-clock fields that measure the machine."""
+    import msgspec
+
+    body = msgspec.to_builtins(report)
+    # What the machine cost, not what the render scored. ev-002 makes the same distinction
+    # about the whole-document digest: two honest runs of one evaluation never share a
+    # wall clock, and a stub judge that replays a script makes no calls of its own.
+    for key in ("created_at", "seconds", "render_seconds", "metric_overhead",
+                "judge_calls", "judge_vram_bytes"):
+        body.pop(key, None)
+    return msgspec.json.encode(body)
+
+
 SECTIONS = {
     "smoke": section_smoke,
     "corpus": section_corpus,
     "detail": section_detail,
     "separation": section_separation,
     "arms": section_arms,
+    "report": section_report,
     "bench": section_bench,
 }
 
