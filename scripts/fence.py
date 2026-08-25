@@ -44,6 +44,15 @@ def rel(path: pathlib.Path) -> str:
     return str(path.relative_to(ROOT))
 
 
+def ours(path: pathlib.Path) -> bool:
+    """Source WE wrote. A venv under the repo is not: it holds other people's test suites,
+    and a fence that reports mypy's own `test_emit.py` is a fence nobody reads."""
+    return not any(
+        part.startswith(".venv") or part in ("site-packages", "__pycache__", ".git")
+        for part in path.parts
+    )
+
+
 def imports(tree: ast.AST) -> Iterator[tuple[str, int]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -158,18 +167,10 @@ def fence_light_import() -> Fence:
 
 
 def fence_no_tests() -> Fence:
-    bad = [
-        rel(path)
-        for path in ROOT.rglob("test_*.py")
-        if ".venv" not in path.parts
-    ]
-    bad += [
-        rel(path)
-        for path in ROOT.rglob("tests")
-        if path.is_dir() and ".venv" not in path.parts
-    ]
+    bad = [rel(path) for path in ROOT.rglob("test_*.py") if ours(path)]
+    bad += [rel(path) for path in ROOT.rglob("tests") if path.is_dir() and ours(path)]
     for path in ROOT.rglob("*.py"):
-        if ".venv" in path.parts:
+        if not ours(path):
             continue
         tree = ast.parse(path.read_text(), filename=str(path))
         for module, line in imports(tree):
