@@ -1,0 +1,45 @@
+name: ci
+# Fences + static analysis + descriptor staleness. There are no test steps anywhere in v2
+# (tracker README #160): verification is running the real endpoint on the real card and
+# recording the transcript and benchmarks in the issue.
+#
+# No GPU, no weights and no CUDA image are needed here, and that is a PROPERTY being
+# checked rather than a convenience: `describe` imports the endpoint and reads its surface,
+# so this job passing is the proof that endpoint module scope stayed light.
+on: [push, pull_request]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - run: uv python install 3.13
+
+      - name: Environment — cozy-runtime only, nothing heavy
+        run: |
+          uv venv --python 3.13
+          uv pip install msgspec 'protobuf>=6.31' 'grpcio>=1.76' mypy ruff
+          uv pip install --no-deps \
+            "cozy-runtime @ git+https://github.com/cozy-creator/cozy-runtime-v2@${COZY_RUNTIME_SHA}"
+        env:
+          # PINNED, and recorded on ev-003: the endpoint's surface is only meaningful
+          # against the author surface it was written for.
+          COZY_RUNTIME_SHA: bf0442ddf91617449a37ea1d129c890cc35b5345
+
+      - name: Fences
+        run: uv run --no-project python scripts/fence.py
+
+      - name: Lint
+        run: uv run --no-project ruff check quality-judge/ scripts/
+
+      - name: Types
+        run: uv run --no-project mypy
+
+      # The committed descriptor IS the surface contract. `--check` exits 13 naming the
+      # pair that diverged, so a schema change that was not reviewed in a diff fails here.
+      - name: Descriptor is current
+        run: uv run --no-project cozy-runtime describe --dir quality-judge --check

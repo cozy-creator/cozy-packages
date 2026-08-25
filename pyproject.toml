@@ -1,0 +1,32 @@
+# Not a distributed package: endpoints are installed from this repo by `cozy install`, and
+# nothing here is published to an index. This file exists to hold the STATIC ANALYSIS
+# configuration, which is required (tracker README, owner directive 2026-08-25) — the
+# no-tests rule bans test suites, not type checking.
+
+[tool.mypy]
+python_version = "3.13"
+files = ["quality-judge", "scripts"]
+strict = true
+warn_unreachable = true
+disallow_any_generics = true
+implicit_reexport = false
+
+# The model libraries an endpoint constructs through are OPTIONAL to type checking: the
+# checking venv holds cozy-runtime, msgspec and nothing heavy, exactly like the container
+# `describe` runs in. `fence.py::light-module-scope` is what actually holds the packaging
+# rule; mypy never could. transformers additionally publishes no usable stubs for the
+# dynamic `Auto*` surface, so a stub package would be a fiction with a version number.
+[[tool.mypy.overrides]]
+module = [
+    "torch.*", "torchvision.*", "transformers.*", "tokenizers.*", "numpy.*", "PIL.*",
+    "safetensors.*", "tfsbench", "tensorfs", "tensorfs.*", "cozy_eval.*",
+]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+src = ["quality-judge", "scripts"]
+exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
