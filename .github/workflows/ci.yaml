@@ -65,7 +65,7 @@ jobs:
       - name: Install the pinned author surface
         if: env.COZY_CI_TOKEN != ''
         env:
-          COZY_RUNTIME_SHA: bf0442ddf91617449a37ea1d129c890cc35b5345
+          COZY_RUNTIME_SHA: 96b8c235fe1ce48e392256610eb47ad318dd6850
         run: |
           uv pip install 'protobuf>=6.31' 'grpcio>=1.76'
           uv pip install --no-deps \
@@ -102,6 +102,13 @@ jobs:
           uv venv --python 3.13
           uv pip install msgspec numpy
 
+      - name: Release archive is byte-reproducible
+        run: |
+          mkdir -p "$RUNNER_TEMP/h3-pack"
+          python scripts/pack.py h3 cozy/minimax-h3 ci "$RUNNER_TEMP/h3-pack/a.tar.gz"
+          python scripts/pack.py h3 cozy/minimax-h3 ci "$RUNNER_TEMP/h3-pack/b.tar.gz"
+          cmp "$RUNNER_TEMP/h3-pack/a.tar.gz" "$RUNNER_TEMP/h3-pack/b.tar.gz"
+
       # H3's reference semantics, each checked against an independently written upstream
       # expression rather than against the endpoint's own call shapes — so the same arms
       # gate the diffusers rebase that replaces the hand port (#531). Every arm carries its
@@ -131,8 +138,9 @@ jobs:
       - name: Environment
         run: |
           uv venv --python 3.13
-          uv pip install msgspec numpy pillow "transformers>=5.13,<6" \
-            --extra-index-url https://download.pytorch.org/whl/cpu torch
+          uv pip install --index-url https://download.pytorch.org/whl/cpu \
+            "torch==2.9.1" "torchvision==0.24.1"
+          uv pip install msgspec numpy pillow "transformers>=5.13,<6"
           uv pip install \
             "diffusers @ git+https://github.com/huggingface/diffusers@50e7158093710f9c1b4ea9ff100137a91c9228f3"
 

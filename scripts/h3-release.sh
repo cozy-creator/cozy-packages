@@ -1,188 +1,297 @@
 #!/usr/bin/env bash
-# Build the H3 ENDPOINT RELEASE — the archive `cozy install --from --digest` verifies.
+# Build and probe one exact H3 endpoint release archive.
 #
-#   scripts/h3-release.sh [--artifact-release <name>] [--endpoint org/name]
-#                         [--runtime-sha <sha>] [--out <dir>]
+#   scripts/h3-release.sh --artifact-release <name> [--endpoint org/name]
+#       [--runtime-sha <40-hex>] [--tensorfs-sha <40-hex>]
+#       [--cozy-eval-sha <40-hex>] [--out <dir>]
 #
-# The endpoint SOURCE is this repo's `h3/` directory, unmodified: one module, its
-# `h3_arch/` model library, its `endpoint.toml`, its committed descriptor, and the bundled
-# Qwen vocabulary. Everything else is the CLOSURE — the two wheels that are not on an index
-# and the lock over all of it.
-#
-# THE FOOT-GUN THIS SCRIPT IS WRITTEN AGAINST. se-008 found that rebuilding an fp8 archive
-# needs `--artifact-release fp8` and not just `--endpoint`, because otherwise `endpoint.toml`
-# still selects the fp16 artifact and the release is silently the wrong rung. H3's analogue
-# is WORSE, because it has TWO binding tables — `Fl2VAModel` and `Ref2VAModel` — and a
-# rewrite that edited one and not the other would produce a release whose two task slots
-# bind DIFFERENT artifacts, which is a legal deployment and not the one anyone asked for.
-# So the rewrite here is applied to EVERY `release =` line and then COUNTED: if the number
-# of lines rewritten is not the number of binding tables, this script refuses rather than
-# shipping a half-rewritten selection. The count is printed on every build, green or not.
-#
-# TWO PINS, both by read-only `git archive`, because a verification whose peer can move
-# underneath it measures nothing.
+# This repo owns the serving BUNDLE, not a per-endpoint image, cache mount, or worker
+# receipt. The bundle is one source commit, one committed uv lock, three source-built peer
+# wheels, and the existing release.json archive declaration. `build-pins.json` records the
+# inputs th-042 must materialize; it does not claim that materialization happened on a
+# worker.
 set -euo pipefail
 
 RUNTIME_REPO="${RUNTIME_REPO:-$HOME/cozy_v2/cozy-runtime}"
-# aaa49d0 is the FLOOR, not a preference: it is the SECOND record-key break (#567e), and a
-# release pinned before it speaks a dead record. The model half of a binding record is now
-# the artifact REF and the slot — `store`, `snapshot`, `snapshots`, `variant`, `custody` and
-# `vram_floor_bytes` left the closed key set, because they are the SERVING machine's
-# resolution of the ref and not the writer's to state. A runtime older than this reads a
-# record cozy-creator no longer writes and refuses `binding_plan_unknown_field`; a runtime
-# at or after it also carries the stamp reader (#567d), without which every task-stamped
-# class on this endpoint fails closed on every checkpoint. f1625f9 (the FIRST record-key
-# break) is an ancestor of it, so nothing that floor protected is given up.
-# Anything at or after is legal.
-# THE COMMITTED DESCRIPTOR IS DERIVED AGAINST THIS PIN, so the two move together. A
-# runtime that adds a member to a bound SERVICE changes this endpoint's surface without
-# touching a line of `h3/` — #553a's `Checkpoints.declare` did exactly that — and `cozy
-# install` then refuses `stale_descriptor` on a release nobody edited. Bumping the pin
-# means re-running `cozy-runtime describe --write-descriptor` in the release's own venv
-# and committing the result in the same change.
-RUNTIME_SHA="${RUNTIME_SHA:-c543c0e}"
-RUNTIME_FLOOR="${RUNTIME_FLOOR:-d78a9a0}"
-# THE WHEEL IS BUILT, NOT FOUND. #566 shipped an archive carrying a MONTHS-OLD tensorfs
-# out of a scratch directory nobody had rebuilt, and the divergence surfaced on a rented
-# card as a reader that did not have the function the endpoint called. The default is now
-# the repo's own build output, and the script refuses a wheel older than the tfs binary
-# beside it rather than shipping whichever copy a /tmp directory still held.
 TENSORFS_REPO="${TENSORFS_REPO:-$HOME/cozy_v2/tensorfs}"
-TENSORFS_WHEEL="${TENSORFS_WHEEL:-$(ls -t "$TENSORFS_REPO"/target/wheels/tensorfs-*.whl 2>/dev/null | head -1)}"
-# TORCH IS PINNED TO WHAT RAN. `>=2.6` resolved to whatever PyPI held on build day, which
-# on 2026-08-26 was 2.13.0 against CUDA 13.1 — a wheel whose driver floor nothing in this
-# lane has ever met on a rented pod. 2.9.1 is the version #566 observed serving H3 on an
-# H200 (cu129, minor-version-compatible with every driver these pods have carried). Move
-# it when a newer one has RUN, not when a newer one exists.
-TORCH_SPEC="${TORCH_SPEC:-torch==2.9.1}"
-OUT="${OUT:-$HOME/.cache/cozy/se-001}"
+COZY_EVAL_REPO="${COZY_EVAL_REPO:-$HOME/cozy_v2/cozy-eval}"
+
+# Full commits only. Abbreviations are a moving lookup, not a release input.
+RUNTIME_SHA="${RUNTIME_SHA:-96b8c235fe1ce48e392256610eb47ad318dd6850}"
+RUNTIME_FLOOR="d78a9a0fddb34c11c334019cde83df6a5260bdee"
+TENSORFS_SHA="${TENSORFS_SHA:-c6c598baca3799508f64b4ef02af542c9181dc27}"
+COZY_EVAL_SHA="${COZY_EVAL_SHA:-61560ff5cc0bce2403b7e2bc9e6bff753be58ca1}"
+
+BUILD_PYTHON="3.12.12"
+REQUIRED_UV="0.9.18"
+REQUIRED_MATURIN="1.14.1"
+OUT="${OUT:-$HOME/.cache/cozy/se-011}"
 VERSION="${VERSION:-1.0.0}"
 ENDPOINT="cozy/minimax-h3"
 ARTIFACT_RELEASE=""
 
-while [ $# -gt 0 ]; do
+usage() {
+  echo "usage: $0 --artifact-release <name> [--endpoint org/name]" >&2
+  echo "          [--runtime-sha <40-hex>] [--tensorfs-sha <40-hex>]" >&2
+  echo "          [--cozy-eval-sha <40-hex>] [--out <dir>]" >&2
+}
+
+while [ "$#" -gt 0 ]; do
   case "$1" in
     --endpoint) ENDPOINT="$2"; shift 2 ;;
     --artifact-release) ARTIFACT_RELEASE="$2"; shift 2 ;;
     --runtime-sha) RUNTIME_SHA="$2"; shift 2 ;;
+    --tensorfs-sha) TENSORFS_SHA="$2"; shift 2 ;;
+    --cozy-eval-sha) COZY_EVAL_SHA="$2"; shift 2 ;;
     --out) OUT="$2"; shift 2 ;;
-    *) echo "usage: $0 [--endpoint org/name] [--artifact-release <name>] [--runtime-sha <sha>] [--out <dir>]" >&2; exit 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage; exit 2 ;;
   esac
 done
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SLUG="${ENDPOINT#*/}"
-RT="$OUT/runtime"
-T="$OUT/tree-$SLUG"
-rm -rf "$RT" "$T"
-mkdir -p "$RT" "$T/vendor"
+if [[ ! "$ENDPOINT" =~ ^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$ ]]; then
+  echo "REFUSED: endpoint must be an org/name slug, got $ENDPOINT" >&2
+  exit 2
+fi
+if [[ ! "$ARTIFACT_RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "REFUSED: --artifact-release is required and must be an opaque release name" >&2
+  exit 2
+fi
 
-FULL="$(git -C "$RUNTIME_REPO" rev-parse "$RUNTIME_SHA")"
-# THE PIN FLOOR, CHECKED rather than commented: an ancestor of the record-key break speaks
-# a record the coordinator no longer writes, and the failure would appear as a binding that
-# resolves to nothing on a rented card.
-if ! git -C "$RUNTIME_REPO" merge-base --is-ancestor "$RUNTIME_FLOOR" "$FULL"; then
-  echo "REFUSED: runtime pin $RUNTIME_SHA does not contain $RUNTIME_FLOOR — the record-key" >&2
-  echo "         break. A release pinned before it binds against a dead record shape." >&2
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
+  echo "REFUSED: $ROOT is dirty. Release source is an exact commit; commit or remove only" >&2
+  echo "         the intended H3 changes before building." >&2
   exit 3
 fi
 
-# READ-ONLY. That repo has concurrent writers; a checkout of its working tree would make
-# this release a photograph of somebody else's edit.
-git -C "$RUNTIME_REPO" archive "$FULL" | tar -x -C "$RT"
+exact_commit() {
+  local repo="$1" pin="$2" label="$3" resolved
+  if [[ ! "$pin" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "REFUSED: $label pin is not a full 40-hex commit: $pin" >&2
+    return 1
+  fi
+  if ! resolved="$(git -C "$repo" rev-parse --verify "${pin}^{commit}" 2>/dev/null)"; then
+    echo "REFUSED: $label commit $pin is absent from $repo" >&2
+    return 1
+  fi
+  if [ "$resolved" != "$pin" ]; then
+    echo "REFUSED: $label resolved to $resolved instead of exact input $pin" >&2
+    return 1
+  fi
+  printf '%s\n' "$resolved"
+}
 
-nice -n 19 uv build --wheel --project "$RT" --out-dir "$T/vendor" >/dev/null
-rm -f "$T/vendor/.gitignore"
-if [ -z "$TENSORFS_WHEEL" ] || [ ! -s "$TENSORFS_WHEEL" ]; then
-  echo "REFUSED: no tensorfs wheel. Build one (\`maturin build --release --out target/wheels\`" >&2
-  echo "         in $TENSORFS_REPO) or point TENSORFS_WHEEL at the current build." >&2
-  exit 5
+SOURCE_SHA="$(git -C "$ROOT" rev-parse HEAD)"
+RUNTIME_SHA="$(exact_commit "$RUNTIME_REPO" "$RUNTIME_SHA" cozy-runtime)"
+TENSORFS_SHA="$(exact_commit "$TENSORFS_REPO" "$TENSORFS_SHA" tensorfs)"
+COZY_EVAL_SHA="$(exact_commit "$COZY_EVAL_REPO" "$COZY_EVAL_SHA" cozy-eval)"
+if ! git -C "$RUNTIME_REPO" merge-base --is-ancestor "$RUNTIME_FLOOR" "$RUNTIME_SHA"; then
+  echo "REFUSED: runtime $RUNTIME_SHA predates the binding-record floor $RUNTIME_FLOOR" >&2
+  exit 3
 fi
-TFS_BIN="$TENSORFS_REPO/target/release/tfs"
-if [ -x "$TFS_BIN" ] && [ "$TFS_BIN" -nt "$TENSORFS_WHEEL" ]; then
-  echo "REFUSED: $TENSORFS_WHEEL is older than $TFS_BIN — the release would ship a reader" >&2
-  echo "         that is not the tensorfs this workspace is on (#566). Rebuild the wheel." >&2
-  exit 5
+
+if [ "$(uv --version)" != "uv $REQUIRED_UV" ]; then
+  echo "REFUSED: this lock was cut with uv $REQUIRED_UV; found $(uv --version)" >&2
+  exit 3
 fi
-cp "$TENSORFS_WHEEL" "$T/vendor/"
-TFS_WHEEL_NAME="$(basename "$TENSORFS_WHEEL")"
+if [ "$(maturin --version)" != "maturin $REQUIRED_MATURIN" ]; then
+  echo "REFUSED: TensorFS wheel requires maturin $REQUIRED_MATURIN; found $(maturin --version)" >&2
+  exit 3
+fi
+if ! BUILD_PYTHON_PATH="$(uv python find "$BUILD_PYTHON" 2>/dev/null)"; then
+  echo "REFUSED: uv-managed Python $BUILD_PYTHON is not installed" >&2
+  exit 3
+fi
+for command in ffmpeg ffprobe; do
+  if ! command -v "$command" >/dev/null; then
+    echo "REFUSED: deterministic media probes require $command on PATH" >&2
+    exit 3
+  fi
+done
 
-# The endpoint's own source, copied whole. `h3/` IS the release: no generated module, no
-# rewritten import, no second copy of the handler anywhere.
-# EVERY top-level module, not a list of them. A hand-kept list is what drifts: `gates.py`
-# arrived with the grid fix (#564), `h3.py` imported it, and the archive this script built
-# was missing it — an endpoint whose own release cannot import itself, which surfaced as a
-# `missing_dependency` naming a module that was sitting in the source tree all along.
-cp "$ROOT/h3"/*.py "$T/"
-cp "$ROOT/h3/endpoint.toml" "$ROOT/h3/endpoint.descriptor.json" "$T/"
-cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$T/"
-mkdir -p "$T/h3_arch" "$T/h3_ref" "$T/tokenizer"
-cp "$ROOT/h3/h3_arch"/*.py "$T/h3_arch/"
-cp "$ROOT/h3/h3_ref"/*.py "$T/h3_ref/"
-cp "$ROOT/h3/tokenizer"/* "$T/tokenizer/"
+mkdir -p "$OUT"
+WORK="$(mktemp -d "$OUT/.h3-build.XXXXXX")"
+cleanup() {
+  case "$WORK" in
+    "$OUT"/.h3-build.*) rm -rf -- "$WORK" ;;
+    *) echo "REFUSED cleanup outside the build root: $WORK" >&2 ;;
+  esac
+}
+trap cleanup EXIT
 
-BINDINGS="$(grep -c '^\[bindings\.' "$T/endpoint.toml")"
-if [ -n "$ARTIFACT_RELEASE" ]; then
-  BEFORE="$(grep -c '^release = ' "$T/endpoint.toml")"
-  sed -i "s|^release = .*|release = \"$ARTIFACT_RELEASE\"|" "$T/endpoint.toml"
-  AFTER="$(grep -c "^release = \"$ARTIFACT_RELEASE\"$" "$T/endpoint.toml")"
-  if [ "$BEFORE" != "$BINDINGS" ] || [ "$AFTER" != "$BINDINGS" ]; then
-    echo "REFUSED: $BINDINGS binding tables, $BEFORE release lines before, $AFTER after —" >&2
-    echo "         a partial rewrite would bind the two task slots to different artifacts." >&2
+RUNTIME_TREE="$WORK/cozy-runtime"
+TENSORFS_TREE="$WORK/tensorfs"
+COZY_EVAL_TREE="$WORK/cozy-eval"
+SOURCE_TREE="$WORK/source"
+TREE="$WORK/tree"
+WHEELS="$WORK/wheels"
+mkdir -p "$RUNTIME_TREE" "$TENSORFS_TREE" "$COZY_EVAL_TREE" "$SOURCE_TREE" \
+  "$TREE/vendor" "$WHEELS"
+
+# Every peer is read by commit archive. Concurrent worktrees and untracked build products
+# cannot enter the release, and no peer checkout is mutated.
+git -C "$RUNTIME_REPO" archive "$RUNTIME_SHA" | tar -x -C "$RUNTIME_TREE"
+git -C "$TENSORFS_REPO" archive "$TENSORFS_SHA" | tar -x -C "$TENSORFS_TREE"
+git -C "$COZY_EVAL_REPO" archive "$COZY_EVAL_SHA" | tar -x -C "$COZY_EVAL_TREE"
+git -C "$ROOT" archive "$SOURCE_SHA" h3 LICENSE NOTICE \
+  scripts/pack.py scripts/h3-conform.py scripts/h3-vision-conform.py \
+  scripts/h3-live.py scripts/h3-seam-oracle.py | tar -x -C "$SOURCE_TREE"
+
+SOURCE_DATE_EPOCH="$(git -C "$ROOT" show -s --format=%ct "$SOURCE_SHA")"
+export SOURCE_DATE_EPOCH
+nice -n 19 uv build --wheel --python "$BUILD_PYTHON_PATH" --project "$RUNTIME_TREE" \
+  --out-dir "$WHEELS" >/dev/null
+nice -n 19 uv build --wheel --python "$BUILD_PYTHON_PATH" --project "$COZY_EVAL_TREE" \
+  --out-dir "$WHEELS" >/dev/null
+TENSORFS_BUILD_CACHE="${H3_TENSORFS_BUILD_CACHE:-$HOME/.cache/cozy/se-011-tensorfs-target}"
+mkdir -p "$TENSORFS_BUILD_CACHE"
+(cd "$TENSORFS_TREE" && CARGO_TARGET_DIR="$TENSORFS_BUILD_CACHE" nice -n 19 maturin build \
+  --release --interpreter "$BUILD_PYTHON_PATH" --out "$WHEELS" >/dev/null)
+
+RUNTIME_WHEEL="cozy_runtime-0.0.1-py3-none-any.whl"
+TENSORFS_WHEEL="tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl"
+COZY_EVAL_WHEEL="cozy_eval-2.3.0-py3-none-any.whl"
+for wheel in "$RUNTIME_WHEEL" "$TENSORFS_WHEEL" "$COZY_EVAL_WHEEL"; do
+  if [ ! -s "$WHEELS/$wheel" ]; then
+    echo "REFUSED: exact source build did not produce $wheel" >&2
     exit 4
   fi
+  install -m 0644 "$WHEELS/$wheel" "$TREE/vendor/$wheel"
+done
+
+# The committed H3 tree is the release tree. No generated module, dependency heredoc, or
+# second handler exists.
+cp -a "$SOURCE_TREE/h3/." "$TREE/"
+install -m 0644 "$SOURCE_TREE/LICENSE" "$SOURCE_TREE/NOTICE" "$TREE/"
+
+BINDINGS="$(grep -c '^\[bindings\.' "$TREE/endpoint.toml")"
+BEFORE="$(grep -c '^release = ' "$TREE/endpoint.toml")"
+sed -i "s|^release = .*|release = \"$ARTIFACT_RELEASE\"|" "$TREE/endpoint.toml"
+AFTER="$(grep -c "^release = \"$ARTIFACT_RELEASE\"$" "$TREE/endpoint.toml")"
+if [ "$BINDINGS" != "$BEFORE" ] || [ "$BINDINGS" != "$AFTER" ]; then
+  echo "REFUSED: $BINDINGS bindings, $BEFORE release lines before, $AFTER after" >&2
+  exit 4
 fi
-echo "  bindings: $BINDINGS table(s), all selecting $(grep -m1 '^release = ' "$T/endpoint.toml" | cut -d'"' -f2)"
 
-cat > "$T/pyproject.toml" <<TOML
-# The endpoint as a RELEASE. \`cozy install\` builds its venv with \`uv sync --locked\`
-# against this lock, so the cozy-runtime that serves the endpoint is the one the release
-# pinned — never the host's.
-#
-# TWO MODEL LIBRARIES SHIP HERE FOR NOW, and that is a migration state rather than a
-# design. \`h3_ref/\` is the REFERENCE one (#531): a construction layer over the official
-# H3 implementation diffusers merged on 2026-08-05, which is where every architecture
-# question is answered from now on. \`h3_arch/\` is the hand port it replaces, kept only
-# until the upstream path is proven against it on a card — the port is oracle-proven and
-# the replacement is not yet, and deleting proven code ahead of its unproven successor is
-# how a licence fix becomes a correctness regression. NOTICE records the terms; the port
-# is GPL-adapted and the replacement is not, which is the second reason it goes.
-#
-# THE DIFFUSERS PIN IS A SHA, NEVER A BRANCH: \`main\` moves and builds must be
-# reproducible. This is the same commit v1's H3 endpoint pins, chosen for that reason and
-# not for its date — it is the first pin both lanes can be compared at, and a newer SHA
-# would fold unreviewed upstream drift into a commit whose whole claim is a rebase onto
-# reviewed upstream code. It ships \`MiniMaxH3Transformer3DModel\`,
-# \`AutoencoderKLMiniMaxH3\`, \`AutoencoderKLMiniMaxH3Audio\` and \`MiniMaxH3Scheduler\`;
-# it collapses to \`diffusers>=0.40\` once 0.40.0 ships them in a release.
-#
-# TRANSFORMERS MOVED TO 5.x, and it is a FIX rather than a bump: the text encoder is
-# Qwen3-VL, whose \`Qwen3VLForConditionalGeneration\` does not exist below 5.x. The
-# previous \`<5\` cap was a floor copied from a family that does not use it, and an archive
-# built under it could not have constructed the text encoder at all.
-[project]
-name = "h3-endpoint"
-version = "$VERSION"
-requires-python = ">=3.11"
-dependencies = [
-    "cozy-runtime==0.0.1",
-    "tensorfs==0.0.1",
-    "$TORCH_SPEC",
-    "transformers>=5.13,<6",
-    "diffusers @ git+https://github.com/huggingface/diffusers@50e7158093710f9c1b4ea9ff100137a91c9228f3",
-]
+sha256_file() {
+  sha256sum "$1" | cut -d' ' -f1
+}
+RUNTIME_WHEEL_SHA="$(sha256_file "$TREE/vendor/$RUNTIME_WHEEL")"
+TENSORFS_WHEEL_SHA="$(sha256_file "$TREE/vendor/$TENSORFS_WHEEL")"
+COZY_EVAL_WHEEL_SHA="$(sha256_file "$TREE/vendor/$COZY_EVAL_WHEEL")"
+"$BUILD_PYTHON_PATH" - "$TREE/build-pins.json" \
+  "$SOURCE_SHA" "$ARTIFACT_RELEASE" "$BUILD_PYTHON" "$REQUIRED_UV" "$REQUIRED_MATURIN" \
+  "$RUNTIME_SHA" "$RUNTIME_WHEEL" "$RUNTIME_WHEEL_SHA" \
+  "$TENSORFS_SHA" "$TENSORFS_WHEEL" "$TENSORFS_WHEEL_SHA" \
+  "$COZY_EVAL_SHA" "$COZY_EVAL_WHEEL" "$COZY_EVAL_WHEEL_SHA" <<'PY'
+import json
+import pathlib
+import sys
 
-# uv records path sources RELATIVE to the project root, so an in-tree wheel relocates with
-# the archive and an out-of-tree one does not (cl-009's finding).
-[tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.0.1-py3-none-any.whl" }
-tensorfs = { path = "vendor/$TFS_WHEEL_NAME" }
-TOML
+(
+    out,
+    source_sha,
+    artifact_release,
+    python_version,
+    uv_version,
+    maturin_version,
+    runtime_sha,
+    runtime_wheel,
+    runtime_wheel_sha,
+    tensorfs_sha,
+    tensorfs_wheel,
+    tensorfs_wheel_sha,
+    eval_sha,
+    eval_wheel,
+    eval_wheel_sha,
+) = sys.argv[1:]
+payload = {
+    "artifact_release": artifact_release,
+    "endpoint_source_sha": source_sha,
+    "platform": "linux-x86_64",
+    "python_version": python_version,
+    "uv_version": uv_version,
+    "maturin_version": maturin_version,
+    "system_commands": ["ffmpeg", "ffprobe"],
+    "torch": {"version": "2.9.1+cu129", "torchvision": "0.24.1+cu129", "cuda": "12.9"},
+    "peers": {
+        "cozy-runtime": {
+            "source_sha": runtime_sha,
+            "wheel": runtime_wheel,
+            "wheel_sha256": runtime_wheel_sha,
+        },
+        "tensorfs": {
+            "source_sha": tensorfs_sha,
+            "wheel": tensorfs_wheel,
+            "wheel_sha256": tensorfs_wheel_sha,
+        },
+        "cozy-eval": {
+            "source_sha": eval_sha,
+            "wheel": eval_wheel,
+            "wheel_sha256": eval_wheel_sha,
+        },
+    },
+}
+pathlib.Path(out).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
 
-( cd "$T" && nice -n 19 uv lock --quiet )
+# A lock that parses is not a closure proof. Materialize it, import every direct runtime
+# dependency, check the CUDA build identity, derive the descriptor, and run the deterministic
+# contract/vision/control-plane probes before any archive is emitted.
+uv lock --check --project "$TREE" --python "$BUILD_PYTHON_PATH" >/dev/null
+nice -n 19 uv sync --locked --no-install-project --project "$TREE" \
+  --python "$BUILD_PYTHON_PATH" >/dev/null
+"$TREE/.venv/bin/python" - <<'PY'
+import importlib.metadata as metadata
+import av
+import cozy_eval
+import diffusers
+import msgspec
+import numpy
+import PIL
+import tensorfs
+import torch
+import torchvision
+import transformers
 
-ARCHIVE="$OUT/$SLUG-$VERSION.tar.gz"
-nice -n 19 python3 "$ROOT/scripts/pack.py" "$T" "$ENDPOINT" "$VERSION" "$ARCHIVE" | sed 's/^/  /'
-echo "  runtime:  $FULL (git archive, read-only; contains $RUNTIME_FLOOR)"
-echo "  tensorfs: $TFS_WHEEL_NAME"
-echo "  binding:  $(grep -E '^(repo|release) =' "$T/endpoint.toml" | tr '\n' ' ')"
+expected = {
+    "cozy-eval": "2.3.0",
+    "cozy-runtime": "0.0.1",
+    "tensorfs": "0.0.1",
+    "torch": "2.9.1+cu129",
+    "torchvision": "0.24.1+cu129",
+}
+actual = {name: metadata.version(name) for name in expected}
+if actual != expected:
+    raise SystemExit(f"installed direct versions disagree: {actual!r} != {expected!r}")
+if torch.version.cuda != "12.9":
+    raise SystemExit(f"torch CUDA build is {torch.version.cuda!r}, expected '12.9'")
+print("install probe:", actual, "cuda", torch.version.cuda)
+PY
+"$TREE/.venv/bin/cozy-runtime" describe --dir "$TREE" --check
+nice -n 19 "$TREE/.venv/bin/python" "$SOURCE_TREE/scripts/h3-conform.py"
+nice -n 19 "$TREE/.venv/bin/python" "$SOURCE_TREE/scripts/h3-vision-conform.py"
+nice -n 19 "$TREE/.venv/bin/python" "$SOURCE_TREE/scripts/h3-live.py"
+
+SLUG="${ENDPOINT#*/}"
+CANDIDATE="$WORK/$SLUG-$VERSION.tar.gz"
+ARCHIVE="$OUT/$SLUG-$VERSION-${SOURCE_SHA:0:12}.tar.gz"
+python3 "$SOURCE_TREE/scripts/pack.py" "$TREE" "$ENDPOINT" "$VERSION" "$CANDIDATE" \
+  | sed 's/^/  /'
+if [ -e "$ARCHIVE" ]; then
+  if ! cmp -s "$CANDIDATE" "$ARCHIVE"; then
+    echo "REFUSED: $ARCHIVE already exists with different bytes for the same source commit" >&2
+    exit 5
+  fi
+else
+  install -m 0644 "$CANDIDATE" "$ARCHIVE"
+fi
+
+echo "  archive:          $ARCHIVE"
+echo "  endpoint source:  $SOURCE_SHA"
+echo "  model release:    $ARTIFACT_RELEASE ($BINDINGS bindings)"
+echo "  runtime source:   $RUNTIME_SHA"
+echo "  tensorfs source:  $TENSORFS_SHA"
+echo "  cozy-eval source: $COZY_EVAL_SHA"
+echo "  digest:           sha256:$(sha256_file "$ARCHIVE")"

@@ -2,8 +2,8 @@
 """H3's VISION-SEAM CONFORMANCE ARMS — the pixels-to-text-encoder seam, decided on CPU.
 
     nice -n 19 python scripts/h3-vision-conform.py [arm ...]
-    arms: preprocess, presentation, splices, deepstack, towerkeys, forward, refrows,
-          refusal
+    arms: oraclerun, preprocess, presentation, splices, deepstack, towerkeys, forward,
+          refrows, refusal
 
 WHY THIS IS A SECOND FILE. `h3-conform.py` declares "no torch, no weights, no network" and
 that is load-bearing — it is the arm set that can run anywhere. Every arm HERE needs torch,
@@ -28,6 +28,7 @@ Nothing here loads a weight, touches a card or opens a socket.
 
 from __future__ import annotations
 
+import ast
 import pathlib
 import sys
 import traceback
@@ -185,7 +186,7 @@ def _upstream_presentation(tokenizer: Any, prompt: str, refs: list[Any], counts:
         def __init__(self, inner: Any) -> None:
             self._inner = inner
 
-        def __call__(self, text: str, add_special_tokens: bool = False) -> dict:
+        def __call__(self, text: str, add_special_tokens: bool = False) -> dict[str, list[int]]:
             return {"input_ids": self._inner.ids(text)}
 
         def convert_tokens_to_ids(self, token: str) -> int:
@@ -407,21 +408,34 @@ def arm_refusal() -> None:
     """THE OLD ARM, INVERTED. `vision_seam_unbuilt` was the guarantee that a vision
     presentation could not silently reach Qwen as nothing. It must now be UNREACHABLE for
     an image request — its survival would mean the seam is still not wired."""
-    import inspect
-
-    import h3
-
-    src = inspect.getsource(h3)
+    path = ROOT / "h3" / "h3.py"
+    src = path.read_text()
+    tree = ast.parse(src, filename=str(path))
+    base = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "_H3Base"
+    )
+    condition = next(
+        node
+        for node in base.body
+        if isinstance(node, ast.FunctionDef) and node.name == "condition_text"
+    )
+    prepare = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "prepare"
+    )
+    condition_src = ast.get_source_segment(src, condition) or ""
+    prepare_src = ast.get_source_segment(src, prepare) or ""
     check(
-        "vision_seam_unbuilt" not in inspect.getsource(h3._H3Base.condition_text),
+        "vision_seam_unbuilt" not in condition_src,
         "RED (inverted): condition_text no longer refuses a vision presentation",
     )
     check(
-        "text_encoder_blocks" in inspect.getsource(h3._H3Base.condition_text),
+        "text_encoder_blocks" in condition_src,
         "condition_text splices the patchified vision blocks into the text-encoder call",
     )
     check(
-        "vision.patchify" in inspect.getsource(h3.prepare),
+        "vision.patchify" in prepare_src,
         "prepare patchifies, so the layout's text span is the EXPANDED length",
     )
     check(
@@ -720,13 +734,13 @@ def arm_refrows() -> None:
     # would return essentially pure noise and destroy every anchor.
     x0 = torch.ones(4)
     noise = torch.zeros(4)
-    t = 0.999
-    ours = t * x0 + (1.0 - t) * noise
+    noise_level = 0.999
+    ours = noise_level * x0 + (1.0 - noise_level) * noise
     check(
         abs(ours.mean().item() - 0.999) < 1e-6,
         f"noising at t=0.999 keeps 99.9% of the anchor, got {ours.mean().item():.4f}",
     )
-    reversed_convention = (1.0 - t) * x0 + t * noise
+    reversed_convention = (1.0 - noise_level) * x0 + noise_level * noise
     check(
         abs(reversed_convention.mean().item() - 0.001) < 1e-6,
         "RED: the reversed convention would keep 0.1% and destroy the anchor",
@@ -753,7 +767,7 @@ def arm_refrows() -> None:
 
 
 def arm_oraclerun() -> None:
-    """THE POD HARNESS'S `H3Run`, CONSTRUCTED HERE FOR $0.
+    """THE POD HARNESS'S `H3Run` CALL, CHECKED HERE FOR $0.
 
     `scripts/h3-seam-oracle.py::seam_run` is the only construction of `H3Run` outside
     `h3.py`'s own path, and it runs POD-SIDE ONLY — so when the vision work gave `H3Run` two
@@ -762,41 +776,54 @@ def arm_oraclerun() -> None:
     text encoder had loaded on a rented H200: a signature drift billed at card rates and
     discovered thirteen minutes in.
 
-    The arm calls the harness's OWN constructor rather than restating it, so the thing under
-    test is the thing that runs. Zero weights, zero network — the drift is a signature, and a
-    signature is free to check.
+    Importing either file would also import torch and the private runtime. The signature
+    drift is syntax, so this arm parses the ACTUAL dataclass and the ACTUAL harness call and
+    requires every non-default field to be supplied. Zero weights, zero network, zero fake
+    author surface.
     """
-    import argparse
-    import importlib.util
-
-    import h3
-
-    spec = importlib.util.spec_from_file_location(
-        "h3_seam_oracle", pathlib.Path(__file__).with_name("h3-seam-oracle.py")
+    endpoint_path = ROOT / "h3" / "h3.py"
+    endpoint_tree = ast.parse(endpoint_path.read_text(), filename=str(endpoint_path))
+    run_class = next(
+        node
+        for node in endpoint_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "H3Run"
     )
-    assert spec and spec.loader
-    oracle = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(oracle)
+    required = tuple(
+        node.target.id
+        for node in run_class.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.value is None
+    )
 
-    # The harness's own request defaults, its own geometry, its own solver — so this arm
-    # walks the chain `side_render` walks, not a paraphrase of it.
-    parser = argparse.ArgumentParser()
-    oracle.add_request_options(parser)
-    args = parser.parse_args([])
-
-    grid = oracle.geometry(args)
-    layout = oracle._layout_for(22, grid)
-    solver = oracle.solver_for(args, layout)
-    run = oracle.seam_run(args, grid, layout, solver.plan)
-
-    check(isinstance(run, h3.H3Run), "the oracle's seam_run still constructs an H3Run")
-    check(run.plan.grid is grid, "and the model boundary's grid is the requested one",
-          detail=f"{grid.latent_t}x{grid.latent_h}x{grid.latent_w} from {args.length} frames")
-    check(run.timestep_plan is solver.plan, "and its timestep plan is the solver's",
-          detail=f"{solver.evaluations} evaluations, digest {run.digest}")
-    unset = [f for f in h3.H3Run.__dataclass_fields__ if not hasattr(run, f)]
-    check(not unset, "every H3Run field is populated, including any newly required one",
-          detail=f"fields {tuple(h3.H3Run.__dataclass_fields__)}")
+    oracle_path = pathlib.Path(__file__).with_name("h3-seam-oracle.py")
+    oracle_tree = ast.parse(oracle_path.read_text(), filename=str(oracle_path))
+    seam_run = next(
+        node
+        for node in oracle_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "seam_run"
+    )
+    calls = [
+        node
+        for node in ast.walk(seam_run)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "H3Run"
+    ]
+    check(len(calls) == 1, "the oracle's seam_run has exactly one H3Run construction")
+    if len(calls) != 1:
+        return
+    supplied = tuple(keyword.arg for keyword in calls[0].keywords if keyword.arg is not None)
+    missing = tuple(field for field in required if field not in supplied)
+    check(
+        not missing,
+        "every required H3Run field is supplied by the pod harness",
+        detail=f"required {required}; supplied {supplied}",
+    )
+    check(
+        bool(set(required) - set(supplied[:-1])),
+        "RED: deleting the harness's last required keyword makes the signatures disagree",
+    )
 
 
 ARMS = {

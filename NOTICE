@@ -58,8 +58,11 @@ FOR DELETION
     checkout on a rented card and is never imported by any endpoint or shipped
     in any release archive.
 
-    Nothing under `h3/h3_arch/` is included in a release archive built for a
-    deployment that selects the upstream path.
+    Current H3 release archives DO include `h3/h3_arch/`: the serving module still
+    imports its layout, presentation, vision and port-dialect path even when upstream
+    construction is selected. Public distribution remains blocked until those imports
+    and this directory are deleted together; there is no conditional packager that can
+    make the current source something it is not.
 
 
 THE MODEL'S OWN LICENCE IS NOT A CODE LICENCE

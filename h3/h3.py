@@ -533,14 +533,13 @@ def _present(ref: Reference, *, where: str) -> PresentedReference:
     """
     from h3_arch.vision import normalize_reference_image
 
-    kind = _kind_of(ref)
-    if kind == "audio":
+    if isinstance(ref, AudioReference):
         # A WAVEFORM NEVER ENTERS QWEN. The presentation gets the label; the audio VAE
         # gets the samples. Upstream refused audio as the only modality; that guard was
         # measured to protect nothing and this endpoint carries the Cozy extension
         # instead, WITHOUT claiming viseme or beat synchronization.
         return PresentedReference(kind="audio", has_audio=True)
-    if kind == "video":
+    if isinstance(ref, VideoReference):
         # The frames would have to be decoded, resampled onto the 24 fps clock and then
         # sampled again onto the text encoder's 2 fps grid, and the soundtrack encoded
         # beside them. The presentation layer builds video blocks and the packed layout
@@ -680,7 +679,7 @@ class _H3Base(Model[H3Pipeline]):
             return self.pipe.components["video_vae"].decode(latents)
 
 
-class Fl2VAModel(_H3Base, task="fl2va"):
+class Fl2VAModel(_H3Base, task="fl2va"):  # type: ignore[call-arg]
     """Text and first/last keyframes. Binds the `transformer` component."""
 
     def load(self, loader: Loader) -> None:
@@ -710,7 +709,7 @@ class Fl2VAModel(_H3Base, task="fl2va"):
             )
 
 
-class Ref2VAModel(_H3Base, task="ref2va"):
+class Ref2VAModel(_H3Base, task="ref2va"):  # type: ignore[call-arg]
     """Ordered image/video/audio references, optionally with keyframes when the deployment
     opens that door. Binds the `transformer_ref` component."""
 

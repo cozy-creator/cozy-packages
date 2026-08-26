@@ -210,7 +210,7 @@ def group_components() -> None:
         failed("task stamps", str(stamps))
 
     def _restamp() -> None:
-        class _Bad(h3.Fl2VAModel, task="ref2va"):
+        class _Bad(h3.Fl2VAModel, task="ref2va"):  # type: ignore[call-arg]
             pass
 
     expect_refusal(

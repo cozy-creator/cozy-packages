@@ -49,6 +49,15 @@ ignore_missing_imports = true
 module = ["quality_judge", "sdxl", "h3", "h3_arch.*", "h3_ref", "h3_ref.*"]
 disallow_subclassing_any = false
 disallow_untyped_decorators = false
+warn_unused_ignores = false
+
+# This driver imports the same private author surface as `h3`; CI cannot type that
+# dependency, so its component decorators are Any there. The real-surface run remains the
+# strong check, while the three `call-arg` ignores mark the exact missing-type consequence.
+[[tool.mypy.overrides]]
+module = ["h3-live"]
+disallow_untyped_decorators = false
+warn_unused_ignores = false
 
 [tool.ruff]
 line-length = 100

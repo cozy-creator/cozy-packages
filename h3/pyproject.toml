@@ -1,0 +1,33 @@
+[project]
+name = "h3-endpoint"
+version = "1.0.0"
+requires-python = "==3.12.*"
+dependencies = [
+    "cozy-runtime[media]==0.0.1",
+    "tensorfs==0.0.1",
+    "cozy-eval==2.3.0",
+    "msgspec>=0.19",
+    "numpy>=1.26",
+    "pillow>=10",
+    "torch==2.9.1+cu129",
+    "torchvision==0.24.1+cu129",
+    "transformers>=5.13,<6",
+    "diffusers @ git+https://github.com/huggingface/diffusers@50e7158093710f9c1b4ea9ff100137a91c9228f3",
+]
+
+# These three wheels are built from the source commits recorded in `build-pins.json`.
+# They live beside this file only inside a release archive.
+[tool.uv.sources]
+cozy-runtime = { path = "vendor/cozy_runtime-0.0.1-py3-none-any.whl" }
+tensorfs = { path = "vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl" }
+cozy-eval = { path = "vendor/cozy_eval-2.3.0-py3-none-any.whl" }
+torch = { index = "pytorch-cu129" }
+torchvision = { index = "pytorch-cu129" }
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[tool.uv]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]

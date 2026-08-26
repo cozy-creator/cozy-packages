@@ -13,13 +13,13 @@ Prints the archive's sha256 — what `cozy install --digest` checks.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import json
 import pathlib
 import sys
 import tarfile
-import time
 
 SKIP = {".git", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache", "node_modules", "dist"}
 
@@ -30,6 +30,20 @@ def digest(path: pathlib.Path) -> str:
         for block in iter(lambda: f.read(1 << 20), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def add_bytes(tar: tarfile.TarFile, name: str, payload: bytes, mode: int) -> None:
+    """Add one normalized regular file.
+
+    The release digest identifies content, not the builder's clock, uid, umask, or host.
+    """
+    info = tarfile.TarInfo(name)
+    info.size = len(payload)
+    info.mtime = 0
+    info.mode = mode
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    tar.addfile(info, io.BytesIO(payload))
 
 
 def main(argv: list[str]) -> int:
@@ -48,16 +62,24 @@ def main(argv: list[str]) -> int:
         rel = p.relative_to(root).as_posix()
         files.append({"path": rel, "sha256": digest(p), "size": p.stat().st_size})
 
-    declaration = json.dumps(
-        {"endpoint": endpoint, "version": version, "files": files}, indent=2
+    declaration = (
+        json.dumps({"endpoint": endpoint, "version": version, "files": files}, indent=2)
+        + "\n"
     ).encode()
 
-    with tarfile.open(out, "w:gz") as tar:
-        info = tarfile.TarInfo("release.json")
-        info.size, info.mtime, info.mode = len(declaration), int(time.time()), 0o644
-        tar.addfile(info, io.BytesIO(declaration))
+    # `tarfile.open(..., "w:gz")` embeds the current time in the gzip header, while
+    # `tar.add` preserves host uid/gid/mtime. Normalize both layers so identical input
+    # bytes always produce one archive digest.
+    with (
+        open(out, "wb") as raw,
+        gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed,
+        tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as tar,
+    ):
+        add_bytes(tar, "release.json", declaration, 0o644)
         for f in files:
-            tar.add(root / str(f["path"]), arcname=str(f["path"]), recursive=False)
+            path = root / str(f["path"])
+            mode = 0o755 if path.stat().st_mode & 0o111 else 0o644
+            add_bytes(tar, str(f["path"]), path.read_bytes(), mode)
 
     print(f"archive:  {out}")
     print(f"endpoint: {endpoint}  version: {version}  files: {len(files)}")
