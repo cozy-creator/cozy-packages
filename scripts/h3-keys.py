@@ -13,7 +13,7 @@ serve on a rented card; here it is a diff on this box.
     nice -n 19 .venv/bin/python scripts/h3-keys.py [component ...]
 
 THE SOURCE IS DECLARED, and unreadable is a REFUSAL, never a skip: the pinned evidence bank
-`~/cozy_v2/h3-evidence` (tfs-010) carries the exact header bytes of
+`~/cozy_v2/tracker-v2/h3-evidence` (tfs-010) carries the exact header bytes of
 `Comfy-Org/MiniMax-H3@4cc1d817…`, which is proto-001's selection and job-001's recipe. If
 the bank is not there this script must not print a verdict.
 
@@ -42,7 +42,7 @@ from typing import Any, NoReturn
 import torch
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-BANK = pathlib.Path.home() / "cozy_v2" / "h3-evidence"
+BANK = pathlib.Path.home() / "cozy_v2" / "tracker-v2" / "h3-evidence"
 ROW = "comfy-org-h3.json"
 
 #: The recipe's five components (job-001), each as (served carrier, dtype carrier). The

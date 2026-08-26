@@ -13,8 +13,9 @@ is an output-verification, and a green run here says nothing about whether a ren
 right — that is the GPU oracle's job and it has not been done.
 
 THE SOURCE IS DECLARED, and unreadable is a REFUSAL rather than a skip: the pinned evidence
-bank `~/cozy_v2/h3-evidence` carries the exact header bytes of the official release's
-diffusers packaging. If the bank is not there this script must not print a verdict.
+bank `~/cozy_v2/tracker-v2/h3-evidence` carries the exact header bytes of the official
+release's diffusers packaging. If the bank is not there this script must not print a
+verdict.
 
 The transformer, video VAE and text encoder are SHARDED, so their key sets come from the
 banked `*.index.json` weight maps — which name every key across every shard, and are the
@@ -36,7 +37,7 @@ from typing import Any, NoReturn
 import torch
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-BANK = pathlib.Path.home() / "cozy_v2" / "h3-evidence"
+BANK = pathlib.Path.home() / "cozy_v2" / "tracker-v2" / "h3-evidence"
 ROW = "minimax-diffusers-tree.json"
 
 #: component -> (the class's config document, the file whose key set is the artifact's
