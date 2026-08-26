@@ -32,7 +32,6 @@ beside that loader on real weights.
 from __future__ import annotations
 
 import math
-from typing import Any
 
 import torch
 from torch import Tensor, nn
@@ -485,20 +484,34 @@ class MiniMaxH3Dit(nn.Module):
         position_ids: Tensor,
         video_seg: tuple[int, int, int],
         audio_seg: tuple[int, int, int],
-        *,
-        on_step: Any = None,
     ) -> tuple[Tensor, Tensor]:
         """ONE denoise evaluation over an ALREADY PACKED sequence.
 
         The packing, the modulation segment table and the timestep plan are the endpoint's
         (`layout.py`) and arrive resolved: this signature is what makes `denoise` a single
-        declared component scope over the transformer and nothing else."""
+        declared component scope over the transformer and nothing else.
+
+        THE OUTPUT CONVENTION, because half of se-002's first render was this sentence not
+        being written down (#522a): these heads are DATA-WARD VELOCITY, pointing from
+        noise toward data, in ROW shape. The solver consumes them as
+        `x + (sigma - sigma_next) * v` and `layout.H3Solver` says so on its own side.
+
+        ComfyUI returns `[-video_out, -audio_out]` from the same computation because its
+        GENERIC flow sampler assumes the opposite sign and then applies the opposite
+        delta; the two flips compose to this same update. Diffusers' dedicated
+        `MiniMaxH3Scheduler` keeps the heads raw exactly as here and documents the
+        convention in the scheduler. Taking ComfyUI's negation WITHOUT its delta — or, as
+        happened, its delta without its negation — is 30 evaluations of anti-denoising,
+        and there is no numeric symptom short of the finished video.
+
+        NO PROGRESS CALLBACK. A denoise evaluation is one unit of progress; emitting one
+        per BLOCK reported 50 advances for a single step and made the 30-step bar
+        meaningless. The solver owns the count because the solver owns the loop (#522e).
+        """
         t_emb = self.timestep_embedding(t_values)
         rope_freqs = self.rope_freqs(position_ids, packed.dtype)
         h = packed
-        for index, block in enumerate(self.blocks):
+        for block in self.blocks:
             h = block(h, t_emb, mod_segments, rope_freqs)
-            if on_step is not None:
-                on_step(index)
         out: tuple[Tensor, Tensor] = self.final_layer(h, t_emb, video_seg, audio_seg)
         return out

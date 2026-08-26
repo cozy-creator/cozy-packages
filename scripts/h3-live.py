@@ -3,7 +3,12 @@
 weights and no rented card, fired for real and observed.
 
     nice -n 19 .venv-check/bin/python scripts/h3-live.py [group ...]
-    groups: components, request, plan, integrity, keys
+    groups: components, request, plan, keys, fence   (`.venv-check` is enough)
+    nice -n 19 .venv/bin/python scripts/h3-live.py gates   (needs torch + cozy-eval + ffmpeg)
+
+DETERMINISTIC CONTRACT ARMS LIVE IN `scripts/h3-conform.py` AND RUN IN CI (#533). This
+driver holds what CI cannot decide: refusals that need the runtime's guard, and the output
+gates, which need real banked media and a decoder.
 
 This is a driver, not a test suite (tracker README #160): it fires arms and prints what it
 saw. An arm that is not observed is not banked, and a green fence nobody has fired is a
@@ -316,7 +321,7 @@ def group_plan() -> None:
         args: dict[str, Any] = {
             "task": "fl2va",
             "structure": "h3-adaln-curve",
-            "steps": 30,
+            "evaluations": 30,
             "layout": layout,
             "sigma_shift_video": 12.0,
             "sigma_shift_audio": 3.0,
@@ -333,79 +338,231 @@ def group_plan() -> None:
         failed("plan digest is not stable", f"{a.digest()} vs {b.digest()}")
 
     cases = [
-        ("the SAME 30 steps at a different video shift", plan(sigma_shift_video=11.0)),
-        ("the same 30 steps at a different AUDIO shift", plan(sigma_shift_audio=4.0)),
-        ("the same 30 steps on the other task partition", plan(task="ref2va")),
-        ("the same 30 steps against a FULL-AdaLN structure", plan(structure="h3-full")),
-        ("the same 30 steps with a visual condition present", plan(visual_cond_timestep=0.999)),
-        ("the same 30 steps with an AdaLN-targeting adapter", plan(adapters=("turbo-4step",))),
+        ("the SAME 30 evaluations at a different video shift", plan(sigma_shift_video=11.0)),
+        ("the same 30 evaluations at a different AUDIO shift", plan(sigma_shift_audio=4.0)),
+        ("the same 30 evaluations on the other task partition", plan(task="ref2va")),
+        ("the same 30 against a FULL-AdaLN structure", plan(structure="h3-full")),
+        ("the same 30 with a visual condition present", plan(visual_cond_timestep=0.999)),
+        ("the same 30 with an AdaLN-targeting adapter", plan(adapters=("turbo-4step",))),
     ]
     for what, other in cases:
         if other.digest() != a.digest():
             observe(f"{what} is a DIFFERENT plan", other.digest())
         else:
             failed(f"{what} collided with the base plan", a.digest())
-    if a.steps == 30 and plan(steps=30).steps == 30:
-        observe("`steps` is display metadata derived from the value list", f"{a.steps}")
-
-
-def group_integrity() -> None:
-    print("\n== the output-integrity floor — all three branches, on real tensors ==")
-
-    class Tel:
-        """The one `Telemetry` member the floor uses. A structural stand-in, not a mock
-        framework: the floor's contract with telemetry is `metric(name, value)`."""
-
-        def __init__(self) -> None:
-            self.metrics: dict[str, float] = {}
-
-        def metric(self, name: str, value: float) -> None:
-            self.metrics[name] = value
-
-    def tel_of(t: Tel) -> Any:
-        return t
-
-    good_video = torch.rand(3, 8, 64, 64)
-    good_pixels = (good_video * 255).to(torch.uint8)
-    good_audio = torch.randn(2, 32000) * 0.1
-
-    tel = Tel()
-    h3._integrity(torch, good_video, good_pixels, good_audio, tel_of(tel))
-    observe("a real-shaped decode passes", str(tel.metrics))
-
-    nan_video = good_video.clone()
-    nan_video[0, 0, 0, 0] = float("nan")
-    expect_refusal(
-        "NaN read off the FLOAT decode, before quantization (#411's lesson)",
-        lambda: h3._integrity(torch, nan_video, good_pixels, good_audio, tel_of(Tel())),
-        code="output_integrity_nan",
-    )
-    # THE POINT of reading the float tensor: the quantized pixels of that same decode are
-    # clean, because a uint8 cannot be NaN.
-    quantized = torch.nan_to_num(nan_video, 0.0).mul(255).to(torch.uint8)
-    if not bool(torch.isnan(quantized.to(torch.float32)).any()):
+    if (a.evaluations, a.grid_points) == (30, 31):
         observe(
-            "the same generation's uint8 pixels carry NO evidence of it",
-            "clamp(0,1).to(uint8) is exactly what erases a diverged decode",
+            "the plan names EVALUATIONS and GRID POINTS apart",
+            f"{a.evaluations} model evaluations over {a.grid_points} sigma values — "
+            "`steps` is gone, because it never said which of the two it meant",
+        )
+    else:
+        failed("evaluations vs grid points", f"{a.evaluations} / {a.grid_points}")
+
+
+#: THE GATE FIXTURES, pinned by CONTENT DIGEST and not by path. Both live in the eval bank
+#: rather than this repo — they are 2 MiB and 13 MiB of real media — so the pin is what
+#: makes "the arm ran against the clip it says it ran against" checkable.
+#:
+#: The POSITIVE fixture is a real ComfyUI H3 render the owner accepted as good (job-003's
+#: bf16 floor arm), and it is exactly the 5 s preset: 1344x768, 24 fps, 124 frames, 32 kHz
+#: stereo. It REPLACES `torch.rand` — the previous positive fixture was random noise, which
+#: is the statistical class of the failure the gate exists to catch, so the gate was green
+#: for its own subject.
+#:
+#: The NEGATIVE fixture is `daf50552…` itself: se-002's first render, banked as permanent
+#: evidence (#519). It is a red arm forever. If it ever passes, the gate has regressed.
+_BANK = pathlib.Path.home() / "cozy_v2"
+GOOD_CLIP = (
+    _BANK / "tensorfs-bench/job-003-floor/outputs/B-comfy-full-bf16_r1_00001_.mp4",
+    "bb83def835cc41497afff168243a059e122c44418b503727438edc8633725f7e",
+)
+FAILED_CLIP = (
+    _BANK / "tensorfs-bench/proto-001/outputs/degraded/"
+    "RED-h3-first-serve-reversed-sampler-daf50552.mp4",
+    "daf50552d2b4ff79d9948e0c8167c2b1a68c20799530d49025d250fb1c0cee42",
+)
+
+
+class Tel:
+    """The one `Telemetry` member the gates use. A structural stand-in, not a mock
+    framework: their contract with telemetry is `metric(name, value)`."""
+
+    def __init__(self) -> None:
+        self.metrics: dict[str, float] = {}
+
+    def metric(self, name: str, value: float) -> None:
+        self.metrics[name] = value
+
+
+def tel_of(t: Tel) -> Any:
+    """The stand-in, typed as the surface it stands in for. `Telemetry` is a bound runtime
+    service an endpoint never constructs, so a driver cannot hand the real one over."""
+    return t
+
+
+def _pinned(fixture: tuple[pathlib.Path, str]) -> pathlib.Path | None:
+    """The fixture, or a FAILURE naming what is missing. Never a silent skip: a gate arm
+    that quietly does not run is the shape se-002 already paid for."""
+    import hashlib
+
+    path, digest = fixture
+    if not path.is_file():
+        failed(f"fixture missing: {path.name}", f"expected at {path}")
+        return None
+    got = hashlib.sha256(path.read_bytes()).hexdigest()
+    if got != digest:
+        failed(f"fixture {path.name} is not the pinned bytes", f"{got[:16]}… != {digest[:16]}…")
+        return None
+    observe(f"fixture {path.name} matches its pin", f"sha256 {digest[:16]}…")
+    return path
+
+
+def group_gates() -> None:
+    """THE TWO PER-REQUEST GATES, fired against digest-pinned REAL media.
+
+    Needs `.venv` (torch, cozy-eval) and ffmpeg, not `.venv-check`."""
+    print("\n== the per-request output gates — real clips, cozy-eval's own floors ==")
+    import numpy as np
+
+    from gates import post_encode_gate, pre_encode_gate
+    from h3_arch.layout import MediaFacts
+
+    good = _pinned(GOOD_CLIP)
+    bad = _pinned(FAILED_CLIP)
+    if good is None or bad is None:
+        return
+
+    import cozy_eval.audio as ce_audio
+    import cozy_eval.frames as ce_frames
+    import cozy_eval.integrity as ce_integrity
+
+    def tensors(path: pathlib.Path) -> tuple[Any, Any, Any]:
+        clip = np.stack(list(ce_frames.iter_video(path)))          # (T, H, W, 3) in [0,1]
+        audio = ce_audio.read_audio(path)
+        return (
+            torch.from_numpy(clip),                                 # the FLOAT decode
+            torch.from_numpy((clip * 255).round().astype("uint8")),  # the encoder's pixels
+            torch.from_numpy(audio.samples.T.copy()),               # (channels, samples)
         )
 
-    flat = torch.full((3, 8, 64, 64), 0.5)
+    def facts(frames: int) -> Any:
+        return MediaFacts(width=1344, height=768, frames=frames, fps=24, sample_rate=32000)
+
+    # ---- the POSITIVE fixture: a real, owner-accepted H3 render
+    decoded, pixels, waveform = tensors(good)
+    tel = Tel()
+    pre_encode_gate(
+        torch, decoded=decoded, pixels=pixels, waveform=waveform,
+        requested=facts(124), tel=tel_of(tel),
+    )
+    observe(
+        "a REAL good H3 render passes the pre-encode gate",
+        f"adjacent_frame_corr {tel.metrics['adjacent_frame_corr']}, "
+        f"frame_std_min {tel.metrics['frame_std_min']}, "
+        f"true peak {tel.metrics['audio_true_peak_dbtp']} dBTP",
+    )
+    tel = Tel()
+    post_encode_gate(good, requested=facts(124), tel=tel_of(tel))
+    observe(
+        "and the post-encode gate, decoding the actual container",
+        f"{int(tel.metrics['encoded_frames'])} frames at "
+        f"{int(tel.metrics['encoded_width'])}x{int(tel.metrics['encoded_height'])} / "
+        f"{tel.metrics['encoded_fps']} fps, {tel.metrics['encoded_audio_seconds']} s of audio",
+    )
+
+    # ---- THE PERMANENT RED ARM: se-002's first render, by digest
+    red_decoded, red_pixels, red_waveform = tensors(bad)
+    # THE HEADLINE NUMBER, read straight off cozy-eval so the arm reports what the floor
+    # actually measured rather than only which refusal arrived first.
+    verdict = ce_integrity.output_integrity(red_pixels.numpy())
+    if not verdict.ok:
+        observe(
+            "daf50552… fails cozy-eval's integrity floor — the check that already existed",
+            f"{verdict.summary()} — against a floor of 0.6, and the endpoint never called it",
+        )
+    else:
+        failed("the failed render passed the integrity floor", verdict.summary())
     expect_refusal(
-        "a flat field — the black clip a wrong VAE scaling produces",
-        lambda: h3._integrity(torch, flat, (flat * 255).to(torch.uint8), good_audio, tel_of(Tel())),
-        code="output_integrity_flat",
+        "daf50552… — the first se-002 render — is REFUSED at the pre-encode gate",
+        lambda: pre_encode_gate(
+            torch,
+            decoded=red_decoded,
+            pixels=red_pixels,
+            waveform=red_waveform,
+            requested=facts(103),
+            tel=tel_of(Tel()),
+        ),
+        code="output_av_duration_mismatch",
+    )
+    expect_refusal(
+        "  and against what was actually REQUESTED, on its frame count alone",
+        lambda: pre_encode_gate(
+            torch,
+            decoded=red_decoded,
+            pixels=red_pixels,
+            waveform=red_waveform,
+            requested=facts(124),
+            tel=tel_of(Tel()),
+        ),
+        code="output_shape_mismatch",
+    )
+    expect_refusal(
+        "  and at the post-encode gate, from the container alone",
+        lambda: post_encode_gate(bad, requested=facts(124), tel=tel_of(Tel())),
+        code="output_container_video",
+    )
+    tel = Tel()
+    try:
+        post_encode_gate(bad, requested=facts(103), tel=tel_of(tel))
+        failed("its own streams should still disagree", str(tel.metrics))
+    except Exception as exc:
+        observe(
+            "  and even taken on its OWN terms, its two streams disagree",
+            f"{getattr(exc, 'code', '?')}: {str(exc).splitlines()[0][:120]}",
+        )
+
+    # ---- the branches the floor exists for, over the REAL clip rather than noise
+    nan_decoded = decoded.clone()
+    nan_decoded[0, 0, 0, 0] = float("nan")
+    expect_refusal(
+        "NaN read off the FLOAT decode, before quantization (#411's lesson)",
+        lambda: pre_encode_gate(
+            torch, decoded=nan_decoded, pixels=pixels, waveform=waveform,
+            requested=facts(124), tel=tel_of(Tel()),
+        ),
+        code="output_integrity_nan",
+    )
+    if not bool(torch.isnan(pixels.to(torch.float32)).any()):
+        observe(
+            "the same generation's uint8 pixels carry NO evidence of it",
+            "quantizing to uint8 is exactly what erases a diverged decode",
+        )
+    black = torch.zeros_like(pixels)
+    expect_refusal(
+        "a black clip — what a wrong VAE scaling produces",
+        lambda: pre_encode_gate(
+            torch, decoded=black.to(torch.float32), pixels=black, waveform=waveform,
+            requested=facts(124), tel=tel_of(Tel()),
+        ),
+        code="output_integrity_video",
     )
     expect_refusal(
         "A SILENT SOUNDTRACK over a perfectly good picture — H3's own third branch",
-        lambda: h3._integrity(torch, good_video, good_pixels, torch.zeros(2, 32000), tel_of(Tel())),
-        code="output_integrity_silent",
+        lambda: pre_encode_gate(
+            torch, decoded=decoded, pixels=pixels, waveform=torch.zeros_like(waveform),
+            requested=facts(124), tel=tel_of(Tel()),
+        ),
+        code="output_integrity_audio",
     )
     expect_refusal(
-        "NaN in the AUDIO alone, with the video clean",
-        lambda: h3._integrity(
-            torch, good_video, good_pixels, good_audio * float("nan"), tel_of(Tel())
+        "a soundtrack that is 0.9 s longer than the picture",
+        lambda: pre_encode_gate(
+            torch, decoded=decoded, pixels=pixels,
+            waveform=torch.cat([waveform, waveform[:, :29000]], dim=1),
+            requested=facts(124), tel=tel_of(Tel()),
         ),
-        code="output_integrity_nan",
+        code="output_av_duration_mismatch",
     )
 
 
@@ -567,7 +724,7 @@ GROUPS = {
     "components": group_components,
     "request": group_request,
     "plan": group_plan,
-    "integrity": group_integrity,
+    "gates": group_gates,
     "keys": group_keys,
     "fence": group_fence,
 }

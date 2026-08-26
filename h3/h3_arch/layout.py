@@ -15,14 +15,20 @@ Two things are load-bearing beyond the packing itself:
     digest and never by step count. `steps=30` is display metadata; two 30-step requests
     with different scheduler shifts, different condition classes or a different modality
     convention are different plans, and this digest is what says so before any byte moves.
+  * `H3Solver`. The sampler's SIGN and SCHEDULE, in one small object that owns nothing
+    else. The model boundary returns DATA-WARD velocity and this is what turns that into
+    a latent update; se-002's first render had the sign backwards for every one of its 30
+    evaluations (#522a), which is not a numeric drift but a stated convention nobody
+    stated. It is stated here and again at `dit.MiniMaxH3Dit.forward`.
 """
 
 from __future__ import annotations
 
 import hashlib
 import math
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import msgspec
 
@@ -30,6 +36,25 @@ import msgspec
 #: later one spans four, rescaled by 5/3 — the released checkpoint's rotary convention.
 FRAME_PER_TOKEN = (1, 4, 4, 4, 4)
 FRAME_RESCALE = 5.0 / 3.0
+
+#: THE TEMPORAL GEOMETRY, and the single relation every downstream count reads.
+#:
+#: H3's video VAE is causal on a 17-frame clip grid that produces 5 latent frames per clip
+#: over a 5-frame / 2-latent head: `17k + 5` pixel frames <-> `5k + 2` latent frames. It is
+#: NOT a ratio. A generic `(frames - 1) // 4 + 1` agrees with it nowhere useful and was the
+#: geometry half of the first garbage render (#522b): 124 frames became 31 latents instead
+#: of 37, and the wrong count reached the noise SHAPE, the packed row count and the ROTARY
+#: CLOCK (`_video_t_spans` is indexed by latent frame) before the VAE deterministically
+#: decoded the wrong 31 into the 103 frames the artifact actually carries.
+FRAMES_PER_CLIP = 17
+LATENTS_PER_CLIP = 5
+HEAD_FRAMES = 5
+HEAD_LATENTS = 2
+
+#: The checkpoint's native clock and its audio VAE's latent rate. The audio row count
+#: follows the video CLOCK rather than the video latent count.
+FPS = 24
+AUDIO_LATENT_FPS = 40
 
 #: The packed order, and the modality tag each kind carries into AdaLN. Tags are the
 #: checkpoint's: 0 video, 1 text, 2 audio.
@@ -70,16 +95,92 @@ class LatentGrid:
         return self.audio_t * 2
 
 
-def latent_grid(
-    frames: int, width: int, height: int, *, spatial_ratio: int = 16, temporal_ratio: int = 4
-) -> LatentGrid:
-    """Pixel geometry -> latent geometry. The audio row count follows the video clock: the
-    audio VAE's 40 Hz latent rate against the 24 fps video grid."""
-    latent_t = (frames - 1) // temporal_ratio + 1
-    latent_h = height // spatial_ratio
-    latent_w = width // spatial_ratio
-    audio_t = round(frames / 24.0 * 40.0)
-    return LatentGrid(frames, height, width, latent_t, latent_h, latent_w, audio_t)
+#: How far a muxed soundtrack may sit from the video's own duration before the container
+#: is two clips in a trenchcoat. One video FRAME is the honest tolerance for a mux; the
+#: first se-002 artifact was 4.29 s of video against 5.18 s of audio — 21 frames apart.
+AV_DURATION_TOLERANCE_FRAMES = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class MediaFacts:
+    """What a request RESOLVED TO, in the vocabulary a finished file can be read in.
+
+    It exists so "observed" has something to disagree with. Every fact the first garbage
+    render carried was read off the artifact itself, so nothing could contradict it."""
+
+    width: int
+    height: int
+    frames: int
+    fps: int
+    sample_rate: int
+    mute: bool = False
+
+    @property
+    def duration_s(self) -> float:
+        return self.frames / float(self.fps)
+
+    @property
+    def av_tolerance_s(self) -> float:
+        return AV_DURATION_TOLERANCE_FRAMES / float(self.fps)
+
+    def av_drift(self, audio_seconds: float) -> float:
+        return abs(audio_seconds - self.duration_s)
+
+    def av_agrees(self, audio_seconds: float) -> bool:
+        """The two streams were denoised JOINTLY, so a duration disagreement is a latent
+        geometry that is wrong — never a mux preference."""
+        return self.av_drift(audio_seconds) <= self.av_tolerance_s
+
+
+def latent_frames(frames: int) -> int:
+    """`17k + 5` pixel frames -> `5k + 2` latent frames. A count OFF the grid refuses.
+
+    Refusing rather than flooring is deliberate: flooring is what a ratio does, and a
+    ratio is the thing that was wrong. Every offered duration lands on the grid by
+    construction, so an off-grid count reaching here is a caller bug and says so."""
+    if frames <= HEAD_FRAMES:
+        return HEAD_LATENTS
+    clips, remainder = divmod(frames - HEAD_FRAMES, FRAMES_PER_CLIP)
+    if remainder:
+        raise ValueError(
+            f"{frames} frames is not on H3's clip grid: the video VAE is causal over "
+            f"{FRAMES_PER_CLIP}-frame clips on a {HEAD_FRAMES}-frame head, so a frame "
+            f"count is {FRAMES_PER_CLIP}k + {HEAD_FRAMES} and nothing else"
+        )
+    return clips * LATENTS_PER_CLIP + HEAD_LATENTS
+
+
+def pixel_frames(latent_t: int) -> int:
+    """The exact INVERSE of `latent_frames`, and the reason the round trip is provable
+    with no card: the frame count a latent sequence of `latent_t` is entitled to."""
+    if latent_t <= HEAD_LATENTS:
+        return HEAD_FRAMES
+    clips, remainder = divmod(latent_t - HEAD_LATENTS, LATENTS_PER_CLIP)
+    if remainder:
+        raise ValueError(
+            f"{latent_t} latent frames is not on H3's clip grid: a latent count is "
+            f"{LATENTS_PER_CLIP}k + {HEAD_LATENTS} and nothing else"
+        )
+    return clips * FRAMES_PER_CLIP + HEAD_FRAMES
+
+
+def audio_latents(frames: int) -> int:
+    """The audio latent count for a video frame count, on the video CLOCK: the audio
+    VAE's 40 Hz latent rate against the checkpoint's 24 fps grid."""
+    return round(frames / float(FPS) * float(AUDIO_LATENT_FPS))
+
+
+def latent_grid(frames: int, width: int, height: int, *, spatial_ratio: int = 16) -> LatentGrid:
+    """Pixel geometry -> latent geometry, through H3's own relations and no ratio."""
+    return LatentGrid(
+        frames,
+        height,
+        width,
+        latent_frames(frames),
+        height // spatial_ratio,
+        width // spatial_ratio,
+        audio_latents(frames),
+    )
 
 
 def _axis_from_sqrt_area(dim: int, patch: int, sqrt_area: float) -> list[float]:
@@ -267,20 +368,46 @@ class TimestepPlan(msgspec.Struct, frozen=True):
         )
 
     @property
-    def steps(self) -> int:
-        """Display metadata. Never a cache key — that is what `digest()` is for."""
+    def grid_points(self) -> int:
+        """How many sigma VALUES the schedule holds. Never a loop bound."""
         return len(self.video_sigmas)
 
+    @property
+    def evaluations(self) -> int:
+        """How many times the MODEL IS EVALUATED: the number of TRANSITIONS between grid
+        points, which is one fewer than the number of points.
 
-def flow_sigmas(steps: int, shift: float) -> tuple[float, ...]:
-    """The shifted flow-match schedule: a uniform grid on [1, 0] bent by `shift`."""
+        The two numbers are named separately because conflating them is what put an extra
+        forward pass in the first render (#522c): `flow_sigmas(30)` returns 31 values, the
+        loop iterated over the VALUES, and the 31st iteration stepped from sigma 0 to
+        sigma 0 — a full-cost evaluation with a zero delta. A 30-step request is 30
+        evaluations over 31 grid points, exactly, and `steps` as a name is gone because it
+        was never clear which of the two it meant."""
+        return len(self.video_sigmas) - 1
+
+
+def flow_sigmas(evaluations: int, shift: float) -> tuple[float, ...]:
+    """The shifted flow-match schedule: a uniform grid on [1, 0] bent by `shift`.
+
+    Returns `evaluations + 1` GRID POINTS, from exactly 1.0 down to exactly 0.0 — the
+    shift maps both ends to themselves, so the terminal zero is part of the grid rather
+    than appended to it. The argument is the count of MODEL EVALUATIONS because that is
+    what a caller asks for and what it is billed for; the point count is one more, and the
+    two are never the same number (#522c)."""
     return tuple(
-        shift * (1.0 - i / steps) / (1.0 + (shift - 1.0) * (1.0 - i / steps))
-        for i in range(steps + 1)
+        shift * (1.0 - i / evaluations) / (1.0 + (shift - 1.0) * (1.0 - i / evaluations))
+        for i in range(evaluations + 1)
     )
 
 
 def shift_sigma(sigma: float, from_shift: float, to_shift: float) -> float:
+    """Unbend one shifted schedule back to its uniform grid, then bend it by another.
+
+    This is why H3 samples ONE clock: `shift_sigma(flow_sigmas(n, 12)[i], 12, 3)` is
+    exactly `flow_sigmas(n, 3)[i]`, because the first half inverts the shift back to
+    `1 - i/n`. Diffusers runs a SECOND `MiniMaxH3Scheduler` at shift 3 over the same
+    uniform base to get the audio schedule; that is the same numbers by a different
+    route, and the conformance arm checks the identity rather than assuming it."""
     base = sigma / (from_shift + sigma * (1.0 - from_shift))
     return to_shift * base / (1.0 + (to_shift - 1.0) * base)
 
@@ -289,7 +416,7 @@ def build_timestep_plan(
     *,
     task: str,
     structure: str,
-    steps: int,
+    evaluations: int,
     layout: PackedLayout,
     sigma_shift_video: float,
     sigma_shift_audio: float,
@@ -299,7 +426,9 @@ def build_timestep_plan(
     output_dtype: str = "float32",
     adapters: tuple[str, ...] = (),
 ) -> TimestepPlan:
-    video = flow_sigmas(steps, sigma_shift_video)
+    """`evaluations` is the number of MODEL EVALUATIONS the request asked for — the
+    published step preset. The plan holds `evaluations + 1` sigmas per stream."""
+    video = flow_sigmas(evaluations, sigma_shift_video)
     audio = tuple(shift_sigma(s, sigma_shift_video, sigma_shift_audio) for s in video)
     kinds = sorted({k for _, _, k in layout.segments})
     return TimestepPlan(
@@ -318,7 +447,28 @@ def build_timestep_plan(
     )
 
 
-def modulation_segments(
+@dataclass(frozen=True, slots=True)
+class Modulation:
+    """ONE evaluation's complete modulation plane, resolved before a component is leased.
+
+    Segments, the distinct timesteps they index and the final layer's two stream slices
+    are ONE object because they are one arithmetic and their row indices must agree. They
+    used to be two functions that each rebuilt `{value: row}` from a list of floats, and
+    the second one was handed the list AFTER a float32 tensor round trip — so the exact
+    dict lookup missed on a value the first one had put there, and the pod patched it with
+    a nearest-value search. Computing the rows ONCE removes the class of bug rather than
+    the instance."""
+
+    segments: tuple[tuple[int, int, int], ...]
+    timesteps: tuple[float, ...]
+    """The distinct timestep values, in modulation-row order. `AdalnProj` gets exactly
+    these, and a row is `timestep_index * 3 + modality_tag`."""
+    video_stream: tuple[int, int, int]
+    audio_stream: tuple[int, int, int]
+    position_ids: tuple[tuple[float, float, float], ...]
+
+
+def build_modulation(
     layout: PackedLayout,
     *,
     t_video: float,
@@ -326,8 +476,9 @@ def modulation_segments(
     visual_cond_t: float,
     audio_cond_t: float,
     text_token_tags: tuple[int, ...] | None = None,
-) -> tuple[list[tuple[int, int, int]], list[float]]:
-    """The per-segment modulation row table, plus the distinct timestep values it indexes.
+) -> Modulation:
+    """The per-segment modulation row table, the distinct timesteps it indexes, and the
+    two target-stream slices the final layer reads.
 
     Rows are `t_row * 3 + modality_tag`, which is why one AdaLN projection over M distinct
     timesteps yields 3M modulation rows and a 100k-row sequence needs no per-row anything.
@@ -354,14 +505,88 @@ def modulation_segments(
                     start = i
         else:
             out.append((a, b, base + SEGMENT_TAG[kind]))
-    return out, unique
-
-
-def stream_rows(
-    layout: PackedLayout, unique: list[float], *, t_video: float, t_audio: float
-) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-    """The final layer's two slices: (start, stop, modulation row) for video and audio."""
-    row_of = {value: index for index, value in enumerate(unique)}
     va, vb = layout.stream("video")
     aa, ab = layout.stream("audio")
-    return (va, vb, row_of[t_video]), (aa, ab, row_of[t_audio])
+    return Modulation(
+        segments=tuple(out),
+        timesteps=tuple(unique),
+        video_stream=(va, vb, row_of[seg_t["video"]]),
+        audio_stream=(aa, ab, row_of[seg_t["audio"]]),
+        position_ids=tuple(layout.position_ids),
+    )
+
+
+# ------------------------------------------------------------------ the solver
+
+
+@dataclass(frozen=True, slots=True)
+class SolverStep:
+    """One model evaluation's schedule facts, and the update that consumes its result."""
+
+    index: int
+    sigma_video: float
+    sigma_video_next: float
+    sigma_audio: float
+    sigma_audio_next: float
+
+    @property
+    def t_video(self) -> float:
+        """The modulation plane's timestep, which is `1 - sigma` and not the sigma."""
+        return 1.0 - self.sigma_video
+
+    @property
+    def t_audio(self) -> float:
+        return 1.0 - self.sigma_audio
+
+    def advance_video(self, latent: Any, velocity: Any) -> Any:
+        return latent + (self.sigma_video - self.sigma_video_next) * velocity
+
+    def advance_audio(self, latent: Any, velocity: Any) -> Any:
+        return latent + (self.sigma_audio - self.sigma_audio_next) * velocity
+
+
+@dataclass(frozen=True, slots=True)
+class H3Solver:
+    """The flow-match Euler solver. It owns SIGN and SCHEDULE and nothing else.
+
+    THE SIGN CONVENTION, stated here and again at `dit.MiniMaxH3Dit.forward`, because a
+    convention held in one place is a convention half the code disagrees with:
+
+        the model returns DATA-WARD velocity — the direction from noise toward data —
+        and a step toward data multiplies it by the sigma DECREASE:
+
+            x_next = x + (sigma - sigma_next) * v
+
+    `sigma` decreases along the schedule, so `(sigma - sigma_next)` is POSITIVE and the
+    latent moves toward data. se-002's first render used `(sigma_next - sigma)` on the
+    same raw heads and therefore anti-denoised for all 30 evaluations (#522a).
+
+    The two reference implementations agree with this and with each other. ComfyUI negates
+    both heads inside the model and then applies the opposite delta, so the two sign flips
+    compose to the same update. Diffusers' own `MiniMaxH3Scheduler` keeps the heads raw
+    and writes `x0 = x_t + sigma * v` with `x_next = ratio*x + (1-ratio)*x0`, `ratio =
+    sigma_next/sigma`, which is this line rearranged. This port takes diffusers' shape
+    because it is the one that states the convention rather than compensating for it.
+    """
+
+    plan: TimestepPlan
+
+    @property
+    def evaluations(self) -> int:
+        return self.plan.evaluations
+
+    def step(self, index: int) -> SolverStep:
+        return SolverStep(
+            index=index,
+            sigma_video=self.plan.video_sigmas[index],
+            sigma_video_next=self.plan.video_sigmas[index + 1],
+            sigma_audio=self.plan.audio_sigmas[index],
+            sigma_audio_next=self.plan.audio_sigmas[index + 1],
+        )
+
+    def steps(self) -> Iterator[SolverStep]:
+        """Every model evaluation, once. Never one per GRID POINT — the terminal sigma is
+        a destination, not a transition, and evaluating at it costs a full forward pass to
+        add exactly zero (#522c)."""
+        for index in range(self.evaluations):
+            yield self.step(index)

@@ -1,7 +1,16 @@
 name: ci
-# Fences + static analysis. There are no test steps anywhere in v2 (tracker README #160):
-# verification is running the real endpoint on the real card and recording the transcript
-# and benchmarks in the issue.
+# Fences + static analysis + the DETERMINISTIC CONFORMANCE ARMS.
+#
+# The testing rule as of #533: "No mock-heavy behavioral suites or tests of implementation
+# trivia. Deterministic contract, arithmetic, codec, schema, and regression checks MUST run
+# in CI. Live end-to-end evidence remains mandatory." The four defects that produced
+# se-002's first garbage render — a reversed sampler sign, a generic temporal ratio, sigma
+# grid points counted as model evaluations, and a double pixel rescale — were every one of
+# them decidable on a CPU in milliseconds, and no manually-invoked script was running them.
+# So they run here, on every push, and they cost seconds.
+#
+# Live evidence (a real render on a real card, viewed) is still mandatory and still cannot
+# happen here. These arms make the CHEAP half unmissable; they do not replace the other.
 #
 # No GPU and no weights are needed here, and that is a PROPERTY being checked rather than a
 # convenience: endpoint module scope must stay light enough for `describe` to read the
@@ -43,7 +52,7 @@ jobs:
         run: uv run --no-project python scripts/fence.py
 
       - name: Lint
-        run: uv run --no-project ruff check quality-judge/ scripts/
+        run: uv run --no-project ruff check h3/ quality-judge/ scripts/ sdxl/
 
       # Static analysis is REQUIRED (tracker README, owner directive 2026-08-25). Without
       # the private runtime installed, `cozy_runtime.*` resolves to Any here — the same
@@ -52,6 +61,19 @@ jobs:
       # types, is `.venv-check/bin/python -m mypy` against the pinned checkout.
       - name: Types
         run: uv run --no-project mypy
+
+      # The H3 reference semantics, checked against independently written upstream
+      # expressions rather than against the endpoint's own call shapes — so the same arms
+      # gate the diffusers rebase that replaces the hand port (#531). Every arm carries its
+      # own RED CONTROL: the exact defective expression that shipped, asserted to disagree.
+      #
+      # numpy is the only addition to the environment above, and it is here because the
+      # pixel arm exercises the SHIPPED conversion on a real array instead of a paraphrase
+      # of it. No torch, no weights, no network, no card.
+      - name: Conformance arms
+        run: |
+          uv pip install numpy
+          uv run --no-project python scripts/h3-conform.py
 
       - name: Install the pinned author surface
         if: env.COZY_CI_TOKEN != ''
