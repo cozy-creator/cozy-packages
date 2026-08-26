@@ -28,7 +28,7 @@ import ast
 import pathlib
 import sys
 import traceback
-from typing import Any, cast
+from typing import Any
 
 from _h3_probe import SOURCE_TREE, select
 
@@ -689,15 +689,12 @@ def arm_keyframes() -> None:
 
 def arm_rng() -> None:
     """One request owns one ordered CPU stream: condition(s), video, then audio rows."""
-    import inspect
-    from types import SimpleNamespace
-
     import torch
 
-    import h3
     from h3_arch import DitConfig
     from h3_arch.dit import pack_audio, unpack_audio
-    from h3_arch.layout import Keyframe, LatentGrid, PackedLayout
+    from h3_arch.layout import LatentGrid
+    from h3_arch.sampling import condition_noise, initial_latents
 
     grid = LatentGrid(
         frames=5,
@@ -708,51 +705,15 @@ def arm_rng() -> None:
         latent_w=2,
         audio_t=3,
     )
-    images = (_image(17, 32, 32), _image(18, 32, 32))
-    geometry = ((1, 2, 2), (1, 2, 2))
-    plan = h3.H3Plan(
-        grid=grid,
-        keyframes=(Keyframe(0), Keyframe(4)),
-        steps=1,
-        mute=False,
-        condition_images=images,
-        condition_geometry=geometry,
-    )
-    run = h3.H3Run(
-        plan=plan,
-        layout=PackedLayout(4, grid, keyframes=plan.keyframes),
-        timestep_plan=cast(Any, None),
-        generator=torch.Generator(device="cpu").manual_seed(73),
-        expanded=cast(Any, None),
-    )
-
-    class FakeVae:
-        post_quant_conv = SimpleNamespace(weight=torch.empty(1))
-
-        def encode_condition(self, _pixels: Any) -> Any:
-            return torch.zeros(1, 24, 1, 2, 2)
-
-    model: Any = SimpleNamespace(
-        pipe=SimpleNamespace(
-            components={"video_vae": FakeVae()},
-            config=SimpleNamespace(dit=DitConfig()),
-        )
-    )
-    condition_visual = inspect.unwrap(h3.Fl2VAModel.condition_visual)
-    conditions = condition_visual(model, run, noise_level=0.0)
-
-    class EmptySolver:
-        def steps(self) -> tuple[()]:
-            return ()
-
-    sampled = h3._sample(
-        torch,
-        model,
-        run,
-        cast(Any, EmptySolver()),
-        torch.empty(1),
-        lambda _index: None,
-        cast(Any, SimpleNamespace()),
+    generator = torch.Generator(device="cpu").manual_seed(73)
+    conditions = [
+        condition_noise(generator, torch.zeros(1, 24, 1, 2, 2)) for _ in range(2)
+    ]
+    sampled = initial_latents(
+        generator,
+        DitConfig(),
+        grid,
+        device=torch.device("cpu"),
     )
 
     oracle = torch.Generator(device="cpu").manual_seed(73)
@@ -799,6 +760,24 @@ def arm_rng() -> None:
         and not torch.equal(sampled["video"], legacy_video)
         and not torch.equal(pack_audio(sampled["audio"]), pack_audio(legacy_audio)),
         "RED: independent condition seeds plus a reset target stream disagree with the release",
+    )
+
+    endpoint = ast.parse(ENDPOINT_SOURCE.read_text(), filename=str(ENDPOINT_SOURCE))
+    calls = [
+        node.func.id
+        for node in ast.walk(endpoint)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"condition_noise", "initial_latents"}
+    ]
+    check(
+        calls.count("condition_noise") == 1 and calls.count("initial_latents") == 1,
+        "the endpoint wires each exact draw operation into one production call site",
+        detail=f"calls {calls}",
+    )
+    check(
+        "cozy_runtime" not in sys.modules,
+        "the RNG proof executes without importing the private Runtime package",
     )
 
 

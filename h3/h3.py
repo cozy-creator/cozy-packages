@@ -114,6 +114,7 @@ from h3_arch.layout import (
 from h3_arch.pixels import pixel_bytes
 from h3_arch.presentation import Tokenizer
 from h3_arch.presentation import build as build_presentation
+from h3_arch.sampling import condition_noise, initial_latents
 from h3_arch.vision import ExpandedPresentation, PatchedVision
 
 app = App()
@@ -445,9 +446,7 @@ class Fl2VAModel(Model[H3Pipeline], task="fl2va"):  # type: ignore[call-arg]
                     )
                 # x_t = t*x_0 + (1-t)*noise, in H3's `t` convention — `t = 1` is clean. The
                 # noise is drawn on the HOST so two cards produce the same anchor.
-                noise = torch.randn(
-                    latents.shape, generator=run.generator, dtype=torch.float32
-                ).to(device=latents.device, dtype=latents.dtype)
+                noise = condition_noise(run.generator, latents)
                 out.append(noise_level * latents + (1.0 - noise_level) * noise)
         return out
 
@@ -731,25 +730,11 @@ def _sample(
     plan = run.timestep_plan
     dit = model.pipe.config.dit
     grid = run.plan.grid
-    from h3_arch.dit import unpack_audio
-
     # SEEDED ON THE HOST, always: a device-side draw is not reproducible across cards, and
     # the seed is a request fact. The latents then follow the conditioning to wherever the
     # runtime placed the weights.
-    video = torch.randn(
-        1,
-        dit.latents_dim,
-        grid.latent_t,
-        grid.latent_h,
-        grid.latent_w,
-        generator=run.generator,
-    ).to(text_states.device)
-    audio_rows = torch.randn(
-        grid.audio_rows,
-        dit.audio_latents_dim,
-        generator=run.generator,
-    )
-    audio = unpack_audio(audio_rows).to(text_states.device)
+    latents = initial_latents(run.generator, dit, grid, device=text_states.device)
+    video, audio = latents["video"], latents["audio"]
 
     for step in solver.steps():
         ctx.raise_if_cancelled()
