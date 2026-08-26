@@ -2,7 +2,8 @@
 """H3's VISION-SEAM CONFORMANCE ARMS — the pixels-to-conditioner seam, decided on CPU.
 
     nice -n 19 python scripts/h3-vision-conform.py [arm ...]
-    arms: preprocess, presentation, splices, deepstack, forward, refrows, refusal
+    arms: preprocess, presentation, splices, deepstack, towerkeys, forward, refrows,
+          refusal
 
 WHY THIS IS A SECOND FILE. `h3-conform.py` declares "no torch, no weights, no network" and
 that is load-bearing — it is the arm set that can run anywhere. Every arm HERE needs torch,
@@ -559,6 +560,98 @@ def arm_forward() -> None:
     )
 
 
+def arm_towerkeys() -> None:
+    """OUR vision tower against the OFFICIAL one, destination for destination.
+
+    #540 proved the whole `h3_ref` conditioner key-exact against the official diffusers
+    tree. That is the OTHER dialect. This arm asks the question the vision seam actually
+    depends on: does the tower inside `h3_arch`'s conditioner — the one the BOUND carrier
+    fills — have exactly the destinations `transformers`' own `Qwen3VLVisionModel` has?
+
+    If it does, then every constant the port had to guess (the rope sections, the vision
+    rope theta, the merger's pre- vs post-shuffle norm) is guessing about ARITHMETIC over a
+    graph whose shape is confirmed, which is a much smaller claim than guessing about both.
+    Header-verified, on the control plane, for nothing.
+
+    The carrier's own banked header is the third party: 902 BF16 destinations of which the
+    `visual.*` families are 27 blocks and 3 deepstack mergers, with `attn.qkv` FUSED on the
+    vision side and q/k/v SPLIT on the language side — the two dialects this arm's two
+    models have to agree with.
+    """
+    import torch
+
+    from h3_arch.config import TextEncoderConfig
+    from h3_arch.text_encoder import Qwen3VLConditioner
+
+    config = TextEncoderConfig()
+    with torch.device("meta"):
+        ours = Qwen3VLConditioner(config)
+    mine = {
+        name[len("visual.") :]: tuple(p.shape)
+        for name, p in ours.named_parameters()
+        if name.startswith("visual.")
+    }
+
+    from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLVisionConfig
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLVisionModel
+
+    official_config = Qwen3VLVisionConfig(
+        depth=config.vision_depth,
+        hidden_size=config.vision_hidden_size,
+        intermediate_size=config.vision_intermediate_size,
+        num_heads=config.vision_num_heads,
+        in_channels=config.vision_in_channels,
+        patch_size=config.vision_patch_size,
+        spatial_merge_size=config.vision_spatial_merge_size,
+        temporal_patch_size=config.vision_temporal_patch_size,
+        out_hidden_size=config.vision_out_hidden_size,
+        num_position_embeddings=config.vision_num_position_embeddings,
+        deepstack_visual_indexes=list(config.vision_deepstack_layers),
+    )
+    with torch.device("meta"):
+        official = Qwen3VLVisionModel(official_config)
+    theirs = {name: tuple(p.shape) for name, p in official.named_parameters()}
+
+    check(
+        len(mine) == len(theirs) == 351,
+        f"the tower has 351 destinations on both sides (ours {len(mine)}, official {len(theirs)})",
+    )
+    missing = sorted(set(theirs) - set(mine))
+    extra = sorted(set(mine) - set(theirs))
+    check(
+        not missing,
+        f"no official destination is missing from the port ({len(missing)})",
+        str(missing[:4]),
+    )
+    check(not extra, f"the port invents no destination ({len(extra)})", str(extra[:4]))
+    mismatched = sorted(k for k in set(mine) & set(theirs) if mine[k] != theirs[k])
+    check(
+        not mismatched,
+        f"every shared destination agrees on SHAPE ({len(mismatched)} disagree)",
+        str([(k, mine[k], theirs[k]) for k in mismatched[:3]]),
+    )
+    check(
+        mine.get("blocks.0.attn.qkv.weight") == (3456, 1152),
+        f"the vision attention is FUSED qkv at [3456, 1152], as the carrier's header says: "
+        f"{mine.get('blocks.0.attn.qkv.weight')}",
+    )
+    check(
+        mine.get("merger.linear_fc2.weight") == (5120, 4608),
+        f"the merger folds 2x2 of 1152 into the 5120 language width: "
+        f"{mine.get('merger.linear_fc2.weight')}",
+    )
+
+    # RED CONTROL: the deepstack mergers are NOT the patch merger — their norm is applied
+    # POST-shuffle and is 4608 wide, against the merger's pre-shuffle 1152. If the two were
+    # interchangeable the port could have shared one class and been silently wrong.
+    check(
+        mine.get("merger.norm.weight") == (1152,)
+        and mine.get("deepstack_merger_list.0.norm.weight") == (4608,),
+        "RED: the two merger classes differ where they must — 1152 pre-shuffle vs 4608 post",
+        f"{mine.get('merger.norm.weight')} vs {mine.get('deepstack_merger_list.0.norm.weight')}",
+    )
+
+
 def arm_refrows() -> None:
     """The reference LATENT rows: what the layout RESERVES and what the patchifier PRODUCES
     must be the same integer, and the anchors' noising must be the reference's.
@@ -656,6 +749,7 @@ ARMS = {
     "presentation": arm_presentation,
     "splices": arm_splices,
     "deepstack": arm_deepstack,
+    "towerkeys": arm_towerkeys,
     "forward": arm_forward,
     "refrows": arm_refrows,
     "refusal": arm_refusal,
