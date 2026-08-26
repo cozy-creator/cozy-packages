@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """H3's VISION-SEAM CONFORMANCE ARMS — the pixels-to-text-encoder seam, decided on CPU.
 
-    nice -n 19 python scripts/h3-vision-conform.py [arm ...]
+    nice -n 19 python scripts/h3-vision-conform.py [--installed-wheel] [arm ...]
     arms: oraclerun, preprocess, presentation, splices, deepstack, towerkeys, forward,
           refrows, refusal
 
@@ -34,8 +34,10 @@ import sys
 import traceback
 from typing import Any
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "h3"))
+from _h3_probe import SOURCE_TREE, select
+
+INSTALLED_WHEEL, _SUBJECTS = select(sys.argv, "h3", "h3_arch")
+ENDPOINT_SOURCE = _SUBJECTS.get("h3", SOURCE_TREE / "h3.py")
 
 PASS = "  ok   "
 FAIL = "  FAIL "
@@ -408,7 +410,7 @@ def arm_refusal() -> None:
     """THE OLD ARM, INVERTED. `vision_seam_unbuilt` was the guarantee that a vision
     presentation could not silently reach Qwen as nothing. It must now be UNREACHABLE for
     an image request — its survival would mean the seam is still not wired."""
-    path = ROOT / "h3" / "h3.py"
+    path = ENDPOINT_SOURCE
     src = path.read_text()
     tree = ast.parse(src, filename=str(path))
     base = next(
@@ -781,7 +783,7 @@ def arm_oraclerun() -> None:
     requires every non-default field to be supplied. Zero weights, zero network, zero fake
     author surface.
     """
-    endpoint_path = ROOT / "h3" / "h3.py"
+    endpoint_path = ENDPOINT_SOURCE
     endpoint_tree = ast.parse(endpoint_path.read_text(), filename=str(endpoint_path))
     run_class = next(
         node

@@ -3,7 +3,8 @@
 own diffusers-format headers, and the four #522 seams against upstream's own arithmetic.
 Decided on the control plane, with ZERO weight bytes and zero dollars.
 
-    nice -n 19 .venv/bin/python scripts/h3-diffusers-keys.py [keys|geometry|schedule|solver|curve]
+    nice -n 19 .venv/bin/python scripts/h3-diffusers-keys.py \
+        [--installed-wheel] [keys|geometry|schedule|solver|curve]
 
 WHAT THIS ANSWERS, AND WHAT IT DOES NOT. `scripts/h3-keys.py` asks the same question of the
 hand port against the community carrier; this asks it of the upstream classes against the
@@ -36,7 +37,9 @@ from typing import Any, NoReturn
 
 import torch
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+from _h3_probe import select
+
+INSTALLED_WHEEL, _SUBJECTS = select(sys.argv, "h3_ref", "h3_arch")
 BANK = pathlib.Path.home() / "cozy_v2" / "tracker-v2" / "h3-evidence"
 ROW = "minimax-diffusers-tree.json"
 
@@ -111,7 +114,6 @@ def banked(path: str) -> Any:
 def build_component(component: str, config: dict[str, Any]) -> Any:
     """`h3_ref`'s builder, reached the way the release archive lays the endpoint out: the
     model library sits beside the endpoint module, not on the path this script runs from."""
-    sys.path.insert(0, str(ROOT / "h3"))
     from h3_ref import build_component as build
 
     return build(component, config)
@@ -296,7 +298,6 @@ def check_solver() -> bool:
     RED CONTROL on arm 2: the defective `x + (sigma_next - sigma) * v` update (#522a) must
     DISAGREE, and it is asserted to, so a green arm is never a green nobody fired.
     """
-    sys.path.insert(0, str(ROOT / "h3"))
     from diffusers import MiniMaxH3Scheduler
 
     from h3_arch.layout import H3Solver, TimestepPlan, flow_sigmas

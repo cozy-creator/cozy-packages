@@ -2,7 +2,7 @@
 """H3's DETERMINISTIC CONFORMANCE ARMS — every reference semantic that can be decided with
 no card, no weights and no model library, fired for real and observed.
 
-    nice -n 19 python scripts/h3-conform.py [arm ...]
+    nice -n 19 python scripts/h3-conform.py [--installed-wheel] [arm ...]
     arms: sign, geometry, windows, schedule, pixels, facts
 
 THESE RUN IN CI (#533). The four defects that produced se-002's first garbage render —
@@ -37,13 +37,13 @@ REFERENCES, both read from source and cited where they are used:
 from __future__ import annotations
 
 import math
-import pathlib
 import sys
 import traceback
 from typing import Any
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "h3"))
+from _h3_probe import select
+
+INSTALLED_WHEEL, _SUBJECTS = select(sys.argv, "h3_arch")
 
 from h3_arch.layout import (  # noqa: E402
     AV_DURATION_TOLERANCE_FRAMES,

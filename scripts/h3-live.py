@@ -2,8 +2,9 @@
 """se-001's CONTROL-PLANE ARMS — every H3 refusal that can be decided with no GPU, no
 weights and no rented card, fired for real and observed.
 
-    nice -n 19 .venv-check/bin/python scripts/h3-live.py [group ...]
-    groups: components, request, plan, keys, fence   (`.venv-check` is enough)
+    nice -n 19 .venv-check/bin/python scripts/h3-live.py [--installed-wheel] [group ...]
+    groups: components, request, plan, keys, fence   (`.venv-check` is enough;
+            fence is source-only)
     nice -n 19 .venv/bin/python scripts/h3-live.py gates presentation
         (gates needs torch + cozy-eval + ffmpeg; presentation needs transformers)
 
@@ -29,8 +30,9 @@ import sys
 import traceback
 from typing import Any
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "h3"))
+from _h3_probe import ROOT, select
+
+INSTALLED_WHEEL, _SUBJECTS = select(sys.argv, "h3", "h3_arch")
 
 import msgspec  # noqa: E402
 import torch  # noqa: E402
@@ -800,7 +802,13 @@ GROUPS = {
 
 
 def main() -> int:
-    names = sys.argv[1:] or list(GROUPS)
+    names = sys.argv[1:] or [name for name in GROUPS if not (INSTALLED_WHEEL and name == "fence")]
+    if INSTALLED_WHEEL and "fence" in names:
+        print(
+            "REFUSED: h3-live's fence group plants the repository source and is source-only",
+            file=sys.stderr,
+        )
+        return 2
     for name in names:
         if name not in GROUPS:
             print(f"unknown group {name!r}: {', '.join(GROUPS)}", file=sys.stderr)

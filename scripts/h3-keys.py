@@ -10,7 +10,7 @@ component on `meta`, walk it the way `cozy_runtime.author.census` walks it, and 
 declares. A missing key, an extra key, a transposed shape or a wrong dtype is a failed
 serve on a rented card; here it is a diff on this box.
 
-    nice -n 19 .venv/bin/python scripts/h3-keys.py [component ...]
+    nice -n 19 .venv/bin/python scripts/h3-keys.py [--installed-wheel] [component ...]
 
 THE SOURCE IS DECLARED, and unreadable is a REFUSAL, never a skip: the pinned evidence bank
 `~/cozy_v2/tracker-v2/h3-evidence` (tfs-010) carries the exact header bytes of
@@ -41,7 +41,9 @@ from typing import Any, NoReturn
 
 import torch
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+from _h3_probe import select
+
+INSTALLED_WHEEL, _SUBJECTS = select(sys.argv, "h3_arch")
 BANK = pathlib.Path.home() / "cozy_v2" / "tracker-v2" / "h3-evidence"
 ROW = "comfy-org-h3.json"
 
@@ -146,7 +148,6 @@ def pinned(component: str) -> Table:
 def constructed(component: str) -> Table:
     """The graph the endpoint builds, censused the way the runtime censuses it: one
     `state_dict()` walk of the component root, on `meta`, so no byte is allocated."""
-    sys.path.insert(0, str(ROOT / "h3"))
     from h3_arch import build_component
 
     with torch.device("meta"):
