@@ -27,9 +27,27 @@ RUNTIME_REPO="${RUNTIME_REPO:-$HOME/cozy_v2/cozy-runtime}"
 # f1625f9 is the FLOOR, not a preference: it is the record-key break
 # (`entrypoint_binding_plan_id`, `model_binding_path`, `model_parameter_name`, real lists),
 # and a release pinned before it speaks a dead record. Anything at or after is legal.
-RUNTIME_SHA="${RUNTIME_SHA:-be33325}"
+# THE COMMITTED DESCRIPTOR IS DERIVED AGAINST THIS PIN, so the two move together. A
+# runtime that adds a member to a bound SERVICE changes this endpoint's surface without
+# touching a line of `h3/` — #553a's `Checkpoints.declare` did exactly that — and `cozy
+# install` then refuses `stale_descriptor` on a release nobody edited. Bumping the pin
+# means re-running `cozy-runtime describe --write-descriptor` in the release's own venv
+# and committing the result in the same change.
+RUNTIME_SHA="${RUNTIME_SHA:-a684e2d}"
 RUNTIME_FLOOR="${RUNTIME_FLOOR:-f1625f9}"
-TENSORFS_WHEEL="${TENSORFS_WHEEL:-/tmp/cozy-wheels-cl003/tensorfs-0.0.1-cp311-abi3-linux_x86_64.whl}"
+# THE WHEEL IS BUILT, NOT FOUND. #566 shipped an archive carrying a MONTHS-OLD tensorfs
+# out of a scratch directory nobody had rebuilt, and the divergence surfaced on a rented
+# card as a reader that did not have the function the endpoint called. The default is now
+# the repo's own build output, and the script refuses a wheel older than the tfs binary
+# beside it rather than shipping whichever copy a /tmp directory still held.
+TENSORFS_REPO="${TENSORFS_REPO:-$HOME/cozy_v2/tensorfs}"
+TENSORFS_WHEEL="${TENSORFS_WHEEL:-$(ls -t "$TENSORFS_REPO"/target/wheels/tensorfs-*.whl 2>/dev/null | head -1)}"
+# TORCH IS PINNED TO WHAT RAN. `>=2.6` resolved to whatever PyPI held on build day, which
+# on 2026-08-26 was 2.13.0 against CUDA 13.1 — a wheel whose driver floor nothing in this
+# lane has ever met on a rented pod. 2.9.1 is the version #566 observed serving H3 on an
+# H200 (cu129, minor-version-compatible with every driver these pods have carried). Move
+# it when a newer one has RUN, not when a newer one exists.
+TORCH_SPEC="${TORCH_SPEC:-torch==2.9.1}"
 OUT="${OUT:-$HOME/.cache/cozy/se-001}"
 VERSION="${VERSION:-1.0.0}"
 ENDPOINT="cozy/minimax-h3"
@@ -68,12 +86,28 @@ git -C "$RUNTIME_REPO" archive "$FULL" | tar -x -C "$RT"
 
 nice -n 19 uv build --wheel --project "$RT" --out-dir "$T/vendor" >/dev/null
 rm -f "$T/vendor/.gitignore"
+if [ -z "$TENSORFS_WHEEL" ] || [ ! -s "$TENSORFS_WHEEL" ]; then
+  echo "REFUSED: no tensorfs wheel. Build one (\`maturin build --release --out target/wheels\`" >&2
+  echo "         in $TENSORFS_REPO) or point TENSORFS_WHEEL at the current build." >&2
+  exit 5
+fi
+TFS_BIN="$TENSORFS_REPO/target/release/tfs"
+if [ -x "$TFS_BIN" ] && [ "$TFS_BIN" -nt "$TENSORFS_WHEEL" ]; then
+  echo "REFUSED: $TENSORFS_WHEEL is older than $TFS_BIN — the release would ship a reader" >&2
+  echo "         that is not the tensorfs this workspace is on (#566). Rebuild the wheel." >&2
+  exit 5
+fi
 cp "$TENSORFS_WHEEL" "$T/vendor/"
 TFS_WHEEL_NAME="$(basename "$TENSORFS_WHEEL")"
 
 # The endpoint's own source, copied whole. `h3/` IS the release: no generated module, no
 # rewritten import, no second copy of the handler anywhere.
-cp "$ROOT/h3/h3.py" "$ROOT/h3/endpoint.toml" "$ROOT/h3/endpoint.descriptor.json" "$T/"
+# EVERY top-level module, not a list of them. A hand-kept list is what drifts: `gates.py`
+# arrived with the grid fix (#564), `h3.py` imported it, and the archive this script built
+# was missing it — an endpoint whose own release cannot import itself, which surfaced as a
+# `missing_dependency` naming a module that was sitting in the source tree all along.
+cp "$ROOT/h3"/*.py "$T/"
+cp "$ROOT/h3/endpoint.toml" "$ROOT/h3/endpoint.descriptor.json" "$T/"
 cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$T/"
 mkdir -p "$T/h3_arch" "$T/h3_ref" "$T/tokenizer"
 cp "$ROOT/h3/h3_arch"/*.py "$T/h3_arch/"
@@ -126,7 +160,7 @@ requires-python = ">=3.11"
 dependencies = [
     "cozy-runtime==0.0.1",
     "tensorfs==0.0.1",
-    "torch>=2.6",
+    "$TORCH_SPEC",
     "transformers>=5.13,<6",
     "diffusers @ git+https://github.com/huggingface/diffusers@50e7158093710f9c1b4ea9ff100137a91c9228f3",
 ]

@@ -656,6 +656,7 @@
     },
     "checkpoints": {
       "members": [
+        "declare",
         "save"
       ],
       "service": "Checkpoints"
@@ -705,5 +706,5 @@
       "service": "Telemetry"
     }
   },
-  "surface_digest": "sha256:43e8ba4d324f17c4a70429aee3cc4b3865f8bb8a5638e0980df32891fa83063b"
+  "surface_digest": "sha256:a8e0e2e8351bbef47ee245f6899fc30b656212afc1a4e5f1530ada503012d503"
 }
