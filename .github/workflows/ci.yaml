@@ -75,7 +75,9 @@ jobs:
       # pair that diverged, so a schema change that was not reviewed in a diff fails here.
       - name: Descriptor is current
         if: env.COZY_CI_TOKEN != ''
-        run: uv run --no-project cozy-runtime describe --dir quality-judge --check
+        run: |
+          uv run --no-project cozy-runtime describe --dir quality-judge --check
+          uv run --no-project cozy-runtime describe --dir h3 --check
 
   # A SEPARATE JOB ON PURPOSE. The arms must not be able to stop running because some
   # earlier step in another job went red — that is precisely the failure mode #533 names,

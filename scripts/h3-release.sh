@@ -256,13 +256,30 @@ payload = {
 pathlib.Path(out).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
 
-# A lock that parses is not a closure proof. Materialize it, import every direct runtime
-# dependency, check the CUDA build identity, derive the descriptor, and run the deterministic
-# contract/vision/control-plane probes before any archive is emitted.
-uv lock --check --project "$TREE" --python "$BUILD_PYTHON_PATH" >/dev/null
-nice -n 19 uv sync --locked --no-install-project --project "$TREE" \
+SLUG="${ENDPOINT#*/}"
+CANDIDATE="$WORK/$SLUG-$VERSION.tar.gz"
+ARCHIVE="$OUT/$SLUG-$VERSION-${SOURCE_SHA:0:12}.tar.gz"
+python3 "$SOURCE_TREE/scripts/pack.py" "$TREE" "$ENDPOINT" "$VERSION" "$CANDIDATE" \
+  | sed 's/^/  /'
+
+# Probe what a consumer receives, not the pre-pack staging tree. `release.json` must be the
+# first member because Creator verifies it before accepting any declared payload bytes.
+FIRST_MEMBER="$(tar -tzf "$CANDIDATE" | sed -n '1p')"
+if [ "$FIRST_MEMBER" != "release.json" ]; then
+  echo "REFUSED: release.json is not the archive's first member ($FIRST_MEMBER)" >&2
+  exit 5
+fi
+EXTRACTED="$WORK/extracted"
+mkdir -p "$EXTRACTED"
+tar -xzf "$CANDIDATE" -C "$EXTRACTED"
+
+# A lock that parses is not a closure proof. Materialize the extracted archive, import every
+# direct runtime dependency, check the CUDA build identity, derive the descriptor, and run
+# the deterministic contract/vision/control-plane probes before publishing the candidate.
+uv lock --check --project "$EXTRACTED" --python "$BUILD_PYTHON_PATH" >/dev/null
+nice -n 19 uv sync --locked --no-install-project --project "$EXTRACTED" \
   --python "$BUILD_PYTHON_PATH" >/dev/null
-"$TREE/.venv/bin/python" - <<'PY'
+"$EXTRACTED/.venv/bin/python" - <<'PY'
 import importlib.metadata as metadata
 import av
 import cozy_eval
@@ -289,16 +306,11 @@ if torch.version.cuda != "12.9":
     raise SystemExit(f"torch CUDA build is {torch.version.cuda!r}, expected '12.9'")
 print("install probe:", actual, "cuda", torch.version.cuda)
 PY
-"$TREE/.venv/bin/cozy-runtime" describe --dir "$TREE" --check
-nice -n 19 "$TREE/.venv/bin/python" "$SOURCE_TREE/scripts/h3-conform.py"
-nice -n 19 "$TREE/.venv/bin/python" "$SOURCE_TREE/scripts/h3-vision-conform.py"
-nice -n 19 "$TREE/.venv/bin/python" "$SOURCE_TREE/scripts/h3-live.py"
+"$EXTRACTED/.venv/bin/cozy-runtime" describe --dir "$EXTRACTED" --check
+nice -n 19 "$EXTRACTED/.venv/bin/python" "$SOURCE_TREE/scripts/h3-conform.py"
+nice -n 19 "$EXTRACTED/.venv/bin/python" "$SOURCE_TREE/scripts/h3-vision-conform.py"
+nice -n 19 "$EXTRACTED/.venv/bin/python" "$SOURCE_TREE/scripts/h3-live.py"
 
-SLUG="${ENDPOINT#*/}"
-CANDIDATE="$WORK/$SLUG-$VERSION.tar.gz"
-ARCHIVE="$OUT/$SLUG-$VERSION-${SOURCE_SHA:0:12}.tar.gz"
-python3 "$SOURCE_TREE/scripts/pack.py" "$TREE" "$ENDPOINT" "$VERSION" "$CANDIDATE" \
-  | sed 's/^/  /'
 if [ -e "$ARCHIVE" ]; then
   if ! cmp -s "$CANDIDATE" "$ARCHIVE"; then
     echo "REFUSED: $ARCHIVE already exists with different bytes for the same source commit" >&2
