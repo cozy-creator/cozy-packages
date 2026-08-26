@@ -112,16 +112,32 @@ done
 
 mkdir -p "$OUT"
 WORK="$(mktemp -d "$OUT/.h3-build.XXXXXX")"
+TENSORFS_TREE="/tmp/cozy-h3-tensorfs-$TENSORFS_SHA"
+if [[ ! "$TENSORFS_TREE" =~ ^/tmp/cozy-h3-tensorfs-[0-9a-f]{40}$ ]]; then
+  echo "REFUSED: unsafe canonical TensorFS build path: $TENSORFS_TREE" >&2
+  exit 3
+fi
+exec 9>"$TENSORFS_TREE.lock"
+if ! flock -n 9; then
+  echo "REFUSED: another exact H3 TensorFS build owns $TENSORFS_TREE" >&2
+  exit 3
+fi
+if [ -e "$TENSORFS_TREE" ]; then
+  rm -rf -- "$TENSORFS_TREE"
+fi
 cleanup() {
   case "$WORK" in
     "$OUT"/.h3-build.*) rm -rf -- "$WORK" ;;
     *) echo "REFUSED cleanup outside the build root: $WORK" >&2 ;;
   esac
+  case "$TENSORFS_TREE" in
+    /tmp/cozy-h3-tensorfs-[0-9a-f]*) rm -rf -- "$TENSORFS_TREE" ;;
+    *) echo "REFUSED cleanup outside the canonical TensorFS root: $TENSORFS_TREE" >&2 ;;
+  esac
 }
 trap cleanup EXIT
 
 RUNTIME_TREE="$WORK/cozy-runtime"
-TENSORFS_TREE="$WORK/tensorfs"
 COZY_EVAL_TREE="$WORK/cozy-eval"
 SOURCE_TREE="$WORK/source"
 TREE="$WORK/tree"
@@ -138,16 +154,20 @@ git -C "$ROOT" archive "$SOURCE_SHA" h3 LICENSE NOTICE \
   scripts/pack.py scripts/h3-conform.py scripts/h3-vision-conform.py \
   scripts/h3-live.py scripts/h3-seam-oracle.py | tar -x -C "$SOURCE_TREE"
 
-SOURCE_DATE_EPOCH="$(git -C "$ROOT" show -s --format=%ct "$SOURCE_SHA")"
-export SOURCE_DATE_EPOCH
-nice -n 19 uv build --wheel --python "$BUILD_PYTHON_PATH" --project "$RUNTIME_TREE" \
+RUNTIME_EPOCH="$(git -C "$RUNTIME_REPO" show -s --format=%ct "$RUNTIME_SHA")"
+TENSORFS_EPOCH="$(git -C "$TENSORFS_REPO" show -s --format=%ct "$TENSORFS_SHA")"
+COZY_EVAL_EPOCH="$(git -C "$COZY_EVAL_REPO" show -s --format=%ct "$COZY_EVAL_SHA")"
+SOURCE_DATE_EPOCH="$RUNTIME_EPOCH" nice -n 19 uv build --wheel \
+  --python "$BUILD_PYTHON_PATH" --project "$RUNTIME_TREE" \
   --out-dir "$WHEELS" >/dev/null
-nice -n 19 uv build --wheel --python "$BUILD_PYTHON_PATH" --project "$COZY_EVAL_TREE" \
+SOURCE_DATE_EPOCH="$COZY_EVAL_EPOCH" nice -n 19 uv build --wheel \
+  --python "$BUILD_PYTHON_PATH" --project "$COZY_EVAL_TREE" \
   --out-dir "$WHEELS" >/dev/null
 TENSORFS_BUILD_CACHE="${H3_TENSORFS_BUILD_CACHE:-$HOME/.cache/cozy/se-011-tensorfs-target}"
 mkdir -p "$TENSORFS_BUILD_CACHE"
-(cd "$TENSORFS_TREE" && CARGO_TARGET_DIR="$TENSORFS_BUILD_CACHE" nice -n 19 maturin build \
-  --release --interpreter "$BUILD_PYTHON_PATH" --out "$WHEELS" >/dev/null)
+(cd "$TENSORFS_TREE" && SOURCE_DATE_EPOCH="$TENSORFS_EPOCH" \
+  CARGO_TARGET_DIR="$TENSORFS_BUILD_CACHE" nice -n 19 maturin build --release \
+  --interpreter "$BUILD_PYTHON_PATH" --out "$WHEELS" >/dev/null)
 
 RUNTIME_WHEEL="cozy_runtime-0.0.1-py3-none-any.whl"
 TENSORFS_WHEEL="tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl"

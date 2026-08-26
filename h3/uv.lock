@@ -97,7 +97,7 @@ dependencies = [
     { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { filename = "cozy_eval-2.3.0-py3-none-any.whl", hash = "sha256:8b2af65159e9b5446d7fb1025988ba1aea74f14aea0bb27668c73260344f23a8" },
+    { filename = "cozy_eval-2.3.0-py3-none-any.whl", hash = "sha256:e54f6a6c17b412d461b6c9e755a3fe7b692b40353a28e8d142a606ba63563eeb" },
 ]
 
 [package.metadata]
@@ -175,7 +175,7 @@ dependencies = [
     { name = "protobuf", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.1-py3-none-any.whl", hash = "sha256:b7f054bf0a20f09ce97c306036cb7bd6d141b10606ca79519df97cde822c3b26" },
+    { filename = "cozy_runtime-0.0.1-py3-none-any.whl", hash = "sha256:81fdeb41843b906d55d3aef11c6f2df9a6eea6846564bd9c335298b1747dd207" },
 ]
 
 [package.optional-dependencies]
@@ -724,7 +724,7 @@ name = "tensorfs"
 version = "0.0.1"
 source = { path = "vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl" }
 wheels = [
-    { filename = "tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:6cddaa9a43fb75d03736cb9cb7dfbe0df659831116d9dd11fea7343ecb851d3f" },
+    { filename = "tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:30ac8ebf4b2644ef73034247c8a3b80567b33b5ad8b7b9c7d8bb596d895f333a" },
 ]
 
 [[package]]
