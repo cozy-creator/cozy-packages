@@ -16,7 +16,7 @@ THE SOURCE IS DECLARED, and unreadable is a REFUSAL rather than a skip: the pinn
 bank `~/cozy_v2/h3-evidence` carries the exact header bytes of the official release's
 diffusers packaging. If the bank is not there this script must not print a verdict.
 
-The transformer, video VAE and conditioner are SHARDED, so their key sets come from the
+The transformer, video VAE and text encoder are SHARDED, so their key sets come from the
 banked `*.index.json` weight maps — which name every key across every shard, and are the
 reason a 66 GB tree can be checked from 22 KB of JSON. The audio VAE is a single file and
 its header carries shapes and dtypes as well; where a header is available this checks
@@ -39,7 +39,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 BANK = pathlib.Path.home() / "cozy_v2" / "h3-evidence"
 ROW = "minimax-diffusers-tree.json"
 
-#: role -> (the class's config document, the file whose key set is the artifact's topology).
+#: component -> (the class's config document, the file whose key set is the artifact's
+#: topology).
 #: `transformer_ref` is deliberately absent: its banked config and index are BYTE-IDENTICAL
 #: to `transformer`'s (they resolve to the same cache blob), so checking it twice would
 #: report two facts and measure one. That identity is itself job-001's N-ary claim.
@@ -106,19 +107,19 @@ def banked(path: str) -> Any:
     return json.loads(raw)
 
 
-def build_component(role: str, config: dict[str, Any]) -> Any:
+def build_component(component: str, config: dict[str, Any]) -> Any:
     """`h3_ref`'s builder, reached the way the release archive lays the endpoint out: the
     model library sits beside the endpoint module, not on the path this script runs from."""
     sys.path.insert(0, str(ROOT / "h3"))
     from h3_ref import build_component as build
 
-    return build(role, config)
+    return build(component, config)
 
 
-def pinned(role: str) -> tuple[set[str], dict[str, tuple[int, ...]], int | None]:
+def pinned(component: str) -> tuple[set[str], dict[str, tuple[int, ...]], int | None]:
     """The artifact's own destination table. An index names keys and a total size; a header
     additionally names shapes."""
-    document = banked(CARRIERS[role][1])
+    document = banked(CARRIERS[component][1])
     if "weight_map" in document:
         return set(document["weight_map"]), {}, int(document["metadata"]["total_size"])
     keys = {k for k in document if k != "__metadata__"}
@@ -126,7 +127,7 @@ def pinned(role: str) -> tuple[set[str], dict[str, tuple[int, ...]], int | None]
     return keys, shapes, None
 
 
-def constructed(role: str) -> tuple[dict[str, tuple[int, ...]], set[str]]:
+def constructed(component: str) -> tuple[dict[str, tuple[int, ...]], set[str]]:
     """The graph `h3_ref` builds, censused the way the runtime censuses it: one
     `state_dict()` walk of the component root, on `meta`, so no byte is allocated.
 
@@ -135,9 +136,9 @@ def constructed(role: str) -> tuple[dict[str, tuple[int, ...]], set[str]]:
     #508c named as the native/diffusers delta, and this is where that resolves: upstream
     derives it at construction, so neither side carries it and there is nothing to map.
     """
-    config = {role: banked(CARRIERS[role][0])}
+    config = {component: banked(CARRIERS[component][0])}
     with torch.device("meta"):
-        module = build_component(role, config)
+        module = build_component(component, config)
     table = {k: tuple(v.shape) for k, v in module.state_dict().items()}
     return table, {n for n, _ in module.named_buffers()} - set(table)
 
@@ -148,9 +149,9 @@ def summarize(keys: list[str], limit: int = 8) -> list[str]:
     return [f"{count}x {name}" for name, count in sorted(families.items())][:limit]
 
 
-def check_keys(role: str) -> bool:
-    want, want_shapes, size = pinned(role)
-    got, nonpersistent = constructed(role)
+def check_keys(component: str) -> bool:
+    want, want_shapes, size = pinned(component)
+    got, nonpersistent = constructed(component)
     missing = sorted(want - set(got))
     extra = sorted(set(got) - want)
     shape = sorted(k for k in want_shapes if k in got and want_shapes[k] != got[k])
@@ -158,7 +159,7 @@ def check_keys(role: str) -> bool:
     gib = f"  {size / 2**30:7.1f} GiB" if size else ""
     scope = "keys+shapes" if want_shapes else "keys"
     print(
-        f"{'OK  ' if ok else 'FAIL'} {role:14s} pinned {len(want):5d}  constructed "
+        f"{'OK  ' if ok else 'FAIL'} {component:14s} pinned {len(want):5d}  constructed "
         f"{len(got):5d}  [{scope}]{gib}"
     )
     for label, keys in (
@@ -472,10 +473,13 @@ def main() -> int:
     results: list[bool] = []
     if "keys" in sections:
         print("KEY CENSUS — the constructed graph against the official tree's own headers")
-        roles = list(CARRIERS)
-        results += [check_keys(role) for role in roles]
-        total = sum(len(pinned(role)[0]) for role in roles)
-        print(f"     {sum(results)}/{len(roles)} roles key-exact over {total} destinations\n")
+        components = list(CARRIERS)
+        results += [check_keys(component) for component in components]
+        total = sum(len(pinned(component)[0]) for component in components)
+        print(
+            f"     {sum(results)}/{len(components)} components key-exact over "
+            f"{total} destinations\n"
+        )
     if "geometry" in sections:
         print("TEMPORAL GEOMETRY — #522b, against the released VAE's own chunk relation")
         results.append(check_geometry())

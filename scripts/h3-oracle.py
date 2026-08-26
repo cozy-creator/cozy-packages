@@ -26,7 +26,7 @@ BANKED (2026-08-25, one RTX 4090, se-001): both VAEs bit-identical to the refere
 their real carriers — the video VAE at fp32, and 4.2e-3 relative at fp16, which is the
 distinction between reduction order and structure with a number on it. Every DiT kernel
 bit-identical on identical random weights. The text encoder is UNVERIFIED: 51 GiB of
-conditioner plus a reference copy does not fit a 24 GiB card.
+text encoder plus a reference copy does not fit a 24 GiB card.
 """
 
 from __future__ import annotations

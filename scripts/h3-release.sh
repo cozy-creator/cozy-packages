@@ -156,10 +156,10 @@ cat > "$T/pyproject.toml" <<TOML
 # \`AutoencoderKLMiniMaxH3\`, \`AutoencoderKLMiniMaxH3Audio\` and \`MiniMaxH3Scheduler\`;
 # it collapses to \`diffusers>=0.40\` once 0.40.0 ships them in a release.
 #
-# TRANSFORMERS MOVED TO 5.x, and it is a FIX rather than a bump: the conditioner is
+# TRANSFORMERS MOVED TO 5.x, and it is a FIX rather than a bump: the text encoder is
 # Qwen3-VL, whose \`Qwen3VLForConditionalGeneration\` does not exist below 5.x. The
 # previous \`<5\` cap was a floor copied from a family that does not use it, and an archive
-# built under it could not have constructed the conditioner at all.
+# built under it could not have constructed the text encoder at all.
 [project]
 name = "h3-endpoint"
 version = "$VERSION"

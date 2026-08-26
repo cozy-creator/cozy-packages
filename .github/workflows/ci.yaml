@@ -136,9 +136,9 @@ jobs:
           uv pip install \
             "diffusers @ git+https://github.com/huggingface/diffusers@50e7158093710f9c1b4ea9ff100137a91c9228f3"
 
-      # The pixels-to-conditioner seam, diffed against upstream rather than against a
+      # The pixels-to-text-encoder seam, diffed against upstream rather than against a
       # restatement of it: byte-identical reference pixels, a bit-identical patch matrix,
-      # token ids equal element for element, and a real conditioner forward at toy width
+      # token ids equal element for element, and a real text-encoder forward at toy width
       # that proves the splice indices and the deepstack take-points are load-bearing.
       - name: H3 vision seam conformance arms
         run: uv run --no-project python scripts/h3-vision-conform.py

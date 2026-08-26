@@ -51,7 +51,7 @@ FOR DELETION
     This is known and is being resolved by REMOVAL rather than by argument.
     Decision #531 replaces every one of these files with the Apache-2.0
     upstream implementation now constructed by `h3/h3_ref/`; decision #532
-    names the conditioner specifically. The port is retained only until the
+    names the text encoder specifically. The port is retained only until the
     upstream path is proven against it on a card, because deleting
     oracle-proven code before its replacement is proven would trade a licence
     problem for a correctness one. `scripts/h3-oracle.py` imports a ComfyUI

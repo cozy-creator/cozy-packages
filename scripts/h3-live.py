@@ -92,22 +92,22 @@ class FakeComponent:
 
 
 class FakePipe:
-    def __init__(self, transformer_role: str) -> None:
-        self.transformer_role = transformer_role
+    def __init__(self, transformer_component: str) -> None:
+        self.transformer_component = transformer_component
         self.config = H3Config()
         self.components: dict[str, Any] = {}
 
 
-def build_double(cls: Any, transformer_role: str) -> Any:
+def build_double(cls: Any, transformer_component: str) -> Any:
     """One role class over a fake pipeline, with the RUNTIME'S guard installed over every
     component exactly as the runtime installs it after `load`."""
-    pipe = FakePipe(transformer_role)
+    pipe = FakePipe(transformer_component)
     model = cls.for_test(pipe=pipe, tokenizer=None)
-    for name in (transformer_role, "text_encoder", "video_vae", "audio_vae"):
+    for name in (transformer_component, "text_encoder", "video_vae", "audio_vae"):
         pipe.components[name] = GuardedComponent(name, FakeComponent(name), model)
     # the twin's transformer, present in the DUAL artifact and not in this slot's set —
     # this is the object the wrong-transformer arm reaches for
-    twin = "transformer_ref" if transformer_role == "transformer" else "transformer"
+    twin = "transformer_ref" if transformer_component == "transformer" else "transformer"
     pipe.components[twin] = GuardedComponent(twin, FakeComponent(twin), model)
     return model, pipe
 

@@ -52,8 +52,8 @@ NO GUIDANCE. H3-Base is guidance-distilled: there is no `guidance_scale`, no
 family because guidance is real there; here the omission is the checkpoint's fact.
 
 STATE OF PROOF (grades, honestly). The constructed graph is KEY-EXACT against the pinned
-artifact header for all five components at zero cost (`scripts/h3-keys.py`). The reference
-semantics this file's sampler depends on — the data-ward sign, the 17k+5 temporal
+safetensors header for all five components at zero cost (`scripts/h3-keys.py`). The
+reference semantics this file's sampler depends on — the data-ward sign, the 17k+5 temporal
 geometry, the sigma grid and its evaluation count, the pixel conversion, the
 requested-vs-observed media agreement — are CONFORMANCE-PROVEN ON CPU against
 independently written upstream expressions (`scripts/h3-conform.py`, which runs in CI).
@@ -62,8 +62,8 @@ The output gates are proven against digest-pinned real media, including the fail
 
 THE WHOLE-SEAM ORACLE HAS NOW RUN (2026-08-26, one H200; `scripts/h3-seam-oracle.py`
 carries the table). Against ComfyUI v0.33.0 on the same bf16 carriers, the same prompt and
-the same seed, every seam agrees at cosine >= 0.9993 — token ids identical, the conditioner
-EXACT at float32 — and a full-length 15.083 s / 362-frame / 30-evaluation render was
+the same seed, every seam agrees at cosine >= 0.9993 — token ids identical, the text
+encoder EXACT at float32 — and a full-length 15.083 s / 362-frame / 30-evaluation render was
 produced and VIEWED: coherent motion matching the prompt, an audio track that follows the
 picture, adjacent-frame correlation 0.9882 against cozy-eval's 0.6 floor. The endpoint's
 model path is OUTPUT-VERIFIED.
@@ -275,42 +275,42 @@ class H3Pipeline:
     """The constructed component roots of ONE task slot.
 
     The `components` mapping is what the runtime censuses, so its keys ARE the artifact's
-    component roles. A slot exposes its own transformer role and the three shared ones; it
+    components. A slot exposes its own transformer component and the three shared ones; it
     never exposes the twin's, which is what makes an undeclared access spellable.
 
     TWO CONSTRUCTION LAYERS, SELECTED BY THE ARTIFACT (#531/#540). `h3_arch` is the hand
     port and answers to the community curve carrier's key set; `h3_ref` is a thin layer over
     upstream's official classes and answers to the official diffusers-format tree's. The
     artifact's own config says which, through `H3Config.graph`, and nothing else in this file
-    knows the difference — `build_component(role, ...)` is the same signature on both sides,
+    knows the difference — `build_component(name, ...)` is the same signature on both sides,
     which is the whole reason the rebase can be a construction decision rather than a fork.
     """
 
-    def __init__(self, config: Any, *, transformer_role: str) -> None:
+    def __init__(self, config: Any, *, transformer_component: str) -> None:
         whole = H3Config.from_mapping(config.mapping())
         self.config = whole
-        self.transformer_role = transformer_role
-        roles = (transformer_role, "text_encoder", "video_vae", "audio_vae")
+        self.transformer_component = transformer_component
+        components = (transformer_component, "text_encoder", "video_vae", "audio_vae")
         self.components: dict[str, Any]
         if whole.graph is GraphDialect.DIFFUSERS:
             import h3_ref
 
             mapping = h3_ref.config_mapping(whole)
-            self.components = {r: h3_ref.build_component(r, mapping) for r in roles}
+            self.components = {c: h3_ref.build_component(c, mapping) for c in components}
         else:
-            self.components = {r: build_component(r, whole) for r in roles}
+            self.components = {c: build_component(c, whole) for c in components}
 
     @property
     def transformer(self) -> Any:
-        return self.components[self.transformer_role]
+        return self.components[self.transformer_component]
 
 
 def build_fl2va_pipeline(config: Any) -> H3Pipeline:
-    return H3Pipeline(config, transformer_role="transformer")
+    return H3Pipeline(config, transformer_component="transformer")
 
 
 def build_ref2va_pipeline(config: Any) -> H3Pipeline:
-    return H3Pipeline(config, transformer_role="transformer_ref")
+    return H3Pipeline(config, transformer_component="transformer_ref")
 
 
 # ------------------------------------------------------------------ the run
@@ -348,7 +348,7 @@ class H3Run:
     presentation: Presentation
     expanded: ExpandedPresentation
     """The presentation with its vision blocks expanded into real pad runs. THIS is the
-    sequence the conditioner ran on and the one `PackedLayout`'s text span was sized from;
+    sequence the text encoder ran on and the one `PackedLayout`'s text span was sized from;
     `presentation.tags` carries one tag per PRESENTATION row and is one row per block."""
     patched: PatchedVision
     conditioning: dict[str, Any] = field(default_factory=dict)
@@ -542,7 +542,7 @@ def _present(ref: Reference, *, where: str) -> PresentedReference:
         return PresentedReference(kind="audio", has_audio=True)
     if kind == "video":
         # The frames would have to be decoded, resampled onto the 24 fps clock and then
-        # sampled again onto the conditioner's 2 fps grid, and the soundtrack encoded
+        # sampled again onto the text encoder's 2 fps grid, and the soundtrack encoded
         # beside them. The presentation layer builds video blocks and the packed layout
         # lays them out; what has no implementation is the DECODE. Refused typed and
         # narrowly, rather than under the seam-wide code that no longer applies.
@@ -585,7 +585,7 @@ class _H3Base(Model[H3Pipeline]):
         """Qwen3-VL over the expanded presentation: the UNNORMALIZED hidden state after
         layer 50, `[1, L, text_dim]`.
 
-        THE VISION SEAM IS BUILT HERE. The conditioner takes `[batch, seq]` token ids plus
+        THE VISION SEAM IS BUILT HERE. The text encoder takes `[batch, seq]` token ids plus
         already-patchified `VisionBlock(patches, grid_thw, index)` splices; `prepare` has
         produced both, from upstream's own processor. Every vision block's pad run is
         already in `expanded.token_ids` at `expanded.splices[i]`, so the splice is an
@@ -598,7 +598,7 @@ class _H3Base(Model[H3Pipeline]):
 
         encoder = self.pipe.components["text_encoder"]
         device = encoder.model.embed_tokens.weight.device
-        blocks = vision.conditioner_blocks(patched, expanded)
+        blocks = vision.text_encoder_blocks(patched, expanded)
         with torch.inference_mode():
             tokens = torch.tensor([expanded.token_ids], dtype=torch.long, device=device)
             placed = [
@@ -681,7 +681,7 @@ class _H3Base(Model[H3Pipeline]):
 
 
 class Fl2VAModel(_H3Base, task="fl2va"):
-    """Text and first/last keyframes. Binds the `transformer` role."""
+    """Text and first/last keyframes. Binds the `transformer` component."""
 
     def load(self, loader: Loader) -> None:
         self.pipe = loader.construct(H3Pipeline, factory=build_fl2va_pipeline)
@@ -712,7 +712,7 @@ class Fl2VAModel(_H3Base, task="fl2va"):
 
 class Ref2VAModel(_H3Base, task="ref2va"):
     """Ordered image/video/audio references, optionally with keyframes when the deployment
-    opens that door. Binds the `transformer_ref` role."""
+    opens that door. Binds the `transformer_ref` component."""
 
     def load(self, loader: Loader) -> None:
         self.pipe = loader.construct(H3Pipeline, factory=build_ref2va_pipeline)
@@ -1122,7 +1122,7 @@ def _sample(
             t_audio=step.t_audio,
             visual_cond_t=plan.visual_cond_timestep or 0.0,
             audio_cond_t=plan.audio_cond_timestep or 0.0,
-            # THE EXPANDED TAGS, one per conditioner row. `presentation.tags` carries one
+            # THE EXPANDED TAGS, one per text-encoder row. `presentation.tags` carries one
             # tag per PRESENTATION row, where a whole vision block is a single row, so
             # using it would tag the text span by a length the sequence does not have.
             text_token_tags=run.expanded.tags,

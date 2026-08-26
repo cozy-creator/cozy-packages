@@ -5,7 +5,7 @@
 # a repo, release, checkpoint or revision — the artifact and its release live here.
 #
 # TWO SLOTS, ONE ARTIFACT. Both role classes bind the SAME dual snapshot: it carries both
-# task-role-stamped transformers plus the shared conditioner and both VAEs in one manifest
+# task-role-stamped transformers plus the shared text encoder and both VAEs in one manifest
 # (job-001, the N-ary packaging rule). Sharing of BYTES is then the resident-component
 # registry's job — three of the four components each slot declares are the same objects,
 # and neither slot can see the other's transformer. Pointing the two slots at two NARROW

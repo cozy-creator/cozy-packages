@@ -16,21 +16,22 @@ implementation of H3 existed to depend on. Diffusers merged the official one on 
   * the decode returns pixels the caller scales once.
 
 So this package is not a port. It is a THIN CONSTRUCTION LAYER over upstream classes, and
-everything it adds is the part Cozy owns and upstream does not: which component roles an
+everything it adds is the part Cozy owns and upstream does not: which components an
 artifact has, and building each one EMPTY so the runtime's fill plane can put our bytes in
 it. Weights never arrive over the network here — no hub call, no offload manager, no
 device choreography, no `.to()`. Those are `cozy_runtime`'s, exactly as in `h3_arch/`.
 
 WHAT IS PROVEN, AND AT WHICH GRADE. `scripts/h3-diffusers-keys.py` builds all four
-weight-bearing roles on `meta` and diffs their census against the banked headers of the
-official release's diffusers-format tree. The result is EXACT IDENTITY — 638 transformer,
-703 video-VAE, 1087 audio-VAE and 1058 conditioner destinations, zero renames, zero shape
-or dtype disagreements. That is header-verified evidence, on the control plane, for $0.
-It is NOT output verification: no number here has been produced on a card.
+weight-bearing components on `meta` and diffs their census against the banked headers of
+the official release's diffusers-format tree. The result is EXACT IDENTITY — 638
+transformer, 703 video-VAE, 1087 audio-VAE and 1058 text-encoder destinations, zero
+renames, zero shape or dtype disagreements. That is header-verified evidence, on the
+control plane, for $0. It is NOT output verification: no number here has been produced on
+a card.
 
 `rope.inv_freq` is the one tensor #508c named as the native/diffusers delta, and the census
 shows why it is not a delta at all: upstream registers it NON-PERSISTENTLY, so it is absent
-from the state dict and absent from the artifact header alike. It is derived at
+from the state dict and absent from the banked safetensors header alike. It is derived at
 construction, never filled.
 
 MODULE SCOPE STAYS LIGHT, for the same reason `h3_arch/` keeps it light: `describe` runs in
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
     from torch import nn
 
 __all__ = [
-    "ROLES",
+    "COMPONENTS",
     "build_audio_vae",
     "build_component",
     "build_scheduler",
@@ -57,16 +58,16 @@ __all__ = [
     "config_mapping",
 ]
 
-#: The artifact's component roles, and the ONLY names this package answers to. They are the
-#: endpoint's role vocabulary (`h3.py`'s `H3Pipeline.components`), deliberately unchanged by
-#: the rebase: the runtime-facing contract is the thing that must not move while the
-#: internals become upstream's. Upstream's own tree spells the video VAE `vae`; the
+#: The artifact's components, and the ONLY names this package answers to. They are the
+#: endpoint's component vocabulary (`h3.py`'s `H3Pipeline.components`), deliberately
+#: unchanged by the rebase: the runtime-facing contract is the thing that must not move
+#: while the internals become upstream's. Upstream's own tree spells the video VAE `vae`; the
 #: translation is one row of `_SUBFOLDER` and never leaks into a binding or a descriptor.
-ROLES = ("transformer", "transformer_ref", "text_encoder", "video_vae", "audio_vae")
+COMPONENTS = ("transformer", "transformer_ref", "text_encoder", "video_vae", "audio_vae")
 
-#: role -> the subfolder an official diffusers-format snapshot carries it under. This is the
-#: PACKAGING's vocabulary, not ours, and it is written down once so that a config mapping
-#: keyed either way resolves the same.
+#: component -> the subfolder an official diffusers-format snapshot carries it under. This
+#: is the PACKAGING's vocabulary, not ours, and it is written down once so that a config
+#: mapping keyed either way resolves the same.
 _SUBFOLDER: dict[str, str] = {
     "transformer": "transformer",
     "transformer_ref": "transformer_ref",
@@ -76,8 +77,8 @@ _SUBFOLDER: dict[str, str] = {
 }
 
 
-def component_config(role: str, mapping: dict[str, Any]) -> dict[str, Any]:
-    """One role's construction kwargs out of the artifact's immutable config.
+def component_config(component: str, mapping: dict[str, Any]) -> dict[str, Any]:
+    """One component's construction kwargs out of the artifact's immutable config.
 
     A diffusers-format artifact's config IS the constructor's kwargs — that is what
     `config.json` in each subfolder holds — so there is no translation table here and no
@@ -89,14 +90,14 @@ def component_config(role: str, mapping: dict[str, Any]) -> dict[str, Any]:
         does not read is a compatibility fact rather than a caller error;
       * nothing else. An unrecognized VALUE is never silently corrected.
 
-    The mapping may be keyed by ROLE (`video_vae`) or by SUBFOLDER (`vae`); both are the
-    same component and both resolve.
+    The mapping may be keyed by COMPONENT (`video_vae`) or by SUBFOLDER (`vae`); both are
+    the same component and both resolve.
     """
-    if role not in ROLES:
-        raise KeyError(f"{role!r} is not an H3 component role: {', '.join(ROLES)}")
-    section = mapping.get(role)
+    if component not in COMPONENTS:
+        raise KeyError(f"{component!r} is not an H3 component: {', '.join(COMPONENTS)}")
+    section = mapping.get(component)
     if not isinstance(section, dict):
-        section = mapping.get(_SUBFOLDER[role])
+        section = mapping.get(_SUBFOLDER[component])
     if not isinstance(section, dict):
         return {}
     return {k: v for k, v in section.items() if not k.startswith("_")}
@@ -209,8 +210,8 @@ CURVE_STRUCTURE = "h3-adaln-curve"
 def build_transformer(config: dict[str, Any] | None = None) -> nn.Module:
     """The packed-token audio-video DiT, `MiniMaxH3Transformer3DModel`.
 
-    Both transformer roles build this same class from the same config: the fl2va and ref2va
-    partitions are structurally indistinguishable (job-001) and are told apart by the
+    Both transformer components build this same class from the same config: the fl2va and
+    ref2va partitions are structurally indistinguishable (job-001) and are told apart by the
     recipe's declared content digest, never by their shapes.
 
     TWO TOPOLOGIES, ONE CLASS. An artifact whose config names the curve structure gets the
@@ -232,11 +233,11 @@ def build_transformer(config: dict[str, Any] | None = None) -> nn.Module:
 
 
 def build_text_encoder(config: dict[str, Any] | None = None) -> nn.Module:
-    """The Qwen3-VL conditioner, upstream's own `Qwen3VLForConditionalGeneration`.
+    """The Qwen3-VL text encoder, upstream's own `Qwen3VLForConditionalGeneration`.
 
     This is the component #532 wants the GPL-adapted local `text_encoder.py` replaced by,
     and it is also the one place the rebase is not free: the official release ships the
-    UNTRUNCATED conditioner (64 language layers, a vision tower and an LM head — 1058
+    UNTRUNCATED text encoder (64 language layers, a vision tower and an LM head — 1058
     destinations, 66.7 GB), where the community repackaging ships it cut to 50 layers with
     no head. Same architecture, more resident bytes, and the residency ladder is entitled to
     know that before anyone rents a card for it.
@@ -272,7 +273,7 @@ def build_scheduler(config: dict[str, Any] | None = None) -> Any:
     exponential sigma shift differs (12.0 video, 3.0 audio) and the modality is a property
     of the schedule, not of the class. A pipeline holds two instances; this builds one.
 
-    It carries no weights, so it is not a component and never appears in `ROLES`: nothing
+    It carries no weights, so it is not a component and never appears in `COMPONENTS`: nothing
     censuses it and nothing fills it.
     """
     from diffusers import MiniMaxH3Scheduler
@@ -289,17 +290,17 @@ _BUILDERS: dict[str, Any] = {
 }
 
 
-def build_component(role: str, config: dict[str, Any] | None = None) -> nn.Module:
-    """One component root by its artifact role — the seam `scripts/h3-diffusers-keys.py`
+def build_component(component: str, config: dict[str, Any] | None = None) -> nn.Module:
+    """One component root by its component name — the seam `scripts/h3-diffusers-keys.py`
     checks, and the same signature `h3_arch.build_component` answers to, so the pipeline
     switches implementations by changing an import and nothing else.
 
-    `config` is the WHOLE artifact config mapping; this selects the role's section from it.
+    `config` is the WHOLE artifact config mapping; this selects the component's section.
     A diffusers-format artifact's own per-subfolder `config.json` documents ARE that mapping;
     `config_mapping` produces the same shape from this repo's typed `H3Config` when the
     artifact carries no diffusers config of its own.
     """
-    if role not in _BUILDERS:
-        raise KeyError(f"{role!r} is not an H3 component role: {', '.join(ROLES)}")
-    builder: Any = _BUILDERS[role]
-    return builder(component_config(role, config or {}))
+    if component not in _BUILDERS:
+        raise KeyError(f"{component!r} is not an H3 component: {', '.join(COMPONENTS)}")
+    builder: Any = _BUILDERS[component]
+    return builder(component_config(component, config or {}))

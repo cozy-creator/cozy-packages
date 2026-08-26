@@ -17,7 +17,7 @@ sign, a generic temporal ratio, an off-by-one in the evaluation count. #523.3 is
 answer: compare the whole path, at every seam, against an implementation that is known to
 produce good video.
 
-THE CONDITIONER IS THE POINT. It is the ONE component of the five that has never been
+THE TEXT ENCODER IS THE POINT. It is the ONE component of the five that has never been
 output-verified — 49 GiB never fit the 24 GiB card the component oracle ran on, and it was
 flagged as the prime suspect for #519's garbage twice. Its constants (`_ROPE_SECTIONS`,
 the deepstack indices, the vision rope theta, the image normalization) are named in
@@ -45,7 +45,7 @@ prompt and the same seed; cosine is the verdict, the float32 control is the disc
 
     seam                    cosine        what it settles
     tokens                  identical     22 ids both sides, from two independent BPEs
-    conditioner             0.999985      and EXACT at float32 (cos 1.000000000, rel
+    text encoder            0.999985      and EXACT at float32 (cos 1.000000000, rel
                                           1.2e-07) — the one output-UNVERIFIED component
                                           is CORRECT; the bf16 residual is our dtype
     projected packed rows   0.999262
@@ -122,11 +122,11 @@ CARRIERS = {
     "audio_vae": "vae/minimax_h3_audio_vae_fp32.safetensors",
 }
 
-#: Row order of the report. The conditioner is first because it is the one output-unverified
-#: component and the highest-value single number of the run.
+#: Row order of the report. The text encoder is first because it is the one
+#: output-unverified component and the highest-value single number of the run.
 SEAMS = (
     ("tokens", "token ids + modality tags"),
-    ("cond", "conditioner hidden states"),
+    ("cond", "text-encoder hidden states"),
     ("packed", "projected packed rows"),
     ("heads", "raw output heads"),
     ("velocity", "latent-shaped data velocity"),
@@ -168,7 +168,7 @@ def add_request_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--shift-audio", type=float, default=3.0)
     parser.add_argument("--dtype", default="bfloat16", choices=("bfloat16", "float32"),
                         help="OUR compute dtype. The CONTROL that separates precision from "
-                             "structure: the conditioner sits 1.06e-2 relative from the "
+                             "structure: the text encoder sits 1.06e-2 relative from the "
                              "reference at bfloat16 and is EXACT at float32, so the residual "
                              "is our dtype and not the port")
 
@@ -254,8 +254,8 @@ def side_comfy(args: argparse.Namespace) -> None:
     device = mm.get_torch_device()
     grid = geometry(args)
 
-    # --- seam 1 + 2: the presentation and the conditioner
-    log("loading the conditioner (ComfyUI CLIPType.MINIMAX)")
+    # --- seam 1 + 2: the presentation and the text encoder
+    log("loading the text encoder (ComfyUI CLIPType.MINIMAX)")
     clip = comfy.sd.load_clip(
         ckpt_paths=[str(models / CARRIERS["text_encoder"])],
         clip_type=comfy.sd.CLIPType.MINIMAX,
@@ -270,7 +270,7 @@ def side_comfy(args: argparse.Namespace) -> None:
     bank(banked, "tokens", {"ids": ids, "tags": None if tags is None else tags.cpu(),
                             "key": key, "rows": len(tokens[key][0])})
     bank(banked, "cond", states.detach().float().cpu())
-    log(f"conditioner states {tuple(states.shape)} {states.dtype}")
+    log(f"text-encoder states {tuple(states.shape)} {states.dtype}")
     del clip, output
     mm.unload_all_models()
     mm.soft_empty_cache()
@@ -334,7 +334,7 @@ def seam_run(args: argparse.Namespace, grid: Any, layout: Any, plan: Any) -> Any
     `expanded`/`patched` are the VISION halves (`daa56bd`), and this call drifted the moment
     they were added: `H3Run` gained two required fields, nothing constructed it outside
     `h3.py`'s own path, and the oracle went from green to a TypeError at `seam_run` — after
-    the 48 GiB conditioner had already loaded, so the drift cost a card to discover. It is
+    the 48 GiB text encoder had already loaded, so the drift cost a card to discover. It is
     listed as a text-only lane because the vision seam refuses (`vision_seam_unbuilt`).
     """
     import h3
@@ -398,9 +398,9 @@ def load_component(module: Any, path: pathlib.Path) -> Any:
 def side_ours(args: argparse.Namespace) -> None:
     """This endpoint's own modules, at the same four seams, from the same carriers.
 
-    `--dtype float32` is the control, and it is what turned the conditioner from a seam
+    `--dtype float32` is the control, and it is what turned the text encoder from a seam
     reading 2.7 bf16 ulps out (which looks like a defect) into `cos 1.000000000, rel
-    1.2e-07` (which is the same arithmetic). ComfyUI stores the conditioner's 902
+    1.2e-07` (which is the same arithmetic). ComfyUI stores the text encoder's 902
     destinations in bf16 and RUNS them through a float32 compute path; this port declares
     bf16 destinations, because that is the artifact's fact, and then computes in bf16 too —
     which is a numerics decision the reference does not make.
@@ -420,7 +420,7 @@ def side_ours(args: argparse.Namespace) -> None:
     grid = geometry(args)
 
     # --- seam 1 + 2
-    log("building the conditioner")
+    log("building the text encoder")
     tokenizer = Tokenizer()
     presentation = build_presentation(tokenizer, args.prompt)
     ids = presentation.text_ids()
@@ -433,7 +433,7 @@ def side_ours(args: argparse.Namespace) -> None:
     with torch.inference_mode():
         states = encoder(torch.tensor([list(ids)], dtype=torch.long, device=device))
     bank(banked, "cond", states.detach().float().cpu())
-    log(f"conditioner states {tuple(states.shape)} {states.dtype}")
+    log(f"text-encoder states {tuple(states.shape)} {states.dtype}")
     del encoder
     torch.cuda.empty_cache()
 
@@ -490,7 +490,7 @@ def side_ours(args: argparse.Namespace) -> None:
 
 #: THE PRIMARY VERDICT IS COSINE, and the first run is why. A relative-max bound cannot
 #: separate "50 layers of bf16 accumulated in a different order" from "a structurally
-#: different graph": the first run measured the conditioner at 1.06e-2 relative max, which
+#: different graph": the first run measured the text encoder at 1.06e-2 relative max, which
 #: is 2.7x a bf16 ulp and looks like a failure, and then the `--dtype float32` control
 #: returned cos = 1.000000000 with 1.2e-7 relative — the port is EXACT and every bit of that
 #: 1.06e-2 was our own compute precision. Direction survives precision; a wrong rope section
@@ -509,7 +509,7 @@ BOUNDS: dict[str, tuple[float, str]] = {
     ),
     "packed": (
         0.999,
-        "the conditioner's residual through condition_proj and the token refiner, plus two "
+        "the text encoder's residual through condition_proj and the token refiner, plus two "
         "patch projections over identical latents",
     ),
     "heads": (0.999, "one 50-block bf16 stack; our SDPA against ComfyUI's attention path"),

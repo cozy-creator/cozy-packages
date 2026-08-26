@@ -35,10 +35,10 @@ class GraphDialect(enum.Enum):
     artifact fills exactly one of them.
 
     Measured, not asserted: `scripts/h3-keys.py` censuses the native port at 3,445
-    destinations against the community carrier (transformer 532, conditioner 902, video VAE
-    562, audio VAE 917) and `scripts/h3-diffusers-keys.py` censuses the upstream classes at
-    3,486 against the official diffusers-format tree (638 / 1058 / 703 / 1087). Every role
-    disagrees, and the conditioner disagrees structurally rather than by name — the
+    destinations against the community carrier (transformer 532, text encoder 902, video
+    VAE 562, audio VAE 917) and `scripts/h3-diffusers-keys.py` censuses the upstream classes
+    at 3,486 against the official diffusers-format tree (638 / 1058 / 703 / 1087). Every
+    COMPONENT disagrees, and the text encoder disagrees structurally rather than by name — the
     community carrier is Qwen3-VL cut to 50 layers with no head, the official tree is the
     untruncated 64-layer model. So this term selects a graph AND declares which artifact can
     fill it; picking the wrong one is `incomplete_fill` on a rented card.

@@ -76,9 +76,9 @@ def build_dit(config: DitConfig | None = None) -> nn.Module:
 
 
 def build_text_encoder(config: TextEncoderConfig | None = None) -> nn.Module:
-    from .text_encoder import Qwen3VLConditioner
+    from .text_encoder import Qwen3VLTextEncoder
 
-    return Qwen3VLConditioner(config or TextEncoderConfig())
+    return Qwen3VLTextEncoder(config or TextEncoderConfig())
 
 
 def build_video_vae(config: VideoVaeConfig | None = None) -> nn.Module:
@@ -93,8 +93,8 @@ def build_audio_vae(config: AudioVaeConfig | None = None) -> nn.Module:
     return AudioVae(config or AudioVaeConfig())
 
 
-#: Component ROLE -> builder. The two transformer roles build the same class from the same
-#: config: they are structurally indistinguishable and are told apart by the recipe's
+#: COMPONENT NAME -> builder. The two transformer components build the same class from the
+#: same config: they are structurally indistinguishable and are told apart by the recipe's
 #: declared content digest, never by their shapes (job-001).
 _BUILDERS: dict[str, Any] = {
     "transformer": build_dit,
@@ -105,17 +105,17 @@ _BUILDERS: dict[str, Any] = {
 }
 
 
-def build_component(role: str, config: H3Config | None = None) -> nn.Module:
-    """One component root by its artifact role — the seam `scripts/h3-keys.py` checks."""
-    if role not in _BUILDERS:
-        raise KeyError(f"{role!r} is not an H3 component role: {', '.join(_BUILDERS)}")
+def build_component(component: str, config: H3Config | None = None) -> nn.Module:
+    """One component root by its component name — the seam `scripts/h3-keys.py` checks."""
+    if component not in _BUILDERS:
+        raise KeyError(f"{component!r} is not an H3 component: {', '.join(_BUILDERS)}")
     whole = config or H3Config()
-    per_role = {
+    per_component = {
         "transformer": whole.dit,
         "transformer_ref": whole.dit,
         "text_encoder": whole.text_encoder,
         "video_vae": whole.video_vae,
         "audio_vae": whole.audio_vae,
     }
-    builder: Any = _BUILDERS[role]
-    return builder(per_role[role])
+    builder: Any = _BUILDERS[component]
+    return builder(per_component[component])

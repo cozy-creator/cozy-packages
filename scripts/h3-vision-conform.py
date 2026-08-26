@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""H3's VISION-SEAM CONFORMANCE ARMS — the pixels-to-conditioner seam, decided on CPU.
+"""H3's VISION-SEAM CONFORMANCE ARMS — the pixels-to-text-encoder seam, decided on CPU.
 
     nice -n 19 python scripts/h3-vision-conform.py [arm ...]
     arms: preprocess, presentation, splices, deepstack, towerkeys, forward, refrows,
@@ -325,9 +325,9 @@ def arm_splices() -> None:
             f"block {n} rows carry the VIDEO modality tag, not text",
         )
 
-    # The conditioner triples slice the right rows out of the batched patch matrix.
-    blocks = vision.conditioner_blocks(patched, exp)
-    check(len(blocks) == 3, "three conditioner blocks built")
+    # The text-encoder triples slice the right rows out of the batched patch matrix.
+    blocks = vision.text_encoder_blocks(patched, exp)
+    check(len(blocks) == 3, "three text-encoder blocks built")
     total = 0
     for n, (b, count) in enumerate(zip(blocks, patched.token_counts, strict=True)):
         rows = int(b.grid_thw.prod())
@@ -358,7 +358,7 @@ def arm_deepstack() -> None:
     import torch
 
     from h3_arch.config import TextEncoderConfig
-    from h3_arch.text_encoder import Qwen3VLConditioner
+    from h3_arch.text_encoder import Qwen3VLTextEncoder
 
     config = TextEncoderConfig()
     check(
@@ -370,10 +370,10 @@ def arm_deepstack() -> None:
         f"vision tower is 27 blocks with a 2x2 merge, got {config.vision_depth}",
     )
 
-    # The tower must EMIT one feature per take-point, and the conditioner must ADD them on
+    # The tower must EMIT one feature per take-point, and the text encoder must ADD them on
     # the first three decoder layers. Built on `meta`, so no weight is allocated.
     with torch.device("meta"):
-        model = Qwen3VLConditioner(config)
+        model = Qwen3VLTextEncoder(config)
     check(
         len(model.visual.deepstack_merger_list) == 3,
         f"three deepstack mergers exist, got {len(model.visual.deepstack_merger_list)}",
@@ -385,7 +385,7 @@ def arm_deepstack() -> None:
 
     import inspect
 
-    src = inspect.getsource(Qwen3VLConditioner.forward)
+    src = inspect.getsource(Qwen3VLTextEncoder.forward)
     check(
         "index < len(deepstack)" in src and "x[mask] = x[mask] + deepstack[index]" in src,
         "deepstack features are added at the vision positions over the first three layers",
@@ -417,8 +417,8 @@ def arm_refusal() -> None:
         "RED (inverted): condition_text no longer refuses a vision presentation",
     )
     check(
-        "conditioner_blocks" in inspect.getsource(h3._H3Base.condition_text),
-        "condition_text splices the patchified vision blocks into the conditioner call",
+        "text_encoder_blocks" in inspect.getsource(h3._H3Base.condition_text),
+        "condition_text splices the patchified vision blocks into the text-encoder call",
     )
     check(
         "vision.patchify" in inspect.getsource(h3.prepare),
@@ -426,7 +426,7 @@ def arm_refusal() -> None:
     )
     check(
         "run.expanded.tags" in src,
-        "the DiT is tagged per CONDITIONER row, not per presentation row",
+        "the DiT is tagged per TEXT-ENCODER row, not per presentation row",
     )
     check(
         src.count("vision_seam_unbuilt") == 0,
@@ -455,12 +455,12 @@ def arm_refusal() -> None:
 
 
 def arm_forward() -> None:
-    """THE SEAM ACTUALLY RUNS — a real conditioner forward with a real vision block.
+    """THE SEAM ACTUALLY RUNS — a real text-encoder forward with a real vision block.
 
     Every other arm here checks a number that describes the seam. This one EXECUTES it, at
     a toy width with random weights, which is the only CPU-affordable way to find out
     whether the splice indices, the patch slices, the grid and the deepstack add agree with
-    each other rather than merely with the arithmetic. The released conditioner is 62 GiB
+    each other rather than merely with the arithmetic. The released text encoder is 62 GiB
     and cannot be part of a CI arm; the shapes it would fail on are all here.
 
     Real geometry, toy widths: the vision tower keeps its 27 blocks, its 2x2 merge and its
@@ -471,7 +471,7 @@ def arm_forward() -> None:
     from h3_arch import vision
     from h3_arch.config import TextEncoderConfig
     from h3_arch.presentation import PresentedReference, build
-    from h3_arch.text_encoder import Qwen3VLConditioner
+    from h3_arch.text_encoder import Qwen3VLTextEncoder
 
     config = TextEncoderConfig(
         hidden_size=512,
@@ -486,7 +486,7 @@ def arm_forward() -> None:
         vision_out_hidden_size=512,
     )
     torch.manual_seed(0)
-    model = Qwen3VLConditioner(config).to(torch.float32)
+    model = Qwen3VLTextEncoder(config).to(torch.float32)
     model.eval()
 
     tok = _tokenizer()
@@ -499,7 +499,7 @@ def arm_forward() -> None:
     pres = build(tok, "a fox in the grass", references=(PresentedReference("image", small),))
     patched = vision.patchify(pres)
     exp = vision.expand(pres, patched.token_counts)
-    blocks = vision.conditioner_blocks(patched, exp)
+    blocks = vision.text_encoder_blocks(patched, exp)
 
     tokens = torch.tensor([exp.token_ids], dtype=torch.long)
     with torch.inference_mode():
@@ -563,9 +563,9 @@ def arm_forward() -> None:
 def arm_towerkeys() -> None:
     """OUR vision tower against the OFFICIAL one, destination for destination.
 
-    #540 proved the whole `h3_ref` conditioner key-exact against the official diffusers
+    #540 proved the whole `h3_ref` text encoder key-exact against the official diffusers
     tree. That is the OTHER dialect. This arm asks the question the vision seam actually
-    depends on: does the tower inside `h3_arch`'s conditioner — the one the BOUND carrier
+    depends on: does the tower inside `h3_arch`'s text encoder — the one the BOUND carrier
     fills — have exactly the destinations `transformers`' own `Qwen3VLVisionModel` has?
 
     If it does, then every constant the port had to guess (the rope sections, the vision
@@ -581,11 +581,11 @@ def arm_towerkeys() -> None:
     import torch
 
     from h3_arch.config import TextEncoderConfig
-    from h3_arch.text_encoder import Qwen3VLConditioner
+    from h3_arch.text_encoder import Qwen3VLTextEncoder
 
     config = TextEncoderConfig()
     with torch.device("meta"):
-        ours = Qwen3VLConditioner(config)
+        ours = Qwen3VLTextEncoder(config)
     mine = {
         name[len("visual.") :]: tuple(p.shape)
         for name, p in ours.named_parameters()
@@ -689,7 +689,7 @@ def arm_refrows() -> None:
     # RED CONTROL: the placeholder that shipped — `RefBlock(kind="image")` with no
     # geometry, one per reference. It does not reserve zero rows and carry on; it divides
     # by a zero sqrt-area and RAISES, inside `prepare`, before any component is leased.
-    # So ref2va never reached the conditioner at all, which is what #529's "Ref2VA never
+    # So ref2va never reached the text encoder at all, which is what #529's "Ref2VA never
     # ran" recorded from the other end.
     bare = PackedLayout(32, grid)
     try:
@@ -698,7 +698,7 @@ def arm_refrows() -> None:
     except ZeroDivisionError:
         observe(
             "RED: the shipped zero-geometry RefBlock raised ZeroDivisionError in the layout",
-            "ref2va could never reach the conditioner — it died building the packed sequence",
+            "ref2va could never reach the text encoder — it died building the packed sequence",
         )
     block = RefBlock(kind="image", latent_t=1, latent_h=128, latent_w=128)
     real = PackedLayout(32, grid, refs=(block,))
@@ -751,7 +751,7 @@ def arm_oraclerun() -> None:
     `h3.py`'s own path, and it runs POD-SIDE ONLY — so when the vision work gave `H3Run` two
     new required fields, nothing on this box or in CI noticed. The oracle raised
     `TypeError: missing 2 required positional arguments` at `seam_run`, AFTER a 48 GiB
-    conditioner had loaded on a rented H200: a signature drift billed at card rates and
+    text encoder had loaded on a rented H200: a signature drift billed at card rates and
     discovered thirteen minutes in.
 
     The arm calls the harness's OWN constructor rather than restating it, so the thing under

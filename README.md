@@ -115,7 +115,7 @@ as proven as the number of unrelated codebases that reproduce it.
    VAE encode/decode round trips, one DiT block, the rope table, the modulation. se-001 ran
    this against ComfyUI for $0.21 and it found a real defect.
 3. **Whole-seam, on a card** — same prompt and seed, every intermediate compared in order:
-   token ids, conditioner states, packed rows, raw heads, latent-shaped velocity, first
+   token ids, text-encoder states, packed rows, raw heads, latent-shaped velocity, first
    updated latent, final latent, decoded video and audio. **This is the step se-002 skipped**,
    and the four defects #522 names all lived BETWEEN components where component-level
    agreement could not see them.

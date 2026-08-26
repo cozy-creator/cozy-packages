@@ -1,4 +1,4 @@
-"""The H3 conditioner — Qwen3-VL-32B truncated to 50 layers, 902 destinations, BF16.
+"""The H3 text encoder — Qwen3-VL-32B truncated to 50 layers, 902 destinations, BF16.
 
 A Qwen3 decoder stack (64 query heads over 8 KV heads, per-head q/k RMSNorm, interleaved
 MRoPE) beside the 27-block Qwen3-VL vision tower, and nothing after them: the released
@@ -438,7 +438,7 @@ def _mrope_position_ids(
     return ids
 
 
-class Qwen3VLConditioner(nn.Module):
+class Qwen3VLTextEncoder(nn.Module):
     """The H3 text encoder component root — 902 destinations, all BF16.
 
         model.embed_tokens     1 destination     151936 x 5120

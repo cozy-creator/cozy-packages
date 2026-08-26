@@ -1,11 +1,11 @@
-"""The VISION SEAM — reference pixels to the conditioner's patch/grid/index triple.
+"""The VISION SEAM — reference pixels to the text encoder's patch/grid/index triple.
 
 `presentation.build` emits a `VisionBlock` row standing in for a whole block of vision
 tokens, because how many tokens a block becomes is a fact of its RESOLVED GRID and only a
 patchifier can state it. This file is that patchifier, plus the two things that bracket it:
 the normalization upstream puts a reference image through before it is ever patchified, and
 the expansion that turns a presentation carrying block rows into the flat token id sequence
-the conditioner is actually called on.
+the text encoder is actually called on.
 
 THE PREPROCESSING IS UPSTREAM'S, NOT OURS (#531). Qwen3-VL's patch geometry — the 16-pixel
 patch, the 2-frame temporal patch, the 2x2 spatial merge, the `smart_resize` that snaps a
@@ -64,7 +64,7 @@ MAX_PIXELS = 16_777_216
 IMAGE_MEAN = (0.5, 0.5, 0.5)
 IMAGE_STD = (0.5, 0.5, 0.5)
 
-#: The vision PAD ids, which are LOAD-BEARING rather than filler. The local conditioner
+#: The vision PAD ids, which are LOAD-BEARING rather than filler. The local text encoder
 #: overwrites these positions by index and would not care, but upstream's
 #: `Qwen3VLForConditionalGeneration` FINDS the positions to fill by matching these ids, so a
 #: presentation built with the wrong pad splices nothing and reports nothing. Both dialects
@@ -78,7 +78,7 @@ class PatchedVision:
     """What the patchifier states about one presentation's worth of vision blocks.
 
     `pixel_values` and `grid_thw` are batched per MODALITY, in block order within that
-    modality, because that is the shape both conditioners take. `token_counts` is per BLOCK
+    modality, because that is the shape both text encoders take. `token_counts` is per BLOCK
     in presentation order, which is what the expansion below needs.
     """
 
@@ -179,7 +179,7 @@ def _image_processor() -> Any:
 
 
 def merged_token_count(grid: Any) -> int:
-    """How many CONDITIONER tokens one block's grid becomes: its patches, folded 2x2."""
+    """How many TEXT-ENCODER tokens one block's grid becomes: its patches, folded 2x2."""
     return int(grid.prod()) // SPATIAL_MERGE_SIZE**2
 
 
@@ -238,7 +238,7 @@ def patchify(presentation: Presentation) -> PatchedVision:
 class ExpandedPresentation:
     """A presentation with its vision blocks expanded into real pad runs.
 
-    `token_ids` is what the conditioner is called on, `tags` is one modality tag per row of
+    `token_ids` is what the text encoder is called on, `tags` is one modality tag per row of
     it, and `splices` gives each block's first-token position — the position AFTER its
     `<|vision_start|>`, which is what `text_encoder.VisionBlock.index` means.
     """
@@ -285,14 +285,14 @@ def expand(presentation: Presentation, token_counts: tuple[int, ...]) -> Expande
     return ExpandedPresentation(tuple(ids), tuple(tags), tuple(splices))
 
 
-def conditioner_blocks(patched: PatchedVision, expanded: ExpandedPresentation) -> list[Any]:
+def text_encoder_blocks(patched: PatchedVision, expanded: ExpandedPresentation) -> list[Any]:
     """The `text_encoder.VisionBlock(patches, grid_thw, index)` triples, in splice order.
 
     The patch rows of a modality's batch are one flat `[total_patches, 1536]` matrix, so
     each block's slice is found by walking the grids and consuming `t*h*w` rows per block —
     which is the same accounting `merged_token_count` divides down.
     """
-    from .text_encoder import VisionBlock as ConditionerBlock
+    from .text_encoder import VisionBlock as EncoderVisionBlock
 
     out: list[Any] = []
     cursors = {"image": 0, "video": 0}
@@ -311,7 +311,7 @@ def conditioner_blocks(patched: PatchedVision, expanded: ExpandedPresentation) -
         start = cursors[key]
         cursors[key] = start + rows
         out.append(
-            ConditionerBlock(
+            EncoderVisionBlock(
                 patches=values[start : start + rows],
                 grid_thw=grid.reshape(1, 3),
                 index=index,
