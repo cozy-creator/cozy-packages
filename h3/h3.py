@@ -327,6 +327,12 @@ class H3Plan:
     ref_blocks: tuple[RefBlock, ...]
     steps: int
     mute: bool
+    condition_images: tuple[Any, ...] = ()
+    """Every visually-conditioning image IN PACKED ORDER — the keyframes first, then the
+    references — which is the order `PackedLayout` appends their `cond` and `ref_img`
+    segments in. One list, because the DiT does not distinguish them when it reads rows."""
+    condition_geometry: tuple[tuple[int, int, int], ...] = ()
+    """The `(latent_t, latent_h, latent_w)` the layout reserved rows for, per condition."""
 
 
 @dataclass(slots=True)
@@ -378,14 +384,23 @@ def prepare(
         keyframes.append(PackedKeyframe(0))
     if payload.last_frame is not None:
         keyframes.append(PackedKeyframe(frames - 1))
+    keyframe_pixels = _present_keyframes(payload, width=width, height=height)
     presentation = build_presentation(
         tokenizer,
         payload.prompt,
-        keyframes=_present_keyframes(payload, width=width, height=height),
+        keyframes=keyframe_pixels,
         references=references,
     )
     patched = vision.patchify(presentation)
     expanded = vision.expand(presentation, patched.token_counts)
+    # PACKED ORDER, and it is the layout's order rather than the request's: `PackedLayout`
+    # appends every keyframe `cond` segment before the first `ref_img` one, so the
+    # conditioning rows have to be produced in that order too or each one lands on
+    # another's segment.
+    condition_images = (*keyframe_pixels, *(r.pixels for r in references if r.kind == "image"))
+    condition_geometry = tuple(
+        vision.reference_block_geometry(image) for image in condition_images
+    )
     plan = H3Plan(
         prompt=payload.prompt,
         grid=grid,
@@ -394,6 +409,8 @@ def prepare(
         ref_blocks=ref_blocks,
         steps=payload.num_inference_steps,
         mute=payload.mute,
+        condition_images=condition_images,
+        condition_geometry=condition_geometry,
     )
     layout = PackedLayout(
         len(expanded.token_ids), grid, keyframes=plan.keyframes, refs=ref_blocks
@@ -446,6 +463,40 @@ def decode_references(payload: RefGenerateInput) -> tuple[PresentedReference, ..
     return tuple(
         _present(ref, where=f"references.{i}") for i, ref in enumerate(payload.references)
     )
+
+
+def _reference_blocks(references: tuple[PresentedReference, ...]) -> tuple[RefBlock, ...]:
+    """Each presented reference's PACKED contribution, with its real latent geometry.
+
+    This used to be `RefBlock(kind="image")` for every reference — zero latent extents, so
+    `_frame_grid(0, 0)` gave every reference ZERO rows and the packed layout reserved
+    nothing for any of them. A ref2va request built a layout identical to a t2va one and
+    nothing said so.
+
+    The geometry is DERIVED from the normalized canvas rather than measured off the encode,
+    because the layout is built before any component is leased. `condition_visual` checks
+    the encode against it.
+    """
+    from h3_arch.vision import reference_block_geometry
+
+    blocks: list[RefBlock] = []
+    for ref in references:
+        if ref.kind != "image":
+            # Audio references need their waveform decoded and encoded by the audio VAE
+            # before `ref_audio_t` can be stated, and that decode is not built. Refused
+            # here rather than packed as a zero-row block that silently conditions nothing.
+            raise UnsupportedInput(
+                f"{ref.kind} references are not packed by this endpoint yet: image "
+                "references are the built path, and an audio reference needs its waveform "
+                "decoded and encoded before its packed rows can be reserved",
+                code="audio_reference_unpacked",
+                fields=["references"],
+            )
+        latent_t, latent_h, latent_w = reference_block_geometry(ref.pixels)
+        blocks.append(
+            RefBlock(kind="image", latent_t=latent_t, latent_h=latent_h, latent_w=latent_w)
+        )
+    return tuple(blocks)
 
 
 def _kind_of(ref: Reference) -> ReferenceKind:
@@ -562,13 +613,48 @@ class _H3Base(Model[H3Pipeline]):
             return states
 
     @uses_components("video_vae")
-    def condition_visual(self, pixels: Any) -> Any:
-        """Keyframe and visual-reference latents. Separate from the presentation: the same
-        image reaches Qwen as a vision block and the DiT as VAE rows."""
+    def condition_visual(self, run: H3Run, *, noise_level: float) -> list[Any]:
+        """Keyframe and visual-reference CONDITIONING latents, one per packed block.
+
+        Separate from the presentation: the same image reaches Qwen as a vision block and
+        the DiT as VAE rows, and both are needed — the vision tokens carry semantics and
+        these rows carry the pixels.
+
+        A LIST, one entry per block, never one tensor for all of them. Each block is its own
+        geometry and lands at its own segment; the previous shape handed a single tensor to
+        every `cond`/`ref_img` slot at once, which cannot be right for more than one
+        reference and was never populated anyway.
+
+        The anchors are noised ONCE, here, to `noise_level` and held there for the whole
+        loop — they are not on the sampler's schedule. `layout.build_modulation` pins their
+        rows to the same level, so this and the modulation state the same fact.
+        """
         import torch
 
+        from h3_arch.vision import condition_pixels
+
+        vae = self.pipe.components["video_vae"]
+        device = vae.post_quant_conv.weight.device
+        out: list[Any] = []
         with torch.inference_mode():
-            return self.pipe.components["video_vae"].encode(pixels)
+            for position, image in enumerate(run.plan.condition_images):
+                latents = vae.encode_condition(condition_pixels(image).to(device))
+                expected = run.plan.condition_geometry[position]
+                got = tuple(int(n) for n in latents.shape[2:5])
+                if got != expected:
+                    raise RuntimeError(
+                        f"conditioning block {position} encoded to {got} latents and the "
+                        f"packed layout reserved rows for {expected}: the derived geometry "
+                        "and the encode disagree, so the packed sequence would misalign"
+                    )
+                # x_t = t*x_0 + (1-t)*noise, in H3's `t` convention — `t = 1` is clean. The
+                # noise is drawn on the HOST so two cards produce the same anchor.
+                generator = torch.Generator(device="cpu").manual_seed(run.view._seed + position)
+                noise = torch.randn(
+                    latents.shape, generator=generator, dtype=torch.float32
+                ).to(device=latents.device, dtype=latents.dtype)
+                out.append(noise_level * latents + (1.0 - noise_level) * noise)
+        return out
 
     @uses_components("audio_vae")
     def condition_audio(self, waveform: Any) -> Any:
@@ -718,35 +804,49 @@ def _predict_data_velocity(
         pack_audio(audio_latents).to(device=device, dtype=torch.float32)
     ).to(hidden_dtype)
 
-    # THE SAME UNBUILT SEAM AS THE REFERENCE PATH, refused with the same code rather than
-    # reached. Below, a `cond`/`ref_img` segment appends `run.conditioning["visual"]` — one
-    # tensor, for EVERY such segment, in a slot that wants this reference's own rows at
-    # this segment's own row count. Nothing populates it, so the honest outcome was a
-    # KeyError from inside a component lease; a typed refusal is the same fact, named.
-    conditioning = [k for _, _, k in run.layout.segments if k in ("cond", "ref_img", "ref_audio")]
-    if conditioning:
-        raise UnsupportedInput(
-            "this layout carries "
-            f"{', '.join(sorted(set(conditioning)))} rows the endpoint has no builder for: "
-            "the reference LATENT rows (VAE-encode each reference, noise it to the "
-            "conditioning level and interleave it) are a separate seam from the vision "
-            "conditioning, which is built",
-            code="conditioning_rows_unbuilt",
-            fields=["first_frame", "last_frame", "references"],
-        )
+    # THE CONDITIONING ROWS, one condition per `cond`/`ref_img` segment IN ORDER. The
+    # previous shape appended `run.conditioning["visual"]` — a single tensor — to every such
+    # slot at once, which cannot be right for more than one condition and was never
+    # populated at all. `condition_visual` produces the list; it is consumed as an iterator
+    # so a count mismatch is a refusal rather than a silently reused tensor.
+    conditions = iter(run.conditioning.get("visual") or ())
+
+    def _condition_rows(kind: str, count: int) -> Any:
+        try:
+            latents = next(conditions)
+        except StopIteration:
+            raise RuntimeError(
+                f"the packed layout carries a {kind!r} segment with no conditioning latents "
+                "left to fill it: the plan's condition list and the layout's segments "
+                "disagree, and the sequence would be built from a reused tensor"
+            ) from None
+        projected = transformer.video_patch_proj(
+            patchify_video(latents, patch).to(device=device, dtype=torch.float32)
+        ).to(hidden_dtype)
+        if projected.shape[0] != count:
+            raise RuntimeError(
+                f"a {kind!r} condition projected to {projected.shape[0]} rows and the "
+                f"layout reserved {count}"
+            )
+        return projected
 
     rows: list[Any] = []
-    for _, _, kind in run.layout.segments:
+    for start, end, kind in run.layout.segments:
         if kind == "text":
             rows.append(text_rows)
         elif kind in ("cond", "ref_img"):
-            rows.append(run.conditioning["visual"])
+            rows.append(_condition_rows(kind, end - start))
         elif kind == "ref_audio":
             rows.append(run.conditioning["audio"])
         elif kind == "video":
             rows.append(video_rows)
         else:
             rows.append(audio_rows)
+    if next(conditions, None) is not None:
+        raise RuntimeError(
+            "more conditioning latents were encoded than the packed layout reserved "
+            "segments for — the plan and the layout disagree about what this request is"
+        )
 
     video_out, audio_out = transformer(
         torch.cat(rows, dim=0),
@@ -820,10 +920,11 @@ def _predict_data_velocity_ref(
         raise UnsupportedInput(
             "the reference construction layer packs conditioning rows into the modality "
             f"streams itself, and this layout carries {', '.join(sorted(set(conditioning)))} "
-            "rows the endpoint has no builder for: the reference LATENT rows (VAE-encode "
-            "each reference, noise it to the conditioning level and interleave it) are a "
-            "separate seam from the vision conditioning, which is built",
-            code="conditioning_rows_unbuilt",
+            "rows this DIALECT has no builder for. The port dialect builds them; upstream's "
+            "transformer wants them interleaved into `hidden_states` in `video_indices` "
+            "order instead, which is a different assembly and is unbuilt — and no "
+            "diffusers-format artifact is bound yet for it to run against",
+            code="conditioning_rows_unbuilt_diffusers",
             fields=["first_frame", "last_frame", "references"],
         )
 
@@ -912,9 +1013,11 @@ def _run(
 
     with tel.stage("condition_text"):
         text_states = model.condition_text(expanded, patched)
-    if plan.keyframes or plan.references:
+    if plan.condition_images:
         with tel.stage("condition_visual"):
-            run.conditioning["visual"] = model.condition_visual(run.conditioning.get("pixels"))
+            run.conditioning["visual"] = model.condition_visual(
+                run, noise_level=timestep_plan.visual_cond_timestep or 1.0
+            )
     if any(b.ref_audio_t for b in ref_blocks):
         with tel.stage("condition_audio"):
             run.conditioning["audio"] = model.condition_audio(run.conditioning.get("waveform"))
@@ -1066,7 +1169,7 @@ def reference_to_video(
             fields=["first_frame", "last_frame"],
         )
     references = decode_references(payload)
-    blocks = tuple(RefBlock(kind="image") for _ in references)
+    blocks = _reference_blocks(references)
     return _run(
         model,
         ctx,

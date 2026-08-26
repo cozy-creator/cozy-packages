@@ -2,7 +2,7 @@
 """H3's VISION-SEAM CONFORMANCE ARMS — the pixels-to-conditioner seam, decided on CPU.
 
     nice -n 19 python scripts/h3-vision-conform.py [arm ...]
-    arms: preprocess, presentation, splices, deepstack, refusal
+    arms: preprocess, presentation, splices, deepstack, forward, refrows, refusal
 
 WHY THIS IS A SECOND FILE. `h3-conform.py` declares "no torch, no weights, no network" and
 that is load-bearing — it is the arm set that can run anywhere. Every arm HERE needs torch,
@@ -431,12 +431,25 @@ def arm_refusal() -> None:
         src.count("vision_seam_unbuilt") == 0,
         f"`vision_seam_unbuilt` is gone from h3.py ({src.count('vision_seam_unbuilt')} left)",
     )
-    # THE REMAINING SEAM, named apart rather than folded into the one that is built. This
-    # is not a red control — it is the honest statement of what ref2va still cannot do.
-    rows = src.count("conditioning_rows_unbuilt")
+    # THE REFERENCE LATENT ROWS. The PORT dialect builds them; the diffusers dialect wants
+    # them interleaved into `hidden_states` in `video_indices` order, which is a different
+    # assembly and is unbuilt — and no diffusers-format artifact is bound for it to run
+    # against anyway. Named apart so neither claim borrows the other's evidence.
     check(
-        rows >= 2,
-        f"the reference LATENT-row seam refuses under its own code in both dialects ({rows})",
+        "conditioning_rows_unbuilt_diffusers" in src,
+        "the diffusers dialect refuses reference rows under its OWN code",
+    )
+    check(
+        "_condition_rows" in src and "video_patch_proj" in src,
+        "the port dialect BUILDS one conditioning row block per packed segment",
+    )
+    check(
+        "condition_geometry" in src and "disagree" in src,
+        "the derived geometry is checked against the encode rather than trusted",
+    )
+    check(
+        "audio_reference_unpacked" in src and "video_reference_undecoded" in src,
+        "audio and video references refuse under their own codes, not the seam's",
     )
 
 
@@ -546,12 +559,105 @@ def arm_forward() -> None:
     )
 
 
+def arm_refrows() -> None:
+    """The reference LATENT rows: what the layout RESERVES and what the patchifier PRODUCES
+    must be the same integer, and the anchors' noising must be the reference's.
+
+    This is the arm the old `RefBlock(kind="image")` placeholder would have failed loudly:
+    zero latent extents reserved ZERO rows for every reference, so a ref2va layout was
+    byte-identical to a t2va one and nothing said so.
+    """
+    import torch
+
+    from h3_arch import vision
+    from h3_arch.dit import patchify_video
+    from h3_arch.layout import PackedLayout, RefBlock, latent_grid
+
+    grid = latent_grid(124, 1344, 768)
+    patch = (1, 2, 2)
+
+    for width, height in ((2048, 2048), (4096, 2048), (2048, 3072)):
+        image = type("I", (), {"size": (width, height)})()
+        t, h, w = vision.reference_block_geometry(image)
+        check(
+            (t, h, w) == (1, height // 16, width // 16),
+            f"a {width}x{height} reference encodes to latents {(t, h, w)}",
+        )
+        layout = PackedLayout(
+            32, grid, refs=(RefBlock(kind="image", latent_t=t, latent_h=h, latent_w=w),)
+        )
+        reserved = sum(end - start for start, end, k in layout.segments if k == "ref_img")
+        produced = patchify_video(torch.zeros(1, 24, t, h, w), patch).shape[0]
+        check(
+            reserved == produced > 0,
+            f"the layout reserves {reserved} rows and the patchifier produces {produced}",
+        )
+
+    # RED CONTROL: the placeholder that shipped — `RefBlock(kind="image")` with no
+    # geometry, one per reference. It does not reserve zero rows and carry on; it divides
+    # by a zero sqrt-area and RAISES, inside `prepare`, before any component is leased.
+    # So ref2va never reached the conditioner at all, which is what #529's "Ref2VA never
+    # ran" recorded from the other end.
+    bare = PackedLayout(32, grid)
+    try:
+        PackedLayout(32, grid, refs=(RefBlock(kind="image"),))
+        fail("RED: the shipped zero-geometry RefBlock refuses")
+    except ZeroDivisionError:
+        observe(
+            "RED: the shipped zero-geometry RefBlock raised ZeroDivisionError in the layout",
+            "ref2va could never reach the conditioner — it died building the packed sequence",
+        )
+    block = RefBlock(kind="image", latent_t=1, latent_h=128, latent_w=128)
+    real = PackedLayout(32, grid, refs=(block,))
+    check(
+        real.seq_len > bare.seq_len,
+        f"a real reference block DOES grow the sequence: {bare.seq_len} -> {real.seq_len}",
+    )
+
+    # The anchor noising is `x_t = t*x_0 + (1-t)*noise`, upstream's `scale_noise` in H3's
+    # `t` convention, where t = 1 is CLEAN. A schedule-shaped `(1-t)*x + t*noise` at 0.999
+    # would return essentially pure noise and destroy every anchor.
+    x0 = torch.ones(4)
+    noise = torch.zeros(4)
+    t = 0.999
+    ours = t * x0 + (1.0 - t) * noise
+    check(
+        abs(ours.mean().item() - 0.999) < 1e-6,
+        f"noising at t=0.999 keeps 99.9% of the anchor, got {ours.mean().item():.4f}",
+    )
+    reversed_convention = (1.0 - t) * x0 + t * noise
+    check(
+        abs(reversed_convention.mean().item() - 0.001) < 1e-6,
+        "RED: the reversed convention would keep 0.1% and destroy the anchor",
+        f"got {reversed_convention.mean().item():.4f}",
+    )
+
+    # The CONDITIONING encode is not the target encode: it samples and rounds to fp16.
+    import inspect
+
+    from h3_arch.video_vae import VideoVae
+
+    src = inspect.getsource(VideoVae.encode_condition)
+    check("torch.float16" in src, "the conditioning encode rounds the sample to float16")
+    check("manual_seed" in src, "the conditioning posterior is SAMPLED under a fixed seed")
+    check(
+        "torch.clamp(logvar, -30.0, 20.0)" in src,
+        "the logvar is clamped the way upstream's DiagonalGaussianDistribution clamps it",
+    )
+    check(
+        "chunk" in inspect.getsource(VideoVae.encode)
+        and "float16" not in inspect.getsource(VideoVae.encode),
+        "RED: the TARGET encode still takes the mean and does NOT round — the two differ",
+    )
+
+
 ARMS = {
     "preprocess": arm_preprocess,
     "presentation": arm_presentation,
     "splices": arm_splices,
     "deepstack": arm_deepstack,
     "forward": arm_forward,
+    "refrows": arm_refrows,
     "refusal": arm_refusal,
 }
 

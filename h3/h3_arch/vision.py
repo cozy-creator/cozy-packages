@@ -120,6 +120,40 @@ def normalize_reference_image(image: Any) -> Any:
     return image.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
 
+#: The video VAE's spatial compression. A reference image's latent extents are its pixel
+#: extents over this, which is why the reference canvas is rounded onto `CANVAS_MULTIPLE`
+#: (16 for the VAE, times the DiT's 2-wide spatial patch) rather than onto the VAE's ratio
+#: alone: the packed rows are 2x2 PATCHES of latents, so an odd latent extent has no rows.
+VAE_SPATIAL_RATIO = 16
+
+
+def reference_block_geometry(image: Any) -> tuple[int, int, int]:
+    """One normalized reference image -> the `(latent_t, latent_h, latent_w)` its VAE
+    encoding will have.
+
+    Derived rather than measured, because the packed LAYOUT has to be built before any
+    component is leased and the encode happens inside one. The two are checked against each
+    other at conditioning time — a disagreement is a defect, not a tolerance.
+    """
+    width, height = image.size
+    return 1, height // VAE_SPATIAL_RATIO, width // VAE_SPATIAL_RATIO
+
+
+def condition_pixels(image: Any) -> Any:
+    """A normalized reference image -> `[1, 3, 1, H, W]` pixels in [-1, 1].
+
+    [-1, 1] is what `video_vae.encode_condition` states it takes; it ImageNet-normalizes
+    from there. Upstream hands its VAE raw `uint8` and divides by 255 inside, which is the
+    same arithmetic written on the other side of the boundary.
+    """
+    import numpy as np
+    import torch
+
+    array = np.asarray(image, dtype=np.float32)
+    pixels = torch.from_numpy(array).permute(2, 0, 1)[None, :, None]
+    return pixels / 127.5 - 1.0
+
+
 def _image_processor() -> Any:
     """Qwen3-VL's own image processor, configured from the constants above.
 
