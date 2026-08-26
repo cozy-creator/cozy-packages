@@ -24,6 +24,7 @@ No automated tests (decisions.md #160): verification = live runs + benchmarks.
 | `scripts/sdxl-release.sh` | build the SDXL release archive `cozy install --from --digest` verifies |
 | `scripts/pack.py` | tree -> release archive (the pre-hub stand-in for `cozy deploy`) |
 | `scripts/sdxl-live.py` | se-008's live verification, on the RTX 4070 |
+| `scripts/h3-release.sh` | build the deterministic H3 project wheel and inspect it from site-packages; refuses to invent the missing bundle/wheelhouse/environment authorities |
 | `scripts/h3-keys.py` | the port's graph against the community carrier's headers — key-exact, $0, no GPU |
 | `scripts/h3-diffusers-keys.py` | the upstream graph against the OFFICIAL tree's headers, plus geometry, schedule and curve arms — $0, no GPU |
 | `scripts/h3-oracle.py` | the pinned ComfyUI differential oracle; never imported by an endpoint, never in a release |
