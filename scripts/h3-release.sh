@@ -24,17 +24,24 @@
 set -euo pipefail
 
 RUNTIME_REPO="${RUNTIME_REPO:-$HOME/cozy_v2/cozy-runtime}"
-# f1625f9 is the FLOOR, not a preference: it is the record-key break
-# (`entrypoint_binding_plan_id`, `model_binding_path`, `model_parameter_name`, real lists),
-# and a release pinned before it speaks a dead record. Anything at or after is legal.
+# aaa49d0 is the FLOOR, not a preference: it is the SECOND record-key break (#567e), and a
+# release pinned before it speaks a dead record. The model half of a binding record is now
+# the artifact REF and the slot — `store`, `snapshot`, `snapshots`, `variant`, `custody` and
+# `vram_floor_bytes` left the closed key set, because they are the SERVING machine's
+# resolution of the ref and not the writer's to state. A runtime older than this reads a
+# record cozy-creator no longer writes and refuses `binding_plan_unknown_field`; a runtime
+# at or after it also carries the stamp reader (#567d), without which every task-stamped
+# class on this endpoint fails closed on every checkpoint. f1625f9 (the FIRST record-key
+# break) is an ancestor of it, so nothing that floor protected is given up.
+# Anything at or after is legal.
 # THE COMMITTED DESCRIPTOR IS DERIVED AGAINST THIS PIN, so the two move together. A
 # runtime that adds a member to a bound SERVICE changes this endpoint's surface without
 # touching a line of `h3/` — #553a's `Checkpoints.declare` did exactly that — and `cozy
 # install` then refuses `stale_descriptor` on a release nobody edited. Bumping the pin
 # means re-running `cozy-runtime describe --write-descriptor` in the release's own venv
 # and committing the result in the same change.
-RUNTIME_SHA="${RUNTIME_SHA:-a684e2d}"
-RUNTIME_FLOOR="${RUNTIME_FLOOR:-f1625f9}"
+RUNTIME_SHA="${RUNTIME_SHA:-853cef5}"
+RUNTIME_FLOOR="${RUNTIME_FLOOR:-aaa49d0}"
 # THE WHEEL IS BUILT, NOT FOUND. #566 shipped an archive carrying a MONTHS-OLD tensorfs
 # out of a scratch directory nobody had rebuilt, and the divergence surfaced on a rented
 # card as a reader that did not have the function the endpoint called. The default is now
