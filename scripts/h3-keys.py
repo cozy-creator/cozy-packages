@@ -14,8 +14,13 @@ serve on a rented card; here it is a diff on this box.
 
 THE SOURCE IS DECLARED, and unreadable is a REFUSAL, never a skip: the pinned evidence bank
 `~/cozy_v2/h3-evidence` (tfs-010) carries the exact header bytes of
-`Comfy-Org/MiniMax-H3@4cc1d817…`, which is proto-001's selection `D-comfy-curve-fp8` and
-job-001's recipe. If the bank is not there this script must not print a verdict.
+`Comfy-Org/MiniMax-H3@4cc1d817…`, which is proto-001's selection and job-001's recipe. If
+the bank is not there this script must not print a verdict.
+
+THE VARIANT IS NAMED SEMANTICALLY (#534b): it is `curve-adaln-fp8-scaled` — an AdaLN-curve
+topology at fp8 with per-tensor scales — and its PRODUCER is recorded separately, as
+provenance, in the evidence bank's row. The old spelling put a tool's name inside a product
+term, which made a packaging fact read like an architecture and a vendor read like a lane.
 
 Two carriers per transformer, on purpose. The recipe's SERVED carrier is the fp8 one, whose
 header additionally carries 550 encoding-ROLE siblings (`.weight_scale`, `.input_scale`,

@@ -288,8 +288,10 @@ def fence_light_import() -> Fence:
 #: an author still owns — not memory management. A blunter pattern reads as a stronger
 #: proof and is a worse one: it turns red on every shipped endpoint's output tail, and a
 #: fence that must be suppressed is a fence nobody reads. What is NOT covered here is
-#: therefore reviewed rather than proven, and the one live instance is named in se-001's
-#: record (`sdxl.py` constructs `torch.device("cuda", 0)` — an author naming a device).
+#: therefore reviewed rather than proven. se-001's record named ONE live instance —
+#: `sdxl.py` constructing `torch.device("cuda", 0)`, an author naming a device — and #534c
+#: closed it: the handler reads the envelope off the conditioning the placed encoders
+#: returned. No endpoint here names a device now, and this fence still does not prove that.
 CHOREOGRAPHY = (
     (re.compile(r"\.pin_memory\(|\.share_memory\(|\bpinned_memory\b"), "host pinning"),
     (re.compile(r"\btorch\.cuda\.(empty_cache|synchronize|set_device|memory_|Stream|Event)"),

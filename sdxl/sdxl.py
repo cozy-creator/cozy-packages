@@ -176,12 +176,24 @@ class SdxlModel(Model[SdxlPipeline]):
     @uses_components("text_encoder", "text_encoder_2")
     def encode(self, ids: Any, ids_2: Any) -> tuple[Any, Any]:
         """SDXL's two-tower conditioning. ONE method, BOTH encoders — a composite operation
-        declares its components together rather than opening two scopes."""
+        declares its components together rather than opening two scopes.
+
+        IT PLACES ITS OWN INPUTS (#534c). Token ids arrive on the host, and the only code
+        entitled to say where they go is code that holds a lease on the component they are
+        going to: it follows the encoder's own weights to wherever the runtime already put
+        them. The caller used to do this with a hard-coded `cuda:0`, which was an author
+        naming a device — the one live instance se-001's record left open — and it made this
+        endpoint unservable on any envelope the runtime did not place at ordinal zero.
+        """
         import torch
 
+        first_encoder = self.pipe.components["text_encoder"]
+        second_encoder = self.pipe.components["text_encoder_2"]
         with torch.inference_mode():
-            first = self.pipe.components["text_encoder"](ids, output_hidden_states=True)
-            second = self.pipe.components["text_encoder_2"](ids_2, output_hidden_states=True)
+            ids = ids.to(first_encoder.get_input_embeddings().weight.device)
+            ids_2 = ids_2.to(second_encoder.get_input_embeddings().weight.device)
+            first = first_encoder(ids, output_hidden_states=True)
+            second = second_encoder(ids_2, output_hidden_states=True)
             prompt = torch.cat([first.hidden_states[-2], second.hidden_states[-2]], dim=-1)
             return prompt, second.text_embeds
 
@@ -311,7 +323,6 @@ def generate(
     import torch
     from diffusers import EulerDiscreteScheduler
 
-    device = torch.device("cuda", 0)
     view = model.for_request(ctx, seed=payload.seed)
     width, height = _BUCKETS[payload.aspect_ratio]
     steps = payload.steps
@@ -329,9 +340,14 @@ def generate(
             neg, neg_2 = _tokenize(tokenizers, payload.negative_prompt)
 
     with tel.stage("encode"):
-        prompt, pooled = model.encode(ids.to(device), ids_2.to(device))
+        prompt, pooled = model.encode(ids, ids_2)
         if classifier_free:
-            negative, neg_pooled = model.encode(neg.to(device), neg_2.to(device))
+            negative, neg_pooled = model.encode(neg, neg_2)
+    # THE DEVICE ENVELOPE, READ RATHER THAN NAMED (#534c). The conditioning came back from
+    # the encoders the runtime placed, so it already carries where this request runs; the
+    # latents and the schedule follow it. This is data flow across the boundary an author
+    # owns, and it is the whole of what the deleted `torch.device("cuda", 0)` was doing.
+    device = prompt.device
     tel.metric("prompt_absmax", _finite(torch, prompt))
     tel.metric("pooled_absmax", _finite(torch, pooled))
 
