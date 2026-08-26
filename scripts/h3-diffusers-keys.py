@@ -3,7 +3,7 @@
 own diffusers-format headers, and the four #522 seams against upstream's own arithmetic.
 Decided on the control plane, with ZERO weight bytes and zero dollars.
 
-    nice -n 19 .venv/bin/python scripts/h3-diffusers-keys.py [keys|geometry|schedule]
+    nice -n 19 .venv/bin/python scripts/h3-diffusers-keys.py [keys|geometry|schedule|solver|curve]
 
 WHAT THIS ANSWERS, AND WHAT IT DOES NOT. `scripts/h3-keys.py` asks the same question of the
 hand port against the community carrier; this asks it of the upstream classes against the
@@ -256,6 +256,152 @@ def check_schedule() -> bool:
     return ok
 
 
+def check_solver() -> bool:
+    """THE TWO-SCHEDULER SEAM (#540's banked next-lane item), END TO END.
+
+    H3 runs TWO schedules per request — video at shift 12.0, audio at shift 3.0 — and this
+    endpoint drives both from ONE `H3Solver` over one `TimestepPlan`, where upstream drives
+    two `MiniMaxH3Scheduler` instances. The fix lane proved a SINGLE step agrees to 1e-12; a
+    single step says nothing about the other 29, because the two sides index their grids
+    differently — upstream carries a `_step_index` cursor that advances inside `step()`,
+    this port indexes the plan — and an off-by-one there is invisible until the last
+    evaluation.
+
+    THREE ARMS, because the seam and the schedule's REPRESENTATION are different subjects
+    and reporting one number for both would attribute a float32 rounding to the update rule:
+
+      1. THE GRID. `flow_sigmas` computes in Python float64; upstream builds `linspace` in
+         float32. They are the same expression, so they agree to float32 resolution and no
+         further, and that difference is measured here rather than absorbed.
+      2. THE SEAM, on a SHARED grid. Both sides driven from upstream's own sigma values, so
+         the only thing left that can differ is the update expression and the order it is
+         applied in. It is exact to float32 resolution and NOT bit-exact, for a reason the
+         upstream scheduler states in its own `step()`: it recovers the x0 sigma from the
+         TIMESTEP (`1 - t`, a float32 round trip that is lossy below sigma 0.5) while taking
+         the Euler ratio from the sigma GRID, deliberately keeping the two sources apart.
+         `SolverStep.advance_*` is the algebraic rearrangement of that update with ONE sigma,
+         so the two agree exactly in real arithmetic and differ by that round trip in float32
+         — which is why the audio schedule, whose shift 3.0 grid spends more of its length
+         below 0.5, carries the larger residual of the two.
+      3. THE SHIPPED PAIR. The port's own grid against upstream's own grid, whose residual
+         must stay inside what arm 1 measured: `evaluations` steps each carrying at most one
+         float32 epsilon of schedule error.
+
+    The velocity is a fixed pseudo-random field that DEPENDS ON THE CURRENT SAMPLE, which is
+    what makes every arm sensitive to ORDER: a schedule that is right as a set and wrong as
+    a sequence passes a per-step check and fails these.
+
+    RED CONTROL on arm 2: the defective `x + (sigma_next - sigma) * v` update (#522a) must
+    DISAGREE, and it is asserted to, so a green arm is never a green nobody fired.
+    """
+    sys.path.insert(0, str(ROOT / "h3"))
+    from diffusers import MiniMaxH3Scheduler
+
+    from h3_arch.layout import H3Solver, TimestepPlan, flow_sigmas
+
+    evaluations = 30
+    #: float32 has 24 bits of mantissa, so one grid value carries at most this much relative
+    #: error against the float64 expression — and a trajectory carries at most one per
+    #: evaluation. The bound is that product, not a number chosen to make the arm pass.
+    float32_eps = 2.0**-23
+    bound = evaluations * float32_eps
+
+    def velocity(sample: torch.Tensor, index: int) -> torch.Tensor:
+        """Deterministic, and a function OF THE SAMPLE, so the trajectory diverges the moment
+        a step is taken out of order or at the wrong sigma."""
+        generator = torch.Generator().manual_seed(1000 + index)
+        return torch.randn(sample.shape, generator=generator, dtype=torch.float64) + sample
+
+    def solver_over(sigmas: tuple[float, ...], shift: float) -> Any:
+        """The SHIPPED solver over a given grid. A plan is built directly rather than
+        through `build_timestep_plan` so the grid under test can be upstream's own values;
+        everything downstream of it is the endpoint's real code."""
+        plan = TimestepPlan(
+            task="fl2va",
+            structure="h3-adaln-curve",
+            video_sigmas=sigmas,
+            audio_sigmas=sigmas,
+            sigma_shift_video=shift,
+            sigma_shift_audio=shift,
+            visual_cond_timestep=None,
+            audio_cond_timestep=None,
+            modality_tags=(0, 1, 2),
+            scheduler="flow_match_uniform",
+            output_dtype="float32",
+        )
+        return H3Solver(plan)
+
+    def ours(
+        sigmas: tuple[float, ...], shift: float, modality: str, *, red: bool = False
+    ) -> torch.Tensor:
+        """`SolverStep.advance_video` is the shipped update and is what runs here — the red
+        control is the ONE expression that is written out, because it is the one that was
+        deleted (#522a) and has to be spelled to be fired."""
+        generator = torch.Generator().manual_seed(7)
+        sample = torch.randn(256, generator=generator, dtype=torch.float64)
+        for step in solver_over(sigmas, shift).steps():
+            v = velocity(sample, step.index)
+            if red:
+                sample = sample + (step.sigma_video_next - step.sigma_video) * v
+            elif modality == "video":
+                sample = step.advance_video(sample, v)
+            else:
+                sample = step.advance_audio(sample, v)
+        return sample
+
+    def theirs(scheduler: Any) -> torch.Tensor:
+        generator = torch.Generator().manual_seed(7)
+        sample = torch.randn(256, generator=generator, dtype=torch.float64)
+        for index, timestep in enumerate(scheduler.timesteps):
+            sample = scheduler.step(velocity(sample, index), timestep, sample).prev_sample
+        return sample
+
+    ok = True
+    for name, shift in (("video", 12.0), ("audio", 3.0)):
+        native = flow_sigmas(evaluations, shift)
+        scheduler = MiniMaxH3Scheduler(shift=shift)
+        scheduler.set_timesteps(evaluations + 1)
+        upstream = tuple(float(s) for s in scheduler.sigmas)
+
+        # 1 — the grid, to float32 resolution
+        points = len(upstream) == len(native)
+        grid_delta = (
+            max(abs(a - b) for a, b in zip(native, upstream, strict=True)) if points else 1.0
+        )
+        grid_ok = points and grid_delta <= float32_eps
+
+        # 2 — the seam, both sides on upstream's own values
+        reference = theirs(scheduler)
+        scale = float(reference.abs().max())
+        seam = float((ours(upstream, shift, name) - reference).abs().max()) / scale
+        red = float((ours(upstream, shift, name, red=True) - reference).abs().max()) / scale
+        seam_ok = seam <= float32_eps and red > 1e-3
+
+        # 3 — the shipped pair, inside what arm 1 measured
+        shipped = float((ours(native, shift, name) - reference).abs().max()) / scale
+        shipped_ok = shipped <= bound
+
+        ok &= grid_ok and seam_ok and shipped_ok
+        verdict = "OK  " if (grid_ok and seam_ok and shipped_ok) else "FAIL"
+        print(
+            f"{verdict} {name:5s} shift {shift:4.1f}: {len(native)} grid points, "
+            f"{evaluations} evaluations"
+        )
+        print(
+            f"       grid   max|d| {grid_delta:.3e} (float32 resolution {float32_eps:.3e})"
+        )
+        print(
+            f"       seam   shared grid, final rel {seam:.3e} "
+            f"(bound float32 eps {float32_eps:.3e} — upstream's own x0 round trip); "
+            f"the #522a sign as red control: {red:.3e}"
+        )
+        print(
+            f"       shipped native grid vs upstream's, final rel {shipped:.3e} "
+            f"(bound {evaluations} x float32 eps = {bound:.3e})"
+        )
+    return ok
+
+
 #: The banked ATTENTION-FUSION delta between the two dialects, as arithmetic rather than as
 #: a claim. The community carrier fuses q/k/v into one `attn.qkv_proj.weight` per attention
 #: module where the official packaging keeps three, over 52 modules (50 blocks + 2 refiner
@@ -318,8 +464,9 @@ def check_curve() -> bool:
 
 
 def main() -> int:
-    sections = sys.argv[1:] or ["keys", "geometry", "schedule", "curve"]
-    unknown = [s for s in sections if s not in ("keys", "geometry", "schedule", "curve")]
+    known = ("keys", "geometry", "schedule", "solver", "curve")
+    sections = sys.argv[1:] or list(known)
+    unknown = [s for s in sections if s not in known]
     if unknown:
         refuse(f"unknown section(s): {', '.join(unknown)}")
     results: list[bool] = []
@@ -336,6 +483,10 @@ def main() -> int:
     if "schedule" in sections:
         print("SCHEDULE — #522a and #522c, against the official H3 scheduler")
         results.append(check_schedule())
+        print()
+    if "solver" in sections:
+        print("SOLVER SEAM — one H3Solver against upstream's TWO schedulers, all 30 steps")
+        results.append(check_solver())
         print()
     if "curve" in sections:
         print("CURVE DELTA — the optimization lane's topology, against the banked carrier")

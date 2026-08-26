@@ -8,6 +8,11 @@ which components each operation may touch so the registry has something true to 
 
 WHAT IS DECLARED HERE
 
+  * TWO CONSTRUCTION LAYERS, chosen by the ARTIFACT and not by this file. `H3Config.graph`
+    names one: `h3-native` builds the hand port (`h3_arch/`, the community curve carrier's
+    3,445 destinations) and `h3-diffusers` builds upstream's official classes through
+    `h3_ref/` (the official tree's 3,486). The term selects a KEY SET, so it is structural
+    (§1.1.1) and defaults to the dialect the one ingested H3 artifact actually carries.
   * TWO THIN ROLE CLASSES over one shared base. `Fl2VAModel(task="fl2va")` binds
     `transformer`; `Ref2VAModel(task="ref2va")` binds `transformer_ref`. They are separate
     instances always, even when both bind the SAME dual artifact, and the only method that
@@ -89,7 +94,7 @@ from cozy_runtime.author import (
 )
 
 from gates import post_encode_gate, pre_encode_gate
-from h3_arch import H3Config, build_component
+from h3_arch import GraphDialect, H3Config, build_component
 from h3_arch.layout import (
     FPS,
     FRAMES_PER_CLIP,
@@ -261,18 +266,28 @@ class H3Pipeline:
     The `components` mapping is what the runtime censuses, so its keys ARE the artifact's
     component roles. A slot exposes its own transformer role and the three shared ones; it
     never exposes the twin's, which is what makes an undeclared access spellable.
+
+    TWO CONSTRUCTION LAYERS, SELECTED BY THE ARTIFACT (#531/#540). `h3_arch` is the hand
+    port and answers to the community curve carrier's key set; `h3_ref` is a thin layer over
+    upstream's official classes and answers to the official diffusers-format tree's. The
+    artifact's own config says which, through `H3Config.graph`, and nothing else in this file
+    knows the difference — `build_component(role, ...)` is the same signature on both sides,
+    which is the whole reason the rebase can be a construction decision rather than a fork.
     """
 
     def __init__(self, config: Any, *, transformer_role: str) -> None:
         whole = H3Config.from_mapping(config.mapping())
         self.config = whole
         self.transformer_role = transformer_role
-        self.components: dict[str, Any] = {
-            transformer_role: build_component(transformer_role, whole),
-            "text_encoder": build_component("text_encoder", whole),
-            "video_vae": build_component("video_vae", whole),
-            "audio_vae": build_component("audio_vae", whole),
-        }
+        roles = (transformer_role, "text_encoder", "video_vae", "audio_vae")
+        self.components: dict[str, Any]
+        if whole.graph is GraphDialect.DIFFUSERS:
+            import h3_ref
+
+            mapping = h3_ref.config_mapping(whole)
+            self.components = {r: h3_ref.build_component(r, mapping) for r in roles}
+        else:
+            self.components = {r: build_component(r, whole) for r in roles}
 
     @property
     def transformer(self) -> Any:
@@ -500,6 +515,7 @@ class Fl2VAModel(_H3Base, task="fl2va"):
                 video_latents=video_latents,
                 audio_latents=audio_latents,
                 modulation=modulation,
+                graph=self.pipe.config.graph,
             )
 
 
@@ -530,6 +546,7 @@ class Ref2VAModel(_H3Base, task="ref2va"):
                 video_latents=video_latents,
                 audio_latents=audio_latents,
                 modulation=modulation,
+                graph=self.pipe.config.graph,
             )
 
 
@@ -549,6 +566,7 @@ def _predict_data_velocity(
     video_latents: Any,
     audio_latents: Any,
     modulation: Modulation,
+    graph: GraphDialect,
 ) -> tuple[Any, Any]:
     """THE MODEL BOUNDARY (#524): latents in, LATENT-SHAPED DATA-WARD VELOCITY out.
 
@@ -571,6 +589,16 @@ def _predict_data_velocity(
     import torch
 
     from h3_arch.dit import pack_audio, patchify_video, unpack_audio, unpatchify_video
+
+    if graph is GraphDialect.DIFFUSERS:
+        return _predict_data_velocity_ref(
+            transformer,
+            run=run,
+            text_states=text_states,
+            video_latents=video_latents,
+            audio_latents=audio_latents,
+            modulation=modulation,
+        )
 
     grid = run.plan.grid
     patch = transformer.config.patch_size
@@ -616,6 +644,98 @@ def _predict_data_velocity(
             patch,
         ).to(video_latents.dtype),
         unpack_audio(audio_out).to(audio_latents.dtype),
+    )
+
+
+def _predict_data_velocity_ref(
+    transformer: Any,
+    *,
+    run: H3Run,
+    text_states: Any,
+    video_latents: Any,
+    audio_latents: Any,
+    modulation: Modulation,
+) -> tuple[Any, Any]:
+    """THE SAME BOUNDARY, over upstream's `MiniMaxH3Transformer3DModel`.
+
+    The two transformers take the packed sequence apart differently and this is the whole of
+    that difference. The port takes ONE already-concatenated `[S, hidden]` buffer plus a
+    per-SEGMENT modulation table; upstream takes the three modalities SEPARATELY plus
+    per-ROW index tensors, and scatters them into the buffer itself. Both describe the same
+    layout — `PackedLayout` — so the translation is arithmetic on the segment table and
+    invents nothing:
+
+        row -> modulation row       (the port's `Modulation.segments`)
+        row -> timestep index       row // MODALITY_NUM
+        row -> modality tag         row %  MODALITY_NUM
+
+    which is exactly the relation upstream builds in the other direction
+    (`adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + token_tags`).
+
+    CONDITIONING ROWS ARE NOT HANDLED HERE and do not silently vanish: upstream's
+    `hidden_states` must carry the conditioning video rows interleaved in `video_indices`
+    order, and building that is the same unbuilt pixels-to-rows seam `condition_text`
+    refuses on (`vision_seam_unbuilt`). A layout that carries one reaches an explicit
+    refusal rather than a forward that quietly drops it.
+
+    The heads are RAW and DATA-WARD on this side too — upstream's own
+    `MiniMaxH3Scheduler` states the convention — so `H3Solver` consumes them unchanged.
+    """
+    import torch
+
+    from h3_arch.dit import pack_audio, patchify_video, unpack_audio, unpatchify_video
+
+    modality_num = 3
+    grid = run.plan.grid
+    patch = transformer.config.patch_size
+    weight = transformer.context_embedder.weight
+    device = weight.device
+
+    conditioning = [k for _, _, k in run.layout.segments if k in ("cond", "ref_img", "ref_audio")]
+    if conditioning:
+        raise UnsupportedInput(
+            "the reference construction layer packs conditioning rows into the modality "
+            f"streams itself, and this layout carries {', '.join(sorted(set(conditioning)))} "
+            "rows the endpoint has no builder for: the pixels-to-rows seam is the same one "
+            "`condition_text` refuses on",
+            code="vision_seam_unbuilt",
+            fields=["first_frame", "last_frame", "references"],
+        )
+
+    seq_len = run.layout.seq_len
+    timestep_indices = torch.zeros(seq_len, dtype=torch.long)
+    token_tags = torch.zeros(seq_len, dtype=torch.long)
+    for start, end, row in modulation.segments:
+        timestep_indices[start:end] = row // modality_num
+        token_tags[start:end] = row % modality_num
+
+    def _span(kind: str) -> Any:
+        a, b = run.layout.stream(kind)
+        return torch.arange(a, b, dtype=torch.long, device=device)
+
+    video_out, audio_out = transformer(
+        patchify_video(video_latents, patch).unsqueeze(0).to(device=device),
+        pack_audio(audio_latents).unsqueeze(0).to(device=device),
+        text_states.to(device=device),
+        torch.tensor(modulation.timesteps, dtype=torch.float32, device=device),
+        timestep_indices.to(device),
+        token_tags.to(device),
+        torch.tensor(modulation.position_ids, dtype=torch.float32, device=device),
+        _span("video"),
+        _span("audio"),
+        _span("text"),
+        return_dict=False,
+    )
+    return (
+        unpatchify_video(
+            video_out[0],
+            grid.latent_t // patch[0],
+            grid.latent_h // patch[1],
+            grid.latent_w // patch[2],
+            transformer.config.in_channels,
+            patch,
+        ).to(video_latents.dtype),
+        unpack_audio(audio_out[0]).to(audio_latents.dtype),
     )
 
 

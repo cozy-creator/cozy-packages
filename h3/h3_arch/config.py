@@ -29,6 +29,25 @@ class AdaLnStructure(enum.Enum):
     BAKED = "h3-adaln-baked"
 
 
+class GraphDialect(enum.Enum):
+    """WHICH implementation constructs the component roots — a STRUCTURAL term (§1.1.1),
+    never a preference, because the two dialects answer to DIFFERENT KEY SETS and an
+    artifact fills exactly one of them.
+
+    Measured, not asserted: `scripts/h3-keys.py` censuses the native port at 3,445
+    destinations against the community carrier (transformer 532, conditioner 902, video VAE
+    562, audio VAE 917) and `scripts/h3-diffusers-keys.py` censuses the upstream classes at
+    3,486 against the official diffusers-format tree (638 / 1058 / 703 / 1087). Every role
+    disagrees, and the conditioner disagrees structurally rather than by name — the
+    community carrier is Qwen3-VL cut to 50 layers with no head, the official tree is the
+    untruncated 64-layer model. So this term selects a graph AND declares which artifact can
+    fill it; picking the wrong one is `incomplete_fill` on a rented card.
+    """
+
+    NATIVE = "h3-native"
+    DIFFUSERS = "h3-diffusers"
+
+
 class Task(enum.Enum):
     """The task partition a transformer component was trained for. Structurally invisible
     (job-001: the two carriers have byte-identical headers), so it is carried as a stamp
@@ -193,6 +212,10 @@ class H3Config:
     text_encoder: TextEncoderConfig = field(default_factory=TextEncoderConfig)
     video_vae: VideoVaeConfig = field(default_factory=VideoVaeConfig)
     audio_vae: AudioVaeConfig = field(default_factory=AudioVaeConfig)
+    graph: GraphDialect = GraphDialect.NATIVE
+    """Which construction layer builds the roots. NATIVE is the default because it is what
+    the ONE ingested H3 artifact carries: job-001's dual snapshot is the community curve
+    carrier, and no diffusers-format artifact is bound anywhere yet (#540e)."""
 
     @classmethod
     def from_mapping(cls, mapping: dict[str, Any]) -> H3Config:
@@ -205,6 +228,16 @@ class H3Config:
         field this code does not read is a compatibility fact, not a caller error.
         """
         out = cls()
+        stated = mapping.get("graph")
+        if stated is not None:
+            try:
+                out = replace(out, graph=GraphDialect(stated))
+            except ValueError:
+                raise ValueError(
+                    f"{stated!r} is not an H3 graph dialect: "
+                    + ", ".join(d.value for d in GraphDialect)
+                    + " — this term selects a KEY SET, so an unknown value cannot default"
+                ) from None
         for name, section in (
             ("dit", mapping.get("dit")),
             ("text_encoder", mapping.get("text_encoder")),

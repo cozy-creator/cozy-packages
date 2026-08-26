@@ -66,7 +66,7 @@
             "decode_video": [
               "video_vae"
             ],
-            "denoise": [
+            "predict_data_velocity": [
               "transformer"
             ]
           },
@@ -307,7 +307,7 @@
             "decode_video": [
               "video_vae"
             ],
-            "denoise": [
+            "predict_data_velocity": [
               "transformer_ref"
             ]
           },
@@ -705,5 +705,5 @@
       "service": "Telemetry"
     }
   },
-  "surface_digest": "sha256:e1290e43cb662dc37030342954ad4e34c6a5bf103f5ef01b1f1ad7caaf02ac1d"
+  "surface_digest": "sha256:43e8ba4d324f17c4a70429aee3cc4b3865f8bb8a5638e0980df32891fa83063b"
 }

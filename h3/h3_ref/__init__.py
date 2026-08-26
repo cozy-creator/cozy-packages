@@ -54,6 +54,7 @@ __all__ = [
     "build_transformer",
     "build_video_vae",
     "component_config",
+    "config_mapping",
 ]
 
 #: The artifact's component roles, and the ONLY names this package answers to. They are the
@@ -99,6 +100,95 @@ def component_config(role: str, mapping: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(section, dict):
         return {}
     return {k: v for k, v in section.items() if not k.startswith("_")}
+
+
+def config_mapping(whole: Any) -> dict[str, dict[str, Any]]:
+    """`H3Config` -> the artifact-config mapping `component_config` reads.
+
+    THE SEAM #540 DEFERRED, and it is a translation rather than a lookup: the two layers
+    parameterize the same released facts differently, and every line below is one of those
+    differences written down once. Upstream's own defaults hold wherever `H3Config` states
+    nothing — a field this port never had is not a field to invent a value for.
+
+    It exists so the endpoint can hand EITHER construction layer the same typed object.
+    `H3Config` is the artifact's config as this repo types it; a diffusers-format artifact
+    carries per-subfolder `config.json` documents instead, and `component_config` already
+    reads those verbatim. So this is the NATIVE-config route into the upstream classes, and
+    a real diffusers artifact bypasses it entirely.
+    """
+    dit, te, vv, av = whole.dit, whole.text_encoder, whole.video_vae, whole.audio_vae
+    return {
+        "transformer": {
+            "num_attention_heads": dit.num_attention_heads,
+            "attention_head_dim": dit.attention_head_dim,
+            "hidden_size": dit.hidden_size,
+            "num_layers": dit.num_layers,
+            "num_refiner_layers": dit.token_refiner_num_layers,
+            "ffn_dim": dit.ffn_hidden_size,
+            "in_channels": dit.latents_dim,
+            "audio_in_channels": dit.audio_latents_dim,
+            "patch_size": tuple(dit.patch_size),
+            "text_dim": dit.text_dim,
+            "freq_dim": dit.timestep_input_dim,
+            "time_embed_hidden_dim": dit.time_embed_hidden_size,
+            "time_embed_dim": dit.time_embed_dim,
+            "rope_freq_dim": dit.rope_inv_freq_len,
+            "norm_eps": dit.norm_eps,
+            "qk_norm_eps": dit.qk_norm_eps,
+            "final_norm_eps": dit.final_norm_eps,
+            # the two terms upstream's class does not know about; `build_transformer` pops
+            # them and they select a topology rather than a numeric default
+            "structure": dit.structure.value,
+            "adaln_curve_grid": dit.adaln_curve_grid,
+        },
+        "text_encoder": {
+            "model_type": "qwen3_vl",
+            "num_hidden_layers": te.num_hidden_layers,
+            "hidden_size": te.hidden_size,
+            "intermediate_size": te.intermediate_size,
+            "num_attention_heads": te.num_attention_heads,
+            "num_key_value_heads": te.num_key_value_heads,
+            "head_dim": te.head_dim,
+            "vocab_size": te.vocab_size,
+            "rms_norm_eps": te.rms_norm_eps,
+            "rope_theta": te.rope_theta,
+        },
+        "video_vae": {
+            "in_channels": vv.in_channels,
+            "out_channels": vv.out_ch,
+            "latent_channels": vv.embed_dim,
+            # upstream states the per-stage WIDTHS where this port states a base and a
+            # multiplier table; the widths are the product and there is no third authority
+            "block_out_channels": tuple(vv.ch * m for m in vv.ch_mult),
+            "layers_per_block": vv.num_res_blocks,
+            "spatial_downsample_factors": tuple(vv.space_down),
+            "temporal_downsample_factors": tuple(vv.time_down),
+            "spatial_padding_mode": vv.padding_mode,
+            "decoder_num_layers": vv.decoder_num_layers,
+            "decoder_num_attention_heads": vv.decoder_heads,
+            "decoder_attention_head_dim": vv.decoder_dim_head,
+            # upstream carries the feed-forward as a MULTIPLE of the decoder width; this
+            # port carries the width itself, and 8192 / 2048 is where the 4 comes from
+            "decoder_ffn_mult": vv.decoder_ffn_dim // vv.decoder_dim,
+            "decoder_rope_theta": vv.decoder_rope_theta,
+            "decoder_rope_dim_ratio": vv.decoder_rope_dim_ratio,
+            "decoder_norm_eps": vv.decoder_norm_eps,
+            # #522b's temporal geometry, as the released config states it
+            "clip_length": vv.vae_clip_length,
+            "token_drop": vv.vae_token_drop,
+        },
+        "audio_vae": {
+            "encoder_dim": av.encoder_dim,
+            "encoder_rates": tuple(av.encoder_rates),
+            "latent_dim": av.latent_dim,
+            "latent_channels": av.latent_channels,
+            "decoder_dim": av.decoder_dim,
+            "decoder_rates": tuple(av.decoder_rates),
+            "resblock_kernel_sizes": tuple(av.resblock_kernel_sizes),
+            "resblock_dilation_sizes": tuple(tuple(d) for d in av.resblock_dilation_sizes),
+            "sampling_rate": av.sample_rate,
+        },
+    }
 
 
 def _accepted(cls: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -205,6 +295,9 @@ def build_component(role: str, config: dict[str, Any] | None = None) -> nn.Modul
     switches implementations by changing an import and nothing else.
 
     `config` is the WHOLE artifact config mapping; this selects the role's section from it.
+    A diffusers-format artifact's own per-subfolder `config.json` documents ARE that mapping;
+    `config_mapping` produces the same shape from this repo's typed `H3Config` when the
+    artifact carries no diffusers config of its own.
     """
     if role not in _BUILDERS:
         raise KeyError(f"{role!r} is not an H3 component role: {', '.join(ROLES)}")
