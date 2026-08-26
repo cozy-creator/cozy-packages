@@ -325,29 +325,19 @@ def side_comfy(args: argparse.Namespace) -> None:
 def seam_run(args: argparse.Namespace, grid: Any, layout: Any, plan: Any) -> Any:
     """One `H3Run` for the model path.
 
-    `view`, `presentation`, `expanded` and `patched` are the request-facing halves and the
-    model boundary reads NONE of them — it takes `plan.grid`, `layout.segments` and
-    `conditioning` and nothing else. Driving the endpoint outside its runtime means there is
-    no `RequestView` to hand it, so they are cast rather than faked: a stand-in object would
-    be a second implementation of a surface this oracle is not testing.
-
-    `expanded`/`patched` are the VISION halves (`daa56bd`), and this call drifted the moment
-    they were added: `H3Run` gained two required fields, nothing constructed it outside
-    `h3.py`'s own path, and the oracle went from green to a TypeError at `seam_run` — after
-    the 48 GiB text encoder had already loaded, so the drift cost a card to discover. It is
-    listed as a text-only lane because the vision seam refuses (`vision_seam_unbuilt`).
+    `view` and `expanded` are request-facing halves the model boundary does not inspect in
+    this text-only oracle. Driving the endpoint outside its runtime means there is no
+    `RequestView` to hand it, so it is cast rather than faked: a stand-in object would be a
+    second implementation of a surface this oracle is not testing.
     """
     import h3
 
     return h3.H3Run(
-        plan=h3.H3Plan(prompt=args.prompt, grid=grid, keyframes=(), references=(),
-                       ref_blocks=(), steps=args.steps, mute=False),
+        plan=h3.H3Plan(grid=grid, keyframes=(), steps=args.steps, mute=False),
         layout=layout,
         timestep_plan=plan,
         view=cast(Any, None),
-        presentation=cast(Any, None),
         expanded=cast(Any, None),
-        patched=cast(Any, None),
     )
 
 

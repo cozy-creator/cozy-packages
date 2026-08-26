@@ -94,23 +94,18 @@ class FakeComponent:
 
 
 class FakePipe:
-    def __init__(self, transformer_component: str) -> None:
-        self.transformer_component = transformer_component
+    def __init__(self) -> None:
         self.config = H3Config()
         self.components: dict[str, Any] = {}
 
 
-def build_double(cls: Any, transformer_component: str) -> Any:
-    """One role class over a fake pipeline, with the RUNTIME'S guard installed over every
+def build_double(cls: Any) -> Any:
+    """The model class over a fake pipeline, with the RUNTIME'S guard installed over every
     component exactly as the runtime installs it after `load`."""
-    pipe = FakePipe(transformer_component)
+    pipe = FakePipe()
     model = cls.for_test(pipe=pipe, tokenizer=None)
-    for name in (transformer_component, "text_encoder", "video_vae", "audio_vae"):
+    for name in ("transformer", "text_encoder", "video_vae", "audio_vae"):
         pipe.components[name] = GuardedComponent(name, FakeComponent(name), model)
-    # the twin's transformer, present in the DUAL artifact and not in this slot's set —
-    # this is the object the wrong-transformer arm reaches for
-    twin = "transformer_ref" if transformer_component == "transformer" else "transformer"
-    pipe.components[twin] = GuardedComponent(twin, FakeComponent(twin), model)
     return model, pipe
 
 
@@ -126,15 +121,15 @@ def group_components() -> None:
         def reach(self, which: str) -> Any:
             return self.pipe.components[which].name
 
-    green, _ = build_double(_Reach, "transformer")
+    green, _ = build_double(_Reach)
     if green.reach("transformer") == "transformer":
         observe("declared access inside its own scope", "Fl2VAModel scope -> transformer.name")
     else:
         failed("declared access inside its own scope")
 
     expect_refusal(
-        "Fl2VAModel.denoise touching the REF transformer",
-        lambda: green.reach("transformer_ref"),
+        "Fl2VAModel.denoise touching the text encoder",
+        lambda: green.reach("text_encoder"),
         code="undeclared_component",
     )
     expect_refusal(
@@ -143,31 +138,19 @@ def group_components() -> None:
         code="poisoned_generation",
     )
 
-    class _RefReach(h3.Ref2VAModel):
-        @uses_components("transformer_ref")
-        def reach(self, which: str) -> Any:
-            return self.pipe.components[which].name
-
-    rg, _ = build_double(_RefReach, "transformer_ref")
-    expect_refusal(
-        "Ref2VAModel.denoise touching the FL transformer",
-        lambda: rg.reach("transformer"),
-        code="undeclared_component",
-    )
-
     class _CrossReach(h3.Fl2VAModel):
         @uses_components("text_encoder")
         def reach(self, which: str) -> Any:
             return self.pipe.components[which].name
 
-    cross, _ = build_double(_CrossReach, "transformer")
+    cross, _ = build_double(_CrossReach)
     expect_refusal(
         "condition_text touching video_vae (a declared component, the wrong one)",
         lambda: cross.reach("video_vae"),
         code="undeclared_component",
     )
 
-    _, outside_pipe = build_double(h3.Fl2VAModel, "transformer")
+    _, outside_pipe = build_double(h3.Fl2VAModel)
     expect_refusal(
         "any component touched OUTSIDE every scope",
         lambda: outside_pipe.components["transformer"].name,
@@ -183,7 +166,7 @@ def group_components() -> None:
         def inner(self) -> Any:
             return self.pipe.components["transformer"].name
 
-    nested, _ = build_double(_Nested, "transformer")
+    nested, _ = build_double(_Nested)
     expect_refusal(
         "a second scope entered while one is active",
         nested.outer,
@@ -202,12 +185,9 @@ def group_components() -> None:
         code="empty_component_set",
     )
 
-    # The stamps are what tell the two slots apart, since NOTHING STRUCTURAL DOES: the two
-    # carriers have byte-identical headers and the dual tuple planned three ways returns
-    # one topology digest (job-001).
-    stamps = (h3.Fl2VAModel.__stamps__, h3.Ref2VAModel.__stamps__)
-    if stamps == ({"task": "fl2va"}, {"task": "ref2va"}):
-        observe("the role classes carry distinct task stamps", f"{stamps[0]} / {stamps[1]}")
+    stamps = h3.Fl2VAModel.__stamps__
+    if stamps == {"task": "fl2va"}:
+        observe("the model carries its exact task stamp", str(stamps))
     else:
         failed("task stamps", str(stamps))
 
@@ -224,7 +204,7 @@ def group_components() -> None:
 
 def group_request() -> None:
     print("\n== the request plane — layer 1, the schema the runtime validates against ==")
-    from cozy_runtime.author import AudioAsset, ImageAsset
+    from cozy_runtime.author import ImageAsset
 
     base = {"prompt": "a cat"}
 
@@ -232,7 +212,7 @@ def group_request() -> None:
         """An asset arrives on the wire as a handle the SUPERVISOR resolves; plain msgspec
         has no such hook, so this driver supplies the same shape. Everything else below is
         the endpoint's own schema, unmodified."""
-        if kind in (ImageAsset, AudioAsset) or getattr(kind, "kind", None):
+        if kind is ImageAsset or getattr(kind, "kind", None):
             return kind(str(value))
         raise TypeError(kind)
 
@@ -266,58 +246,10 @@ def group_request() -> None:
         lambda: decode(h3.GenerateInput, {**base, "negative_prompt": "blurry"}),
     )
 
-    def images(n: int) -> dict[str, Any]:
-        refs = [{"kind": "image", "image": f"cozy://asset/{i}"} for i in range(n)]
-        return {**base, "references": refs}
-
-    def audios(n: int) -> dict[str, Any]:
-        refs = [{"kind": "audio", "audio": f"cozy://a/{i}"} for i in range(n)]
-        return {**base, "references": refs}
-
-    nine = decode(h3.RefGenerateInput, images(9))
-    if len(nine.references) == 9:
-        observe("9 image references — the published schema cap, exactly", "accepted")
-    else:
-        failed("9 image references — the published schema cap", str(len(nine.references)))
-    # This group is the request's PRE-HYDRATION layer. An image handle has metadata here,
-    # not bytes; presentation is deliberately later, after the supervisor hydrates it.
     expect_refusal(
-        "presenting an image before runtime hydration",
-        lambda: h3.decode_references(nine),
-        code="asset_bytes_unavailable",
+        "references are absent from this release rather than hidden behind a flag",
+        lambda: decode(h3.GenerateInput, {**base, "references": []}),
     )
-
-    expect_refusal(
-        "zero references on the reference route",
-        lambda: decode(h3.RefGenerateInput, {**base, "references": []}),
-    )
-    expect_refusal(
-        "13 references, over the TOTAL cap of 12 — refused by the schema",
-        lambda: decode(h3.RefGenerateInput, images(13)),
-    )
-    # THE PER-TYPE CAPS ARE THE ENDPOINT'S, not the schema's: 10 is under the total cap of
-    # 12 and over the image cap of 9, so only `decode_references` can catch it.
-    ten = decode(h3.RefGenerateInput, images(10))
-    expect_refusal(
-        "10 image references — under the total cap, over the per-type cap of 9",
-        lambda: h3.decode_references(ten),
-        code="reference_cap",
-    )
-    four_audio = decode(h3.RefGenerateInput, audios(4))
-    expect_refusal(
-        "4 audio references — over the per-type cap of 3",
-        lambda: h3.decode_references(four_audio),
-        code="reference_cap",
-    )
-    # AUDIO MAY STAND ALONE. Upstream refuses audio as the only modality; that guard was
-    # measured to protect nothing (v1), and the Cozy extension carries it WITHOUT claiming
-    # viseme or beat synchronization.
-    solo = decode(h3.RefGenerateInput, audios(1))
-    presented = h3.decode_references(solo)
-    if len(presented) == 1 and presented[0].kind == "audio":
-        observe("an audio reference standing alone is a legal request", "the Cozy extension")
-    else:
-        failed("audio-only reference", str(presented))
 
 
 def group_plan() -> None:

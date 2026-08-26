@@ -1,10 +1,9 @@
-"""se-001 — the MiniMax H3 launch endpoint: joint video AND audio, two task routes.
+"""se-001 — the MiniMax H3 launch endpoint: joint video AND audio through FL2VA.
 
-The first launch family, and the N-ARY ARTIFACT REFERENCE. SDXL is one model class over
-four components; H3 is TWO task-stamped model classes over FIVE, three of which they share
-byte for byte. The shape that makes that work is not in this file's power to invent — it is
-the runtime's resident-component registry — and this file's whole job is to be honest about
-which components each operation may touch so the registry has something true to act on.
+The release exposes one action and one model class over four components. Ref2VA is absent:
+the hidden action had no serving consumer and its advertised media forms either refused or
+had never produced viewed output. Future Ref2VA work returns as a new output-proven action,
+not as a placeholder in this release's descriptor and wheel identity.
 
 WHAT IS DECLARED HERE
 
@@ -13,15 +12,11 @@ WHAT IS DECLARED HERE
     3,445 destinations) and `h3-diffusers` builds upstream's official classes through
     `h3_ref/` (the official tree's 3,486). The term selects a KEY SET, so it is structural
     (§1.1.1) and defaults to the dialect the one ingested H3 artifact actually carries.
-  * TWO THIN ROLE CLASSES over one shared base. `Fl2VAModel(task="fl2va")` binds
-    `transformer`; `Ref2VAModel(task="ref2va")` binds `transformer_ref`. They are separate
-    instances always, even when both bind the SAME dual artifact, and the only method that
-    differs between them is `predict_data_velocity` — because the only thing that differs
-    is which transformer it may touch. There is no partition selector, no
-    `load_state_dict` over a shared graph and no first-non-null-partition pick here.
-  * SIX COMPONENT-SCOPED OPERATIONS, none of them coarse: text condition (`text_encoder`),
-    visual condition and video decode (`video_vae`), audio condition and audio decode
-    (`audio_vae`), and the role's velocity prediction (its own transformer). The coarse
+  * ONE TASK-STAMPED MODEL. `Fl2VAModel(task="fl2va")` binds `transformer`; there is no
+    partition selector, `load_state_dict` swap, twin binding, or hidden second action.
+  * FIVE COMPONENT-SCOPED OPERATIONS, none of them coarse: text condition (`text_encoder`),
+    visual condition and video decode (`video_vae`), audio decode (`audio_vae`), and
+    velocity prediction (`transformer`). The coarse
     whole-pipeline declaration is legal and is not servable: the tuple is 72.9 GiB and the
     smallest coherent one measured 40.56 GiB (proto-001), so a method that declares
     everything leaves the residency ladder nothing to stage on any card we rent.
@@ -38,7 +33,7 @@ WHAT IS DECLARED HERE
     tensors before encoding, and the MP4 after. #520's standing law — a generation that
     fails the gate is a failed generation regardless of exit status.
   * REQUEST ISOLATION AS STRUCTURE. Every call builds one `H3Run` holding its plan, its
-    layout, its generator and its conditioning. Component and cache leases are the
+    layout, its generator and its keyframe conditioning. Component and cache leases are the
     runtime's capabilities inside the `@uses_components` wrapper and are never `H3Run`
     fields. Success, cancellation and failure all discard the run.
 
@@ -86,7 +81,6 @@ from typing import Annotated, Any, Literal
 import msgspec
 from cozy_runtime.author import (
     App,
-    AudioAsset,
     Context,
     ImageAsset,
     InvalidRequest,
@@ -95,7 +89,6 @@ from cozy_runtime.author import (
     ModelDefault,
     Outputs,
     RequestView,
-    Settings,
     Shape,
     Telemetry,
     UnsupportedInput,
@@ -114,7 +107,6 @@ from h3_arch.layout import (
     MediaFacts,
     Modulation,
     PackedLayout,
-    RefBlock,
     TimestepPlan,
     build_modulation,
     build_timestep_plan,
@@ -124,12 +116,7 @@ from h3_arch.layout import (
     Keyframe as PackedKeyframe,
 )
 from h3_arch.pixels import pixel_bytes
-from h3_arch.presentation import (
-    Presentation,
-    PresentedReference,
-    ReferenceKind,
-    Tokenizer,
-)
+from h3_arch.presentation import Tokenizer
 from h3_arch.presentation import build as build_presentation
 from h3_arch.vision import ExpandedPresentation, PatchedVision
 
@@ -183,37 +170,7 @@ _PIXELS: dict[AspectPreset, tuple[int, int]] = {
     AspectPreset.T9_21: (672, 1536),
 }
 
-#: The released reference caps, per type and in total. Refused typed at decode.
-_MAX_IMAGES = 9
-_MAX_VIDEOS = 3
-_MAX_AUDIO = 3
-_MAX_REFERENCES = 12
-
-
 # ------------------------------------------------------------------ the wire
-
-
-class ImageReference(msgspec.Struct, tag="image", tag_field="kind"):
-    image: ImageAsset
-
-
-class VideoReference(msgspec.Struct, tag="video", tag_field="kind"):
-    video: VideoAsset
-    fps: float | None = None
-    """Override container metadata that is missing or wrong. A video's REAL rate must
-    survive decoding: it sets both the 2 fps presentation sampling and the VAE's clock."""
-    sample_rate: int | None = None
-
-
-class AudioReference(msgspec.Struct, tag="audio", tag_field="kind"):
-    audio: AudioAsset
-    sample_rate: int | None = None
-
-
-#: ONE ORDERED DISCRIMINATED UNION, never three modality-grouped lists. Order controls the
-#: `<Picture i>` / `<Video i>` / `<Audio i>` labels AND the shared rotary clock, so a list
-#: per modality would silently destroy request semantics.
-Reference = ImageReference | VideoReference | AudioReference
 
 
 class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -227,18 +184,6 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     mute: bool = False
     """An OUTPUT toggle: the audio track is omitted at finalization. Never a speed win —
     the audio stream is denoised jointly and cannot be skipped."""
-    seed: int | None = None
-
-
-class RefGenerateInput(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: str
-    references: Annotated[list[Reference], msgspec.Meta(min_length=1, max_length=_MAX_REFERENCES)]
-    first_frame: ImageAsset | None = None
-    last_frame: ImageAsset | None = None
-    aspect_ratio: Annotated[AspectPreset, Shape(pixels=_PIXELS)] = AspectPreset.W16_9
-    duration_s: Annotated[DurationS, Shape(frames=_FRAMES)] = 5
-    num_inference_steps: ModelDefault[StepPreset] = 30
-    mute: bool = False
     seed: int | None = None
 
 
@@ -260,23 +205,14 @@ class GenerateOutput(msgspec.Struct):
     checkpoint: str
 
 
-class RefServeSettings(msgspec.Struct):
-    """Deployment-owned toggles. Both defaults are OFF because both doors are
-    output-UNVERIFIED, and a door whose LAYOUT is proven is not a door that works."""
-
-    combined_keyframes: bool = False
-    """Keyframes alongside references. v1 built the path and nobody judged the result."""
-
-
 # ------------------------------------------------------------------ the pipeline
 
 
 class H3Pipeline:
-    """The constructed component roots of ONE task slot.
+    """The four constructed component roots of the FL2VA action.
 
     The `components` mapping is what the runtime censuses, so its keys ARE the artifact's
-    components. A slot exposes its own transformer component and the three shared ones; it
-    never exposes the twin's, which is what makes an undeclared access spellable.
+    components. The action exposes its transformer plus the text encoder and both VAEs.
 
     TWO CONSTRUCTION LAYERS, SELECTED BY THE ARTIFACT (#531/#540). `h3_arch` is the hand
     port and answers to the community curve carrier's key set; `h3_ref` is a thin layer over
@@ -286,11 +222,10 @@ class H3Pipeline:
     which is the whole reason the rebase can be a construction decision rather than a fork.
     """
 
-    def __init__(self, config: Any, *, transformer_component: str) -> None:
+    def __init__(self, config: Any) -> None:
         whole = H3Config.from_mapping(config.mapping())
         self.config = whole
-        self.transformer_component = transformer_component
-        components = (transformer_component, "text_encoder", "video_vae", "audio_vae")
+        components = ("transformer", "text_encoder", "video_vae", "audio_vae")
         self.components: dict[str, Any]
         if whole.graph is GraphDialect.DIFFUSERS:
             import h3_ref
@@ -302,15 +237,11 @@ class H3Pipeline:
 
     @property
     def transformer(self) -> Any:
-        return self.components[self.transformer_component]
+        return self.components["transformer"]
 
 
 def build_fl2va_pipeline(config: Any) -> H3Pipeline:
-    return H3Pipeline(config, transformer_component="transformer")
-
-
-def build_ref2va_pipeline(config: Any) -> H3Pipeline:
-    return H3Pipeline(config, transformer_component="transformer_ref")
+    return H3Pipeline(config)
 
 
 # ------------------------------------------------------------------ the run
@@ -320,17 +251,12 @@ def build_ref2va_pipeline(config: Any) -> H3Pipeline:
 class H3Plan:
     """One request's resolved facts, before any component is touched."""
 
-    prompt: str
     grid: LatentGrid
     keyframes: tuple[PackedKeyframe, ...]
-    references: tuple[PresentedReference, ...]
-    ref_blocks: tuple[RefBlock, ...]
     steps: int
     mute: bool
     condition_images: tuple[Any, ...] = ()
-    """Every visually-conditioning image IN PACKED ORDER — the keyframes first, then the
-    references — which is the order `PackedLayout` appends their `cond` and `ref_img`
-    segments in. One list, because the DiT does not distinguish them when it reads rows."""
+    """The first/last keyframes in packed order."""
     condition_geometry: tuple[tuple[int, int, int], ...] = ()
     """The `(latent_t, latent_h, latent_w)` the layout reserved rows for, per condition."""
 
@@ -345,13 +271,11 @@ class H3Run:
     layout: PackedLayout
     timestep_plan: TimestepPlan
     view: RequestView
-    presentation: Presentation
     expanded: ExpandedPresentation
     """The presentation with its vision blocks expanded into real pad runs. THIS is the
     sequence the text encoder ran on and the one `PackedLayout`'s text span was sized from;
     `presentation.tags` carries one tag per PRESENTATION row and is one row per block."""
-    patched: PatchedVision
-    conditioning: dict[str, Any] = field(default_factory=dict)
+    visual_conditioning: list[Any] = field(default_factory=list)
 
     @property
     def digest(self) -> str:
@@ -359,12 +283,10 @@ class H3Run:
 
 
 def prepare(
-    payload: GenerateInput | RefGenerateInput,
+    payload: GenerateInput,
     *,
     tokenizer: Tokenizer,
-    references: tuple[PresentedReference, ...],
-    ref_blocks: tuple[RefBlock, ...],
-) -> tuple[H3Plan, PackedLayout, Presentation, ExpandedPresentation, PatchedVision]:
+) -> tuple[H3Plan, PackedLayout, ExpandedPresentation, PatchedVision]:
     """CPU media preparation and the exact request plan. No component is touched.
 
     THE PATCHIFICATION HAPPENS HERE, not at conditioning time, and that placement is the
@@ -389,38 +311,26 @@ def prepare(
         tokenizer,
         payload.prompt,
         keyframes=keyframe_pixels,
-        references=references,
     )
     patched = vision.patchify(presentation)
     expanded = vision.expand(presentation, patched.token_counts)
-    # PACKED ORDER, and it is the layout's order rather than the request's: `PackedLayout`
-    # appends every keyframe `cond` segment before the first `ref_img` one, so the
-    # conditioning rows have to be produced in that order too or each one lands on
-    # another's segment.
-    condition_images = (*keyframe_pixels, *(r.pixels for r in references if r.kind == "image"))
+    condition_images = keyframe_pixels
     condition_geometry = tuple(
         vision.reference_block_geometry(image) for image in condition_images
     )
     plan = H3Plan(
-        prompt=payload.prompt,
         grid=grid,
         keyframes=tuple(keyframes),
-        references=references,
-        ref_blocks=ref_blocks,
         steps=payload.num_inference_steps,
         mute=payload.mute,
         condition_images=condition_images,
         condition_geometry=condition_geometry,
     )
-    layout = PackedLayout(
-        len(expanded.token_ids), grid, keyframes=plan.keyframes, refs=ref_blocks
-    )
-    return plan, layout, presentation, expanded, patched
+    layout = PackedLayout(len(expanded.token_ids), grid, keyframes=plan.keyframes)
+    return plan, layout, expanded, patched
 
 
-def _present_keyframes(
-    payload: GenerateInput | RefGenerateInput, *, width: int, height: int
-) -> tuple[Any, ...]:
+def _present_keyframes(payload: GenerateInput, *, width: int, height: int) -> tuple[Any, ...]:
     """The first/last keyframes as pixels on the TARGET canvas.
 
     A keyframe is not a reference and does not take the reference rule: it is an anchor on
@@ -448,63 +358,6 @@ def _present_keyframes(
     return tuple(out)
 
 
-def decode_references(payload: RefGenerateInput) -> tuple[PresentedReference, ...]:
-    """The typed caps, refused per TYPE and in total before any decoding cost is paid."""
-    counts = {"image": 0, "video": 0, "audio": 0}
-    for ref in payload.references:
-        counts[_kind_of(ref)] += 1
-    for kind, cap in (("image", _MAX_IMAGES), ("video", _MAX_VIDEOS), ("audio", _MAX_AUDIO)):
-        if counts[kind] > cap:
-            raise InvalidRequest(
-                f"{counts[kind]} {kind} references, and this checkpoint accepts {cap}",
-                code="reference_cap",
-                fields=["references"],
-            )
-    return tuple(
-        _present(ref, where=f"references.{i}") for i, ref in enumerate(payload.references)
-    )
-
-
-def _reference_blocks(references: tuple[PresentedReference, ...]) -> tuple[RefBlock, ...]:
-    """Each presented reference's PACKED contribution, with its real latent geometry.
-
-    This used to be `RefBlock(kind="image")` for every reference — zero latent extents, so
-    `_frame_grid(0, 0)` gave every reference ZERO rows and the packed layout reserved
-    nothing for any of them. A ref2va request built a layout identical to a t2va one and
-    nothing said so.
-
-    The geometry is DERIVED from the normalized canvas rather than measured off the encode,
-    because the layout is built before any component is leased. `condition_visual` checks
-    the encode against it.
-    """
-    from h3_arch.vision import reference_block_geometry
-
-    blocks: list[RefBlock] = []
-    for ref in references:
-        if ref.kind != "image":
-            # Audio references need their waveform decoded and encoded by the audio VAE
-            # before `ref_audio_t` can be stated, and that decode is not built. Refused
-            # here rather than packed as a zero-row block that silently conditions nothing.
-            raise UnsupportedInput(
-                f"{ref.kind} references are not packed by this endpoint yet: image "
-                "references are the built path, and an audio reference needs its waveform "
-                "decoded and encoded before its packed rows can be reserved",
-                code="audio_reference_unpacked",
-                fields=["references"],
-            )
-        latent_t, latent_h, latent_w = reference_block_geometry(ref.pixels)
-        blocks.append(
-            RefBlock(kind="image", latent_t=latent_t, latent_h=latent_h, latent_w=latent_w)
-        )
-    return tuple(blocks)
-
-
-def _kind_of(ref: Reference) -> ReferenceKind:
-    if isinstance(ref, ImageReference):
-        return "image"
-    return "video" if isinstance(ref, VideoReference) else "audio"
-
-
 def _decode_image(asset: Any, *, where: str) -> Any:
     """A hydrated image asset -> an RGB `PIL.Image`. An asset that is not a decodable image
     is a typed REQUEST refusal, not a backend fault: the caller sent it."""
@@ -524,55 +377,18 @@ def _decode_image(asset: Any, *, where: str) -> Any:
     return image.convert("RGB")
 
 
-def _present(ref: Reference, *, where: str) -> PresentedReference:
-    """One wire reference -> its presentation form, with the pixels ATTACHED.
-
-    The pixels used to be dropped here with a note saying the condition operation would
-    attach them, and nothing ever did — which is one half of what the old seam-wide refusal
-    was standing in front of.
-    """
-    from h3_arch.vision import normalize_reference_image
-
-    if isinstance(ref, AudioReference):
-        # A WAVEFORM NEVER ENTERS QWEN. The presentation gets the label; the audio VAE
-        # gets the samples. Upstream refused audio as the only modality; that guard was
-        # measured to protect nothing and this endpoint carries the Cozy extension
-        # instead, WITHOUT claiming viseme or beat synchronization.
-        return PresentedReference(kind="audio", has_audio=True)
-    if isinstance(ref, VideoReference):
-        # The frames would have to be decoded, resampled onto the 24 fps clock and then
-        # sampled again onto the text encoder's 2 fps grid, and the soundtrack encoded
-        # beside them. The presentation layer builds video blocks and the packed layout
-        # lays them out; what has no implementation is the DECODE. Refused typed and
-        # narrowly, rather than under the seam-wide code that no longer applies.
-        raise UnsupportedInput(
-            "video references are not decoded by this endpoint yet: image references are "
-            "the built path, and a video reference needs its own frame decode, its 24 fps "
-            "resample and its soundtrack before it can be presented",
-            code="video_reference_undecoded",
-            fields=[where],
-        )
-    try:
-        pixels = normalize_reference_image(_decode_image(ref.image, where=where))
-    except ValueError as exc:
-        raise InvalidRequest(str(exc), code="reference_geometry", fields=[where]) from exc
-    return PresentedReference(kind="image", pixels=pixels)
-
-
 # ------------------------------------------------------------------ the models
 
 
-class _H3Base(Model[H3Pipeline]):
-    """Everything both task slots share, including all three shared components.
-
-    Subclasses add exactly one method — `denoise` — because exactly one component differs.
-    """
+class Fl2VAModel(Model[H3Pipeline], task="fl2va"):  # type: ignore[call-arg]
+    """The release's one model: text and optional first/last frames to joint video/audio."""
 
     pipe: H3Pipeline
     tokenizer: Tokenizer
 
     def load(self, loader: Loader) -> None:
-        raise NotImplementedError  # a role class states its factory; the base has none
+        self.pipe = loader.construct(H3Pipeline, factory=build_fl2va_pipeline)
+        self.tokenizer = Tokenizer()
 
     def unload(self, loader: Loader) -> None:
         return None
@@ -613,16 +429,13 @@ class _H3Base(Model[H3Pipeline]):
 
     @uses_components("video_vae")
     def condition_visual(self, run: H3Run, *, noise_level: float) -> list[Any]:
-        """Keyframe and visual-reference CONDITIONING latents, one per packed block.
+        """First/last keyframe conditioning latents, one per packed block.
 
-        Separate from the presentation: the same image reaches Qwen as a vision block and
-        the DiT as VAE rows, and both are needed — the vision tokens carry semantics and
-        these rows carry the pixels.
+        The same image reaches Qwen as a vision block and the DiT as VAE rows; the vision
+        tokens carry semantics and these rows carry the pixels.
 
         A LIST, one entry per block, never one tensor for all of them. Each block is its own
-        geometry and lands at its own segment; the previous shape handed a single tensor to
-        every `cond`/`ref_img` slot at once, which cannot be right for more than one
-        reference and was never populated anyway.
+        geometry and lands at its own `cond` segment.
 
         The anchors are noised ONCE, here, to `noise_level` and held there for the whole
         loop — they are not on the sampler's schedule. `layout.build_modulation` pins their
@@ -656,13 +469,6 @@ class _H3Base(Model[H3Pipeline]):
         return out
 
     @uses_components("audio_vae")
-    def condition_audio(self, waveform: Any) -> Any:
-        import torch
-
-        with torch.inference_mode():
-            return self.pipe.components["audio_vae"].encode(waveform)
-
-    @uses_components("audio_vae")
     def decode_audio(self, latents: Any) -> Any:
         """The SMALL decode runs first: it is 0.6 GiB against the video VAE's 5.2, so
         taking it before the video decode is what keeps peak residency where it is."""
@@ -678,13 +484,6 @@ class _H3Base(Model[H3Pipeline]):
         with torch.inference_mode():
             return self.pipe.components["video_vae"].decode(latents)
 
-
-class Fl2VAModel(_H3Base, task="fl2va"):  # type: ignore[call-arg]
-    """Text and first/last keyframes. Binds the `transformer` component."""
-
-    def load(self, loader: Loader) -> None:
-        self.pipe = loader.construct(H3Pipeline, factory=build_fl2va_pipeline)
-        self.tokenizer = Tokenizer()
 
     @uses_components("transformer")
     def predict_data_velocity(
@@ -707,46 +506,6 @@ class Fl2VAModel(_H3Base, task="fl2va"):  # type: ignore[call-arg]
                 modulation=modulation,
                 graph=self.pipe.config.graph,
             )
-
-
-class Ref2VAModel(_H3Base, task="ref2va"):  # type: ignore[call-arg]
-    """Ordered image/video/audio references, optionally with keyframes when the deployment
-    opens that door. Binds the `transformer_ref` component."""
-
-    def load(self, loader: Loader) -> None:
-        self.pipe = loader.construct(H3Pipeline, factory=build_ref2va_pipeline)
-        self.tokenizer = Tokenizer()
-
-    @uses_components("transformer_ref")
-    def predict_data_velocity(
-        self,
-        run: H3Run,
-        text_states: Any,
-        video_latents: Any,
-        audio_latents: Any,
-        modulation: Modulation,
-    ) -> tuple[Any, Any]:
-        import torch
-
-        with torch.inference_mode():
-            return _predict_data_velocity(
-                self.pipe.transformer,
-                run=run,
-                text_states=text_states,
-                video_latents=video_latents,
-                audio_latents=audio_latents,
-                modulation=modulation,
-                graph=self.pipe.config.graph,
-            )
-
-
-#: What the module functions accept. NOT `_H3Base`: the base deliberately has no
-#: `predict_data_velocity`, because a method on it would have to declare a component set,
-#: and the whole point is that the set is the one thing the two roles do not share. An
-#: undecorated one on the base would declare ALL components by omission — the coarse
-#: contract this endpoint exists to avoid — so the union is the honest type.
-H3Model = Fl2VAModel | Ref2VAModel
-
 
 def _predict_data_velocity(
     transformer: Any,
@@ -781,7 +540,7 @@ def _predict_data_velocity(
     from h3_arch.dit import pack_audio, patchify_video, unpack_audio, unpatchify_video
 
     if graph is GraphDialect.DIFFUSERS:
-        return _predict_data_velocity_ref(
+        return _predict_data_velocity_official(
             transformer,
             run=run,
             text_states=text_states,
@@ -803,12 +562,9 @@ def _predict_data_velocity(
         pack_audio(audio_latents).to(device=device, dtype=torch.float32)
     ).to(hidden_dtype)
 
-    # THE CONDITIONING ROWS, one condition per `cond`/`ref_img` segment IN ORDER. The
-    # previous shape appended `run.conditioning["visual"]` — a single tensor — to every such
-    # slot at once, which cannot be right for more than one condition and was never
-    # populated at all. `condition_visual` produces the list; it is consumed as an iterator
-    # so a count mismatch is a refusal rather than a silently reused tensor.
-    conditions = iter(run.conditioning.get("visual") or ())
+    # One keyframe latent per `cond` segment, consumed in layout order. A count mismatch
+    # refuses instead of silently reusing one image for both anchors.
+    conditions = iter(run.visual_conditioning)
 
     def _condition_rows(kind: str, count: int) -> Any:
         try:
@@ -833,14 +589,17 @@ def _predict_data_velocity(
     for start, end, kind in run.layout.segments:
         if kind == "text":
             rows.append(text_rows)
-        elif kind in ("cond", "ref_img"):
+        elif kind == "cond":
             rows.append(_condition_rows(kind, end - start))
-        elif kind == "ref_audio":
-            rows.append(run.conditioning["audio"])
         elif kind == "video":
             rows.append(video_rows)
-        else:
+        elif kind == "audio":
             rows.append(audio_rows)
+        else:
+            raise RuntimeError(
+                f"the FL2VA action cannot pack a {kind!r} segment; its request schema "
+                "admits only text, first/last conditions, target video, and target audio"
+            )
     if next(conditions, None) is not None:
         raise RuntimeError(
             "more conditioning latents were encoded than the packed layout reserved "
@@ -868,7 +627,7 @@ def _predict_data_velocity(
     )
 
 
-def _predict_data_velocity_ref(
+def _predict_data_velocity_official(
     transformer: Any,
     *,
     run: H3Run,
@@ -879,8 +638,8 @@ def _predict_data_velocity_ref(
 ) -> tuple[Any, Any]:
     """THE SAME BOUNDARY, over upstream's `MiniMaxH3Transformer3DModel`.
 
-    The two transformers take the packed sequence apart differently and this is the whole of
-    that difference. The port takes ONE already-concatenated `[S, hidden]` buffer plus a
+    The two graph implementations take the packed sequence apart differently. The port
+    takes ONE already-concatenated `[S, hidden]` buffer plus a
     per-SEGMENT modulation table; upstream takes the three modalities SEPARATELY plus
     per-ROW index tensors, and scatters them into the buffer itself. Both describe the same
     layout — `PackedLayout` — so the translation is arithmetic on the segment table and
@@ -897,9 +656,9 @@ def _predict_data_velocity_ref(
     `hidden_states` must carry the conditioning video rows interleaved in `video_indices`
     order, and this endpoint has no builder for them. That is a DIFFERENT seam from the one
     `condition_text` used to refuse on, and it is now the only one left: the vision seam
-    (pixels to patches, grid and splice index) is built, so a reference reaches Qwen3-VL
-    correctly and reaches the DiT's LATENT rows not at all. A layout that carries one
-    reaches an explicit refusal rather than a forward that quietly drops it.
+    (pixels to patches, grid and splice index) is built, so a keyframe reaches Qwen3-VL
+    correctly and reaches the DiT's LATENT rows not at all. A conditioned layout reaches
+    an explicit refusal rather than a forward that quietly drops its anchors.
 
     The heads are RAW and DATA-WARD on this side too — upstream's own
     `MiniMaxH3Scheduler` states the convention — so `H3Solver` consumes them unchanged.
@@ -917,14 +676,14 @@ def _predict_data_velocity_ref(
     conditioning = [k for _, _, k in run.layout.segments if k in ("cond", "ref_img", "ref_audio")]
     if conditioning:
         raise UnsupportedInput(
-            "the reference construction layer packs conditioning rows into the modality "
+            "the official construction layer packs conditioning rows into the modality "
             f"streams itself, and this layout carries {', '.join(sorted(set(conditioning)))} "
             "rows this DIALECT has no builder for. The port dialect builds them; upstream's "
             "transformer wants them interleaved into `hidden_states` in `video_indices` "
             "order instead, which is a different assembly and is unbuilt — and no "
             "diffusers-format artifact is bound yet for it to run against",
             code="conditioning_rows_unbuilt_diffusers",
-            fields=["first_frame", "last_frame", "references"],
+            fields=["first_frame", "last_frame"],
         )
 
     seq_len = run.layout.seq_len
@@ -968,39 +727,32 @@ def _predict_data_velocity_ref(
 
 
 def _run(
-    model: H3Model,
+    model: Fl2VAModel,
     ctx: Context,
-    payload: GenerateInput | RefGenerateInput,
+    payload: GenerateInput,
     out: Outputs,
     tel: Telemetry,
-    *,
-    task: str,
-    references: tuple[PresentedReference, ...],
-    ref_blocks: tuple[RefBlock, ...],
 ) -> GenerateOutput:
-    """The one generation body. Both routes are the same six operations in the same order;
-    what differs is which transformer the role class declared and what the plan contains."""
+    """The one generation body."""
     import torch
 
     view = model.for_request(ctx, seed=payload.seed)
     with tel.stage("prepare"):
-        plan, layout, presentation, expanded, patched = prepare(
-            payload, tokenizer=model.tokenizer, references=references, ref_blocks=ref_blocks
-        )
+        plan, layout, expanded, patched = prepare(payload, tokenizer=model.tokenizer)
     config = model.pipe.config.dit
     timestep_plan = build_timestep_plan(
-        task=task,
+        task="fl2va",
         structure=config.structure.value,
         evaluations=plan.steps,
         layout=layout,
         sigma_shift_video=config.sigma_shift_video,
         sigma_shift_audio=config.sigma_shift_audio,
-        visual_cond_timestep=0.999 if plan.keyframes or plan.references else None,
-        audio_cond_timestep=1.0 if any(b.ref_audio_t for b in ref_blocks) else None,
+        visual_cond_timestep=0.999 if plan.keyframes else None,
+        audio_cond_timestep=None,
         adapters=tuple(str(a) for a in view.adapters),
     )
     solver = H3Solver(timestep_plan)
-    run = H3Run(plan, layout, timestep_plan, view, presentation, expanded, patched)
+    run = H3Run(plan, layout, timestep_plan, view, expanded)
     tel.metric("packed_rows", float(layout.seq_len))
     tel.metric("text_rows", float(len(expanded.token_ids)))
     tel.metric("vision_blocks", float(len(patched.token_counts)))
@@ -1014,12 +766,9 @@ def _run(
         text_states = model.condition_text(expanded, patched)
     if plan.condition_images:
         with tel.stage("condition_visual"):
-            run.conditioning["visual"] = model.condition_visual(
+            run.visual_conditioning = model.condition_visual(
                 run, noise_level=timestep_plan.visual_cond_timestep or 1.0
             )
-    if any(b.ref_audio_t for b in ref_blocks):
-        with tel.stage("condition_audio"):
-            run.conditioning["audio"] = model.condition_audio(run.conditioning.get("waveform"))
 
     on_step = tel.step_callback(solver.evaluations, stage="denoise")
     with tel.stage("denoise"):
@@ -1084,7 +833,7 @@ def _run(
 
 def _sample(
     torch: Any,
-    model: H3Model,
+    model: Fl2VAModel,
     run: H3Run,
     solver: H3Solver,
     text_states: Any,
@@ -1146,46 +895,4 @@ def generate(
     tel: Telemetry,
 ) -> GenerateOutput:
     """Text, optionally anchored by a first and/or last frame, to one muxed mp4."""
-    return _run(model, ctx, payload, out, tel, task="fl2va", references=(), ref_blocks=())
-
-
-# HIDDEN, and now structurally so (#572d). Ref2VA's vision-conditioning seam is UNBUILT
-# (#529/#539f): this surface has never produced a frame, and until #558e it was "hidden" only
-# in a tracker row. A deployment therefore staged its binding like any other, its construction
-# refused, and — before prepare became per-binding — it took the working T2VA sibling down
-# with it on a rented H200 with 92.6 GiB already resident.
-#
-# `hidden=True` keeps the surface in the descriptor, because it is real code with a real
-# signature and the descriptor must not lie about the release, while excluding it from the
-# serving set: no binding is staged and no request lands. It comes OFF the day the vision
-# seam renders something a person has looked at.
-@app.entrypoint(hidden=True)
-def reference_to_video(
-    ctx: Context,
-    payload: RefGenerateInput,
-    model: Ref2VAModel,
-    out: Outputs,
-    tel: Telemetry,
-    settings: Settings[RefServeSettings],
-) -> GenerateOutput:
-    """Ordered image/video/audio references, in request order, to one muxed mp4."""
-    if (payload.first_frame or payload.last_frame) and not settings.value.combined_keyframes:
-        raise UnsupportedInput(
-            "keyframes alongside references are not enabled on this deployment: the "
-            "combined layout is proven and its OUTPUT has never been judged, so the door "
-            "opens per deployment rather than by default",
-            code="combined_keyframes_disabled",
-            fields=["first_frame", "last_frame"],
-        )
-    references = decode_references(payload)
-    blocks = _reference_blocks(references)
-    return _run(
-        model,
-        ctx,
-        payload,
-        out,
-        tel,
-        task="ref2va",
-        references=references,
-        ref_blocks=blocks,
-    )
+    return _run(model, ctx, payload, out, tel)

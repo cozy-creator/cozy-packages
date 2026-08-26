@@ -413,12 +413,14 @@ def arm_refusal() -> None:
     path = ENDPOINT_SOURCE
     src = path.read_text()
     tree = ast.parse(src, filename=str(path))
-    base = next(
-        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "_H3Base"
+    model = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "Fl2VAModel"
     )
     condition = next(
         node
-        for node in base.body
+        for node in model.body
         if isinstance(node, ast.FunctionDef) and node.name == "condition_text"
     )
     prepare = next(
@@ -448,25 +450,33 @@ def arm_refusal() -> None:
         src.count("vision_seam_unbuilt") == 0,
         f"`vision_seam_unbuilt` is gone from h3.py ({src.count('vision_seam_unbuilt')} left)",
     )
-    # THE REFERENCE LATENT ROWS. The PORT dialect builds them; the diffusers dialect wants
-    # them interleaved into `hidden_states` in `video_indices` order, which is a different
-    # assembly and is unbuilt — and no diffusers-format artifact is bound for it to run
-    # against anyway. Named apart so neither claim borrows the other's evidence.
+    # Keyframe latent rows. The port dialect builds them; the diffusers dialect wants them
+    # interleaved into `hidden_states` in `video_indices` order, which remains a different
+    # assembly. Named apart so neither claim borrows the other's evidence.
     check(
         "conditioning_rows_unbuilt_diffusers" in src,
-        "the diffusers dialect refuses reference rows under its OWN code",
+        "the diffusers dialect refuses conditioning rows under its OWN code",
     )
     check(
         "_condition_rows" in src and "video_patch_proj" in src,
-        "the port dialect BUILDS one conditioning row block per packed segment",
+        "the port dialect builds one keyframe row block per packed segment",
     )
     check(
         "condition_geometry" in src and "disagree" in src,
         "the derived geometry is checked against the encode rather than trusted",
     )
     check(
-        "audio_reference_unpacked" in src and "video_reference_undecoded" in src,
-        "audio and video references refuse under their own codes, not the seam's",
+        all(
+            spelling not in src
+            for spelling in (
+                "RefGenerateInput",
+                "Ref2VAModel",
+                "reference_to_video",
+                "AudioReference",
+                "VideoReference",
+            )
+        ),
+        "the unserved Ref2VA contract is absent rather than hidden behind refusal branches",
     )
 
 
