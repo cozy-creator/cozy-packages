@@ -11,11 +11,11 @@ double pixel rescale — were every one of them a cheap deterministic CPU check 
 manually-invoked script was running. An arm that only fires when someone remembers it is
 an arm that stops firing.
 
-THE ARMS OUTLIVE THE IMPLEMENTATION (#531). The hand port is slated for replacement by a
-diffusers rebase, so every arm here checks a CONTRACT against an INDEPENDENTLY WRITTEN
-REFERENCE VALUE, never an internal call shape: the reference expression is spelled out in
-the arm from the upstream source it came from, and the endpoint's answer has to match it.
-The same file gates the rebase.
+THE ARMS OUTLIVE THE IMPLEMENTATION (#531). Every arm checks a CONTRACT against an
+INDEPENDENTLY WRITTEN REFERENCE VALUE, never an internal call shape: the reference
+expression is spelled out in the arm from upstream source and the endpoint's answer has to
+match it. A future official-graph release must pass the same contracts after its exact
+artifact and complete operation set are bound atomically.
 
 EVERY ARM CARRIES ITS OWN RED CONTROL — the exact defective expression that shipped, kept
 as a permanent negative control and asserted to DISAGREE. A green arm whose red half was
@@ -500,7 +500,6 @@ def _plan(evaluations: int) -> Any:
         sigma_shift_video=SHIFT_VIDEO,
         sigma_shift_audio=SHIFT_AUDIO,
         visual_cond_timestep=None,
-        audio_cond_timestep=None,
     )
 
 

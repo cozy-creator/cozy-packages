@@ -6,68 +6,28 @@ values the pinned release states about itself — `Comfy-Org/MiniMax-H3@4cc1d817
 safetensors header metadata for the three components that publish one, and the DiT's tensor
 shapes for the one that does not.
 
-Nothing here names a repo, a release, a checkpoint or a revision: a hidden size is not a
-selection. The `structure` term is the exception that proves the rule — it is a STRUCTURAL
-term (§1.1.1's three AdaLN structures), and getting it wrong is a different key set, which
-is why it is a typed enum with no default that means "whatever the bytes are".
+Nothing here selects a repo, release, checkpoint, revision, or graph: this release constructs
+one fixed native-curve topology. Artifact metadata may confirm that identity but cannot select
+another implementation.
 """
 
 from __future__ import annotations
 
-import enum
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-
-class AdaLnStructure(enum.Enum):
-    """§1.1.1's three structures. `CURVE` is a community-pruned topology with its own
-    numeric semantics and its own quality approval — never shorthand for BAKED, and never
-    an automatic degradation from FULL."""
-
-    FULL = "h3-full"
-    CURVE = "h3-adaln-curve"
-    BAKED = "h3-adaln-baked"
-
-
-class GraphDialect(enum.Enum):
-    """WHICH implementation constructs the component roots — a STRUCTURAL term (§1.1.1),
-    never a preference, because the two dialects answer to DIFFERENT KEY SETS and an
-    artifact fills exactly one of them.
-
-    Measured, not asserted: `scripts/h3-keys.py` censuses the native port at 3,445
-    destinations against the community carrier (transformer 532, text encoder 902, video
-    VAE 562, audio VAE 917) and `scripts/h3-diffusers-keys.py` censuses the upstream classes
-    at 3,486 against the official diffusers-format tree (638 / 1058 / 703 / 1087). Every
-    COMPONENT disagrees, and the text encoder disagrees structurally rather than by name — the
-    community carrier is Qwen3-VL cut to 50 layers with no head, the official tree is the
-    untruncated 64-layer model. So this term selects a graph AND declares which artifact can
-    fill it; picking the wrong one is `incomplete_fill` on a rented card.
-    """
-
-    NATIVE = "h3-native"
-    DIFFUSERS = "h3-diffusers"
-
-
-class Task(enum.Enum):
-    """The task partition a transformer component was trained for. Structurally invisible
-    (job-001: the two carriers have byte-identical headers), so it is carried as a stamp
-    and checked by declared digest, never inferred from the weights."""
-
-    FL2VA = "fl2va"
-    REF2VA = "ref2va"
+DIT_STRUCTURE = "h3-adaln-curve"
 
 
 @dataclass(frozen=True, slots=True)
 class DitConfig:
     """The packed-token audio-video DiT.
 
-    The CURVE defaults: `time_embed_dim=8` is the interpolated curve's basis width and
+    `time_embed_dim=8` is the interpolated curve's basis width and
     `adaln_curve_grid=1025` its sampled grid, which together are why a curve block's
-    `adaln_proj.linear` is `[96768, 8]` and a full block's would be `[96768, 2688]`. That
-    single number is the 26 GB the pruned topology does not carry.
+    `adaln_proj.linear` is `[96768, 8]`. This release does not carry a second topology.
     """
 
-    structure: AdaLnStructure = AdaLnStructure.CURVE
     hidden_size: int = 5376
     num_layers: int = 50
     token_refiner_num_layers: int = 2
@@ -78,8 +38,6 @@ class DitConfig:
     audio_latents_dim: int = 32
     patch_size: tuple[int, int, int] = (1, 2, 2)
     text_dim: int = 5120
-    timestep_input_dim: int = 256
-    time_embed_hidden_size: int = 5376
     time_embed_dim: int = 8
     adaln_curve_grid: int = 1025
     rope_inv_freq_len: int = 16
@@ -89,16 +47,25 @@ class DitConfig:
     sigma_shift_video: float = 12.0
     sigma_shift_audio: float = 3.0
 
+    def __post_init__(self) -> None:
+        expected = (8, 1025)
+        got = (self.time_embed_dim, self.adaln_curve_grid)
+        if type(got[0]) is not int or type(got[1]) is not int:
+            raise TypeError(
+                "time_embed_dim and adaln_curve_grid must be exact integers; booleans and "
+                f"floats are not structural dimensions, got {type(got[0]).__name__} and "
+                f"{type(got[1]).__name__}"
+            )
+        if got != expected:
+            raise ValueError(
+                f"{DIT_STRUCTURE} requires time_embed_dim={expected[0]} and "
+                f"adaln_curve_grid={expected[1]}, got {got[0]} and {got[1]}"
+            )
+
     @property
     def video_patch_dim(self) -> int:
         pt, ph, pw = self.patch_size
         return self.latents_dim * pt * ph * pw
-
-
-#: The FULL-AdaLN sibling of the same release, kept as a named structure rather than a
-#: comment: it is the 535-key/538-key lane the red arms substitute in (job-001's
-#: `UNREGISTERED_FINGERPRINT` arm), and naming it is what makes that arm spellable.
-DIT_FULL = DitConfig(structure=AdaLnStructure.FULL, time_embed_dim=2688, adaln_curve_grid=0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,17 +179,12 @@ class AudioVaeConfig:
 
 @dataclass(frozen=True, slots=True)
 class H3Config:
-    """One artifact's whole construction configuration — five components, one object."""
+    """One artifact's whole construction configuration — four components, one object."""
 
     dit: DitConfig = field(default_factory=DitConfig)
     text_encoder: TextEncoderConfig = field(default_factory=TextEncoderConfig)
     video_vae: VideoVaeConfig = field(default_factory=VideoVaeConfig)
     audio_vae: AudioVaeConfig = field(default_factory=AudioVaeConfig)
-    graph: GraphDialect = GraphDialect.NATIVE
-    """Which construction layer builds the roots. NATIVE is the default because it is what
-    the ONE ingested H3 artifact carries: job-001's dual snapshot is the community curve
-    carrier, and no diffusers-format artifact is bound anywhere yet (#540e)."""
-
     @classmethod
     def from_mapping(cls, mapping: dict[str, Any]) -> H3Config:
         """Overlay whatever the artifact's immutable config states over the release facts.
@@ -234,25 +196,33 @@ class H3Config:
         field this code does not read is a compatibility fact, not a caller error.
         """
         out = cls()
-        stated = mapping.get("graph")
-        if stated is not None:
-            try:
-                out = replace(out, graph=GraphDialect(stated))
-            except ValueError:
-                raise ValueError(
-                    f"{stated!r} is not an H3 graph dialect: "
-                    + ", ".join(d.value for d in GraphDialect)
-                    + " — this term selects a KEY SET, so an unknown value cannot default"
-                ) from None
+        stated_graph = mapping.get("graph")
+        if stated_graph not in (None, "h3-native"):
+            raise ValueError(
+                f"{stated_graph!r} is not executable by this H3 release: it ships one "
+                "native graph, and artifact config cannot activate endpoint code"
+            )
         for name, section in (
             ("dit", mapping.get("dit")),
             ("text_encoder", mapping.get("text_encoder")),
             ("video_vae", mapping.get("video_vae")),
             ("audio_vae", mapping.get("audio_vae")),
         ):
-            if not isinstance(section, dict):
+            if section is None:
                 continue
+            if not isinstance(section, dict):
+                raise TypeError(
+                    f"artifact config section {name!r} must be a mapping, got "
+                    f"{type(section).__name__}"
+                )
             current = getattr(out, name)
+            if name == "dit" and "structure" in section:
+                stated_structure = section["structure"]
+                if stated_structure != DIT_STRUCTURE:
+                    raise ValueError(
+                        f"{stated_structure!r} is not executable by this H3 release; "
+                        f"the only bound DiT structure is {DIT_STRUCTURE!r}"
+                    )
             known = {
                 k: v for k, v in section.items() if k in type(current).__dataclass_fields__
             }

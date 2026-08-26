@@ -3,12 +3,12 @@
 own header, decided on the control plane with ZERO weight bytes.
 
 An endpoint's construction names destinations; the fill plane matches them against the
-artifact's topology by exact key. So the question "will this endpoint serve the job-001
-dual snapshot" has a component-by-component answer that costs nothing to ask: build every
-component on `meta`, walk it the way `cozy_runtime.author.census` walks it, and diff the
-(key, shape, dtype) table against the pinned safetensors header of the carrier the recipe
-declares. A missing key, an extra key, a transposed shape or a wrong dtype is a failed
-serve on a rented card; here it is a diff on this box.
+artifact's topology by exact key. So the question "will this endpoint serve its FL2VA
+artifact projection" has a component-by-component answer that costs nothing to ask: build
+the four declared components on `meta`, walk them the way `cozy_runtime.author.census`
+walks them, and diff the (key, shape, dtype) table against the pinned safetensors header of
+the carrier the recipe declares. A missing key, an extra key, a transposed shape or a wrong
+dtype is a failed serve on a rented card; here it is a diff on this box.
 
     nice -n 19 .venv/bin/python scripts/h3-keys.py [--installed-wheel] [component ...]
 
@@ -22,7 +22,7 @@ topology at fp8 with per-tensor scales — and its PRODUCER is recorded separate
 provenance, in the evidence bank's row. The old spelling put a tool's name inside a product
 term, which made a packaging fact read like an architecture and a vendor read like a lane.
 
-Two carriers per transformer, on purpose. The recipe's SERVED carrier is the fp8 one, whose
+Two carriers for the transformer, on purpose. The recipe's SERVED carrier is the fp8 one, whose
 header additionally carries 550 encoding-ROLE siblings (`.weight_scale`, `.input_scale`,
 `.comfy_quant`) that are parts of a destination and not destinations. The LOGICAL table —
 532 keys — is the fp8 header with those roles folded out, and its dtypes are the bf16
@@ -44,19 +44,17 @@ import torch
 from _h3_probe import select
 
 INSTALLED_WHEEL, _SUBJECTS = select(sys.argv, "h3_arch")
+from h3_arch import COMPONENTS  # noqa: E402
+
 BANK = pathlib.Path.home() / "cozy_v2" / "tracker-v2" / "h3-evidence"
 ROW = "comfy-org-h3.json"
 
-#: The recipe's five components (job-001), each as (served carrier, dtype carrier). The
-#: two differ only for an ENCODED component: fp8 stores fp8 and fills bf16.
+#: The current FL2VA construction's four components, each as (served carrier, dtype
+#: carrier). The two differ only for an ENCODED component: fp8 stores fp8 and fills bf16.
 CARRIERS: dict[str, tuple[str, str]] = {
     "transformer": (
         "diffusion_models/minimax_h3_fl2va_pruned_fp8_scaled.safetensors",
         "diffusion_models/minimax_h3_fl2va_pruned_bf16.safetensors",
-    ),
-    "transformer_ref": (
-        "diffusion_models/minimax_h3_ref2va_pruned_fp8_scaled.safetensors",
-        "diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors",
     ),
     "text_encoder": (
         "text_encoders/qwen3vl_32b_minimax_h3_bf16.safetensors",
@@ -192,7 +190,12 @@ def check(component: str) -> bool:
 
 
 def main() -> int:
-    names = sys.argv[1:] or list(CARRIERS)
+    if set(CARRIERS) != set(COMPONENTS):
+        refuse(
+            "the pinned carrier names do not equal the endpoint construction registry: "
+            f"carriers={tuple(CARRIERS)}, components={COMPONENTS}"
+        )
+    names = sys.argv[1:] or list(COMPONENTS)
     unknown = [n for n in names if n not in CARRIERS]
     if unknown:
         refuse(f"unknown component(s): {', '.join(unknown)}")

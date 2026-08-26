@@ -2,15 +2,15 @@
 """se-001's CONTROL-PLANE ARMS — every H3 refusal that can be decided with no GPU, no
 weights and no rented card, fired for real and observed.
 
-    nice -n 19 .venv-check/bin/python scripts/h3-live.py [--installed-wheel] [group ...]
-    groups: components, request, plan, keys, fence   (`.venv-check` is enough;
-            fence is source-only)
+    nice -n 19 .venv/bin/python scripts/h3-live.py [--installed-wheel] [group ...]
+    groups: request, plan, keys, fence, gates, presentation
     nice -n 19 .venv/bin/python scripts/h3-live.py gates presentation
         (gates needs torch + cozy-eval + ffmpeg; presentation needs transformers)
 
 DETERMINISTIC CONTRACT ARMS LIVE IN `scripts/h3-conform.py` AND RUN IN CI (#533). This
-driver holds what CI cannot decide: refusals that need the runtime's guard, and the output
-gates, which need real banked media and a decoder.
+driver holds endpoint request/plan refusals, source fences, and the output gates that need
+real banked media and a decoder. Runtime component-guard/restamp arms live in Runtime's own
+`scripts/redarm.py`; duplicating them here with endpoint doubles would cross that boundary.
 
 This is a driver, not a test suite (tracker README #160): it fires arms and prints what it
 saw. An arm that is not observed is not banked, and a green fence nobody has fired is a
@@ -18,9 +18,8 @@ claim rather than a fact — se-008 learned that the hard way when its NaN floor
 to be checking a tensor where NaN cannot exist.
 
 WHAT THIS CANNOT DECIDE, said once here rather than implied by silence: nothing about
-numerics, nothing about residency, nothing about a real generation. The component-use arms
-use the runtime's OWN `GuardedComponent` over author-built doubles, which is the real
-guard and a fake pipeline. se-002 is where a card enters.
+numerics, nothing about residency, nothing about a real generation. se-002 is where a card
+enters.
 """
 
 from __future__ import annotations
@@ -36,12 +35,6 @@ INSTALLED_WHEEL, _SUBJECTS = select(sys.argv, "h3", "h3_arch")
 
 import msgspec  # noqa: E402
 import torch  # noqa: E402
-from cozy_runtime.author import uses_components  # noqa: E402
-
-# The runtime's real component guard. Not on the author surface on purpose — an endpoint
-# never installs one — but this driver is standing in for the runtime, so simulating it
-# with a lookalike would be verifying the lookalike.
-from cozy_runtime.author._model import GuardedComponent  # noqa: E402
 
 import h3  # noqa: E402
 from h3_arch import H3Config  # noqa: E402
@@ -79,127 +72,7 @@ def expect_refusal(what: str, fn: Any, *, code: str | None = None) -> None:
     failed(what, "the call SUCCEEDED — the arm did not fire")
 
 
-# --------------------------------------------------------------- author doubles
-
-
-class FakeComponent:
-    """Stands in for a component root. It owns one attribute, which is all the guard
-    needs: any access at all is what gets checked."""
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        return self.name
-
-
-class FakePipe:
-    def __init__(self) -> None:
-        self.config = H3Config()
-        self.components: dict[str, Any] = {}
-
-
-def build_double(cls: Any) -> Any:
-    """The model class over a fake pipeline, with the RUNTIME'S guard installed over every
-    component exactly as the runtime installs it after `load`."""
-    pipe = FakePipe()
-    model = cls.for_test(pipe=pipe, tokenizer=None)
-    for name in ("transformer", "text_encoder", "video_vae", "audio_vae"):
-        pipe.components[name] = GuardedComponent(name, FakeComponent(name), model)
-    return model, pipe
-
-
 # --------------------------------------------------------------- the arms
-
-
-def group_components() -> None:
-    print("\n== component-use contract — the runtime's own guard over author doubles ==")
-
-    # GREEN FIRST: the declared access works, or the red arms below prove nothing.
-    class _Reach(h3.Fl2VAModel):
-        @uses_components("transformer")
-        def reach(self, which: str) -> Any:
-            return self.pipe.components[which].name
-
-    green, _ = build_double(_Reach)
-    if green.reach("transformer") == "transformer":
-        observe("declared access inside its own scope", "Fl2VAModel scope -> transformer.name")
-    else:
-        failed("declared access inside its own scope")
-
-    expect_refusal(
-        "Fl2VAModel.denoise touching the text encoder",
-        lambda: green.reach("text_encoder"),
-        code="undeclared_component",
-    )
-    expect_refusal(
-        "and the instance is POISONED afterwards — reuse refuses",
-        lambda: green.reach("transformer"),
-        code="poisoned_generation",
-    )
-
-    class _CrossReach(h3.Fl2VAModel):
-        @uses_components("text_encoder")
-        def reach(self, which: str) -> Any:
-            return self.pipe.components[which].name
-
-    cross, _ = build_double(_CrossReach)
-    expect_refusal(
-        "condition_text touching video_vae (a declared component, the wrong one)",
-        lambda: cross.reach("video_vae"),
-        code="undeclared_component",
-    )
-
-    _, outside_pipe = build_double(h3.Fl2VAModel)
-    expect_refusal(
-        "any component touched OUTSIDE every scope",
-        lambda: outside_pipe.components["transformer"].name,
-        code="undeclared_component",
-    )
-
-    class _Nested(h3.Fl2VAModel):
-        @uses_components("text_encoder")
-        def outer(self) -> Any:
-            return self.inner()
-
-        @uses_components("transformer")
-        def inner(self) -> Any:
-            return self.pipe.components["transformer"].name
-
-    nested, _ = build_double(_Nested)
-    expect_refusal(
-        "a second scope entered while one is active",
-        nested.outer,
-        code="concurrent_scope",
-    )
-
-    def _empty_set() -> None:
-        class _Bad(h3.Fl2VAModel):
-            @uses_components()
-            def nothing(self) -> None:
-                return None
-
-    expect_refusal(
-        "@uses_components() empty — a component-free method is module code",
-        _empty_set,
-        code="empty_component_set",
-    )
-
-    stamps = h3.Fl2VAModel.__stamps__
-    if stamps == {"task": "fl2va"}:
-        observe("the model carries its exact task stamp", str(stamps))
-    else:
-        failed("task stamps", str(stamps))
-
-    def _restamp() -> None:
-        class _Bad(h3.Fl2VAModel, task="ref2va"):  # type: ignore[call-arg]
-            pass
-
-    expect_refusal(
-        "a role class RE-stamping its base's task",
-        _restamp,
-        code="restamped",
-    )
 
 
 def group_request() -> None:
@@ -270,7 +143,6 @@ def group_plan() -> None:
             "sigma_shift_video": 12.0,
             "sigma_shift_audio": 3.0,
             "visual_cond_timestep": None,
-            "audio_cond_timestep": None,
         }
         args.update(over)
         return build_timestep_plan(**args)
@@ -284,8 +156,7 @@ def group_plan() -> None:
     cases = [
         ("the SAME 30 evaluations at a different video shift", plan(sigma_shift_video=11.0)),
         ("the same 30 evaluations at a different AUDIO shift", plan(sigma_shift_audio=4.0)),
-        ("the same 30 evaluations on the other task partition", plan(task="ref2va")),
-        ("the same 30 against a FULL-AdaLN structure", plan(structure="h3-full")),
+        ("the same coverage stamped for the unserved Ref2VA task", plan(task="ref2va")),
         ("the same 30 with a visual condition present", plan(visual_cond_timestep=0.999)),
         ("the same 30 with an AdaLN-targeting adapter", plan(adapters=("turbo-4step",))),
     ]
@@ -514,16 +385,16 @@ def group_keys() -> None:
     print("\n== the key-exactness harness — and its own red arm ==")
     import subprocess
 
-    result = subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "h3-keys.py")],
-        capture_output=True,
-        text=True,
-    )
+    command = [sys.executable, str(ROOT / "scripts" / "h3-keys.py")]
+    if INSTALLED_WHEEL:
+        command.append("--installed-wheel")
+    result = subprocess.run(command, capture_output=True, text=True)
     tail = result.stdout.strip().splitlines()[-1] if result.stdout else result.stderr
-    if result.returncode == 0:
-        observe("all five components key-exact against the pinned header", tail)
+    expected = "4/4 components key-exact over 2913 destinations"
+    if result.returncode == 0 and tail == expected:
+        observe("all four components key-exact against the pinned header", tail)
     else:
-        failed("key-exactness", tail)
+        failed("key-exactness", f"{tail!r}, expected {expected!r}")
 
     # THE ARM: a graph that is one block short is a serve that would fail on a rented
     # card. Perturbing the config is the cheapest way to prove the harness can say so.
@@ -531,10 +402,42 @@ def group_keys() -> None:
     import importlib.util
 
     import h3_arch
-    from h3_arch.config import DitConfig
+
+    curve = H3Config.from_mapping({"dit": {"structure": "h3-adaln-curve"}})
+    if (curve.dit.time_embed_dim, curve.dit.adaln_curve_grid) == (8, 1025):
+        observe("the artifact config admits the one bound native-curve structure")
+    else:
+        failed("native-curve structure config", repr(curve.dit))
+    for structure in ("h3-full", "h3-adaln-baked", "not-an-h3-structure"):
+        expect_refusal(
+            f"the unbound structure {structure!r} at the artifact boundary",
+            lambda structure=structure: H3Config.from_mapping(
+                {"dit": {"structure": structure}}
+            ),
+        )
+    expect_refusal(
+        "artifact config cannot activate the deleted official graph",
+        lambda: H3Config.from_mapping({"graph": "h3-diffusers"}),
+    )
+    expect_refusal(
+        "a float cannot impersonate the curve grid's integer dimension",
+        lambda: H3Config.from_mapping({"dit": {"adaln_curve_grid": 1025.0}}),
+    )
+    expect_refusal(
+        "a boolean cannot impersonate the curve graph's integer dimension",
+        lambda: H3Config.from_mapping({"dit": {"adaln_curve_grid": False}}),
+    )
+    expect_refusal(
+        "an integer value mismatch cannot change the fixed curve graph",
+        lambda: H3Config.from_mapping({"dit": {"adaln_curve_grid": 1024}}),
+    )
+    expect_refusal(
+        "a malformed known artifact section cannot silently select release defaults",
+        lambda: H3Config.from_mapping({"video_vae": "broken"}),
+    )
 
     with torch.device("meta"):
-        short = h3_arch.build_dit(dataclasses.replace(DitConfig(), num_layers=49))
+        short = h3_arch.build_dit(dataclasses.replace(curve.dit, num_layers=49))
     keys = set(short.state_dict())
 
     spec = importlib.util.spec_from_file_location("h3keys", ROOT / "scripts" / "h3-keys.py")
@@ -551,20 +454,6 @@ def group_keys() -> None:
         )
     else:
         failed("the short-graph arm", f"{len(missing)} missing / {len(keys - want)} extra")
-
-    with torch.device("meta"):
-        full = h3_arch.build_dit(h3_arch.DIT_FULL)
-    full_keys = set(full.state_dict())
-    only_full = sorted(full_keys - want)
-    only_curve = sorted(want - full_keys)
-    if only_full and only_curve:
-        observe(
-            "the FULL-AdaLN structure is a DIFFERENT key set — curve is never shorthand for it",
-            f"full-only: {only_full[:2]} ... curve-only: {only_curve}",
-        )
-    else:
-        failed("full vs curve structure", f"{len(only_full)} / {len(only_curve)}")
-
 
 def group_fence() -> None:
     """PLANT -> OBSERVE -> REMOVE, on the real file through the real fence. A fence nobody
@@ -723,7 +612,6 @@ def group_presentation() -> None:
 
 
 GROUPS = {
-    "components": group_components,
     "request": group_request,
     "presentation": group_presentation,
     "plan": group_plan,

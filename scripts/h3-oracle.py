@@ -162,12 +162,12 @@ def dit_block(comfy_root: str, device: str) -> int:
     torch.manual_seed(7)
     hidden, heads, head_dim, ffn, t_dim = 256, 4, 64, 128, 8
     dtype = torch.float32
-    kwargs: dict[str, Any] = {"apply_silu": False, "adaln_dtype": dtype, "dtype": dtype}
+    kwargs: dict[str, Any] = {"adaln_dtype": dtype, "dtype": dtype}
 
     mine = ours.DiTBlock(hidden, heads, head_dim, ffn, t_dim, 1e-5, 1e-5, **kwargs).to(device)
     theirs = ref.DiTBlock(
         hidden, heads, head_dim, ffn, t_dim, 1e-5, 1e-5,
-        **kwargs, device=device, operations=comfy.ops.disable_weight_init,
+        apply_silu=False, **kwargs, device=device, operations=comfy.ops.disable_weight_init,
     ).to(device)
     theirs.load_state_dict(mine.state_dict())
     # The reference's fused rope kernel refuses a parameter that carries grad — it is an

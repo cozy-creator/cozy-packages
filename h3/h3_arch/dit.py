@@ -31,18 +31,14 @@ beside that loader on real weights.
 
 from __future__ import annotations
 
-import math
-
 import torch
 from torch import Tensor, nn
 
-from .config import AdaLnStructure, DitConfig
+from .config import DitConfig
 
-#: The condition rows' pinned timestep classes. A visual condition sits at 0.999 rather
-#: than 1.0 so it is near-clean but not identically the clean-latent class; audio pins
-#: exactly at 1.0. Both are the checkpoint's training convention, not a tunable.
+#: A visual condition sits at 0.999 rather than 1.0 so it is near-clean but not identically
+#: the clean-latent class. This is the checkpoint's training convention, not a tunable.
 VISUAL_COND_TIMESTEP = 0.999
-AUDIO_COND_TIMESTEP = 1.0
 
 
 def time_shift_sigma(sigma: Tensor | float, from_shift: float, to_shift: float) -> Tensor:
@@ -125,28 +121,6 @@ def attention(q: Tensor, k: Tensor, v: Tensor) -> Tensor:
     return out.transpose(1, 2).reshape(1, out.shape[2], -1).squeeze(0)
 
 
-class TimeEmbedder(nn.Module):
-    """The FULL structure's sinusoidal timestep embedder. A curve artifact does not carry
-    it — its `adaln_t_table` is the sampled curve this would have produced."""
-
-    def __init__(self, freq_dim: int, hidden: int, out: int, dtype: torch.dtype) -> None:
-        super().__init__()
-        self.freq_dim = freq_dim
-        self.proj_in = nn.Linear(freq_dim, hidden, bias=True, dtype=dtype)
-        self.proj_out = nn.Linear(hidden, out, bias=True, dtype=dtype)
-
-    def forward(self, t: Tensor) -> Tensor:
-        half = self.freq_dim // 2
-        freqs = torch.exp(
-            -math.log(10000.0)
-            * torch.arange(half, dtype=torch.float32, device=t.device)
-            / half
-        )
-        args = t.to(torch.float32)[:, None] * freqs[None]
-        emb = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)  # cos BEFORE sin
-        return self.proj_out(nn.functional.silu(self.proj_in(emb)))
-
-
 class Attention(nn.Module):
     def __init__(
         self, hidden: int, heads: int, head_dim: int, eps: float, dtype: torch.dtype
@@ -196,12 +170,11 @@ class MLP(nn.Module):
 
 
 class AdalnProj(nn.Module):
-    """One block's modulation projection: `[M, t_dim] -> expand tensors of [M*3, hidden]`.
+    """The native curve's modulation projection.
 
-    `t_dim` is the whole difference between the two live structures. FULL feeds it the 2688
-    -wide timestep embedding through a SiLU; CURVE feeds it 8 interpolated coordinates of a
-    shared basis and applies no SiLU, because the curve already absorbed it. That is the
-    roughly 26 GB the pruned topology does not carry, and it is one integer."""
+    Its eight interpolated coordinates already absorbed the SiLU used to mint the curve,
+    so the released carrier projects them directly.
+    """
 
     def __init__(
         self,
@@ -210,19 +183,17 @@ class AdalnProj(nn.Module):
         expand: int,
         modalities: int,
         *,
-        apply_silu: bool,
         dtype: torch.dtype,
     ) -> None:
         super().__init__()
         self.expand = expand
         self.modalities = modalities
         self.hidden = hidden
-        self.apply_silu = apply_silu
         self.linear = nn.Linear(t_dim, expand * hidden * modalities, bias=True, dtype=dtype)
 
     def forward(self, t_emb: Tensor) -> tuple[Tensor, ...]:
         source = t_emb.to(self.linear.weight.dtype)
-        x = self.linear(nn.functional.silu(source) if self.apply_silu else source)
+        x = self.linear(source)
         x = x.view(x.shape[0] * self.modalities, self.expand * self.hidden)
         chunks: tuple[Tensor, ...] = x.chunk(self.expand, dim=-1)
         return chunks
@@ -307,7 +278,6 @@ class DiTBlock(nn.Module):
         eps: float,
         qk_eps: float,
         *,
-        apply_silu: bool,
         adaln_dtype: torch.dtype,
         dtype: torch.dtype,
     ) -> None:
@@ -316,9 +286,7 @@ class DiTBlock(nn.Module):
         self.norm2 = nn.RMSNorm(hidden, eps=eps, dtype=dtype)
         self.attn = Attention(hidden, heads, head_dim, qk_eps, dtype)
         self.mlp = MLP(hidden, ffn, dtype)
-        self.adaln_proj = AdalnProj(
-            t_dim, hidden, 6, 3, apply_silu=apply_silu, dtype=adaln_dtype
-        )
+        self.adaln_proj = AdalnProj(t_dim, hidden, 6, 3, dtype=adaln_dtype)
 
     def forward(
         self, x: Tensor, t_emb: Tensor, mod_segments: Segments, rope_freqs: Tensor
@@ -344,15 +312,12 @@ class FinalLayer(nn.Module):
         audio_dim: int,
         eps: float,
         *,
-        apply_silu: bool,
         adaln_dtype: torch.dtype,
         dtype: torch.dtype,
     ) -> None:
         super().__init__()
         self.norm = nn.RMSNorm(hidden, eps=eps, dtype=dtype)
-        self.adaln_proj = AdalnProj(
-            t_dim, hidden, 2, 1, apply_silu=apply_silu, dtype=adaln_dtype
-        )
+        self.adaln_proj = AdalnProj(t_dim, hidden, 2, 1, dtype=adaln_dtype)
         self.video_out = nn.Linear(hidden, video_dim, bias=True, dtype=torch.float32)
         self.audio_out = nn.Linear(hidden, audio_dim, bias=True, dtype=torch.float32)
 
@@ -372,21 +337,19 @@ class FinalLayer(nn.Module):
 
 
 class MiniMaxH3Transformer3DModel(nn.Module):
-    """The component root. One of these per TASK SLOT — two instances of this same class
-    with two different sets of weights, never one graph with a partition selector.
+    """The release's one transformer component root.
 
     THE NAME IS UPSTREAM'S, VERBATIM (#580): a class that mirrors an upstream thing carries
     that thing's official name, and `diffusers.…transformer_minimax_h3` is where this one's
     name comes from. The module path is the disambiguator — `h3_arch.dit` is the hand port
-    on the community CURVE topology, `diffusers` is the official full-AdaLN graph — and
-    `h3_ref/curve.py` is the whole of the difference.
+    on the community CURVE topology; a future official graph replaces this release rather
+    than branching inside it.
     """
 
     def __init__(self, config: DitConfig) -> None:
         super().__init__()
         self.config = config
         dtype = torch.bfloat16
-        curve = config.structure is AdaLnStructure.CURVE
         # AdaLN weights ship fp16 in the released curve carrier; declaring anything else
         # would make a `plain` fill a conversion. See the module docstring.
         adaln_dtype = torch.float16
@@ -399,19 +362,11 @@ class MiniMaxH3Transformer3DModel(nn.Module):
             config.audio_latents_dim, hidden, bias=True, dtype=torch.float32
         )
         self.condition_proj = nn.Linear(config.text_dim, hidden, bias=True, dtype=dtype)
-        if curve:
-            self.register_buffer(
-                "adaln_t_table",
-                torch.empty(config.adaln_curve_grid, config.time_embed_dim, dtype=torch.float32),
-                persistent=True,
-            )
-        else:
-            self.time_embedder = TimeEmbedder(
-                config.timestep_input_dim,
-                config.time_embed_hidden_size,
-                config.time_embed_dim,
-                dtype=torch.float32,
-            )
+        self.register_buffer(
+            "adaln_t_table",
+            torch.empty(config.adaln_curve_grid, config.time_embed_dim, dtype=torch.float32),
+            persistent=True,
+        )
         self.rope = nn.Module()
         self.rope.register_buffer(
             "inv_freq", torch.empty(config.rope_inv_freq_len, dtype=torch.float32), persistent=True
@@ -437,7 +392,6 @@ class MiniMaxH3Transformer3DModel(nn.Module):
                     config.time_embed_dim,
                     config.norm_eps,
                     config.qk_norm_eps,
-                    apply_silu=not curve,
                     adaln_dtype=adaln_dtype,
                     dtype=dtype,
                 )
@@ -450,14 +404,9 @@ class MiniMaxH3Transformer3DModel(nn.Module):
             config.video_patch_dim,
             config.audio_latents_dim,
             config.final_norm_eps,
-            apply_silu=not curve,
             adaln_dtype=adaln_dtype,
             dtype=dtype,
         )
-
-    @property
-    def uses_curve(self) -> bool:
-        return self.config.structure is AdaLnStructure.CURVE
 
     def refine_text(self, text_states: Tensor) -> Tensor:
         """[L, text_dim] Qwen states -> [L, hidden]. Already-hidden-width states pass."""
@@ -475,8 +424,6 @@ class MiniMaxH3Transformer3DModel(nn.Module):
 
     def timestep_embedding(self, t_values: Tensor) -> Tensor:
         """The distinct timesteps of one step, embedded once and reused by every block."""
-        if not self.uses_curve:
-            return self.time_embedder(t_values)
         table = self.adaln_t_table
         pos = t_values.clamp(0.0, 1.0) * (table.shape[0] - 1)
         # max-clamp keeps t=1.0 on the last interval instead of reading past the table

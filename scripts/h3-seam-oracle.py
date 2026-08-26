@@ -17,7 +17,7 @@ sign, a generic temporal ratio, an off-by-one in the evaluation count. #523.3 is
 answer: compare the whole path, at every seam, against an implementation that is known to
 produce good video.
 
-THE TEXT ENCODER IS THE POINT. It is the ONE component of the five that has never been
+THE TEXT ENCODER IS THE POINT. It is the ONE component of the four that has never been
 output-verified — 49 GiB never fit the 24 GiB card the component oracle ran on, and it was
 flagged as the prime suspect for #519's garbage twice. Its constants (`_ROPE_SECTIONS`,
 the deepstack indices, the vision rope theta, the image normalization) are named in
@@ -113,7 +113,7 @@ import torch
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "h3"))
 
-#: The five carriers, by the path they land on under `--models`. The transformer is the
+#: The four carriers, by the path they land on under `--models`. The transformer is the
 #: BF16 sibling of the served fp8 one for the reason the module docstring gives.
 CARRIERS = {
     "transformer": "diffusion_models/minimax_h3_fl2va_pruned_bf16.safetensors",
@@ -207,7 +207,6 @@ def solver_for(args: argparse.Namespace, layout: Any) -> Any:
             sigma_shift_video=args.shift_video,
             sigma_shift_audio=args.shift_audio,
             visual_cond_timestep=None,
-            audio_cond_timestep=None,
         )
     )
 
@@ -325,10 +324,9 @@ def side_comfy(args: argparse.Namespace) -> None:
 def seam_run(args: argparse.Namespace, grid: Any, layout: Any, plan: Any) -> Any:
     """One `H3Run` for the model path.
 
-    `view` and `expanded` are request-facing halves the model boundary does not inspect in
-    this text-only oracle. Driving the endpoint outside its runtime means there is no
-    `RequestView` to hand it, so it is cast rather than faked: a stand-in object would be a
-    second implementation of a surface this oracle is not testing.
+    `expanded` is a request-facing half the model boundary does not inspect in this
+    text-only oracle. The request generator is real even though this seam does not draw
+    from it, so signature drift cannot hide an alternate RNG owner in the harness.
     """
     import h3
 
@@ -336,7 +334,7 @@ def seam_run(args: argparse.Namespace, grid: Any, layout: Any, plan: Any) -> Any
         plan=h3.H3Plan(grid=grid, keyframes=(), steps=args.steps, mute=False),
         layout=layout,
         timestep_plan=plan,
-        view=cast(Any, None),
+        generator=torch.Generator(device="cpu").manual_seed(args.seed),
         expanded=cast(Any, None),
     )
 
@@ -401,7 +399,7 @@ def side_ours(args: argparse.Namespace) -> None:
     device = torch.device("cuda")
 
     import h3
-    from h3_arch import GraphDialect, H3Config, build_component
+    from h3_arch import H3Config, build_component
     from h3_arch.layout import build_modulation
     from h3_arch.presentation import Tokenizer
     from h3_arch.presentation import build as build_presentation
@@ -444,7 +442,6 @@ def side_ours(args: argparse.Namespace) -> None:
         t_video=step.t_video,
         t_audio=step.t_audio,
         visual_cond_t=0.0,
-        audio_cond_t=0.0,
         text_token_tags=tuple([1] * text_shared.shape[1]),
     )
     run = seam_run(args, grid, layout, solver.plan)
@@ -459,7 +456,6 @@ def side_ours(args: argparse.Namespace) -> None:
             video_latents=video.to(device=device, dtype=torch.bfloat16),
             audio_latents=audio.to(device=device, dtype=torch.bfloat16),
             modulation=modulation,
-            graph=GraphDialect.NATIVE,
         )
     for handle in hooks:
         handle.remove()
@@ -603,7 +599,7 @@ def side_render(args: argparse.Namespace) -> None:
     device = torch.device("cuda")
 
     import h3
-    from h3_arch import GraphDialect, H3Config, build_component
+    from h3_arch import H3Config, build_component
     from h3_arch.layout import FPS, MediaFacts, build_modulation
     from h3_arch.pixels import pixel_bytes
     from h3_arch.presentation import Tokenizer
@@ -643,14 +639,14 @@ def side_render(args: argparse.Namespace) -> None:
     for step in solver.steps():
         modulation = build_modulation(
             layout, t_video=step.t_video, t_audio=step.t_audio,
-            visual_cond_t=0.0, audio_cond_t=0.0,
+            visual_cond_t=0.0,
             text_token_tags=tuple([1] * text.shape[1]),
         )
         with torch.inference_mode():
             v_video, v_audio = h3._predict_data_velocity(
                 transformer, run=run, text_states=text,
                 video_latents=video, audio_latents=audio,
-                modulation=modulation, graph=GraphDialect.NATIVE,
+                modulation=modulation,
             )
         video = step.advance_video(video, v_video)
         audio = step.advance_audio(audio, v_audio)

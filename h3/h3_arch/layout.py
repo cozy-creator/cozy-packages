@@ -58,14 +58,12 @@ AUDIO_LATENT_FPS = 40
 
 #: The packed order, and the modality tag each kind carries into AdaLN. Tags are the
 #: checkpoint's: 0 video, 1 text, 2 audio.
-SegmentKind = Literal["text", "cond", "ref_img", "ref_audio", "audio", "video"]
+SegmentKind = Literal["text", "cond", "audio", "video"]
 SEGMENT_TAG: dict[str, int] = {
     "text": 1,
     "video": 0,
     "audio": 2,
     "cond": 0,
-    "ref_img": 0,
-    "ref_audio": 2,
 }
 
 
@@ -253,18 +251,6 @@ def _video_t_grid(n: int, origin: float) -> list[float]:
 
 
 @dataclass(frozen=True, slots=True)
-class RefBlock:
-    """One ordered reference's packed contribution. ORDER IS SEMANTIC: it drives both the
-    `<Picture i>`/`<Video i>`/`<Audio i>` labels and this shared rotary cursor."""
-
-    kind: Literal["image", "audio", "video", "video_audio"]
-    latent_t: int = 0
-    latent_h: int = 0
-    latent_w: int = 0
-    ref_audio_t: int = 0
-
-
-@dataclass(frozen=True, slots=True)
 class Keyframe:
     """A TARGET-CLOCK anchor, never a reference: its latent rows sit at the generated
     clip's first or last temporal coordinate and stay fixed while the target denoises."""
@@ -275,9 +261,8 @@ class Keyframe:
 class PackedLayout:
     """The static packed structure for one (geometry, conditioning) signature.
 
-    Row order is `text | keyframe conds | per-reference blocks | target audio | target
-    video`, and the last two are always the last two — the final layer slices them by
-    position rather than by search."""
+    Row order is `text | keyframe conds | target audio | target video`, and the last two
+    are always the last two — the final layer slices them by position rather than search."""
 
     def __init__(
         self,
@@ -285,7 +270,6 @@ class PackedLayout:
         grid: LatentGrid,
         *,
         keyframes: tuple[Keyframe, ...] = (),
-        refs: tuple[RefBlock, ...] = (),
     ) -> None:
         frame, w_grid = _frame_grid(grid.latent_h, grid.latent_w)
         frame_rows = len(frame)
@@ -310,33 +294,6 @@ class PackedLayout:
 
         target_audio_w = (w_grid[0], w_grid[-1])
         cursor = float(text_len)
-        for blk in refs:
-            if blk.kind == "image":
-                r_frame, _ = _frame_grid(blk.latent_h, blk.latent_w)
-                segments.append(("ref_img", len(r_frame)))
-                pos.extend((cursor, y, x) for y, x in r_frame)
-                img_update.extend([False] * len(r_frame))
-                cursor += 1.0
-            elif blk.kind == "audio":
-                if blk.ref_audio_t > 0:
-                    segments.append(("ref_audio", blk.ref_audio_t * 2))
-                    pos.extend(_audio_positions(cursor, blk.ref_audio_t, *target_audio_w))
-                    audio_update.extend([False] * blk.ref_audio_t * 2)
-                cursor += float(blk.ref_audio_t)
-            else:
-                # a soundtracked video's audio rows pack immediately BEFORE its video rows,
-                # both sharing one cursor origin: they are the same moment, not a sequence
-                r_frame, r_w = _frame_grid(blk.latent_h, blk.latent_w)
-                if blk.ref_audio_t > 0:
-                    segments.append(("ref_audio", blk.ref_audio_t * 2))
-                    pos.extend(_audio_positions(cursor, blk.ref_audio_t, r_w[0], r_w[-1]))
-                    audio_update.extend([False] * blk.ref_audio_t * 2)
-                n = blk.latent_t * len(r_frame)
-                segments.append(("ref_img", n))
-                pos.extend(_video_positions(blk.latent_t, r_frame, cursor))
-                img_update.extend([False] * n)
-                cursor += max(float(blk.ref_audio_t), sum(_video_t_spans(blk.latent_t)))
-
         segments.append(("audio", grid.audio_rows))
         pos.extend(_audio_positions(cursor, grid.audio_t, *target_audio_w))
         audio_update.extend([True] * grid.audio_rows)
@@ -397,7 +354,6 @@ class TimestepPlan(msgspec.Struct, frozen=True):
     sigma_shift_video: float
     sigma_shift_audio: float
     visual_cond_timestep: float | None
-    audio_cond_timestep: float | None
     modality_tags: tuple[int, ...]
     scheduler: str
     output_dtype: str
@@ -463,7 +419,6 @@ def build_timestep_plan(
     sigma_shift_video: float,
     sigma_shift_audio: float,
     visual_cond_timestep: float | None,
-    audio_cond_timestep: float | None,
     scheduler: str = "flow_match_uniform",
     output_dtype: str = "float32",
     adapters: tuple[str, ...] = (),
@@ -481,7 +436,6 @@ def build_timestep_plan(
         sigma_shift_video=sigma_shift_video,
         sigma_shift_audio=sigma_shift_audio,
         visual_cond_timestep=visual_cond_timestep,
-        audio_cond_timestep=audio_cond_timestep,
         modality_tags=tuple(SEGMENT_TAG[k] for k in kinds),
         scheduler=scheduler,
         output_dtype=output_dtype,
@@ -516,7 +470,6 @@ def build_modulation(
     t_video: float,
     t_audio: float,
     visual_cond_t: float,
-    audio_cond_t: float,
     text_token_tags: tuple[int, ...] | None = None,
 ) -> Modulation:
     """The per-segment modulation row table, the distinct timesteps it indexes, and the
@@ -530,8 +483,6 @@ def build_modulation(
         "video": t_video,
         "audio": t_audio,
         "cond": max(t_video, visual_cond_t),
-        "ref_img": max(t_video, visual_cond_t),
-        "ref_audio": max(t_audio, audio_cond_t),
     }
     present = {k for _, _, k in layout.segments}
     unique = sorted({seg_t[k] for k in present})

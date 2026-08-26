@@ -37,13 +37,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .config import (
-    DIT_FULL,
-    AdaLnStructure,
+    DIT_STRUCTURE,
     AudioVaeConfig,
     DitConfig,
-    GraphDialect,
     H3Config,
-    Task,
     TextEncoderConfig,
     VideoVaeConfig,
 )
@@ -52,13 +49,11 @@ if TYPE_CHECKING:
     from torch import nn
 
 __all__ = [
-    "DIT_FULL",
-    "AdaLnStructure",
+    "COMPONENTS",
+    "DIT_STRUCTURE",
     "AudioVaeConfig",
     "DitConfig",
-    "GraphDialect",
     "H3Config",
-    "Task",
     "TextEncoderConfig",
     "VideoVaeConfig",
     "build_audio_vae",
@@ -93,26 +88,23 @@ def build_audio_vae(config: AudioVaeConfig | None = None) -> nn.Module:
     return AutoencoderKLMiniMaxH3Audio(config or AudioVaeConfig())
 
 
-#: COMPONENT NAME -> builder. The two transformer components build the same class from the
-#: same config: they are structurally indistinguishable and are told apart by the recipe's
-#: declared content digest, never by their shapes (job-001).
+#: COMPONENT NAME -> builder. These are exactly the four roots the FL2VA model constructs.
 _BUILDERS: dict[str, Any] = {
     "transformer": build_dit,
-    "transformer_ref": build_dit,
     "text_encoder": build_text_encoder,
     "video_vae": build_video_vae,
     "audio_vae": build_audio_vae,
 }
+COMPONENTS = tuple(_BUILDERS)
 
 
 def build_component(component: str, config: H3Config | None = None) -> nn.Module:
     """One component root by its component name — the seam `scripts/h3-keys.py` checks."""
     if component not in _BUILDERS:
-        raise KeyError(f"{component!r} is not an H3 component: {', '.join(_BUILDERS)}")
+        raise KeyError(f"{component!r} is not an H3 component: {', '.join(COMPONENTS)}")
     whole = config or H3Config()
     per_component = {
         "transformer": whole.dit,
-        "transformer_ref": whole.dit,
         "text_encoder": whole.text_encoder,
         "video_vae": whole.video_vae,
         "audio_vae": whole.audio_vae,

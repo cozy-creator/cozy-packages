@@ -104,19 +104,18 @@ jobs:
           uv venv --python 3.13
           uv pip install msgspec numpy
 
-      # H3's reference semantics, each checked against an independently written upstream
-      # expression rather than against the endpoint's own call shapes — so the same arms
-      # gate the diffusers rebase that replaces the hand port (#531). Every arm carries its
-      # own RED CONTROL: the exact defective expression that shipped se-002's garbage
-      # render, asserted to DISAGREE with the reference.
+      # H3's reference semantics, each checked against an independently written expression
+      # rather than against the endpoint's own call shapes. Every arm carries its own RED
+      # CONTROL: the exact defective expression that shipped se-002's garbage render,
+      # asserted to DISAGREE with the reference.
       - name: H3 deterministic conformance arms
         run: uv run --no-project python scripts/h3-conform.py
 
-  # SEPARATE JOB, because its environment is the opposite of `arms`'. Every vision arm's
-  # oracle IS upstream — the pinned diffusers' own presentation builder and transformers'
-  # own image processor — so this one installs torch, and dragging that into `arms` would
-  # cost the fast job its seconds. Placed as its own job for the #533 reason the arms job
-  # exists at all: a step behind an already-red step looks wired and never fires.
+  # SEPARATE JOB, because its environment is the opposite of `arms`'. The vision arms use
+  # transformers' own image processor and therefore install torch; dragging that into
+  # `arms` would cost the fast job its seconds. Placed as its own job for the #533 reason
+  # the arms job exists at all: a step behind an already-red step looks wired and never
+  # fires.
   vision-arms:
     name: Vision seam conformance
     runs-on: ubuntu-latest
@@ -128,15 +127,15 @@ jobs:
           version: "latest"
       - run: uv python install 3.13
 
-      # The exact released wheel is the same one the H3 lock names. A Git checkout is not
+      # The same Torch and Transformers versions the H3 lock names. A Git checkout is not
       # a wheelhouse material and would make the offline environment impossible.
       - name: Environment
         run: |
           uv venv --python 3.13
           uv pip install --index-url https://download.pytorch.org/whl/cpu \
             "torch==2.9.1" "torchvision==0.24.1"
-          uv pip install msgspec numpy pillow "transformers>=5.13,<6"
-          uv pip install "diffusers==0.40.0"
+          uv pip install \
+            "msgspec==0.21.1" "numpy==2.5.2" "pillow==12.3.0" "transformers==5.16.1"
 
       # The pixels-to-text-encoder seam, diffed against upstream rather than against a
       # restatement of it: byte-identical reference pixels, a bit-identical patch matrix,

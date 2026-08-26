@@ -46,7 +46,7 @@ ignore_missing_imports = true
 # cozy-eval loosens the identical pair for the two modules that subclass a torch class.
 # Everything else stays strict, and no module carries `ignore_errors`.
 [[tool.mypy.overrides]]
-module = ["quality_judge", "sdxl", "h3", "h3_arch.*", "h3_ref", "h3_ref.*"]
+module = ["quality_judge", "sdxl", "h3", "h3_arch.*"]
 disallow_subclassing_any = false
 disallow_untyped_decorators = false
 warn_unused_ignores = false

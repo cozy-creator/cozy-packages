@@ -7,13 +7,13 @@ third-party code is present, under what terms, and — where the terms conflict
 with the repository's own licence — says so plainly instead of leaving the
 conflict for a reader to discover.
 
-Written 2026-08-26 against decision #532. It is an engineering record of
+Written 2026-08-26 against decisions #532 and #593. It is an engineering record of
 provenance, not legal advice and not a legal conclusion.
 
 
 THE REPOSITORY'S OWN CODE — MIT
 
-  sdxl/, quality-judge/, h3/h3.py, h3/h3_ref/, scripts/
+  sdxl/, quality-judge/, h3/h3.py, scripts/
   Written for this repository against `cozy_runtime.author`.
 
 
@@ -21,15 +21,12 @@ APACHE LICENSE 2.0
 
   diffusers (huggingface/diffusers)
     Used as a DEPENDENCY, not vendored: no file in this repository is a copy
-    or an adaptation of diffusers source. `h3/h3_ref/` constructs upstream's
-    `MiniMaxH3Transformer3DModel`, `AutoencoderKLMiniMaxH3`,
-    `AutoencoderKLMiniMaxH3Audio` and `MiniMaxH3Scheduler` and adds nothing to
-    them; `h3/h3_ref/curve.py` writes new modules that stand in for two of
-    upstream's, and copies none of their code.
+    or an adaptation of diffusers source. SDXL constructs its graph from the
+    dependency. H3 no longer depends on or ships a dormant Diffusers graph.
 
   transformers (huggingface/transformers)
-    Also a dependency. `h3/h3_ref/` constructs `Qwen3VLForConditionalGeneration`
-    through the public auto-classes.
+    Also a dependency. H3 uses its tokenizer and Qwen image processor; the
+    package is not vendored.
 
   torch, safetensors, msgspec, numpy, pillow
     Ordinary dependencies. Not vendored.
@@ -49,20 +46,19 @@ FOR DELETION
     that the repository carries a licence its own contents contradict.
 
     This is known and is being resolved by REMOVAL rather than by argument.
-    Decision #531 replaces every one of these files with the Apache-2.0
-    upstream implementation now constructed by `h3/h3_ref/`; decision #532
-    names the text encoder specifically. The port is retained only until the
-    upstream path is proven against it on a card, because deleting
-    oracle-proven code before its replacement is proven would trade a licence
-    problem for a correctness one. `scripts/h3-oracle.py` imports a ComfyUI
-    checkout on a rented card and is never imported by any endpoint or shipped
-    in any release archive.
+    Decision #593 deleted the incomplete alternate implementation: it had no
+    bound artifact and could not execute the endpoint's conditioning/decode
+    contract. The port is retained as the one graph the current release binds
+    and has output-proven. A future official transition must produce and bind
+    its exact artifact, implement and output-prove every operation, then add
+    official and delete this port in the same release. `scripts/h3-oracle.py`
+    imports a ComfyUI checkout on a rented card and is never imported by any
+    endpoint or shipped in any release artifact.
 
-    The current H3 project wheel DOES include `h3_arch`: the serving module still imports
-    its layout, presentation, vision and port-dialect path even when upstream construction
-    is selected. Public distribution remains blocked until those imports and this directory
-    are deleted together; there is no conditional packager that can make the current source
-    something it is not.
+    The current H3 project wheel DOES include `h3_arch`: it is the release's only graph,
+    layout, presentation, and vision implementation. Public distribution remains blocked
+    until an output-proven replacement and this directory change atomically; there is no
+    conditional packager that can make the current source something it is not.
 
 
 THE MODEL'S OWN LICENCE IS NOT A CODE LICENCE

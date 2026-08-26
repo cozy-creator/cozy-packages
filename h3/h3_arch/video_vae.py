@@ -68,7 +68,7 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
 #: The seed the CONDITIONING posterior is sampled under, independently of the request's own
-#: generator, so the same keyframe or reference always encodes to the same anchor. Fixed at
+#: generator, so the same keyframe always encodes to the same anchor. Fixed at
 #: 42 in the reference implementation; a released-model fact, not a preference.
 CONDITION_ENCODE_SEED = 42
 
@@ -710,7 +710,7 @@ class AutoencoderKLMiniMaxH3(nn.Module):
         return (mean - latents_mean) / latents_std
 
     def encode_condition(self, pixels: Tensor, *, seed: int = CONDITION_ENCODE_SEED) -> Tensor:
-        """[B, 3, T, H, W] in [-1, 1] -> the CONDITIONING latents of a keyframe or reference.
+        """[B, 3, 1, H, W] in [-1, 1] -> one keyframe's conditioning latents.
 
         NOT `encode`, and the difference is load-bearing rather than stylistic. `encode`
         takes the posterior's MEAN, which is right for a target the DiT's own schedule will
@@ -718,27 +718,18 @@ class AutoencoderKLMiniMaxH3(nn.Module):
         under a generator seeded independently of the request, and then ROUNDS the sample to
         float16 — keeping about 11 bits of every conditioning latent — before normalizing.
         Both steps are part of the recipe that reproduces its conditioning, and taking the
-        mean here instead would be a quiet, permanent difference from the reference on every
-        keyframe and every reference image.
+        mean here instead would be a quiet, permanent difference on every keyframe.
 
-        The seed is FIXED, so the same reference always encodes to the same anchor, and it
+        The seed is FIXED, so the same keyframe always encodes to the same anchor, and it
         is drawn on the HOST so two cards agree. Reference:
         `modular_pipelines/minimax_h3/encoders.py::encode_vae_condition`.
         """
         pixels = pixels.to(self.compute_dtype)
-        if pixels.shape[2] == 1:
-            moments = self._encode_moments(self._normalize_pixels(pixels))[:, :, -1:]
-        else:
-            clips: list[Tensor] = []
-            for i in range(math.ceil(pixels.shape[2] / self.clip_length)):
-                clip = pixels[:, :, i * self.clip_length : (i + 1) * self.clip_length]
-                if clip.shape[2] < self.clip_length:
-                    missing = self.clip_length - clip.shape[2]
-                    clip = torch.cat([clip, clip[:, :, -1:].repeat(1, 1, missing, 1, 1)], dim=2)
-                clips.append(self._encode_moments(self._normalize_pixels(clip)))
-            moments = torch.cat(clips, dim=2)
-            if self.token_drop > 0:
-                moments = moments[:, :, : -self.token_drop]
+        if pixels.shape[2] != 1:
+            raise ValueError(
+                f"keyframe conditioning requires exactly one frame, got {pixels.shape[2]}"
+            )
+        moments = self._encode_moments(self._normalize_pixels(pixels))[:, :, -1:]
 
         mean, logvar = torch.chunk(moments.float(), 2, dim=1)
         # The same clamp upstream's `DiagonalGaussianDistribution` applies. Without it an

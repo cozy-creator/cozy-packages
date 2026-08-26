@@ -7,11 +7,9 @@ not as a placeholder in this release's descriptor and wheel identity.
 
 WHAT IS DECLARED HERE
 
-  * TWO CONSTRUCTION LAYERS, chosen by the ARTIFACT and not by this file. `H3Config.graph`
-    names one: `h3-native` builds the hand port (`h3_arch/`, the community curve carrier's
-    3,445 destinations) and `h3-diffusers` builds upstream's official classes through
-    `h3_ref/` (the official tree's 3,486). The term selects a KEY SET, so it is structural
-    (§1.1.1) and defaults to the dialect the one ingested H3 artifact actually carries.
+  * ONE EXECUTABLE GRAPH. `h3_arch/` constructs the four native roots the bound community
+    curve artifact fills: 2,913 destinations. Artifact config describes bytes; it cannot
+    activate a second, unfinished implementation inside this release.
   * ONE TASK-STAMPED MODEL. `Fl2VAModel(task="fl2va")` binds `transformer`; there is no
     partition selector, `load_state_dict` swap, twin binding, or hidden second action.
   * FIVE COMPONENT-SCOPED OPERATIONS, none of them coarse: text condition (`text_encoder`),
@@ -47,7 +45,7 @@ NO GUIDANCE. H3-Base is guidance-distilled: there is no `guidance_scale`, no
 family because guidance is real there; here the omission is the checkpoint's fact.
 
 STATE OF PROOF (grades, honestly). The constructed graph is KEY-EXACT against the pinned
-safetensors header for all five components at zero cost (`scripts/h3-keys.py`). The
+safetensors header for all four constructed components at zero cost (`scripts/h3-keys.py`). The
 reference semantics this file's sampler depends on — the data-ward sign, the 17k+5 temporal
 geometry, the sigma grid and its evaluation count, the pixel conversion, the
 requested-vs-observed media agreement — are CONFORMANCE-PROVEN ON CPU against
@@ -88,16 +86,14 @@ from cozy_runtime.author import (
     Model,
     ModelDefault,
     Outputs,
-    RequestView,
     Shape,
     Telemetry,
-    UnsupportedInput,
     VideoAsset,
     uses_components,
 )
 
 from gates import post_encode_gate, pre_encode_gate
-from h3_arch import GraphDialect, H3Config, build_component
+from h3_arch import COMPONENTS, DIT_STRUCTURE, H3Config, build_component
 from h3_arch.layout import (
     FPS,
     FRAMES_PER_CLIP,
@@ -214,26 +210,16 @@ class H3Pipeline:
     The `components` mapping is what the runtime censuses, so its keys ARE the artifact's
     components. The action exposes its transformer plus the text encoder and both VAEs.
 
-    TWO CONSTRUCTION LAYERS, SELECTED BY THE ARTIFACT (#531/#540). `h3_arch` is the hand
-    port and answers to the community curve carrier's key set; `h3_ref` is a thin layer over
-    upstream's official classes and answers to the official diffusers-format tree's. The
-    artifact's own config says which, through `H3Config.graph`, and nothing else in this file
-    knows the difference — `build_component(name, ...)` is the same signature on both sides,
-    which is the whole reason the rebase can be a construction decision rather than a fork.
+    One release has one executable graph (#593). `h3_arch` answers to the bound community
+    curve carrier's key set. A future official graph arrives only with its exact artifact and
+    complete output proof, replacing this graph rather than becoming an artifact-selected
+    branch beside it.
     """
 
     def __init__(self, config: Any) -> None:
         whole = H3Config.from_mapping(config.mapping())
         self.config = whole
-        components = ("transformer", "text_encoder", "video_vae", "audio_vae")
-        self.components: dict[str, Any]
-        if whole.graph is GraphDialect.DIFFUSERS:
-            import h3_ref
-
-            mapping = h3_ref.config_mapping(whole)
-            self.components = {c: h3_ref.build_component(c, mapping) for c in components}
-        else:
-            self.components = {c: build_component(c, whole) for c in components}
+        self.components = {component: build_component(component, whole) for component in COMPONENTS}
 
     @property
     def transformer(self) -> Any:
@@ -270,7 +256,7 @@ class H3Run:
     plan: H3Plan
     layout: PackedLayout
     timestep_plan: TimestepPlan
-    view: RequestView
+    generator: Any
     expanded: ExpandedPresentation
     """The presentation with its vision blocks expanded into real pad runs. THIS is the
     sequence the text encoder ran on and the one `PackedLayout`'s text span was sized from;
@@ -315,9 +301,7 @@ def prepare(
     patched = vision.patchify(presentation)
     expanded = vision.expand(presentation, patched.token_counts)
     condition_images = keyframe_pixels
-    condition_geometry = tuple(
-        vision.reference_block_geometry(image) for image in condition_images
-    )
+    condition_geometry = tuple(vision.conditioning_geometry(image) for image in condition_images)
     plan = H3Plan(
         grid=grid,
         keyframes=tuple(keyframes),
@@ -461,9 +445,8 @@ class Fl2VAModel(Model[H3Pipeline], task="fl2va"):  # type: ignore[call-arg]
                     )
                 # x_t = t*x_0 + (1-t)*noise, in H3's `t` convention — `t = 1` is clean. The
                 # noise is drawn on the HOST so two cards produce the same anchor.
-                generator = torch.Generator(device="cpu").manual_seed(run.view._seed + position)
                 noise = torch.randn(
-                    latents.shape, generator=generator, dtype=torch.float32
+                    latents.shape, generator=run.generator, dtype=torch.float32
                 ).to(device=latents.device, dtype=latents.dtype)
                 out.append(noise_level * latents + (1.0 - noise_level) * noise)
         return out
@@ -504,7 +487,6 @@ class Fl2VAModel(Model[H3Pipeline], task="fl2va"):  # type: ignore[call-arg]
                 video_latents=video_latents,
                 audio_latents=audio_latents,
                 modulation=modulation,
-                graph=self.pipe.config.graph,
             )
 
 def _predict_data_velocity(
@@ -515,7 +497,6 @@ def _predict_data_velocity(
     video_latents: Any,
     audio_latents: Any,
     modulation: Modulation,
-    graph: GraphDialect,
 ) -> tuple[Any, Any]:
     """THE MODEL BOUNDARY (#524): latents in, LATENT-SHAPED DATA-WARD VELOCITY out.
 
@@ -538,16 +519,6 @@ def _predict_data_velocity(
     import torch
 
     from h3_arch.dit import pack_audio, patchify_video, unpack_audio, unpatchify_video
-
-    if graph is GraphDialect.DIFFUSERS:
-        return _predict_data_velocity_official(
-            transformer,
-            run=run,
-            text_states=text_states,
-            video_latents=video_latents,
-            audio_latents=audio_latents,
-            modulation=modulation,
-        )
 
     grid = run.plan.grid
     patch = transformer.config.patch_size
@@ -627,102 +598,6 @@ def _predict_data_velocity(
     )
 
 
-def _predict_data_velocity_official(
-    transformer: Any,
-    *,
-    run: H3Run,
-    text_states: Any,
-    video_latents: Any,
-    audio_latents: Any,
-    modulation: Modulation,
-) -> tuple[Any, Any]:
-    """THE SAME BOUNDARY, over upstream's `MiniMaxH3Transformer3DModel`.
-
-    The two graph implementations take the packed sequence apart differently. The port
-    takes ONE already-concatenated `[S, hidden]` buffer plus a
-    per-SEGMENT modulation table; upstream takes the three modalities SEPARATELY plus
-    per-ROW index tensors, and scatters them into the buffer itself. Both describe the same
-    layout — `PackedLayout` — so the translation is arithmetic on the segment table and
-    invents nothing:
-
-        row -> modulation row       (the port's `Modulation.segments`)
-        row -> timestep index       row // MODALITY_NUM
-        row -> modality tag         row %  MODALITY_NUM
-
-    which is exactly the relation upstream builds in the other direction
-    (`adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + token_tags`).
-
-    CONDITIONING ROWS ARE NOT HANDLED HERE and do not silently vanish: upstream's
-    `hidden_states` must carry the conditioning video rows interleaved in `video_indices`
-    order, and this endpoint has no builder for them. That is a DIFFERENT seam from the one
-    `condition_text` used to refuse on, and it is now the only one left: the vision seam
-    (pixels to patches, grid and splice index) is built, so a keyframe reaches Qwen3-VL
-    correctly and reaches the DiT's LATENT rows not at all. A conditioned layout reaches
-    an explicit refusal rather than a forward that quietly drops its anchors.
-
-    The heads are RAW and DATA-WARD on this side too — upstream's own
-    `MiniMaxH3Scheduler` states the convention — so `H3Solver` consumes them unchanged.
-    """
-    import torch
-
-    from h3_arch.dit import pack_audio, patchify_video, unpack_audio, unpatchify_video
-
-    modality_num = 3
-    grid = run.plan.grid
-    patch = transformer.config.patch_size
-    weight = transformer.context_embedder.weight
-    device = weight.device
-
-    conditioning = [k for _, _, k in run.layout.segments if k in ("cond", "ref_img", "ref_audio")]
-    if conditioning:
-        raise UnsupportedInput(
-            "the official construction layer packs conditioning rows into the modality "
-            f"streams itself, and this layout carries {', '.join(sorted(set(conditioning)))} "
-            "rows this DIALECT has no builder for. The port dialect builds them; upstream's "
-            "transformer wants them interleaved into `hidden_states` in `video_indices` "
-            "order instead, which is a different assembly and is unbuilt — and no "
-            "diffusers-format artifact is bound yet for it to run against",
-            code="conditioning_rows_unbuilt_diffusers",
-            fields=["first_frame", "last_frame"],
-        )
-
-    seq_len = run.layout.seq_len
-    timestep_indices = torch.zeros(seq_len, dtype=torch.long)
-    token_tags = torch.zeros(seq_len, dtype=torch.long)
-    for start, end, row in modulation.segments:
-        timestep_indices[start:end] = row // modality_num
-        token_tags[start:end] = row % modality_num
-
-    def _span(kind: str) -> Any:
-        a, b = run.layout.stream(kind)
-        return torch.arange(a, b, dtype=torch.long, device=device)
-
-    video_out, audio_out = transformer(
-        patchify_video(video_latents, patch).unsqueeze(0).to(device=device),
-        pack_audio(audio_latents).unsqueeze(0).to(device=device),
-        text_states.to(device=device),
-        torch.tensor(modulation.timesteps, dtype=torch.float32, device=device),
-        timestep_indices.to(device),
-        token_tags.to(device),
-        torch.tensor(modulation.position_ids, dtype=torch.float32, device=device),
-        _span("video"),
-        _span("audio"),
-        _span("text"),
-        return_dict=False,
-    )
-    return (
-        unpatchify_video(
-            video_out[0],
-            grid.latent_t // patch[0],
-            grid.latent_h // patch[1],
-            grid.latent_w // patch[2],
-            transformer.config.in_channels,
-            patch,
-        ).to(video_latents.dtype),
-        unpack_audio(audio_out[0]).to(audio_latents.dtype),
-    )
-
-
 # ------------------------------------------------------------------ the handlers
 
 
@@ -742,17 +617,22 @@ def _run(
     config = model.pipe.config.dit
     timestep_plan = build_timestep_plan(
         task="fl2va",
-        structure=config.structure.value,
+        structure=DIT_STRUCTURE,
         evaluations=plan.steps,
         layout=layout,
         sigma_shift_video=config.sigma_shift_video,
         sigma_shift_audio=config.sigma_shift_audio,
         visual_cond_timestep=0.999 if plan.keyframes else None,
-        audio_cond_timestep=None,
         adapters=tuple(str(a) for a in view.adapters),
     )
     solver = H3Solver(timestep_plan)
-    run = H3Run(plan, layout, timestep_plan, view, expanded)
+    run = H3Run(
+        plan=plan,
+        layout=layout,
+        timestep_plan=timestep_plan,
+        generator=torch.Generator(device="cpu").manual_seed(view._seed),
+        expanded=expanded,
+    )
     tel.metric("packed_rows", float(layout.seq_len))
     tel.metric("text_rows", float(len(expanded.token_ids)))
     tel.metric("vision_blocks", float(len(patched.token_counts)))
@@ -851,16 +731,25 @@ def _sample(
     plan = run.timestep_plan
     dit = model.pipe.config.dit
     grid = run.plan.grid
-    generator = torch.Generator(device="cpu").manual_seed(run.view._seed)
+    from h3_arch.dit import unpack_audio
+
     # SEEDED ON THE HOST, always: a device-side draw is not reproducible across cards, and
     # the seed is a request fact. The latents then follow the conditioning to wherever the
     # runtime placed the weights.
     video = torch.randn(
-        1, dit.latents_dim, grid.latent_t, grid.latent_h, grid.latent_w, generator=generator
+        1,
+        dit.latents_dim,
+        grid.latent_t,
+        grid.latent_h,
+        grid.latent_w,
+        generator=run.generator,
     ).to(text_states.device)
-    audio = torch.randn(
-        1, dit.audio_latents_dim, 2, grid.audio_t, generator=generator
-    ).to(text_states.device)
+    audio_rows = torch.randn(
+        grid.audio_rows,
+        dit.audio_latents_dim,
+        generator=run.generator,
+    )
+    audio = unpack_audio(audio_rows).to(text_states.device)
 
     for step in solver.steps():
         ctx.raise_if_cancelled()
@@ -869,7 +758,6 @@ def _sample(
             t_video=step.t_video,
             t_audio=step.t_audio,
             visual_cond_t=plan.visual_cond_timestep or 0.0,
-            audio_cond_t=plan.audio_cond_timestep or 0.0,
             # THE EXPANDED TAGS, one per text-encoder row. `presentation.tags` carries one
             # tag per PRESENTATION row, where a whole vision block is a single row, so
             # using it would tag the text span by a length the sequence does not have.

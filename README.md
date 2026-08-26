@@ -11,8 +11,7 @@ No automated tests (decisions.md #160): verification = live runs + benchmarks.
 
 | path | what |
 |---|---|
-| `h3/h3_ref/` | H3 as the OFFICIAL upstream implementation (#531): a construction layer over diffusers' H3 classes, plus the curve delta |
-| `h3/h3_arch/` | the hand port `h3_ref/` replaces — GPL-adapted, kept only until the upstream path is proven on a card (see `NOTICE`) |
+| `h3/h3_arch/` | the current H3 release's one executable graph: the native community-curve port (see `NOTICE`) |
 | `sdxl/` | the SDXL launch endpoint (se-008): `generate`, text to image, four components |
 | `sdxl/tokenizer`, `sdxl/tokenizer_2` | the two CLIP vocabularies this endpoint BUNDLES — its own asset, like the model library it imports |
 | `quality-judge/` | the eval judge family (ev-003): `judge`, `soft`, `pairwise`, `transcribe` |
@@ -25,7 +24,6 @@ No automated tests (decisions.md #160): verification = live runs + benchmarks.
 | `scripts/pack.py` | tree -> release archive (the pre-hub stand-in for `cozy deploy`) |
 | `scripts/sdxl-live.py` | se-008's live verification, on the RTX 4070 |
 | `scripts/h3-keys.py` | the port's graph against the community carrier's headers — key-exact, $0, no GPU |
-| `scripts/h3-diffusers-keys.py` | the upstream graph against the OFFICIAL tree's headers, plus geometry, schedule and curve arms — $0, no GPU |
 | `scripts/h3-oracle.py` | the pinned ComfyUI differential oracle; never imported by an endpoint, never in a release |
 | `scripts/fence.py` | four structural fences |
 
@@ -85,13 +83,13 @@ architecture is the endpoint's, never the runtime's.
 
 ## H3: where the architecture comes from, and who checks it
 
-Decision #531 fixed the source hierarchy after a census failure — the 3,100-line port in
-`h3/h3_arch/` was written on the premise that no maintained H3 implementation existed, and
-diffusers had merged the official one twenty days earlier. In order:
+Decision #593 fixed the release boundary after the official candidate was implemented but
+found not executable end to end. This release ships only the graph its bound artifact fills
+and its action can run. Evidence sources remain ordered:
 
 1. the **official model release** — its configs, its docs and its licence;
-2. the **pinned diffusers/transformers implementation** — the architecture, the packing and
-   the scheduler. `h3/h3_ref/` constructs it and adds nothing to it;
+2. the **pinned diffusers/transformers implementation** — an upstream statement and oracle,
+   not an artifact-selected second serving graph;
 3. **DiffSynth-Studio** — an independent second opinion, never a dependency;
 4. **ComfyUI** — a foreign-format producer and a black-box speed baseline, and nothing
    else. Never serving architecture, never pipeline semantics, never product vocabulary.
@@ -110,7 +108,8 @@ as proven as the number of unrelated codebases that reproduce it.
 
 1. **On this box, $0** — construct on `meta` and diff the census against banked headers;
    check the temporal geometry, the sigma grid, the evaluation count and the velocity sign
-   against upstream's own arithmetic. `scripts/h3-diffusers-keys.py` is all four.
+   against upstream's own arithmetic. `scripts/h3-keys.py`, `h3-conform.py`, and
+   `h3-vision-conform.py` are the current zero-dollar proof set.
 2. **Component-level, on a card** — same weights, same input, one component at a time:
    VAE encode/decode round trips, one DiT block, the rope table, the modulation. se-001 ran
    this against ComfyUI for $0.21 and it found a real defect.
@@ -127,10 +126,11 @@ A number produced by only one of the three implementations is a measurement, not
 
 `LICENSE` is MIT. `NOTICE` records what in this tree is not: diffusers and transformers are
 Apache-2.0 dependencies and are not vendored, and `h3/h3_arch/` is adapted from GPL-3.0
-ComfyUI source, which MIT does not cover and which #531/#532 resolve by deleting it once
-`h3/h3_ref/` is proven. The model's own licence is separate from all of them, carries a
-territory restriction, and is an open owner ruling — read `NOTICE` before serving H3
-anywhere.
+ComfyUI source, which MIT does not cover. Decision #593 deleted the incomplete in-wheel
+replacement; a future official transition must land atomically with its exact artifact and
+complete output proof, then delete this port. The model's own licence is separate from all
+of them, carries a territory restriction, and is an open owner ruling — read `NOTICE`
+before serving H3 anywhere.
 
 ## The three rules an endpoint here obeys
 
