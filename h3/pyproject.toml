@@ -15,9 +15,6 @@ dependencies = [
     "diffusers==0.40.0",
 ]
 
-# The endpoint proof builds these three wheels from exact source commits into its temporary
-# dependency input. They are not embedded in the project wheel; the canonical wheelhouse
-# owner will name their bytes once that manifest exists.
 [tool.uv.sources]
 cozy-runtime = { path = "vendor/cozy_runtime-0.0.1-py3-none-any.whl" }
 tensorfs = { path = "vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl" }

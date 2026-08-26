@@ -112,8 +112,7 @@ def banked(path: str) -> Any:
 
 
 def build_component(component: str, config: dict[str, Any]) -> Any:
-    """`h3_ref`'s builder, reached the way the release archive lays the endpoint out: the
-    model library sits beside the endpoint module, not on the path this script runs from."""
+    """`h3_ref`'s builder, reached through either the source project or installed wheel."""
     from h3_ref import build_component as build
 
     return build(component, config)
