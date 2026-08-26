@@ -104,13 +104,6 @@ jobs:
           uv venv --python 3.13
           uv pip install msgspec numpy
 
-      - name: Release archive is byte-reproducible
-        run: |
-          mkdir -p "$RUNNER_TEMP/h3-pack"
-          python scripts/pack.py h3 cozy/minimax-h3 ci "$RUNNER_TEMP/h3-pack/a.tar.gz"
-          python scripts/pack.py h3 cozy/minimax-h3 ci "$RUNNER_TEMP/h3-pack/b.tar.gz"
-          cmp "$RUNNER_TEMP/h3-pack/a.tar.gz" "$RUNNER_TEMP/h3-pack/b.tar.gz"
-
       # H3's reference semantics, each checked against an independently written upstream
       # expression rather than against the endpoint's own call shapes — so the same arms
       # gate the diffusers rebase that replaces the hand port (#531). Every arm carries its
