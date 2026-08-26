@@ -60,10 +60,20 @@ independently written upstream expressions (`scripts/h3-conform.py`, which runs 
 The output gates are proven against digest-pinned real media, including the failed
 `daf50552…` render as a permanent red arm (`scripts/h3-live.py gates`).
 
-NONE OF THAT IS AN OUTPUT VERIFICATION. The whole-seam oracle (#523.3) and a full-length
-viewed render (#521) are a later lane, and the first serve of this file produced garbage
-with every component key-exact — which is exactly why "the components match" is not a
-grade anyone should quote as working.
+THE WHOLE-SEAM ORACLE HAS NOW RUN (2026-08-26, one H200; `scripts/h3-seam-oracle.py`
+carries the table). Against ComfyUI v0.33.0 on the same bf16 carriers, the same prompt and
+the same seed, every seam agrees at cosine >= 0.9993 — token ids identical, the conditioner
+EXACT at float32 — and a full-length 15.083 s / 362-frame / 30-evaluation render was
+produced and VIEWED: coherent motion matching the prompt, an audio track that follows the
+picture, adjacent-frame correlation 0.9882 against cozy-eval's 0.6 floor. The endpoint's
+model path is OUTPUT-VERIFIED.
+
+WHAT THAT DOES NOT COVER, said plainly. This file's SERVING path — the fill plane, the
+stamp plane, the residency ladder — is a separate subject with its own open defects (#529's
+seven), and the oracle drove the model path directly. Two artifacts remain in the picture,
+a 32-pixel spatial lattice and a 17-frame temporal seam, and both are reproduced identically
+by upstream on the same weights: they are the released carrier's, and they are the
+optimization lane's quality question (#531).
 """
 
 from __future__ import annotations

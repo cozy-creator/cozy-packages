@@ -40,6 +40,30 @@ is BIT-EXACT and anything else is a defect; a seam that legitimately reduces in 
 order (a fused kernel against an unfused one) carries an accumulation bound. Which is which
 is stated at each seam, and the reason is stated with it.
 
+BANKED (2026-08-26, one H200, se-002). Both sides on the SAME bf16 carriers, the same
+prompt and the same seed; cosine is the verdict, the float32 control is the discriminator.
+
+    seam                    cosine        what it settles
+    tokens                  identical     22 ids both sides, from two independent BPEs
+    conditioner             0.999985      and EXACT at float32 (cos 1.000000000, rel
+                                          1.2e-07) — the one output-UNVERIFIED component
+                                          is CORRECT; the bf16 residual is our dtype
+    projected packed rows   0.999262
+    raw output heads        0.999907 / 0.999987     (video / audio)
+    latent-shaped velocity  0.999905 / 0.999984
+    first updated latent    0.999999996 / 0.999999998
+
+NOTHING DIVERGED STRUCTURALLY, and the renders agree with the seams: at the same prompt
+and seed this endpoint and ComfyUI produce the same video, the same camera move and the
+same two artifacts — a 32-pixel spatial lattice at the DiT patch period (FFT peak ratio
+4.96 ours against 4.75 upstream) and a temporal seam every 17 frames at the VAE's clip
+boundary (inter-frame delta 1.29x the local mean ours, 1.30x upstream). BOTH ARTIFACTS
+ARE THE RELEASED CARRIER'S, not this port's, and they are #531's optimization-lane
+quality question with numbers on it.
+
+Speed, same 30 evaluations, same geometry, same dtype, same card: 215.4 s for this
+endpoint's model path against 292.1 s for ComfyUI's sampler — 1.36x.
+
 BF16 CARRIERS ON BOTH SIDES, DELIBERATELY. The recipe's served transformer is fp8-scaled,
 and its bf16 sibling exists in the same release. Comparing through two different fp8 decode
 paths would measure the decoders; this compares the models.
