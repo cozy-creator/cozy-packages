@@ -4,7 +4,8 @@ weights and no rented card, fired for real and observed.
 
     nice -n 19 .venv-check/bin/python scripts/h3-live.py [group ...]
     groups: components, request, plan, keys, fence   (`.venv-check` is enough)
-    nice -n 19 .venv/bin/python scripts/h3-live.py gates   (needs torch + cozy-eval + ffmpeg)
+    nice -n 19 .venv/bin/python scripts/h3-live.py gates presentation
+        (gates needs torch + cozy-eval + ffmpeg; presentation needs transformers)
 
 DETERMINISTIC CONTRACT ARMS LIVE IN `scripts/h3-conform.py` AND RUN IN CI (#533). This
 driver holds what CI cannot decide: refusals that need the runtime's guard, and the output
@@ -720,9 +721,68 @@ def group_fence() -> None:
         failed("THE TREE DID NOT RETURN TO GREEN", out)
 
 
+def group_presentation() -> None:
+    """THE CONDITIONING SEAM'S FIRST HALF — what the prompt actually becomes.
+
+    NEEDS `.venv` (transformers). This group exists because of a defect that shipped and
+    reported NOTHING: `Qwen2Tokenizer` renamed `vocab_file`/`merges_file` to
+    `vocab`/`merges` in transformers 5, the old spelling is silently absorbed by `**kwargs`,
+    and what constructs is a two-piece tokenizer that encodes every prompt to the empty
+    list. `build`'s empty-rows fallback then made that ONE PAD TOKEN, so every generation
+    conditioned on no prompt at all — through a green key census, green conformance arms and
+    a green fence. Nothing in this repo asserted that the bundled vocabulary had loaded.
+    """
+    from h3_arch.presentation import Tokenizer
+    from h3_arch.presentation import build as build_presentation
+
+    print("\nPRESENTATION — the bundled vocabulary, and the refusals that keep it honest")
+    tokenizer = Tokenizer()
+    prompt = "a red sports car driving fast along a coastal road at sunset"
+    ids = tokenizer.ids(prompt)
+    if len(ids) < 8:
+        failed("the bundled vocabulary encodes a real prompt",
+               f"{len(ids)} ids for {len(prompt)} characters — the vocabulary did not load")
+    else:
+        observe("the bundled vocabulary encodes a real prompt",
+                f"{len(prompt)} characters -> {len(ids)} ids, {len(tokenizer._tok)} pieces")
+    back = tokenizer._tok.decode(ids)
+    if back == prompt:
+        observe("  and the ids ROUND-TRIP to the same string", repr(back))
+    else:
+        failed("  and the ids ROUND-TRIP to the same string", f"{back!r} != {prompt!r}")
+
+    presentation = build_presentation(tokenizer, prompt)
+    if presentation.text_ids() == tuple(ids) and set(presentation.tags) == {1}:
+        observe("  and the presentation carries them all, every row tagged TEXT",
+                f"{len(presentation.rows)} rows")
+    else:
+        failed("  and the presentation carries them all, every row tagged TEXT",
+               f"{presentation.text_ids()[:8]} vs {ids[:8]}")
+
+    empty = build_presentation(tokenizer, "")
+    if empty.text_ids() == (151643,):
+        observe("an EMPTY request still resolves to one pad token — that path is legitimate")
+    else:
+        failed("an EMPTY request still resolves to one pad token", str(empty.text_ids()))
+
+    class _Mute:
+        """The exact defect, as a red control: a tokenizer that encodes nothing."""
+
+        def ids(self, _text: str) -> list[int]:
+            return []
+
+    expect_refusal(
+        "  but a NON-EMPTY prompt that produces no tokens REFUSES — it is a broken "
+        "tokenizer, not an empty request",
+        lambda: build_presentation(_Mute(), prompt),
+        code="RuntimeError",
+    )
+
+
 GROUPS = {
     "components": group_components,
     "request": group_request,
+    "presentation": group_presentation,
     "plan": group_plan,
     "gates": group_gates,
     "keys": group_keys,

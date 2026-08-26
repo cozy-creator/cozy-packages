@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 #: Qwen3-VL's vision sentinels and its pad token. Ids, not names: the vocabulary is
 #: bundled with this endpoint and these are facts about it.
@@ -81,30 +81,62 @@ class Presentation:
         return tuple(r for r in self.rows if isinstance(r, int))
 
 
+#: The smallest vocabulary the bundled files can honestly produce. The released
+#: `vocab.json` carries 151,643 pieces and the special-token block takes it past that; a
+#: tokenizer that constructs with fewer has not read them. This is a floor on a COUNT, not
+#: a version check — it is true of every Qwen3-VL vocabulary this endpoint could be given.
+_MIN_VOCAB = 151_000
+
+
 class Tokenizer:
     """The bundled Qwen2-family BPE vocabulary, built from its own two files.
 
     Deliberately NOT `from_pretrained`: given a string that is not a directory that
     spelling resolves against the Hub, so it is a fetch this endpoint might one day make by
-    accident, and `fence.py::no-identifiers-in-code` refuses it for exactly that reason."""
+    accident, and `fence.py::no-identifiers-in-code` refuses it for exactly that reason.
+
+    IT PROVES IT LOADED, at construction, because the failure mode is SILENT and shipped.
+    `Qwen2Tokenizer` took `vocab_file=` / `merges_file=` before transformers 5 and takes
+    `vocab=` / `merges=` after it; the old spelling does not raise on the new library, it
+    lands in `**kwargs` and is discarded, and what constructs is a tokenizer holding TWO
+    pieces that encodes every prompt to the empty list. Downstream, `build`'s empty-rows
+    fallback turned that into one pad token, so the endpoint conditioned every generation
+    on NO PROMPT AT ALL and reported nothing. A vocabulary that did not load is a refusal
+    here rather than a garbage render later.
+    """
 
     def __init__(self) -> None:
         from transformers import Qwen2Tokenizer
 
         settings = json.loads((_TOKENIZER / "tokenizer_config.json").read_text())
         self._tok = Qwen2Tokenizer(
-            vocab_file=str(_TOKENIZER / "vocab.json"),
-            merges_file=str(_TOKENIZER / "merges.txt"),
-            errors=settings["errors"],
+            vocab=str(_TOKENIZER / "vocab.json"),
+            merges=str(_TOKENIZER / "merges.txt"),
             unk_token=settings["unk_token"],
             bos_token=None,
             eos_token=settings["eos_token"],
             pad_token=settings["pad_token"],
         )
+        size = len(self._tok)
+        if size < _MIN_VOCAB:
+            raise RuntimeError(
+                f"the bundled vocabulary did not load: the tokenizer holds {size} pieces "
+                f"and the released vocabulary has at least {_MIN_VOCAB}. Every prompt would "
+                "encode to the empty list and this endpoint would condition on nothing"
+            )
 
     def ids(self, text: str) -> list[int]:
         out: list[int] = self._tok(text, add_special_tokens=False)["input_ids"]
         return out
+
+
+class Encoder(Protocol):
+    """What `build` actually needs: one method turning text into ids. Written as a protocol
+    rather than as `Tokenizer` because the ONE thing that can go wrong here is a tokenizer
+    that encodes nothing, and a red control proving the refusal fires has to be spellable
+    without constructing 151,645 pieces of vocabulary to do it."""
+
+    def ids(self, text: str) -> list[int]: ...
 
 
 ReferenceKind = Literal["image", "audio", "video"]
@@ -122,7 +154,7 @@ class PresentedReference:
 
 
 def build(
-    tokenizer: Tokenizer,
+    tokenizer: Encoder,
     prompt: str,
     *,
     keyframes: tuple[Any, ...] = (),
@@ -171,7 +203,18 @@ def build(
         text(f"<Picture {index + 1}>: ")
         vision(frame, video_block=False)
 
+    before = len(rows)
     text(prompt)
+    if prompt and len(rows) == before:
+        # THE FALLBACK BELOW IS FOR AN EMPTY REQUEST, NEVER FOR A BROKEN TOKENIZER. It used
+        # to catch both, and catching both is how a vocabulary that never loaded became a
+        # render conditioned on one pad token with no error anywhere. A prompt with
+        # characters in it that produces no rows is a defect upstream of this function.
+        raise RuntimeError(
+            f"a {len(prompt)}-character prompt produced no tokens: the presentation would "
+            "carry no conditioning at all, which is a broken tokenizer and not an empty "
+            "request"
+        )
     if not rows:
         rows.append(PAD_TOKEN)
         tags.append(TAG_TEXT)
