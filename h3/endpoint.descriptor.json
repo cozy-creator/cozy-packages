@@ -46,6 +46,7 @@
         "telemetry"
       ],
       "gpu": true,
+      "hidden": false,
       "kind": "entrypoint",
       "models": [
         {
@@ -287,6 +288,7 @@
         "telemetry"
       ],
       "gpu": true,
+      "hidden": true,
       "kind": "entrypoint",
       "models": [
         {
@@ -706,5 +708,5 @@
       "service": "Telemetry"
     }
   },
-  "surface_digest": "sha256:a8e0e2e8351bbef47ee245f6899fc30b656212afc1a4e5f1530ada503012d503"
+  "surface_digest": "sha256:85bd7236191ac6e4830521784ff5b3f369ad98316ae62d60843ea5780c21cad9"
 }

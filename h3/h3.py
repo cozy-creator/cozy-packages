@@ -1150,7 +1150,17 @@ def generate(
     return _run(model, ctx, payload, out, tel, task="fl2va", references=(), ref_blocks=())
 
 
-@app.entrypoint
+# HIDDEN, and now structurally so (#572d). Ref2VA's vision-conditioning seam is UNBUILT
+# (#529/#539f): this surface has never produced a frame, and until #558e it was "hidden" only
+# in a tracker row. A deployment therefore staged its binding like any other, its construction
+# refused, and — before prepare became per-binding — it took the working T2VA sibling down
+# with it on a rented H200 with 92.6 GiB already resident.
+#
+# `hidden=True` keeps the surface in the descriptor, because it is real code with a real
+# signature and the descriptor must not lie about the release, while excluding it from the
+# serving set: no binding is staged and no request lands. It comes OFF the day the vision
+# seam renders something a person has looked at.
+@app.entrypoint(hidden=True)
 def reference_to_video(
     ctx: Context,
     payload: RefGenerateInput,
