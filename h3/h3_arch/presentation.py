@@ -144,13 +144,21 @@ ReferenceKind = Literal["image", "audio", "video"]
 
 @dataclass(frozen=True, slots=True)
 class PresentedReference:
-    """One ordered reference as the PRESENTATION sees it. A soundtracked video appears
-    here once, as a video: its waveform is the audio VAE's business."""
+    """One ordered reference as the PRESENTATION sees it.
+
+    A soundtracked video is ONE reference and contributes TWO labels — `"<Audio j>: "` for
+    its waveform and then `"<Video k>: "` for its frames — which is why `has_audio` is a
+    field of its own rather than a synonym for `kind == "audio"`. The audio label comes
+    FIRST, mirroring the order the reference's rows are packed in.
+    """
 
     kind: ReferenceKind
     pixels: Any = None
     """[T, H, W, C] for a video sampled at `PRESENTATION_FPS`, [1, H, W, C] for an image."""
     timestamps: tuple[float, ...] = ()
+    has_audio: bool = False
+    """Whether this reference contributes audio rows. Always true for `kind == "audio"`;
+    true for a video that carries a soundtrack. An image never carries one."""
 
 
 def build(
@@ -187,16 +195,25 @@ def build(
     if references:
         counters = {"image": 0, "audio": 0, "video": 0}
         for ref in references:
-            counters[ref.kind] += 1
+            # THE AUDIO LABEL IS KEYED ON `has_audio`, NOT ON `kind`. A soundtracked video
+            # is labelled `"<Audio j>: <Video k>: "`, in that order, because that is the
+            # order its rows pack in. Keying it on `kind == "audio"` instead dropped the
+            # label for every soundtracked video, which silently renumbered every LATER
+            # audio reference in the same request.
+            if ref.has_audio:
+                counters["audio"] += 1
+                text(f"<Audio {counters['audio']}>: ")
             if ref.kind == "image":
+                counters["image"] += 1
                 text(f"<Picture {counters['image']}>: ")
                 vision(ref.pixels, video_block=False)
-            elif ref.kind == "audio":
-                text(f"<Audio {counters['audio']}>: ")
-            else:
+            elif ref.kind == "video":
+                counters["video"] += 1
                 frames, stamps = _even_frames(ref)
                 text(f"<Video {counters['video']}>: ")
                 for i in range(0, len(stamps), 2):
+                    # `"{:.1f}"` rounds half to EVEN, so a 2 fps pair renders "<0.2 seconds>"
+                    # rather than "<0.3 seconds>". Upstream states the same.
                     text(f"<{(stamps[i] + stamps[i + 1]) / 2.0:.1f} seconds>")
                     vision(frames[i : i + 2], video_block=True)
     for index, frame in enumerate(keyframes):
