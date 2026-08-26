@@ -1,0 +1,24 @@
+# The in-repo DEFAULT bindings — what a bare-venv run with no --model uses, and never a
+# source of truth (cozy-runtime.md §1.0). Production authority is the deploy binding alone.
+#
+# Code states CAPABILITY; bindings state SELECTION. Nothing in `h3.py` or `h3_arch/` names
+# a repo, release, checkpoint or revision — the artifact and its release live here.
+#
+# TWO SLOTS, ONE ARTIFACT. Both role classes bind the SAME dual snapshot: it carries both
+# task-role-stamped transformers plus the shared conditioner and both VAEs in one manifest
+# (job-001, the N-ary packaging rule). Sharing of BYTES is then the resident-component
+# registry's job — three of the four components each slot declares are the same objects,
+# and neither slot can see the other's transformer. Pointing the two slots at two NARROW
+# snapshots is also legal and is a different deployment, never a runtime union of two
+# artifacts into one graph.
+
+[application]
+object = "h3:app"
+
+[bindings."Fl2VAModel"]
+repo = "cozy/minimax-h3"
+release = "se-001"
+
+[bindings."Ref2VAModel"]
+repo = "cozy/minimax-h3"
+release = "se-001"

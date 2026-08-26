@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Structural fences for the endpoint packages. Static analysis, never a test suite.
 
-Four properties CI must not let drift, each checked as a fact about the source rather than
+Five properties CI must not let drift, each checked as a fact about the source rather than
 as a convention someone remembers:
 
   1. author-surface-only  an endpoint imports `cozy_runtime.author` and nothing else from
@@ -14,8 +14,15 @@ as a convention someone remembers:
   3. torch-free-import    endpoint module scope may IMPORT nothing heavy: `describe` runs
                           in a disposable container with no GPU and no weights, and a
                           module-scope `import torch` makes the surface contract
-                          unreadable without a CUDA image.
-  4. no-test-suite        tracker README #160.
+                          unreadable without a CUDA image. Checked over the IMPORT CLOSURE
+                          of `[application] object`, so an endpoint may bring its own model
+                          library (H3 brings the whole MiniMax architecture) as long as
+                          nothing reaches it at import time.
+  4. no-memory-choreography
+                          the mechanisms se-001 DELETED are gone from the source: runtime
+                          quantization, source-format parsing, offload/pinning, allocator
+                          and stream commands, compile markers, checkpoint reads.
+  5. no-test-suite        tracker README #160.
 
     nice -n 19 .venv/bin/python scripts/fence.py
 """
@@ -23,10 +30,12 @@ as a convention someone remembers:
 from __future__ import annotations
 
 import ast
+import io
 import pathlib
 import re
 import sys
-from collections.abc import Iterator
+import tokenize
+from collections.abc import Callable, Iterator
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 Fence = tuple[list[str], str]
@@ -53,16 +62,40 @@ def ours(path: pathlib.Path) -> bool:
     )
 
 
-def imports(tree: ast.AST) -> Iterator[tuple[str, int]]:
+def _from_name(node: ast.ImportFrom, package: str) -> str | None:
+    """`from .dit import x` inside `h3_arch` is `h3_arch.dit`.
+
+    RELATIVE IMPORTS USED TO BE INVISIBLE HERE — `node.level == 0` skipped every one of
+    them — and a fence that cannot see half the import graph is the failure the closure
+    rule exists to prevent. Found by firing the arm, not by reading the code.
+    """
+    if node.level == 0:
+        return node.module
+    parts = package.split(".") if package else []
+    base = parts[: len(parts) - node.level + 1]
+    return ".".join([*base, node.module] if node.module else base) or None
+
+
+def imports(tree: ast.AST, package: str = "") -> Iterator[tuple[str, int]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield alias.name, node.lineno
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            yield node.module, node.lineno
+        elif isinstance(node, ast.ImportFrom):
+            name = _from_name(node, package)
+            if name:
+                yield name, node.lineno
 
 
-def module_scope_imports(tree: ast.Module) -> Iterator[tuple[str, int]]:
+def _type_checking_guard(node: ast.If) -> bool:
+    """`if TYPE_CHECKING:` — a block that NEVER runs, so nothing in it is an import."""
+    test = node.test
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+
+
+def module_scope_imports(tree: ast.Module, package: str = "") -> Iterator[tuple[str, int]]:
     """Imports that run at IMPORT time — module-level `if`/`try`/`with` included, function
     and class bodies excluded, which is exactly where a heavy import belongs."""
     stack = list(tree.body)
@@ -71,8 +104,12 @@ def module_scope_imports(tree: ast.Module) -> Iterator[tuple[str, int]]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 yield alias.name, node.lineno
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            yield node.module, node.lineno
+        elif isinstance(node, ast.ImportFrom):
+            name = _from_name(node, package)
+            if name:
+                yield name, node.lineno
+        elif isinstance(node, ast.If) and _type_checking_guard(node):
+            continue
         elif isinstance(node, ast.If | ast.Try | ast.With):
             for attr in ("body", "orelse", "finalbody", "handlers"):
                 for child in getattr(node, attr, []) or []:
@@ -115,9 +152,12 @@ def fence_identifiers() -> Fence:
     bad: list[str] = []
     for path in endpoint_modules():
         source = path.read_text()
-        # Docstrings and comments name the runtime's own docs (`jobs.md §7`); the rule is
-        # about CODE, so the check runs over the source with strings and comments removed.
-        code = _strip_literals(source)
+        # DOCSTRINGS AND COMMENTS ONLY are blanked, and the distinction is load-bearing:
+        # prose names the runtime's own docs and the pinned upstream revision this port
+        # was read from, while an ORDINARY string literal is the only way anyone would
+        # actually hard-code a ref. Blanking every string (the first cut) made this fence
+        # blind to its own subject — a planted `_pin = "cozy/minimax-h3@se-001"` passed.
+        code = _strip_docs(source)
         for line_no, line in enumerate(code.splitlines(), 1):
             for pattern, what in IDENTIFIERS:
                 if pattern.search(line):
@@ -128,16 +168,42 @@ def fence_identifiers() -> Fence:
     return bad, f"{len(IDENTIFIERS)} identifier shapes over {len(endpoint_modules())} modules"
 
 
+def _doc_spans(source: str) -> set[tuple[int, int]]:
+    """(lineno, col_offset) of every DOCSTRING — module, class, function."""
+    spans: set[tuple[int, int]] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        body = getattr(node, "body", [])
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            spans.add((body[0].value.lineno, body[0].value.col_offset))
+    return spans
+
+
+def _strip_docs(source: str) -> str:
+    """The source with comments and DOCSTRINGS blanked, ordinary string literals kept."""
+    docs = _doc_spans(source)
+    return _blank(
+        source,
+        lambda token: token.type == tokenize.COMMENT
+        or (token.type == tokenize.STRING and token.start in docs),
+    )
+
+
 def _strip_literals(source: str) -> str:
     """The source with every string literal and comment blanked, line numbers preserved."""
-    import io
-    import tokenize
+    return _blank(source, lambda token: token.type in (tokenize.STRING, tokenize.COMMENT))
 
-    lines = source.splitlines()
-    out = [list(line) for line in lines]
-    tokens = tokenize.generate_tokens(io.StringIO(source).readline)
-    for token in tokens:
-        if token.type not in (tokenize.STRING, tokenize.COMMENT):
+
+def _blank(source: str, select: Callable[[tokenize.TokenInfo], bool]) -> str:
+    out = [list(line) for line in source.splitlines()]
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if not select(token):
             continue
         (row0, col0), (row1, col1) = token.start, token.end
         for row in range(row0 - 1, row1):
@@ -152,18 +218,113 @@ HEAVY = {"torch", "transformers", "diffusers", "PIL", "numpy", "cv2", "safetenso
          "tokenizers", "accelerate", "scipy"}
 
 
+def entry_module(project: pathlib.Path) -> str:
+    """The module `describe` imports, from the project's own `[application] object`."""
+    for line in (project / "endpoint.toml").read_text().splitlines():
+        match = re.match(r"""\s*object\s*=\s*["']([^"':]+):""", line)
+        if match:
+            return match.group(1)
+    raise SystemExit(f"{rel(project)}/endpoint.toml declares no [application] object")
+
+
+def resolve(project: pathlib.Path, module: str) -> pathlib.Path | None:
+    """An in-project module name to its file. Out-of-project names resolve to None — a
+    third-party package's own module scope is its business, not this fence's."""
+    parts = module.split(".")
+    for candidate in (project.joinpath(*parts).with_suffix(".py"),
+                      project.joinpath(*parts) / "__init__.py"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def fence_light_import() -> Fence:
+    """THE IMPORT CLOSURE, not the file.
+
+    An endpoint that brings its own model library (H3 brings the whole MiniMax
+    architecture) has files that import torch at module scope and are imported only inside
+    `load`. The per-file version of this rule refuses those and admits the failure it
+    exists to prevent — a light-looking endpoint module importing a heavy one indirectly.
+    So the rule is: nothing reachable from `[application] object` BY MODULE-SCOPE IMPORTS
+    may pull a heavy package. `describe` runs in a container with no GPU, no weights and
+    no CUDA image, and this is the property that keeps it running there.
+    """
+    bad: list[str] = []
+    checked = 0
+    for project in projects():
+        entry = entry_module(project)
+        seen: set[str] = set()
+        stack = [(entry, entry)]
+        while stack:
+            module, via = stack.pop()
+            if module in seen:
+                continue
+            seen.add(module)
+            path = resolve(project, module)
+            if path is None:
+                continue
+            checked += 1
+            tree = ast.parse(path.read_text(), filename=str(path))
+            package = module if path.name == "__init__.py" else module.rpartition(".")[0]
+            for imported, line in module_scope_imports(tree, package):
+                if imported.split(".")[0] in HEAVY:
+                    chain = f" (reached from {entry} via {via})" if via != module else ""
+                    bad.append(
+                        f"{rel(path)}:{line}: module-scope import of {imported!r}"
+                        f"{chain} — `describe` runs with no GPU, no weights and no CUDA "
+                        "image, so a heavy import belongs inside the function that needs it"
+                    )
+                stack.append((imported, module))
+    return bad, f"{len(HEAVY)} heavy packages absent from {checked} import-closure modules"
+
+
+#: THE DELETED MECHANISMS (se-001), as spellings rather than as a review convention:
+#: runtime quantization, source-format parsing, sequencer memory choreography, compile
+#: markers, offload/park and checkpoint reads.
+#:
+#: WHAT THIS RULE DELIBERATELY DOES NOT CLAIM. It does not refuse `.cpu()` or
+#: `.to(x.device)`. Copying a decoded result to the host for the output tail, and following
+#: a weight to wherever the runtime already put it, are DATA FLOW across the one boundary
+#: an author still owns — not memory management. A blunter pattern reads as a stronger
+#: proof and is a worse one: it turns red on every shipped endpoint's output tail, and a
+#: fence that must be suppressed is a fence nobody reads. What is NOT covered here is
+#: therefore reviewed rather than proven, and the one live instance is named in se-001's
+#: record (`sdxl.py` constructs `torch.device("cuda", 0)` — an author naming a device).
+CHOREOGRAPHY = (
+    (re.compile(r"\.pin_memory\(|\.share_memory\(|\bpinned_memory\b"), "host pinning"),
+    (re.compile(r"\btorch\.cuda\.(empty_cache|synchronize|set_device|memory_|Stream|Event)"),
+     "an allocator or stream command"),
+    (re.compile(r"\bdevice_map\b|\benable_model_cpu_offload\b|\benable_sequential_cpu_offload\b"
+                r"|\baccelerate\.dispatch_model\b|\boffload_state_dict\b"),
+     "an offload directive"),
+    (re.compile(r"\btorch\.compile\b|\bmark_dynamic\b|\btorch\.export\b|\baot_compile\b"),
+     "a compile marker"),
+    (re.compile(r"\bquantize_\b|\bbitsandbytes\b|\btorchao\b|\bGPTQ\b|\bAwqConfig\b"
+                r"|\bquantization_config\b"),
+     "runtime quantization"),
+    (re.compile(r"\bsafe_open\b|\bsafetensors\.torch\b|\btorch\.load\b|\bload_state_dict\b"),
+     "a checkpoint read or source-format parse"),
+)
+
+
+def fence_no_choreography() -> Fence:
+    """se-001's structural deletion proof: the replaced mechanisms are gone from the
+    SOURCE, not from a reviewer's memory. Applies to every file in an endpoint project,
+    model library included — a vendored architecture that stages or re-quantizes its own
+    weights is exactly the thing the port was supposed to remove."""
     bad: list[str] = []
     for path in endpoint_modules():
-        tree = ast.parse(path.read_text(), filename=str(path))
-        for module, line in module_scope_imports(tree):
-            if module.split(".")[0] in HEAVY:
-                bad.append(
-                    f"{rel(path)}:{line}: module-scope import of {module!r} — `describe` "
-                    "runs with no GPU, no weights and no CUDA image, so a heavy import "
-                    "belongs inside the function that needs it"
-                )
-    return bad, f"{len(HEAVY)} heavy packages must stay lazily imported"
+        code = _strip_literals(path.read_text())
+        for line_no, line in enumerate(code.splitlines(), 1):
+            for pattern, what in CHOREOGRAPHY:
+                if pattern.search(line):
+                    bad.append(
+                        f"{rel(path)}:{line_no}: {what} in endpoint code — device "
+                        f"placement, offload and encoding are the runtime's, not the "
+                        f"author's: {line.strip()[:80]}"
+                    )
+    modules = len(endpoint_modules())
+    return bad, f"{len(CHOREOGRAPHY)} deleted-mechanism shapes over {modules} modules"
 
 
 def fence_no_tests() -> Fence:
@@ -183,6 +344,7 @@ FENCES = (
     ("author-surface-only", fence_author_surface),
     ("no-identifiers-in-code", fence_identifiers),
     ("light-module-scope", fence_light_import),
+    ("no-memory-choreography", fence_no_choreography),
     ("no-test-suite", fence_no_tests),
 )
 
