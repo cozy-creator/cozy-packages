@@ -54,12 +54,40 @@ prompt and the same seed; cosine is the verdict, the float32 control is the disc
     first updated latent    0.999999996 / 0.999999998
 
 NOTHING DIVERGED STRUCTURALLY, and the renders agree with the seams: at the same prompt
-and seed this endpoint and ComfyUI produce the same video, the same camera move and the
-same two artifacts — a 32-pixel spatial lattice at the DiT patch period (FFT peak ratio
-4.96 ours against 4.75 upstream) and a temporal seam every 17 frames at the VAE's clip
-boundary (inter-frame delta 1.29x the local mean ours, 1.30x upstream). BOTH ARTIFACTS
-ARE THE RELEASED CARRIER'S, not this port's, and they are #531's optimization-lane
-quality question with numbers on it.
+and seed this endpoint and ComfyUI produce the same video and the same camera move.
+
+THE LATTICE WAS NOT THE CARRIER'S, and this paragraph is the correction (#557). The first
+version of it read the lattice as "a 32-pixel spatial lattice at the DiT patch period, FFT
+peak ratio 4.96 ours against 4.75 upstream — the released carrier's, not this port's".
+Every clause of that was wrong, and the SEAM TABLE ABOVE IS WHY IT SURVIVED: it ends at the
+first updated latent. THE DECODE IS NOT A SEAM IN IT. Two things then went unnoticed —
+
+  * the `--side comfy` render OOM'd in ComfyUI's own `vae.decode` and never wrote a file, so
+    the mp4 banked as ComfyUI's is ComfyUI's LATENTS through THIS port's decode. The
+    side-by-side held the decoder fixed and varied the sampler; the number it produced
+    ("4.96 vs 4.75") compared this decoder against itself, which is why it looked like
+    agreement.
+  * the period is 16 px, not 32. 16 px is one latent cell — the VIDEO VAE DECODER's token.
+    32 px is the DiT patch. The period was naming the component and was read as naming the
+    other one.
+
+The real control was already in the bank: `tensorfs-bench/proto-001`'s `C-comfy-curve-bf16`
+ran THE IDENTICAL FOUR CARRIER FILES at the identical geometry through ComfyUI end to end,
+and its token-boundary gradient excess is 10% against this port's 150%. The cause is
+`video_vae`'s decode WINDOW, fixed in `h3_arch/video_vae.py` and armed by
+`h3-conform.py windows`.
+
+AND THE 17-FRAME SEAM WAS THE SAME DEFECT, which is the other half of #555d retired. It was
+banked as a second, independent carrier property. It is not one: the lattice is regenerated
+per decoder call, so it CHANGES at every temporal chunk boundary and reads as a delta spike
+exactly there. Inter-frame delta over the local mean at the clip grid: 3.468 before the
+window fix, 1.031 after, against 1.158 for the ComfyUI bank render on the same weights. One
+cause, both artifacts — and the second one looked independent only because nothing had
+varied the decode.
+
+RULE, and it is the general one: A SEAM TABLE EXONERATES ONLY THE SEAMS IN IT. Every stage
+between the last compared tensor and the bytes a human looks at is un-compared, and an
+artifact will settle in exactly there. Adding a decode seam to this harness is the follow-up.
 
 Speed, same 30 evaluations, same geometry, same dtype, same card: 215.4 s for this
 endpoint's model path against 292.1 s for ComfyUI's sampler — 1.36x.
@@ -297,11 +325,17 @@ def side_comfy(args: argparse.Namespace) -> None:
 def seam_run(args: argparse.Namespace, grid: Any, layout: Any, plan: Any) -> Any:
     """One `H3Run` for the model path.
 
-    `view` and `presentation` are the request-facing halves and the model boundary reads
-    NEITHER — it takes `plan.grid`, `layout.segments` and `conditioning` and nothing else.
-    Driving the endpoint outside its runtime means there is no `RequestView` to hand it, so
-    the two are cast rather than faked: a stand-in object would be a second implementation
-    of a surface this oracle is not testing.
+    `view`, `presentation`, `expanded` and `patched` are the request-facing halves and the
+    model boundary reads NONE of them — it takes `plan.grid`, `layout.segments` and
+    `conditioning` and nothing else. Driving the endpoint outside its runtime means there is
+    no `RequestView` to hand it, so they are cast rather than faked: a stand-in object would
+    be a second implementation of a surface this oracle is not testing.
+
+    `expanded`/`patched` are the VISION halves (`daa56bd`), and this call drifted the moment
+    they were added: `H3Run` gained two required fields, nothing constructed it outside
+    `h3.py`'s own path, and the oracle went from green to a TypeError at `seam_run` — after
+    the 48 GiB conditioner had already loaded, so the drift cost a card to discover. It is
+    listed as a text-only lane because the vision seam refuses (`vision_seam_unbuilt`).
     """
     import h3
 
@@ -312,6 +346,8 @@ def seam_run(args: argparse.Namespace, grid: Any, layout: Any, plan: Any) -> Any
         timestep_plan=plan,
         view=cast(Any, None),
         presentation=cast(Any, None),
+        expanded=cast(Any, None),
+        patched=cast(Any, None),
     )
 
 

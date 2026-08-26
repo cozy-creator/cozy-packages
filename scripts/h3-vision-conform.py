@@ -744,7 +744,55 @@ def arm_refrows() -> None:
     )
 
 
+def arm_oraclerun() -> None:
+    """THE POD HARNESS'S `H3Run`, CONSTRUCTED HERE FOR $0.
+
+    `scripts/h3-seam-oracle.py::seam_run` is the only construction of `H3Run` outside
+    `h3.py`'s own path, and it runs POD-SIDE ONLY — so when the vision work gave `H3Run` two
+    new required fields, nothing on this box or in CI noticed. The oracle raised
+    `TypeError: missing 2 required positional arguments` at `seam_run`, AFTER a 48 GiB
+    conditioner had loaded on a rented H200: a signature drift billed at card rates and
+    discovered thirteen minutes in.
+
+    The arm calls the harness's OWN constructor rather than restating it, so the thing under
+    test is the thing that runs. Zero weights, zero network — the drift is a signature, and a
+    signature is free to check.
+    """
+    import argparse
+    import importlib.util
+
+    import h3
+
+    spec = importlib.util.spec_from_file_location(
+        "h3_seam_oracle", pathlib.Path(__file__).with_name("h3-seam-oracle.py")
+    )
+    assert spec and spec.loader
+    oracle = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(oracle)
+
+    # The harness's own request defaults, its own geometry, its own solver — so this arm
+    # walks the chain `side_render` walks, not a paraphrase of it.
+    parser = argparse.ArgumentParser()
+    oracle.add_request_options(parser)
+    args = parser.parse_args([])
+
+    grid = oracle.geometry(args)
+    layout = oracle._layout_for(22, grid)
+    solver = oracle.solver_for(args, layout)
+    run = oracle.seam_run(args, grid, layout, solver.plan)
+
+    check(isinstance(run, h3.H3Run), "the oracle's seam_run still constructs an H3Run")
+    check(run.plan.grid is grid, "and the model boundary's grid is the requested one",
+          detail=f"{grid.latent_t}x{grid.latent_h}x{grid.latent_w} from {args.length} frames")
+    check(run.timestep_plan is solver.plan, "and its timestep plan is the solver's",
+          detail=f"{solver.evaluations} evaluations, digest {run.digest}")
+    unset = [f for f in h3.H3Run.__dataclass_fields__ if not hasattr(run, f)]
+    check(not unset, "every H3Run field is populated, including any newly required one",
+          detail=f"fields {tuple(h3.H3Run.__dataclass_fields__)}")
+
+
 ARMS = {
+    "oraclerun": arm_oraclerun,
     "preprocess": arm_preprocess,
     "presentation": arm_presentation,
     "splices": arm_splices,

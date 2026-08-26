@@ -123,10 +123,15 @@ def pre_encode_gate(
             code="output_av_duration_mismatch",
         )
 
-    # --- noise and blank, cozy-eval's calibrated floors over the real pixels
+    # --- noise, blank and GRID, cozy-eval's calibrated floors over the real pixels
     integrity = ce_integrity.output_integrity(pixels.cpu().numpy())
     tel.metric("adjacent_frame_corr", round(integrity.adjacent_frame_corr or -1.0, 4))
     tel.metric("frame_std_min", round(integrity.frame_std_min or -1.0, 5))
+    # REPORTED, not just gated. This axis exists because a render that PASSED the two floors
+    # above at 0.988 was rejected on sight for a lattice (#557), so the number that catches
+    # it belongs in the render's own record and not only in a refusal string.
+    tel.metric("grid_peak_ratio", round(integrity.grid_peak_ratio or -1.0, 3))
+    tel.metric("grid_period_px", round(integrity.grid_period_px or -1.0, 1))
     if not integrity.ok:
         raise OutputError(
             f"the decoded video fails cozy-eval's integrity floor — {integrity.summary()}",

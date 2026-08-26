@@ -199,7 +199,11 @@ def split_windows(
     that already fits inside one window IS one window.
 
     ComfyUI `comfy/ldm/minimax/vae.py::MiniMaxH3VideoVAE.split_tiles`, whose defaults
-    (`tile_size=256`, `tile_overlap_min=64`, `tiling=True`) are the reference's own.
+    (`tile_size=256`, `tile_overlap_min=64`, `tiling=True`) are the reference's own — and it
+    says so itself, at `decode_tiled`: "tiling is always on internally with the reference's
+    SEMANTIC TILE SIZES, ignore tiling fallbacks". `tiling` is a constructor default and
+    `_adaptive_decode` branches on it, never on free memory, so the reference decodes 256 px
+    windows on a 24 GiB card and on a 141 GiB one alike.
     """
     if window_px >= extent_px:
         return [0], [extent_px], []
