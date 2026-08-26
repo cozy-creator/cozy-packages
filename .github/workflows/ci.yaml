@@ -135,16 +135,15 @@ jobs:
           version: "latest"
       - run: uv python install 3.13
 
-      # The pinned diffusers SHA is the same one `scripts/h3-release.sh` builds the release
-      # closure against: an oracle whose peer can move underneath it measures nothing.
+      # The exact released wheel is the same one the H3 lock names. A Git checkout is not
+      # a wheelhouse material and would make the offline environment impossible.
       - name: Environment
         run: |
           uv venv --python 3.13
           uv pip install --index-url https://download.pytorch.org/whl/cpu \
             "torch==2.9.1" "torchvision==0.24.1"
           uv pip install msgspec numpy pillow "transformers>=5.13,<6"
-          uv pip install \
-            "diffusers @ git+https://github.com/huggingface/diffusers@50e7158093710f9c1b4ea9ff100137a91c9228f3"
+          uv pip install "diffusers==0.40.0"
 
       # The pixels-to-text-encoder seam, diffed against upstream rather than against a
       # restatement of it: byte-identical reference pixels, a bit-identical patch matrix,

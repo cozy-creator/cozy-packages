@@ -12,7 +12,7 @@ dependencies = [
     "torch==2.9.1+cu129",
     "torchvision==0.24.1+cu129",
     "transformers>=5.13,<6",
-    "diffusers @ git+https://github.com/huggingface/diffusers@50e7158093710f9c1b4ea9ff100137a91c9228f3",
+    "diffusers==0.40.0",
 ]
 
 # These three wheels are built from the source commits recorded in `build-pins.json`.

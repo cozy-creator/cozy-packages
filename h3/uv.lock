@@ -198,8 +198,8 @@ provides-extras = ["corpus", "derive", "media"]
 
 [[package]]
 name = "diffusers"
-version = "0.40.0.dev0"
-source = { git = "https://github.com/huggingface/diffusers?rev=50e7158093710f9c1b4ea9ff100137a91c9228f3#50e7158093710f9c1b4ea9ff100137a91c9228f3" }
+version = "0.40.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "httpx", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -210,6 +210,10 @@ dependencies = [
     { name = "regex", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "requests", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "safetensors", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/59/32/b9c6a198812e2a7d2c2828a850dba384306f9af285eac23e35e89d5b008a/diffusers-0.40.0.tar.gz", hash = "sha256:49f112ce52ff6d332ab68afec01f79a53e6489b42cb69104444c98b4a2f64af8", size = 4886420, upload-time = "2026-08-20T14:30:40.923Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/db/df/ffb593ebed2a068d2d6be44261283f39a6b809c0fcdfdcafbd448cbeec77/diffusers-0.40.0-py3-none-any.whl", hash = "sha256:5b5da7c3ddb62152fa4afc577f02e050af688c797375c34fb2d01006da3f3541", size = 5911654, upload-time = "2026-08-20T14:30:38.422Z" },
 ]
 
 [[package]]
@@ -274,7 +278,7 @@ dependencies = [
 requires-dist = [
     { name = "cozy-eval", path = "vendor/cozy_eval-2.3.0-py3-none-any.whl" },
     { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.1-py3-none-any.whl" },
-    { name = "diffusers", git = "https://github.com/huggingface/diffusers?rev=50e7158093710f9c1b4ea9ff100137a91c9228f3" },
+    { name = "diffusers", specifier = "==0.40.0" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=10" },
