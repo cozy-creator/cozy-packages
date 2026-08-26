@@ -3,7 +3,7 @@
 no card, no weights and no model library, fired for real and observed.
 
     nice -n 19 python scripts/h3-conform.py [arm ...]
-    arms: sign, geometry, schedule, pixels, facts
+    arms: sign, geometry, windows, schedule, pixels, facts
 
 THESE RUN IN CI (#533). The four defects that produced se-002's first garbage render —
 reversed sampler sign, generic temporal ratio, sigma points counted as evaluations, and a
@@ -36,6 +36,7 @@ REFERENCES, both read from source and cited where they are used:
 
 from __future__ import annotations
 
+import math
 import pathlib
 import sys
 import traceback
@@ -57,6 +58,7 @@ from h3_arch.layout import (  # noqa: E402
     latent_grid,
     pixel_frames,
     shift_sigma,
+    split_windows,
 )
 from h3_arch.pixels import PIXEL_FULL_SCALE, pixel_bytes  # noqa: E402
 
@@ -68,6 +70,12 @@ _failures = 0
 #: does not inherit the value it is checking against.
 SHIFT_VIDEO = 12.0
 SHIFT_AUDIO = 3.0
+
+#: The video VAE's decode-window constants and its spatial ratio. Named here rather than
+#: imported, for the same reason the shifts are.
+TILE_SIZE = 256
+TILE_OVERLAP_MIN = 64
+VAE_RATIO = 16
 
 #: Floating-point agreement between two independently written closed forms of the same
 #: expression. Both are float64; the difference is reassociation, not precision loss.
@@ -169,6 +177,35 @@ def defective_step(x: float, velocity: float, sigma: float, sigma_next: float) -
     return x + (sigma_next - sigma) * velocity
 
 
+def reference_windows(extent_px: int) -> tuple[list[int], list[int], list[int]]:
+    """ComfyUI `comfy/ldm/minimax/vae.py::MiniMaxH3VideoVAE.split_tiles`, written out at its
+    own defaults (`tile_size=256`, `tile_overlap_min=64`, `vae_ratio=16`, `tiling=True`)."""
+    tile_size, tile_overlap_min, vae_ratio = 256, 64, 16
+    if tile_size >= extent_px:
+        return [0], [extent_px], []
+    n = math.ceil(extent_px / tile_size)
+    while True:
+        overlaps = [tile_overlap_min] * (n - 1)
+        remaining = tile_size * n - sum(overlaps) - extent_px
+        if remaining < 0:
+            n += 1
+        else:
+            break
+    for i in range(remaining // vae_ratio):
+        overlaps[i % (n - 1)] += vae_ratio
+    starts = [0]
+    for i in range(n - 1):
+        starts.append(starts[-1] + tile_size - overlaps[i])
+    return starts, [tile_size] * n, overlaps
+
+
+def defective_windows(extent_px: int) -> tuple[list[int], list[int], list[int]]:
+    """THE DEFECT (#557): ONE window over the whole frame. This is what shipped — the port
+    read the reference's spatial tiling as a card-fitting trick and deleted it, having just
+    argued, for the TIME axis, that an extent-normalized RoPE makes the window semantic."""
+    return [0], [extent_px], []
+
+
 # --------------------------------------------------------------- the arms
 
 
@@ -263,6 +300,51 @@ def arm_geometry() -> None:
         detail=f"the last video row sits at t={last_t:g}; a 31-latent clip puts it at "
                f"{64 + _rotary_extent(31) - _rotary_extent(1):g}")
     del wrong
+
+
+def arm_windows() -> None:
+    print("\n== the VAE's SPATIAL DECODE WINDOW — 16x16 latent cells, not the whole frame ==")
+
+    # The 5 s 16:9 preset both oracle renders and every bank render used.
+    for extent, axis in ((768, "height"), (1344, "width")):
+        want = reference_windows(extent)
+        got = split_windows(extent, TILE_SIZE, TILE_OVERLAP_MIN, VAE_RATIO)
+        check(f"{axis} {extent} px -> the reference's window plan", got, want,
+              detail=f"{len(got[0])} windows, starts {got[0]}, overlaps {got[2]}")
+
+        starts, lens, overlaps = got
+        check(f"  every {axis} boundary lands on a 16 px latent cell",
+              [s % VAE_RATIO for s in starts] + [o % VAE_RATIO for o in overlaps],
+              [0] * (len(starts) + len(overlaps)))
+        check(f"  and the windows cover {extent} px exactly",
+              starts[-1] + lens[-1], extent,
+              detail="the last window ends on the frame edge, so nothing is invented or lost")
+        check(f"  with every overlap at least {TILE_OVERLAP_MIN} px to crossfade over",
+              min(overlaps) >= TILE_OVERLAP_MIN, True, detail=f"min {min(overlaps)} px")
+
+    # THE POINT. The decoder's RoPE divides by the extent it is handed, so this number IS the
+    # function: 16 cells at 256 px, whatever the frame is.
+    for extent in (768, 1344, 256, 512, 2048):
+        lens = split_windows(extent, TILE_SIZE, TILE_OVERLAP_MIN, VAE_RATIO)[1]
+        check(f"a {extent} px axis is decoded {len(lens)}x16 latent cells at a time",
+              {length // VAE_RATIO for length in lens}, {16})
+
+    check("an axis that already fits is ONE window and not a padded one",
+          split_windows(240, TILE_SIZE, TILE_OVERLAP_MIN, VAE_RATIO), ([0], [240], []))
+
+    red("the one-window decode that shipped, at 1344 px",
+        defective_windows(1344)[1][0] // VAE_RATIO,
+        split_windows(1344, TILE_SIZE, TILE_OVERLAP_MIN, VAE_RATIO)[1][0] // VAE_RATIO,
+        detail="84 latent cells vs 16 — every token 5.25x closer in normalized RoPE than the "
+               "decoder is ever handed, which is the 16 px lattice the owner rejected (#557): "
+               "token-boundary gradient excess 150% of baseline through the one-window decode "
+               "against 10% through the reference's, on the SAME video VAE file")
+    red("  and at 768 px", defective_windows(768)[1][0] // VAE_RATIO,
+        split_windows(768, TILE_SIZE, TILE_OVERLAP_MIN, VAE_RATIO)[1][0] // VAE_RATIO)
+    red("  and the seam it was deleted to avoid, which the reference blends away",
+        len(defective_windows(1344)[2]), len(reference_windows(1344)[2]),
+        detail="0 overlaps vs 6 — the reference crossfades every window boundary, so the "
+               "artefact the deletion was justified by does not exist")
 
 
 def arm_schedule() -> None:
@@ -442,6 +524,7 @@ ARMS = {
     "sign": arm_sign,
     "geometry": arm_geometry,
     "schedule": arm_schedule,
+    "windows": arm_windows,
     "pixels": arm_pixels,
     "facts": arm_facts,
 }

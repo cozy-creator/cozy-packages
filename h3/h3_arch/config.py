@@ -170,6 +170,12 @@ class VideoVaeConfig:
     vae_ratio_t: int = 4
     vae_clip_length: int = 17
     vae_token_drop: int = 3
+    #: The DECODE WINDOW, in pixels. Not a memory budget: the ViT decoder's RoPE coordinates
+    #: are normalized by the extent of the window it is called on, so the window size is a
+    #: term of the function. 256 px is 16 latent cells; see `video_vae` for what a wider one
+    #: does to the output.
+    vae_tile_size: int = 256
+    vae_tile_overlap_min: int = 64
     #: the ViT decoder (`vit_decoder_kwargs`)
     decoder_dim: int = 2048
     decoder_num_layers: int = 36

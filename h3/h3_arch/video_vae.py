@@ -11,20 +11,41 @@ WHAT WAS STRIPPED, each because it is not architecture:
     loader can decide dtype and casting per weight; that decision is the fill plane's.
   * `cast_to` / `cast_to_input` / `intermediate_device()` -> deleted. A cast at use time is
     device management, and there is no device in this file.
-  * SPATIAL TILING (256px tiles, 64px overlap, blended canvas) and the preallocated CPU
-    buffer `decode` streamed finished chunks into -> deleted. Both exist to fit a card, and
-    a tile seam is an artefact the reference does not have.
+  * the preallocated CPU buffer `decode` streamed finished chunks into -> deleted. It exists
+    to fit a card, and a concatenation holds the same values.
   * `optimized_attention` -> `F.scaled_dot_product_attention`.
   * `quant_ops.ck.apply_rope_split_half` -> `_apply_rope_split_half`, which is the same
     rotation the upstream reference spelling computes (`ldm/ideogram4/model.py`) written out.
   * `Conv3d(autopad="causal_zero")` -> the equal weight slice, inline in `CausalConv3d`.
 
-WHAT SURVIVED, because it is SEMANTIC and not memory choreography: the 17-FRAME CLIP GRID.
-The encoder is causal and was trained on 17-frame clips (1 + 4x4), so it produces 5 tokens
-per clip and encoding a long video in one shot is a different function, not a cheaper one.
-The decoder's mirror is stronger still — its 3D RoPE coordinates are NORMALIZED BY THE GRID
-EXTENT (`_token_ids` divides by `dim_size`), so a 7-token window and a 200-token sequence put
-the same frame at different angles. Decoding in windows is the model, not an optimization.
+WHAT SURVIVED, because it is SEMANTIC and not memory choreography: THE DECODE WINDOW, on all
+three axes. The encoder is causal and was trained on 17-frame clips (1 + 4x4), so it produces
+5 tokens per clip and encoding a long video in one shot is a different function, not a cheaper
+one. The decoder's mirror is stronger still — its 3D RoPE coordinates are NORMALIZED BY THE
+GRID EXTENT (`_token_ids` divides by `dim_size`), so a 7-token window and a 200-token sequence
+put the same frame at different angles. Decoding in windows is the model, not an optimization.
+
+THE GRID ARTEFACT (#557), and the reason that paragraph is now three axes and not one. The
+first version of this file drew the line between "semantic" and "memory choreography" on the
+TIME axis only: it kept the 17-frame clip grid and DELETED the reference's 256 px spatial
+tiling as a card-fitting trick, on the stated grounds that "a tile seam is an artefact the
+reference does not have". Both halves were wrong. The reference blends its tiles over a >=64 px
+overlap, so it has no seam; and the extent-normalization argument this file makes for time
+applies unchanged to height and width. Decoding 48x84 latent cells in ONE window instead of the
+reference's 16x16 puts every token at a normalized coordinate 5x finer than the decoder ever
+sees, the attention loses the neighbour relation, and each token reconstructs its own 16x16
+pixel block with an independent offset — a lattice at EXACTLY the 16 px cell period, locked to
+the frame. Measured on the oracle renders: token-boundary gradient excess 150% of baseline
+through this decoder against 10% through the reference's, ON THE SAME `minimax_h3_video_vae_fp16`
+FILE (the `C-comfy-curve-bf16` bank render is that control). The window is now built from the
+release constants and `scripts/h3-conform.py` arms it against the reference expression with the
+one-window decode kept as the red control.
+
+STILL DIVERGENT, stated rather than fixed: `encode` does NOT window spatially, and the
+reference's `tiled_encode` does. The encoder's GroupNorm reduces over the spatial extent, so
+that is the same class of defect on the same argument. It is not fixed here because the only
+caller is the vision seam, which refuses (`vision_seam_unbuilt`), and an unprovable change to
+an unreachable path is a claim. It becomes real work the moment that seam is built.
 
 MEASURED ROUND-TRIP FACT, not a bug in this port: `encode` drops the last `vae_token_drop`
 tokens of the whole clip sequence, so `decode(encode(x))` is 12 frames shorter than `x`.
@@ -40,6 +61,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from .config import VideoVaeConfig
+from .layout import split_windows
 
 #: The release's `pixel_norm_type: "imagenet"`, which is a normalization and not a weight.
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -415,16 +437,28 @@ class ViT3dDecoder(nn.Module):
         )
 
 
-def _blend_frames(head: Tensor, tail: Tensor, extent: int) -> Tensor:
-    """Linear crossfade of `head`'s last `extent` frames into `tail`'s first `extent`."""
-    extent = min(head.shape[2], tail.shape[2], extent)
-    weight = (
-        torch.arange(extent, device=tail.device, dtype=tail.dtype).view(1, 1, extent, 1, 1) / extent
-    )
-    blended = head[:, :, -extent:] * (1.0 - weight) + tail[:, :, :extent] * weight
-    if extent < tail.shape[2]:
-        return torch.cat([blended, tail[:, :, extent:]], dim=2)
+def _blend(head: Tensor, tail: Tensor, extent: int, dim: int) -> Tensor:
+    """Linear crossfade of `head`'s last `extent` slices along `dim` into `tail`'s first
+    `extent`, returning `tail` with its leading overlap replaced. One function for all three
+    axes, because the reference blends all three with this ramp."""
+    extent = min(head.shape[dim], tail.shape[dim], extent)
+    shape = [1] * tail.ndim
+    shape[dim] = extent
+    weight = torch.arange(extent, device=tail.device, dtype=tail.dtype).view(shape) / extent
+
+    lead = [slice(None)] * tail.ndim
+    lead[dim] = slice(0, extent)
+    back = [slice(None)] * head.ndim
+    back[dim] = slice(-extent, None)
+    blended = head[tuple(back)] * (1.0 - weight) + tail[tuple(lead)] * weight
+
+    if extent < tail.shape[dim]:
+        rest = [slice(None)] * tail.ndim
+        rest[dim] = slice(extent, None)
+        return torch.cat([blended, tail[tuple(rest)]], dim=dim)
     return blended
+
+
 
 
 # ------------------------------------------------------------------ the component root
@@ -450,6 +484,8 @@ class VideoVae(nn.Module):
         self.vae_ratio_t = config.vae_ratio_t
         self.clip_length = config.vae_clip_length
         self.token_drop = config.vae_token_drop
+        self.tile_size = config.vae_tile_size
+        self.tile_overlap_min = config.vae_tile_overlap_min
         # The 17-frame clip grid, in tokens and frames. Every one of these is integer
         # arithmetic over the two release constants and none of them is a memory budget.
         self.frame_pre_padding = (-self.clip_length) % self.vae_ratio_t
@@ -488,8 +524,54 @@ class VideoVae(nn.Module):
     def _encode_moments(self, pixels: Tensor) -> Tensor:
         return self.quant_conv(self.encoder(pixels))
 
-    def _decode_pixels(self, latents: Tensor) -> Tensor:
+    def _decode_window(self, latents: Tensor) -> Tensor:
+        """ONE call of the ViT decoder, on the latent extent it is handed. Every token's RoPE
+        coordinate is normalized by THIS tensor's `latent_h`/`latent_w`, which is why the
+        caller may not simply hand it the whole frame."""
         return self.decoder(self.post_quant_conv(latents))
+
+    def _decode_pixels(self, latents: Tensor) -> Tensor:
+        """The spatial window plan, blended. `_decode_window` on the 16x16 cell grid the
+        decoder's normalized coordinates were fitted at, overlapped and crossfaded, so the
+        result carries neither the one-window lattice (#557) nor a window seam."""
+        pixels = latents.shape[-2] * self.vae_ratio, latents.shape[-1] * self.vae_ratio
+        y_start, y_len, y_over = split_windows(
+            pixels[0], self.tile_size, self.tile_overlap_min, self.vae_ratio
+        )
+        x_start, x_len, x_over = split_windows(
+            pixels[1], self.tile_size, self.tile_overlap_min, self.vae_ratio
+        )
+        if len(y_start) == 1 and len(x_start) == 1:
+            return self._decode_window(latents)
+
+        rows: list[Tensor] = []
+        # The tail of each window is taken from the RAW decode, before either blend, so a
+        # window is crossfaded against what its neighbour actually produced there.
+        below: list[Tensor] = []
+        for i, (top, height) in enumerate(zip(y_start, y_len, strict=True)):
+            zi, zh = top // self.vae_ratio, height // self.vae_ratio
+            row: list[Tensor] = []
+            next_below: list[Tensor] = []
+            right: Tensor | None = None
+            for j, (left, width) in enumerate(zip(x_start, x_len, strict=True)):
+                zj, zw = left // self.vae_ratio, width // self.vae_ratio
+                window = self._decode_window(latents[..., zi : zi + zh, zj : zj + zw])
+                if i < len(y_start) - 1:
+                    next_below.append(window[..., -y_over[i] :, :].clone())
+                next_right = window[..., -x_over[j] :].clone() if j < len(x_start) - 1 else None
+                if i > 0:
+                    window = _blend(below[j], window, y_over[i - 1], -2)
+                if right is not None:
+                    window = _blend(right, window, x_over[j - 1], -1)
+                right = next_right
+                if i < len(y_start) - 1:
+                    window = window[..., : -y_over[i], :]
+                if j < len(x_start) - 1:
+                    window = window[..., : -x_over[j]]
+                row.append(window)
+            below = next_below
+            rows.append(torch.cat(row, dim=-1))
+        return torch.cat(rows, dim=-2)
 
     # -------------------------------------------------------------- the clip grid
 
@@ -566,7 +648,7 @@ class VideoVae(nn.Module):
                     overlap = part.contiguous()
                     continue
                 if overlap is not None:
-                    part = _blend_frames(overlap, part, self.frame_overlap)
+                    part = _blend(overlap, part, self.frame_overlap, 2)
                     overlap = None
                 parts.append(part)
             if i == num_chunks - 1 and overlap is not None:

@@ -183,6 +183,44 @@ def latent_grid(frames: int, width: int, height: int, *, spatial_ratio: int = 16
     )
 
 
+def split_windows(
+    extent_px: int, window_px: int, overlap_min_px: int, ratio: int
+) -> tuple[list[int], list[int], list[int]]:
+    """The video VAE's SPATIAL DECODE WINDOWS, in pixels: (start, length, overlap-with-next).
+
+    Geometry and not a memory budget, which is why it lives here. The ViT decoder's RoPE
+    coordinates are normalized by the extent of the tensor it is called on, so the window is
+    a term of the function: one 48x84 call and twenty-eight 16x16 calls are different
+    functions of the same latents, and the first is what put a 16 px lattice in every one of
+    se-002's oracle renders (#557).
+
+    Whole `window_px` windows, at least `overlap_min_px` apart, with the slack handed back one
+    `ratio`-sized latent cell at a time so every boundary lands on a cell boundary. An extent
+    that already fits inside one window IS one window.
+
+    ComfyUI `comfy/ldm/minimax/vae.py::MiniMaxH3VideoVAE.split_tiles`, whose defaults
+    (`tile_size=256`, `tile_overlap_min=64`, `tiling=True`) are the reference's own.
+    """
+    if window_px >= extent_px:
+        return [0], [extent_px], []
+
+    count = math.ceil(extent_px / window_px)
+    while True:
+        overlaps = [overlap_min_px] * (count - 1)
+        slack = window_px * count - sum(overlaps) - extent_px
+        if slack < 0:
+            count += 1
+        else:
+            break
+    for i in range(slack // ratio):
+        overlaps[i % (count - 1)] += ratio
+
+    starts = [0]
+    for i in range(count - 1):
+        starts.append(starts[-1] + window_px - overlaps[i])
+    return starts, [window_px] * count, overlaps
+
+
 def _axis_from_sqrt_area(dim: int, patch: int, sqrt_area: float) -> list[float]:
     ratio = dim / sqrt_area
     n = dim // patch
