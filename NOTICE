@@ -1,0 +1,76 @@
+serverless-endpoints (v2)
+Copyright (c) 2026 Cozy Creator and Paul Fidika
+
+This repository is licensed under the MIT License (see LICENSE) EXCEPT for the
+files named below, which are not ours to relicense. This file records what
+third-party code is present, under what terms, and — where the terms conflict
+with the repository's own licence — says so plainly instead of leaving the
+conflict for a reader to discover.
+
+Written 2026-08-26 against decision #532. It is an engineering record of
+provenance, not legal advice and not a legal conclusion.
+
+
+THE REPOSITORY'S OWN CODE — MIT
+
+  sdxl/, quality-judge/, h3/h3.py, h3/h3_ref/, scripts/
+  Written for this repository against `cozy_runtime.author`.
+
+
+APACHE LICENSE 2.0
+
+  diffusers (huggingface/diffusers)
+    Used as a DEPENDENCY, not vendored: no file in this repository is a copy
+    or an adaptation of diffusers source. `h3/h3_ref/` constructs upstream's
+    `MiniMaxH3Transformer3DModel`, `AutoencoderKLMiniMaxH3`,
+    `AutoencoderKLMiniMaxH3Audio` and `MiniMaxH3Scheduler` and adds nothing to
+    them; `h3/h3_ref/curve.py` writes new modules that stand in for two of
+    upstream's, and copies none of their code.
+
+  transformers (huggingface/transformers)
+    Also a dependency. `h3/h3_ref/` constructs `Qwen3VLForConditionalGeneration`
+    through the public auto-classes.
+
+  torch, safetensors, msgspec, numpy, pillow
+    Ordinary dependencies. Not vendored.
+
+
+GPL-3.0 — PRESENT, IN CONFLICT WITH THIS REPOSITORY'S LICENCE, AND SCHEDULED
+FOR DELETION
+
+  h3/h3_arch/
+    A hand port of ComfyUI v0.33.0's `comfy/ldm/minimax/` and
+    `comfy/text_encoders/{minimax,qwen3vl,qwen35,llama}.py`. ComfyUI is
+    GPL-3.0. `h3/h3_arch/text_encoder.py` states the adaptation in its own
+    module docstring; `h3/h3_arch/__init__.py` states it for the package.
+
+    These files are NOT covered by this repository's MIT LICENSE, and the two
+    terms are not compatible. The honest description of the current state is
+    that the repository carries a licence its own contents contradict.
+
+    This is known and is being resolved by REMOVAL rather than by argument.
+    Decision #531 replaces every one of these files with the Apache-2.0
+    upstream implementation now constructed by `h3/h3_ref/`; decision #532
+    names the conditioner specifically. The port is retained only until the
+    upstream path is proven against it on a card, because deleting
+    oracle-proven code before its replacement is proven would trade a licence
+    problem for a correctness one. `scripts/h3-oracle.py` imports a ComfyUI
+    checkout on a rented card and is never imported by any endpoint or shipped
+    in any release archive.
+
+    Nothing under `h3/h3_arch/` is included in a release archive built for a
+    deployment that selects the upstream path.
+
+
+THE MODEL'S OWN LICENCE IS NOT A CODE LICENCE
+
+  The MiniMax H3 weights this repository's H3 endpoint serves are covered by
+  the model publisher's licence, which is separate from, and unaffected by,
+  every licence above. #532 records that its territory grant EXCLUDES the US,
+  the EU, the UK and South Korea, that the community repackaging inherits that
+  grant rather than laundering it, and that whether to halt serving from an
+  excluded territory is an OPEN OWNER RULING. Until it is ruled: internal
+  development and diagnosis continue; there is no customer-facing or public H3
+  serving from an excluded territory.
+
+  No weights are stored in this repository.

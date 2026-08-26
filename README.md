@@ -11,6 +11,8 @@ No automated tests (decisions.md #160): verification = live runs + benchmarks.
 
 | path | what |
 |---|---|
+| `h3/h3_ref/` | H3 as the OFFICIAL upstream implementation (#531): a construction layer over diffusers' H3 classes, plus the curve delta |
+| `h3/h3_arch/` | the hand port `h3_ref/` replaces — GPL-adapted, kept only until the upstream path is proven on a card (see `NOTICE`) |
 | `sdxl/` | the SDXL launch endpoint (se-008): `generate`, text to image, four components |
 | `sdxl/tokenizer`, `sdxl/tokenizer_2` | the two CLIP vocabularies this endpoint BUNDLES — its own asset, like the model library it imports |
 | `quality-judge/` | the eval judge family (ev-003): `judge`, `soft`, `pairwise`, `transcribe` |
@@ -22,6 +24,9 @@ No automated tests (decisions.md #160): verification = live runs + benchmarks.
 | `scripts/sdxl-release.sh` | build the SDXL release archive `cozy install --from --digest` verifies |
 | `scripts/pack.py` | tree -> release archive (the pre-hub stand-in for `cozy deploy`) |
 | `scripts/sdxl-live.py` | se-008's live verification, on the RTX 4070 |
+| `scripts/h3-keys.py` | the port's graph against the community carrier's headers — key-exact, $0, no GPU |
+| `scripts/h3-diffusers-keys.py` | the upstream graph against the OFFICIAL tree's headers, plus geometry, schedule and curve arms — $0, no GPU |
+| `scripts/h3-oracle.py` | the pinned ComfyUI differential oracle; never imported by an endpoint, never in a release |
 | `scripts/fence.py` | four structural fences |
 
 ## Running an endpoint locally
@@ -77,6 +82,55 @@ The release pins its peers by read-only `git archive` — cozy-runtime and the c
 `tensorfs` facade, whose ENCODING REGISTRY is what decides which lanes the endpoint can
 read. It declares `torch`/`diffusers`/`transformers` as its OWN dependencies: a model
 architecture is the endpoint's, never the runtime's.
+
+## H3: where the architecture comes from, and who checks it
+
+Decision #531 fixed the source hierarchy after a census failure — the 3,100-line port in
+`h3/h3_arch/` was written on the premise that no maintained H3 implementation existed, and
+diffusers had merged the official one twenty days earlier. In order:
+
+1. the **official model release** — its configs, its docs and its licence;
+2. the **pinned diffusers/transformers implementation** — the architecture, the packing and
+   the scheduler. `h3/h3_ref/` constructs it and adds nothing to it;
+3. **DiffSynth-Studio** — an independent second opinion, never a dependency;
+4. **ComfyUI** — a foreign-format producer and a black-box speed baseline, and nothing
+   else. Never serving architecture, never pipeline semantics, never product vocabulary.
+
+### The two differential oracles
+
+Same model, same weights, two independent implementations to disagree with. A seam is only
+as proven as the number of unrelated codebases that reproduce it.
+
+| oracle | what it is | how it is used |
+|---|---|---|
+| ComfyUI v0.33.0 `comfy/ldm/minimax/` | `scripts/h3-oracle.py`, pinned | a checkout on a rented card. Never imported by an endpoint, never in a release archive |
+| DiffSynth-Studio `diffsynth/pipelines/minimax_h3_audio_video.py` (modelscope) | RECORDED, not vendored | an independent third reading of the same seams |
+
+**The comparison protocol**, in the order a disagreement is cheapest to localise:
+
+1. **On this box, $0** — construct on `meta` and diff the census against banked headers;
+   check the temporal geometry, the sigma grid, the evaluation count and the velocity sign
+   against upstream's own arithmetic. `scripts/h3-diffusers-keys.py` is all four.
+2. **Component-level, on a card** — same weights, same input, one component at a time:
+   VAE encode/decode round trips, one DiT block, the rope table, the modulation. se-001 ran
+   this against ComfyUI for $0.21 and it found a real defect.
+3. **Whole-seam, on a card** — same prompt and seed, every intermediate compared in order:
+   token ids, conditioner states, packed rows, raw heads, latent-shaped velocity, first
+   updated latent, final latent, decoded video and audio. **This is the step se-002 skipped**,
+   and the four defects #522 names all lived BETWEEN components where component-level
+   agreement could not see them.
+4. **Output**, last and never first — full-length, gate-passing, and viewed.
+
+A number produced by only one of the three implementations is a measurement, not a proof.
+
+### Licensing
+
+`LICENSE` is MIT. `NOTICE` records what in this tree is not: diffusers and transformers are
+Apache-2.0 dependencies and are not vendored, and `h3/h3_arch/` is adapted from GPL-3.0
+ComfyUI source, which MIT does not cover and which #531/#532 resolve by deleting it once
+`h3/h3_ref/` is proven. The model's own licence is separate from all of them, carries a
+territory restriction, and is an open owner ruling — read `NOTICE` before serving H3
+anywhere.
 
 ## The three rules an endpoint here obeys
 

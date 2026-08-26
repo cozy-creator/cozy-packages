@@ -74,8 +74,10 @@ TFS_WHEEL_NAME="$(basename "$TENSORFS_WHEEL")"
 # The endpoint's own source, copied whole. `h3/` IS the release: no generated module, no
 # rewritten import, no second copy of the handler anywhere.
 cp "$ROOT/h3/h3.py" "$ROOT/h3/endpoint.toml" "$ROOT/h3/endpoint.descriptor.json" "$T/"
-mkdir -p "$T/h3_arch" "$T/tokenizer"
+cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$T/"
+mkdir -p "$T/h3_arch" "$T/h3_ref" "$T/tokenizer"
 cp "$ROOT/h3/h3_arch"/*.py "$T/h3_arch/"
+cp "$ROOT/h3/h3_ref"/*.py "$T/h3_ref/"
 cp "$ROOT/h3/tokenizer"/* "$T/tokenizer/"
 
 BINDINGS="$(grep -c '^\[bindings\.' "$T/endpoint.toml")"
@@ -96,12 +98,27 @@ cat > "$T/pyproject.toml" <<TOML
 # against this lock, so the cozy-runtime that serves the endpoint is the one the release
 # pinned — never the host's.
 #
-# THE MODEL LIBRARY IS IN-TREE, not a dependency: \`h3_arch/\` is the MiniMax H3
-# architecture itself, ported because the artifact's curve topology has no Diffusers
-# counterpart to depend on. What IS declared here is what that library needs — torch for
-# the graph and transformers for the bundled Qwen vocabulary, and nothing else. There is no
-# diffusers dependency on this family and no ComfyUI dependency either: the port is the
-# whole point.
+# TWO MODEL LIBRARIES SHIP HERE FOR NOW, and that is a migration state rather than a
+# design. \`h3_ref/\` is the REFERENCE one (#531): a construction layer over the official
+# H3 implementation diffusers merged on 2026-08-05, which is where every architecture
+# question is answered from now on. \`h3_arch/\` is the hand port it replaces, kept only
+# until the upstream path is proven against it on a card — the port is oracle-proven and
+# the replacement is not yet, and deleting proven code ahead of its unproven successor is
+# how a licence fix becomes a correctness regression. NOTICE records the terms; the port
+# is GPL-adapted and the replacement is not, which is the second reason it goes.
+#
+# THE DIFFUSERS PIN IS A SHA, NEVER A BRANCH: \`main\` moves and builds must be
+# reproducible. This is the same commit v1's H3 endpoint pins, chosen for that reason and
+# not for its date — it is the first pin both lanes can be compared at, and a newer SHA
+# would fold unreviewed upstream drift into a commit whose whole claim is a rebase onto
+# reviewed upstream code. It ships \`MiniMaxH3Transformer3DModel\`,
+# \`AutoencoderKLMiniMaxH3\`, \`AutoencoderKLMiniMaxH3Audio\` and \`MiniMaxH3Scheduler\`;
+# it collapses to \`diffusers>=0.40\` once 0.40.0 ships them in a release.
+#
+# TRANSFORMERS MOVED TO 5.x, and it is a FIX rather than a bump: the conditioner is
+# Qwen3-VL, whose \`Qwen3VLForConditionalGeneration\` does not exist below 5.x. The
+# previous \`<5\` cap was a floor copied from a family that does not use it, and an archive
+# built under it could not have constructed the conditioner at all.
 [project]
 name = "h3-endpoint"
 version = "$VERSION"
@@ -110,7 +127,8 @@ dependencies = [
     "cozy-runtime==0.0.1",
     "tensorfs==0.0.1",
     "torch>=2.6",
-    "transformers>=4.40,<5",
+    "transformers>=5.13,<6",
+    "diffusers @ git+https://github.com/huggingface/diffusers@50e7158093710f9c1b4ea9ff100137a91c9228f3",
 ]
 
 # uv records path sources RELATIVE to the project root, so an in-tree wheel relocates with
