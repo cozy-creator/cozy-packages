@@ -131,6 +131,7 @@ from h3_arch.presentation import (
     Tokenizer,
 )
 from h3_arch.presentation import build as build_presentation
+from h3_arch.vision import ExpandedPresentation, PatchedVision
 
 app = App()
 
@@ -339,6 +340,11 @@ class H3Run:
     timestep_plan: TimestepPlan
     view: RequestView
     presentation: Presentation
+    expanded: ExpandedPresentation
+    """The presentation with its vision blocks expanded into real pad runs. THIS is the
+    sequence the conditioner ran on and the one `PackedLayout`'s text span was sized from;
+    `presentation.tags` carries one tag per PRESENTATION row and is one row per block."""
+    patched: PatchedVision
     conditioning: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -352,8 +358,18 @@ def prepare(
     tokenizer: Tokenizer,
     references: tuple[PresentedReference, ...],
     ref_blocks: tuple[RefBlock, ...],
-) -> tuple[H3Plan, PackedLayout, Presentation]:
-    """CPU media preparation and the exact request plan. No component is touched."""
+) -> tuple[H3Plan, PackedLayout, Presentation, ExpandedPresentation, PatchedVision]:
+    """CPU media preparation and the exact request plan. No component is touched.
+
+    THE PATCHIFICATION HAPPENS HERE, not at conditioning time, and that placement is the
+    whole reason the layout can be right. A vision block stands in the presentation as ONE
+    row and becomes thousands of them, and `PackedLayout`'s text length plus the DiT's
+    per-row modality tags both have to be the EXPANDED count. Resolving it later would
+    build the packed sequence against a text span that does not exist. It is pure CPU work
+    with no weights in it, so it belongs in the stage that has no component lease.
+    """
+    from h3_arch import vision
+
     width, height = _PIXELS[payload.aspect_ratio]
     frames = _FRAMES[payload.duration_s]
     grid = latent_grid(frames, width, height)
@@ -365,11 +381,11 @@ def prepare(
     presentation = build_presentation(
         tokenizer,
         payload.prompt,
-        keyframes=tuple(
-            f for f in (payload.first_frame, payload.last_frame) if f is not None
-        ),
+        keyframes=_present_keyframes(payload, width=width, height=height),
         references=references,
     )
+    patched = vision.patchify(presentation)
+    expanded = vision.expand(presentation, patched.token_counts)
     plan = H3Plan(
         prompt=payload.prompt,
         grid=grid,
@@ -380,9 +396,39 @@ def prepare(
         mute=payload.mute,
     )
     layout = PackedLayout(
-        len(presentation.rows), grid, keyframes=plan.keyframes, refs=ref_blocks
+        len(expanded.token_ids), grid, keyframes=plan.keyframes, refs=ref_blocks
     )
-    return plan, layout, presentation
+    return plan, layout, presentation, expanded, patched
+
+
+def _present_keyframes(
+    payload: GenerateInput | RefGenerateInput, *, width: int, height: int
+) -> tuple[Any, ...]:
+    """The first/last keyframes as pixels on the TARGET canvas.
+
+    A keyframe is not a reference and does not take the reference rule: it is an anchor on
+    the generated clip's own clock, so it is put on the request's canvas rather than on a
+    2048 short edge of its own. Upstream stretches the geometry anchor onto the canvas and
+    cover-crops the follower; that asymmetry is reproduced, with the rounding upstream
+    documents `VaeImageProcessor` does NOT do.
+    """
+    from PIL import Image
+
+    named = (("first_frame", payload.first_frame), ("last_frame", payload.last_frame))
+    assets = [(name, a) for name, a in named if a is not None]
+    out: list[Any] = []
+    for position, (name, asset) in enumerate(assets):
+        image = _decode_image(asset, where=name)
+        if position == 0:
+            out.append(image.resize((width, height), Image.Resampling.LANCZOS))
+            continue
+        scale = max(width / image.size[0], height / image.size[1])
+        sized = (round(image.size[0] * scale), round(image.size[1] * scale))
+        left = max(0, (sized[0] - width) // 2)
+        top = max(0, (sized[1] - height) // 2)
+        resized = image.resize(sized, Image.Resampling.LANCZOS)
+        out.append(resized.crop((left, top, left + width, top + height)))
+    return tuple(out)
 
 
 def decode_references(payload: RefGenerateInput) -> tuple[PresentedReference, ...]:
@@ -397,7 +443,9 @@ def decode_references(payload: RefGenerateInput) -> tuple[PresentedReference, ..
                 code="reference_cap",
                 fields=["references"],
             )
-    return tuple(_present(ref) for ref in payload.references)
+    return tuple(
+        _present(ref, where=f"references.{i}") for i, ref in enumerate(payload.references)
+    )
 
 
 def _kind_of(ref: Reference) -> ReferenceKind:
@@ -406,15 +454,59 @@ def _kind_of(ref: Reference) -> ReferenceKind:
     return "video" if isinstance(ref, VideoReference) else "audio"
 
 
-def _present(ref: Reference) -> PresentedReference:
+def _decode_image(asset: Any, *, where: str) -> Any:
+    """A hydrated image asset -> an RGB `PIL.Image`. An asset that is not a decodable image
+    is a typed REQUEST refusal, not a backend fault: the caller sent it."""
+    import io
+
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        image = Image.open(io.BytesIO(asset.read_bytes()))
+        image.load()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise InvalidRequest(
+            f"{where} is not a decodable image ({type(exc).__name__}): {str(exc)[:120]}",
+            code="undecodable_image",
+            fields=[where],
+        ) from exc
+    return image.convert("RGB")
+
+
+def _present(ref: Reference, *, where: str) -> PresentedReference:
+    """One wire reference -> its presentation form, with the pixels ATTACHED.
+
+    The pixels used to be dropped here with a note saying the condition operation would
+    attach them, and nothing ever did — which is one half of what the old seam-wide refusal
+    was standing in front of.
+    """
+    from h3_arch.vision import normalize_reference_image
+
     kind = _kind_of(ref)
     if kind == "audio":
         # A WAVEFORM NEVER ENTERS QWEN. The presentation gets the label; the audio VAE
         # gets the samples. Upstream refused audio as the only modality; that guard was
         # measured to protect nothing and this endpoint carries the Cozy extension
         # instead, WITHOUT claiming viseme or beat synchronization.
-        return PresentedReference(kind="audio")
-    return PresentedReference(kind=kind)  # pixels are attached by the condition operation
+        return PresentedReference(kind="audio", has_audio=True)
+    if kind == "video":
+        # The frames would have to be decoded, resampled onto the 24 fps clock and then
+        # sampled again onto the conditioner's 2 fps grid, and the soundtrack encoded
+        # beside them. The presentation layer builds video blocks and the packed layout
+        # lays them out; what has no implementation is the DECODE. Refused typed and
+        # narrowly, rather than under the seam-wide code that no longer applies.
+        raise UnsupportedInput(
+            "video references are not decoded by this endpoint yet: image references are "
+            "the built path, and a video reference needs its own frame decode, its 24 fps "
+            "resample and its soundtrack before it can be presented",
+            code="video_reference_undecoded",
+            fields=[where],
+        )
+    try:
+        pixels = normalize_reference_image(_decode_image(ref.image, where=where))
+    except ValueError as exc:
+        raise InvalidRequest(str(exc), code="reference_geometry", fields=[where]) from exc
+    return PresentedReference(kind="image", pixels=pixels)
 
 
 # ------------------------------------------------------------------ the models
@@ -436,34 +528,37 @@ class _H3Base(Model[H3Pipeline]):
         return None
 
     @uses_components("text_encoder")
-    def condition_text(self, presentation: Presentation) -> Any:
-        """Qwen3-VL over the presentation: the UNNORMALIZED hidden state after layer 50,
-        `[1, L, text_dim]`.
+    def condition_text(
+        self, expanded: ExpandedPresentation, patched: PatchedVision
+    ) -> Any:
+        """Qwen3-VL over the expanded presentation: the UNNORMALIZED hidden state after
+        layer 50, `[1, L, text_dim]`.
 
-        THE VISION SEAM IS NOT BUILT and this refuses rather than pretending. The
-        conditioner takes `[batch, seq]` token ids plus already-patchified
-        `VisionBlock(patches, grid_thw, index)` splices, and nothing in this endpoint turns
-        a keyframe's pixels into that triple. se-002 hit the gap on the pod and patched
-        around it with the same refusal; the refusal belongs in the landed source."""
+        THE VISION SEAM IS BUILT HERE. The conditioner takes `[batch, seq]` token ids plus
+        already-patchified `VisionBlock(patches, grid_thw, index)` splices; `prepare` has
+        produced both, from upstream's own processor. Every vision block's pad run is
+        already in `expanded.token_ids` at `expanded.splices[i]`, so the splice is an
+        overwrite of rows that exist rather than an insertion that would move the layout
+        out from under the packed sequence.
+        """
         import torch
 
-        if any(not isinstance(row, int) for row in presentation.rows):
-            raise UnsupportedInput(
-                "vision-block conditioning is not built in this port: the presentation to "
-                "conditioner seam (pixels to patches, grid and splice index) has no "
-                "implementation, so a keyframe or visual reference would reach Qwen3-VL as "
-                "nothing at all",
-                code="vision_seam_unbuilt",
-                fields=["first_frame", "last_frame", "references"],
-            )
+        from h3_arch import vision
+
         encoder = self.pipe.components["text_encoder"]
+        device = encoder.model.embed_tokens.weight.device
+        blocks = vision.conditioner_blocks(patched, expanded)
         with torch.inference_mode():
-            tokens = torch.tensor(
-                [presentation.text_ids()],
-                dtype=torch.long,
-                device=encoder.model.embed_tokens.weight.device,
-            )
-            states: Any = encoder(tokens)
+            tokens = torch.tensor([expanded.token_ids], dtype=torch.long, device=device)
+            placed = [
+                type(b)(
+                    patches=b.patches.to(device=device),
+                    grid_thw=b.grid_thw.to(device=device),
+                    index=b.index,
+                )
+                for b in blocks
+            ]
+            states: Any = encoder(tokens, vision=placed)
             return states
 
     @uses_components("video_vae")
@@ -623,6 +718,23 @@ def _predict_data_velocity(
         pack_audio(audio_latents).to(device=device, dtype=torch.float32)
     ).to(hidden_dtype)
 
+    # THE SAME UNBUILT SEAM AS THE REFERENCE PATH, refused with the same code rather than
+    # reached. Below, a `cond`/`ref_img` segment appends `run.conditioning["visual"]` — one
+    # tensor, for EVERY such segment, in a slot that wants this reference's own rows at
+    # this segment's own row count. Nothing populates it, so the honest outcome was a
+    # KeyError from inside a component lease; a typed refusal is the same fact, named.
+    conditioning = [k for _, _, k in run.layout.segments if k in ("cond", "ref_img", "ref_audio")]
+    if conditioning:
+        raise UnsupportedInput(
+            "this layout carries "
+            f"{', '.join(sorted(set(conditioning)))} rows the endpoint has no builder for: "
+            "the reference LATENT rows (VAE-encode each reference, noise it to the "
+            "conditioning level and interleave it) are a separate seam from the vision "
+            "conditioning, which is built",
+            code="conditioning_rows_unbuilt",
+            fields=["first_frame", "last_frame", "references"],
+        )
+
     rows: list[Any] = []
     for _, _, kind in run.layout.segments:
         if kind == "text":
@@ -684,9 +796,11 @@ def _predict_data_velocity_ref(
 
     CONDITIONING ROWS ARE NOT HANDLED HERE and do not silently vanish: upstream's
     `hidden_states` must carry the conditioning video rows interleaved in `video_indices`
-    order, and building that is the same unbuilt pixels-to-rows seam `condition_text`
-    refuses on (`vision_seam_unbuilt`). A layout that carries one reaches an explicit
-    refusal rather than a forward that quietly drops it.
+    order, and this endpoint has no builder for them. That is a DIFFERENT seam from the one
+    `condition_text` used to refuse on, and it is now the only one left: the vision seam
+    (pixels to patches, grid and splice index) is built, so a reference reaches Qwen3-VL
+    correctly and reaches the DiT's LATENT rows not at all. A layout that carries one
+    reaches an explicit refusal rather than a forward that quietly drops it.
 
     The heads are RAW and DATA-WARD on this side too — upstream's own
     `MiniMaxH3Scheduler` states the convention — so `H3Solver` consumes them unchanged.
@@ -706,9 +820,10 @@ def _predict_data_velocity_ref(
         raise UnsupportedInput(
             "the reference construction layer packs conditioning rows into the modality "
             f"streams itself, and this layout carries {', '.join(sorted(set(conditioning)))} "
-            "rows the endpoint has no builder for: the pixels-to-rows seam is the same one "
-            "`condition_text` refuses on",
-            code="vision_seam_unbuilt",
+            "rows the endpoint has no builder for: the reference LATENT rows (VAE-encode "
+            "each reference, noise it to the conditioning level and interleave it) are a "
+            "separate seam from the vision conditioning, which is built",
+            code="conditioning_rows_unbuilt",
             fields=["first_frame", "last_frame", "references"],
         )
 
@@ -769,7 +884,7 @@ def _run(
 
     view = model.for_request(ctx, seed=payload.seed)
     with tel.stage("prepare"):
-        plan, layout, presentation = prepare(
+        plan, layout, presentation, expanded, patched = prepare(
             payload, tokenizer=model.tokenizer, references=references, ref_blocks=ref_blocks
         )
     config = model.pipe.config.dit
@@ -785,8 +900,10 @@ def _run(
         adapters=tuple(str(a) for a in view.adapters),
     )
     solver = H3Solver(timestep_plan)
-    run = H3Run(plan, layout, timestep_plan, view, presentation)
+    run = H3Run(plan, layout, timestep_plan, view, presentation, expanded, patched)
     tel.metric("packed_rows", float(layout.seq_len))
+    tel.metric("text_rows", float(len(expanded.token_ids)))
+    tel.metric("vision_blocks", float(len(patched.token_counts)))
     # BOTH numbers, named apart. One request's plan holds `grid_points` sigmas and costs
     # `evaluations` forward passes, and they are never the same integer (#522c).
     tel.metric("evaluations", float(solver.evaluations))
@@ -794,7 +911,7 @@ def _run(
     ctx.raise_if_cancelled()
 
     with tel.stage("condition_text"):
-        text_states = model.condition_text(presentation)
+        text_states = model.condition_text(expanded, patched)
     if plan.keyframes or plan.references:
         with tel.stage("condition_visual"):
             run.conditioning["visual"] = model.condition_visual(run.conditioning.get("pixels"))
@@ -902,7 +1019,10 @@ def _sample(
             t_audio=step.t_audio,
             visual_cond_t=plan.visual_cond_timestep or 0.0,
             audio_cond_t=plan.audio_cond_timestep or 0.0,
-            text_token_tags=run.presentation.tags,
+            # THE EXPANDED TAGS, one per conditioner row. `presentation.tags` carries one
+            # tag per PRESENTATION row, where a whole vision block is a single row, so
+            # using it would tag the text span by a length the sequence does not have.
+            text_token_tags=run.expanded.tags,
         )
         v_video, v_audio = model.predict_data_velocity(
             run, text_states, video, audio, modulation

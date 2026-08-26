@@ -109,3 +109,36 @@ jobs:
       # render, asserted to DISAGREE with the reference.
       - name: H3 deterministic conformance arms
         run: uv run --no-project python scripts/h3-conform.py
+
+  # SEPARATE JOB, because its environment is the opposite of `arms`'. Every vision arm's
+  # oracle IS upstream — the pinned diffusers' own presentation builder and transformers'
+  # own image processor — so this one installs torch, and dragging that into `arms` would
+  # cost the fast job its seconds. Placed as its own job for the #533 reason the arms job
+  # exists at all: a step behind an already-red step looks wired and never fires.
+  vision-arms:
+    name: Vision seam conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - run: uv python install 3.13
+
+      # The pinned diffusers SHA is the same one `scripts/h3-release.sh` builds the release
+      # closure against: an oracle whose peer can move underneath it measures nothing.
+      - name: Environment
+        run: |
+          uv venv --python 3.13
+          uv pip install msgspec numpy pillow "transformers>=5.13,<6" \
+            --extra-index-url https://download.pytorch.org/whl/cpu torch
+          uv pip install \
+            "diffusers @ git+https://github.com/huggingface/diffusers@50e7158093710f9c1b4ea9ff100137a91c9228f3"
+
+      # The pixels-to-conditioner seam, diffed against upstream rather than against a
+      # restatement of it: byte-identical reference pixels, a bit-identical patch matrix,
+      # token ids equal element for element, and a real conditioner forward at toy width
+      # that proves the splice indices and the deepstack take-points are load-bearing.
+      - name: H3 vision seam conformance arms
+        run: uv run --no-project python scripts/h3-vision-conform.py

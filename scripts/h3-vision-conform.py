@@ -416,12 +416,134 @@ def arm_refusal() -> None:
         "RED (inverted): condition_text no longer refuses a vision presentation",
     )
     check(
-        "vision.patchify" in inspect.getsource(h3._H3Base.condition_text)
-        or "patchify" in inspect.getsource(h3._H3Base.condition_text),
-        "condition_text patchifies the presentation's vision blocks",
+        "conditioner_blocks" in inspect.getsource(h3._H3Base.condition_text),
+        "condition_text splices the patchified vision blocks into the conditioner call",
     )
-    remaining = src.count("vision_seam_unbuilt")
-    print(f"         `vision_seam_unbuilt` still appears {remaining}x in h3.py")
+    check(
+        "vision.patchify" in inspect.getsource(h3.prepare),
+        "prepare patchifies, so the layout's text span is the EXPANDED length",
+    )
+    check(
+        "run.expanded.tags" in src,
+        "the DiT is tagged per CONDITIONER row, not per presentation row",
+    )
+    check(
+        src.count("vision_seam_unbuilt") == 0,
+        f"`vision_seam_unbuilt` is gone from h3.py ({src.count('vision_seam_unbuilt')} left)",
+    )
+    # THE REMAINING SEAM, named apart rather than folded into the one that is built. This
+    # is not a red control — it is the honest statement of what ref2va still cannot do.
+    rows = src.count("conditioning_rows_unbuilt")
+    check(
+        rows >= 2,
+        f"the reference LATENT-row seam refuses under its own code in both dialects ({rows})",
+    )
+
+
+def arm_forward() -> None:
+    """THE SEAM ACTUALLY RUNS — a real conditioner forward with a real vision block.
+
+    Every other arm here checks a number that describes the seam. This one EXECUTES it, at
+    a toy width with random weights, which is the only CPU-affordable way to find out
+    whether the splice indices, the patch slices, the grid and the deepstack add agree with
+    each other rather than merely with the arithmetic. The released conditioner is 62 GiB
+    and cannot be part of a CI arm; the shapes it would fail on are all here.
+
+    Real geometry, toy widths: the vision tower keeps its 27 blocks, its 2x2 merge and its
+    (8, 16, 24) take-points, because those are what the splice accounting depends on.
+    """
+    import torch
+
+    from h3_arch import vision
+    from h3_arch.config import TextEncoderConfig
+    from h3_arch.presentation import PresentedReference, build
+    from h3_arch.text_encoder import Qwen3VLConditioner
+
+    config = TextEncoderConfig(
+        hidden_size=512,
+        num_hidden_layers=4,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        head_dim=128,
+        intermediate_size=256,
+        vision_hidden_size=64,
+        vision_num_heads=2,
+        vision_intermediate_size=128,
+        vision_out_hidden_size=512,
+    )
+    torch.manual_seed(0)
+    model = Qwen3VLConditioner(config).to(torch.float32)
+    model.eval()
+
+    tok = _tokenizer()
+    # A SMALL reference canvas on purpose: the real 2048 rule makes 6,144 tokens per image,
+    # which is the right number for a card and the wrong one for a CI arm. The seam is
+    # identical; only the grid is smaller.
+    from PIL import Image
+
+    small = _image(5, 512, 768).resize((256, 192), Image.Resampling.LANCZOS)
+    pres = build(tok, "a fox in the grass", references=(PresentedReference("image", small),))
+    patched = vision.patchify(pres)
+    exp = vision.expand(pres, patched.token_counts)
+    blocks = vision.conditioner_blocks(patched, exp)
+
+    tokens = torch.tensor([exp.token_ids], dtype=torch.long)
+    with torch.inference_mode():
+        text_only = model(tokens)
+        spliced = model(tokens, vision=blocks)
+
+    check(
+        spliced.shape == (1, len(exp.token_ids), config.hidden_size),
+        f"the spliced forward returns [1, {len(exp.token_ids)}, {config.hidden_size}]",
+        f"got {tuple(spliced.shape)}",
+    )
+    check(torch.isfinite(spliced).all().item(), "the spliced hidden state is all finite")
+
+    # THE ARM THAT MATTERS: splicing must CHANGE the state, and change it at the vision
+    # positions. A seam that ran but spliced nothing would pass every shape check above.
+    start = exp.splices[0]
+    stop = start + patched.token_counts[0]
+    delta = (spliced - text_only).abs()
+    check(
+        delta[0, start:stop].max().item() > 0,
+        f"the vision rows {start}..{stop} DIFFER from the text-only forward",
+        f"max |delta| = {delta[0, start:stop].max().item():.4g}",
+    )
+    # The prompt follows the block, and the stack is CAUSAL, so the splice reaches the
+    # prompt rows and reaches the label rows before it NOT AT ALL. Both halves are asserted:
+    # a non-zero prefix delta would mean the causal mask was not doing its job.
+    check(
+        delta[0, stop:].max().item() > 0,
+        f"the splice propagates into the {len(exp.token_ids) - stop} prompt rows after it",
+        f"suffix max |delta| = {delta[0, stop:].max().item():.4g}",
+    )
+    check(
+        delta[0, :start].max().item() == 0,
+        "and reaches the label rows BEFORE it not at all — the stack is causal",
+        f"prefix max |delta| = {delta[0, :start].max().item():.4g}",
+    )
+
+    # RED CONTROL: a block spliced at the WRONG index must produce a different state. If it
+    # did not, the index would be decorative and every arm above would be measuring nothing.
+    moved = [type(b)(patches=b.patches, grid_thw=b.grid_thw, index=b.index - 1) for b in blocks]
+    with torch.inference_mode():
+        shifted = model(tokens, vision=moved)
+    check(
+        not torch.equal(shifted, spliced),
+        "RED: splicing one row earlier gives a DIFFERENT state — the index is load-bearing",
+    )
+
+    # RED CONTROL: the deepstack features are consumed. Zeroing the three mergers must
+    # change the answer, or the tower's take-points are wired to nothing.
+    with torch.inference_mode():
+        for merger in model.visual.deepstack_merger_list:
+            merger.linear_fc2.weight.zero_()
+            merger.linear_fc2.bias.zero_()
+        without = model(tokens, vision=blocks)
+    check(
+        not torch.equal(without, spliced),
+        "RED: zeroing the deepstack mergers changes the state — the take-points feed it",
+    )
 
 
 ARMS = {
@@ -429,6 +551,7 @@ ARMS = {
     "presentation": arm_presentation,
     "splices": arm_splices,
     "deepstack": arm_deepstack,
+    "forward": arm_forward,
     "refusal": arm_refusal,
 }
 
