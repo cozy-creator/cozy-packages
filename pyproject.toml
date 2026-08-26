@@ -20,6 +20,9 @@ implicit_reexport = false
 module = [
     "torch.*", "torchvision.*", "transformers.*", "tokenizers.*", "numpy.*", "PIL.*",
     "safetensors.*", "diffusers.*", "tfsbench", "tensorfs", "tensorfs.*", "cozy_eval.*",
+    # The REFERENCE LOADER, imported only by `scripts/h3-oracle.py` and only pod-side: it
+    # is a checkout on a rented card, never a dependency of anything here.
+    "comfy", "comfy.*", "comfy_kitchen", "comfy_kitchen.*",
 ]
 ignore_missing_imports = true
 

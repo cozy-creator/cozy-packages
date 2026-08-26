@@ -437,11 +437,18 @@ class AudioVae(nn.Module):
         self.register_buffer("latents_mean", torch.empty(config.latent_channels), persistent=True)
         self.register_buffer("latents_std", torch.empty(config.latent_channels), persistent=True)
 
+    @property
+    def compute_dtype(self) -> torch.dtype:
+        """The dtype the FILL PLANE gave these weights, read from a parameter. The endpoint
+        does not choose it: the artifact's encoding and the runtime's delivery do."""
+        return self.dec_in_proj.weight.dtype
+
     def encode(self, waveform: torch.Tensor) -> torch.Tensor:
         """[B, ch, L] samples in [-1, 1] at 32 kHz -> normalized latents [B, 32, ch, T].
 
         L is right-padded with zeros to a whole number of latent frames.
         """
+        waveform = waveform.to(self.compute_dtype)
         batch, channels, length = waveform.shape
         right_pad = math.ceil(length / self.hop_length) * self.hop_length - length
         waveform = F.pad(waveform, (0, right_pad))
@@ -452,7 +459,12 @@ class AudioVae(nn.Module):
         return z.reshape(batch, channels, z.shape[1], z.shape[2]).permute(0, 2, 1, 3)
 
     def decode(self, latents: torch.Tensor) -> torch.Tensor:
-        """Normalized latents [B, 32, ch, T] -> [B, ch, L] samples clamped to [-1, 1]."""
+        """Normalized latents [B, 32, ch, T] -> [B, ch, L] samples clamped to [-1, 1].
+
+        ACTIVATIONS FOLLOW THE WEIGHTS. See `video_vae.encode` for the defect this line
+        answers: the reference loader casts the WEIGHT at use time and this port cannot,
+        because moving a weight is the runtime's job and not an author's."""
+        latents = latents.to(self.compute_dtype)
         batch, latent_channels, channels, frames = latents.shape
         z = latents.permute(0, 2, 1, 3).reshape(batch * channels, latent_channels, frames)
         z = z * self.latents_std.view(1, -1, 1) + self.latents_mean.view(1, -1, 1)

@@ -573,12 +573,29 @@ class VideoVae(nn.Module):
 
     # -------------------------------------------------------------- the two operations
 
+    @property
+    def compute_dtype(self) -> torch.dtype:
+        """The dtype the FILL PLANE gave these weights. Read from a parameter rather than
+        stored, because the endpoint does not choose it — the artifact's encoding and the
+        runtime's delivery do, and this component is handed the result."""
+        return self.post_quant_conv.weight.dtype
+
     def encode(self, pixels: Tensor) -> Tensor:
         """[B, 3, T, H, W] in [-1, 1] -> normalized latents [B, 24, t, H/16, W/16], float32.
 
         Clip by clip, because the encoder is causal: a 17-frame clip is 5 tokens (1 + 4x4) and
         the last partial clip is filled by repeating its final frame.
+
+        ACTIVATIONS FOLLOW THE WEIGHTS, and this line is a defect the numerics oracle found
+        (se-001, on a rented 4090). The reference loader tolerates an activation whose dtype
+        differs from the weight's, by casting the WEIGHT at use time — which is exactly the
+        `cast_to` this port deleted, because moving a weight is the runtime's. So the cast
+        has to happen on the side an author owns: the activation. Without it a caller who
+        hands fp32 pixels to an fp16-filled component gets
+        `Input type (float) and bias type (c10::Half) should be the same`, and the serve
+        path DOES hand it fp32 — the DiT's video head is the checkpoint's fp32 island.
         """
+        pixels = pixels.to(self.compute_dtype)
         if pixels.shape[2] == 1:
             moments = self._encode_moments(self._normalize_pixels(pixels))[:, :, -1:]
         else:
@@ -603,6 +620,7 @@ class VideoVae(nn.Module):
     def decode(self, latents: Tensor) -> Tensor:
         """Normalized latents [B, 24, t, h, w] -> float32 pixels [B, 3, T, h*16, w*16] in
         [0, 1], decoded on the clip grid the ViT's normalized RoPE coordinates require."""
+        latents = latents.to(self.compute_dtype)
         latents_mean = self.latents_mean.view(1, -1, 1, 1, 1).to(latents.dtype)
         latents_std = self.latents_std.view(1, -1, 1, 1, 1).to(latents.dtype)
         latents = latents * latents_std + latents_mean
