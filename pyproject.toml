@@ -20,6 +20,9 @@ implicit_reexport = false
 module = [
     "torch.*", "torchvision.*", "transformers.*", "tokenizers.*", "numpy.*", "PIL.*",
     "safetensors.*", "diffusers.*", "tfsbench", "tensorfs", "tensorfs.*", "cozy_eval.*",
+    # PyAV, the encoder the release closure carries as its `[media]` extra (#529 defect g).
+    # Imported only by the pod-side oracle, which writes the proof render's container itself.
+    "av", "av.*",
     # The REFERENCE LOADER, imported only by `scripts/h3-oracle.py` and only pod-side: it
     # is a checkout on a rented card, never a dependency of anything here.
     "comfy", "comfy.*", "comfy_kitchen", "comfy_kitchen.*",
