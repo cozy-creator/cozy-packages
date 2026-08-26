@@ -180,14 +180,51 @@ def post_encode_gate(path: Path, *, requested: MediaFacts, tel: Telemetry) -> No
     video_seconds = decoded_frames / float(requested.fps)
     if rate != requested.sample_rate:
         defects.append(f"encoded {rate} Hz, requested {requested.sample_rate} Hz")
-    if not requested.av_agrees(audio.duration):
+    # THE TWO TIERS BOUND DIFFERENT QUANTITIES, and this one is not the tensor's. Tier 1
+    # already held the SAMPLES to one video frame; what is left for the container is
+    # whether the mux lost or invented audio — and a block codec cannot express an
+    # arbitrary length, so it pads its tail to a whole frame. The first full-length proof
+    # render measured that live: 15.075 s of samples, 15.083 s of video (8 ms apart, tier 1
+    # green) and 15.136 s in the container, which is 53 ms — outside a one-video-frame
+    # tolerance and inside one AAC frame of it. A correct render was being refused.
+    quantum = _codec_quantum(path, audio)
+    tolerance = requested.av_tolerance_s + quantum
+    tel.metric("audio_codec_quantum_s", round(quantum, 6))
+    if requested.av_drift(audio.duration) > tolerance:
         defects.append(
             f"{audio.duration:.3f} s of audio against {video_seconds:.3f} s of video, "
-            f"{requested.av_drift(audio.duration):.3f} s apart"
+            f"{requested.av_drift(audio.duration):.3f} s apart — more than one video frame "
+            f"({requested.av_tolerance_s:.3f} s) plus one codec frame ({quantum:.3f} s)"
         )
     _refuse("output_container_audio", defects, "the muxed container disagrees with itself")
 
     _report_audio(ce_metrics_audio.signal_stats(audio), channels=channels, tel=tel)
+
+
+def _codec_quantum(path: Path, audio: Any) -> float:
+    """One audio CODEC FRAME, in seconds, READ OFF THIS CONTAINER.
+
+    Derived, never a constant: the encoder is the runtime's choice, and AAC's 1024 samples
+    is not AC-3's 1536 or Opus's variable frame. The container states how many coded frames
+    it holds, so the quantum is its decoded length divided by that count — which is the
+    number this file needs and the one `cozy_eval.audio.probe_audio` does not return.
+
+    A container that does not state a frame count yields 0.0, which leaves the tolerance
+    exactly where tier 2 had it before: the fallback tightens, never loosens.
+    """
+    import json
+    import subprocess
+
+    try:
+        raw = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-select_streams", "a:0",
+             "-show_entries", "stream=nb_frames", str(path)],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        frames = int(json.loads(raw)["streams"][0].get("nb_frames") or 0)
+    except (OSError, ValueError, KeyError, IndexError, subprocess.CalledProcessError):
+        return 0.0
+    return audio.duration / frames if frames > 0 else 0.0
 
 
 def _report_audio(stats: dict[str, float], *, channels: int, tel: Telemetry) -> None:
