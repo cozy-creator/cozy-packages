@@ -273,8 +273,17 @@ def group_request() -> None:
         return {**base, "references": refs}
 
     nine = decode(h3.RefGenerateInput, images(9))
-    h3.decode_references(nine)
-    observe("9 image references — the published cap, exactly", "accepted")
+    if len(nine.references) == 9:
+        observe("9 image references — the published schema cap, exactly", "accepted")
+    else:
+        failed("9 image references — the published schema cap", str(len(nine.references)))
+    # This group is the request's PRE-HYDRATION layer. An image handle has metadata here,
+    # not bytes; presentation is deliberately later, after the supervisor hydrates it.
+    expect_refusal(
+        "presenting an image before runtime hydration",
+        lambda: h3.decode_references(nine),
+        code="asset_bytes_unavailable",
+    )
 
     expect_refusal(
         "zero references on the reference route",

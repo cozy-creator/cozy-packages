@@ -150,9 +150,9 @@ mkdir -p "$RUNTIME_TREE" "$TENSORFS_TREE" "$COZY_EVAL_TREE" "$SOURCE_TREE" \
 git -C "$RUNTIME_REPO" archive "$RUNTIME_SHA" | tar -x -C "$RUNTIME_TREE"
 git -C "$TENSORFS_REPO" archive "$TENSORFS_SHA" | tar -x -C "$TENSORFS_TREE"
 git -C "$COZY_EVAL_REPO" archive "$COZY_EVAL_SHA" | tar -x -C "$COZY_EVAL_TREE"
-git -C "$ROOT" archive "$SOURCE_SHA" h3 LICENSE NOTICE \
-  scripts/pack.py scripts/h3-conform.py scripts/h3-vision-conform.py \
-  scripts/h3-live.py scripts/h3-seam-oracle.py | tar -x -C "$SOURCE_TREE"
+# Probe from the whole exact source commit. A hand-maintained script list is another
+# closure that drifts; it already omitted h3-keys.py and made the first bundle probe red.
+git -C "$ROOT" archive "$SOURCE_SHA" | tar -x -C "$SOURCE_TREE"
 
 RUNTIME_EPOCH="$(git -C "$RUNTIME_REPO" show -s --format=%ct "$RUNTIME_SHA")"
 TENSORFS_EPOCH="$(git -C "$TENSORFS_REPO" show -s --format=%ct "$TENSORFS_SHA")"
