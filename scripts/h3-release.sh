@@ -40,7 +40,7 @@ RUNTIME_REPO="${RUNTIME_REPO:-$HOME/cozy_v2/cozy-runtime}"
 # install` then refuses `stale_descriptor` on a release nobody edited. Bumping the pin
 # means re-running `cozy-runtime describe --write-descriptor` in the release's own venv
 # and committing the result in the same change.
-RUNTIME_SHA="${RUNTIME_SHA:-acd8c0d}"
+RUNTIME_SHA="${RUNTIME_SHA:-c543c0e}"
 RUNTIME_FLOOR="${RUNTIME_FLOOR:-d78a9a0}"
 # THE WHEEL IS BUILT, NOT FOUND. #566 shipped an archive carrying a MONTHS-OLD tensorfs
 # out of a scratch directory nobody had rebuilt, and the divergence surfaced on a rented
