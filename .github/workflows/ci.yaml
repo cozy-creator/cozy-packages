@@ -62,19 +62,6 @@ jobs:
       - name: Types
         run: uv run --no-project mypy
 
-      # The H3 reference semantics, checked against independently written upstream
-      # expressions rather than against the endpoint's own call shapes — so the same arms
-      # gate the diffusers rebase that replaces the hand port (#531). Every arm carries its
-      # own RED CONTROL: the exact defective expression that shipped, asserted to disagree.
-      #
-      # numpy is the only addition to the environment above, and it is here because the
-      # pixel arm exercises the SHIPPED conversion on a real array instead of a paraphrase
-      # of it. No torch, no weights, no network, no card.
-      - name: Conformance arms
-        run: |
-          uv pip install numpy
-          uv run --no-project python scripts/h3-conform.py
-
       - name: Install the pinned author surface
         if: env.COZY_CI_TOKEN != ''
         env:
@@ -89,3 +76,36 @@ jobs:
       - name: Descriptor is current
         if: env.COZY_CI_TOKEN != ''
         run: uv run --no-project cozy-runtime describe --dir quality-judge --check
+
+  # A SEPARATE JOB ON PURPOSE. The arms must not be able to stop running because some
+  # earlier step in another job went red — that is precisely the failure mode #533 names,
+  # and it is not hypothetical: the `Types` step above has been red since before these
+  # arms existed (mypy cannot see the private runtime's types here, so the task stamps and
+  # the component decorator report against `Any`), and a step placed after it would have
+  # been skipped on every run while looking wired up.
+  arms:
+    name: Conformance arms
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - run: uv python install 3.13
+
+      # The whole environment: msgspec for the plan struct, numpy for the pixel arm. No
+      # torch, no weights, no network, no card, and no runtime — the arms check reference
+      # SEMANTICS, and semantics do not need a GPU. Seconds, not minutes.
+      - name: Environment
+        run: |
+          uv venv --python 3.13
+          uv pip install msgspec numpy
+
+      # H3's reference semantics, each checked against an independently written upstream
+      # expression rather than against the endpoint's own call shapes — so the same arms
+      # gate the diffusers rebase that replaces the hand port (#531). Every arm carries its
+      # own RED CONTROL: the exact defective expression that shipped se-002's garbage
+      # render, asserted to DISAGREE with the reference.
+      - name: H3 deterministic conformance arms
+        run: uv run --no-project python scripts/h3-conform.py
