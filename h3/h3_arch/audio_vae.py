@@ -396,7 +396,7 @@ class BigVGAN(nn.Module):
 # ------------------------------------------------------------------ the component root
 
 
-class AudioVae(nn.Module):
+class AutoencoderKLMiniMaxH3Audio(nn.Module):
     """The H3 audio VAE component root — 917 destinations, all F32.
 
         encoder        110 destinations   DAC trunk, total stride 800
@@ -408,6 +408,11 @@ class AudioVae(nn.Module):
 
     The stereo pair is folded into the batch: both channels run the same mono graph, which
     is why `output_channel` never appears in a shape.
+
+    THE NAME IS UPSTREAM'S, VERBATIM (#580) — diffusers'
+    `autoencoder_kl_minimax_h3_audio.AutoencoderKLMiniMaxH3Audio`, the class this one
+    mirrors. The module path says which is which: `h3_arch.audio_vae` is the port,
+    `diffusers` is the original.
     """
 
     def __init__(self, config: AudioVaeConfig) -> None:

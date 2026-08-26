@@ -371,9 +371,16 @@ class FinalLayer(nn.Module):
         return self.video_out(hv), self.audio_out(ha)
 
 
-class MiniMaxH3Dit(nn.Module):
+class MiniMaxH3Transformer3DModel(nn.Module):
     """The component root. One of these per TASK SLOT — two instances of this same class
-    with two different sets of weights, never one graph with a partition selector."""
+    with two different sets of weights, never one graph with a partition selector.
+
+    THE NAME IS UPSTREAM'S, VERBATIM (#580): a class that mirrors an upstream thing carries
+    that thing's official name, and `diffusers.…transformer_minimax_h3` is where this one's
+    name comes from. The module path is the disambiguator — `h3_arch.dit` is the hand port
+    on the community CURVE topology, `diffusers` is the official full-AdaLN graph — and
+    `h3_ref/curve.py` is the whole of the difference.
+    """
 
     def __init__(self, config: DitConfig) -> None:
         super().__init__()

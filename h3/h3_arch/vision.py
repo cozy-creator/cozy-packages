@@ -64,11 +64,13 @@ MAX_PIXELS = 16_777_216
 IMAGE_MEAN = (0.5, 0.5, 0.5)
 IMAGE_STD = (0.5, 0.5, 0.5)
 
-#: The vision PAD ids, which are LOAD-BEARING rather than filler. The local text encoder
-#: overwrites these positions by index and would not care, but upstream's
-#: `Qwen3VLForConditionalGeneration` FINDS the positions to fill by matching these ids, so a
-#: presentation built with the wrong pad splices nothing and reports nothing. Both dialects
-#: are served from one presentation, so it carries the ids upstream looks for.
+#: The vision PAD ids, which are LOAD-BEARING rather than filler. The local
+#: `text_encoder.Qwen3VLForConditionalGeneration` overwrites these positions by index and
+#: would not care, but `transformers`' class of that same name (#579: a port answers to the
+#: name of what it ports, and the module path is the disambiguator) FINDS the positions to
+#: fill by matching these ids, so a presentation built with the wrong pad splices nothing and
+#: reports nothing. Both dialects are served from one presentation, so it carries the ids
+#: upstream looks for.
 IMAGE_PAD_TOKEN = 151655
 VIDEO_PAD_TOKEN = 151656
 

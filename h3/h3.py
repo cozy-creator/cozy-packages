@@ -774,7 +774,7 @@ def _predict_data_velocity(
     one it is was decided by the caller's declared component set, and this function has no
     opinion about it.
 
-    DATA-WARD, and the heads are RAW. See `dit.MiniMaxH3Dit.forward` and
+    DATA-WARD, and the heads are RAW. See `dit.MiniMaxH3Transformer3DModel.forward` and
     `layout.H3Solver` — both state the same convention, and this is the seam between them.
     """
     import torch

@@ -19,7 +19,7 @@ Two things are load-bearing beyond the packing itself:
     else. The model boundary returns DATA-WARD velocity and this is what turns that into
     a latent update; se-002's first render had the sign backwards for every one of its 30
     evaluations (#522a), which is not a numeric drift but a stated convention nobody
-    stated. It is stated here and again at `dit.MiniMaxH3Dit.forward`.
+    stated. It is stated here and again at `dit.MiniMaxH3Transformer3DModel.forward`.
 """
 
 from __future__ import annotations
@@ -591,8 +591,9 @@ class SolverStep:
 class H3Solver:
     """The flow-match Euler solver. It owns SIGN and SCHEDULE and nothing else.
 
-    THE SIGN CONVENTION, stated here and again at `dit.MiniMaxH3Dit.forward`, because a
-    convention held in one place is a convention half the code disagrees with:
+    THE SIGN CONVENTION, stated here and again at
+    `dit.MiniMaxH3Transformer3DModel.forward`, because a convention held in one place is a
+    convention half the code disagrees with:
 
         the model returns DATA-WARD velocity — the direction from noise toward data —
         and a step toward data multiplies it by the sigma DECREASE:

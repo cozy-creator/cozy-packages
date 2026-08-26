@@ -464,7 +464,7 @@ def _blend(head: Tensor, tail: Tensor, extent: int, dim: int) -> Tensor:
 # ------------------------------------------------------------------ the component root
 
 
-class VideoVae(nn.Module):
+class AutoencoderKLMiniMaxH3(nn.Module):
     """The whole video VAE: `encoder` -> `quant_conv` and `post_quant_conv` -> `decoder`.
 
         encoder      116 destinations   3D causal CNN, 6 levels, 12 residual blocks
@@ -476,6 +476,11 @@ class VideoVae(nn.Module):
 
     `encode` and `decode` are pure functions of their arguments and this module's own
     parameters: no device call, no offload, no autocast, no global state.
+
+    THE NAME IS UPSTREAM'S, VERBATIM (#580) — diffusers'
+    `autoencoder_kl_minimax_h3.AutoencoderKLMiniMaxH3`, the class this one mirrors. The
+    module path says which is which: `h3_arch.video_vae` is the port, `diffusers` is the
+    original.
     """
 
     def __init__(self, config: VideoVaeConfig) -> None:

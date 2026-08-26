@@ -247,7 +247,7 @@ class _DeepstackMerger(nn.Module):
         return self.linear_fc2(F.gelu(self.linear_fc1(x)))
 
 
-class _VisionTower(nn.Module):
+class Qwen3VLVisionModel(nn.Module):
     def __init__(self, config: TextEncoderConfig) -> None:
         super().__init__()
         self.merge_size = config.vision_spatial_merge_size
@@ -438,8 +438,17 @@ def _mrope_position_ids(
     return ids
 
 
-class Qwen3VLTextEncoder(nn.Module):
+class Qwen3VLForConditionalGeneration(nn.Module):
     """The H3 text encoder component root — 902 destinations, all BF16.
+
+    THE NAME IS UPSTREAM'S, VERBATIM (#579): this is transformers' class name for the
+    component diffusers' own `ComponentSpec` binds to the `text_encoder` slot, and a port
+    answers to the name of what it ports. The module path is the disambiguator —
+    `h3_arch.text_encoder.Qwen3VLForConditionalGeneration` against
+    `transformers.…Qwen3VLForConditionalGeneration` — which is the convention diffusers and
+    ComfyUI use for the same situation. What upstream's suffix promises and this class does
+    NOT carry is stated below rather than left for a reader to discover: there is no head
+    here and nothing generates.
 
         model.embed_tokens     1 destination     151936 x 5120
         model.layers         550 destinations    50 layers, GQA 64:8, MLP 25600
@@ -457,7 +466,7 @@ class Qwen3VLTextEncoder(nn.Module):
         super().__init__()
         self.config = config
         self.model = _LanguageModel(config)
-        self.visual = _VisionTower(config)
+        self.visual = Qwen3VLVisionModel(config)
 
     def forward(
         self,

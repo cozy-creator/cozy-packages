@@ -358,7 +358,7 @@ def arm_deepstack() -> None:
     import torch
 
     from h3_arch.config import TextEncoderConfig
-    from h3_arch.text_encoder import Qwen3VLTextEncoder
+    from h3_arch.text_encoder import Qwen3VLForConditionalGeneration
 
     config = TextEncoderConfig()
     check(
@@ -373,7 +373,7 @@ def arm_deepstack() -> None:
     # The tower must EMIT one feature per take-point, and the text encoder must ADD them on
     # the first three decoder layers. Built on `meta`, so no weight is allocated.
     with torch.device("meta"):
-        model = Qwen3VLTextEncoder(config)
+        model = Qwen3VLForConditionalGeneration(config)
     check(
         len(model.visual.deepstack_merger_list) == 3,
         f"three deepstack mergers exist, got {len(model.visual.deepstack_merger_list)}",
@@ -385,7 +385,7 @@ def arm_deepstack() -> None:
 
     import inspect
 
-    src = inspect.getsource(Qwen3VLTextEncoder.forward)
+    src = inspect.getsource(Qwen3VLForConditionalGeneration.forward)
     check(
         "index < len(deepstack)" in src and "x[mask] = x[mask] + deepstack[index]" in src,
         "deepstack features are added at the vision positions over the first three layers",
@@ -471,7 +471,7 @@ def arm_forward() -> None:
     from h3_arch import vision
     from h3_arch.config import TextEncoderConfig
     from h3_arch.presentation import PresentedReference, build
-    from h3_arch.text_encoder import Qwen3VLTextEncoder
+    from h3_arch.text_encoder import Qwen3VLForConditionalGeneration
 
     config = TextEncoderConfig(
         hidden_size=512,
@@ -486,7 +486,7 @@ def arm_forward() -> None:
         vision_out_hidden_size=512,
     )
     torch.manual_seed(0)
-    model = Qwen3VLTextEncoder(config).to(torch.float32)
+    model = Qwen3VLForConditionalGeneration(config).to(torch.float32)
     model.eval()
 
     tok = _tokenizer()
@@ -581,21 +581,29 @@ def arm_towerkeys() -> None:
     import torch
 
     from h3_arch.config import TextEncoderConfig
-    from h3_arch.text_encoder import Qwen3VLTextEncoder
+    from h3_arch.text_encoder import Qwen3VLForConditionalGeneration
 
     config = TextEncoderConfig()
     with torch.device("meta"):
-        ours = Qwen3VLTextEncoder(config)
+        ours = Qwen3VLForConditionalGeneration(config)
     mine = {
         name[len("visual.") :]: tuple(p.shape)
         for name, p in ours.named_parameters()
         if name.startswith("visual.")
     }
 
-    from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLVisionConfig
-    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLVisionModel
+    # BOTH SIDES ARE IN SCOPE HERE, and after #579 both spell the tower
+    # `Qwen3VLVisionModel` — the port answers to the name of what it ports. The module path
+    # is the real disambiguator; inside one function an alias is, so upstream's side carries
+    # the `Official` prefix this arm already uses for its variables.
+    from transformers.models.qwen3_vl.configuration_qwen3_vl import (
+        Qwen3VLVisionConfig as OfficialQwen3VLVisionConfig,
+    )
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+        Qwen3VLVisionModel as OfficialQwen3VLVisionModel,
+    )
 
-    official_config = Qwen3VLVisionConfig(
+    official_config = OfficialQwen3VLVisionConfig(
         depth=config.vision_depth,
         hidden_size=config.vision_hidden_size,
         intermediate_size=config.vision_intermediate_size,
@@ -609,7 +617,7 @@ def arm_towerkeys() -> None:
         deepstack_visual_indexes=list(config.vision_deepstack_layers),
     )
     with torch.device("meta"):
-        official = Qwen3VLVisionModel(official_config)
+        official = OfficialQwen3VLVisionModel(official_config)
     theirs = {name: tuple(p.shape) for name, p in official.named_parameters()}
 
     check(
@@ -728,9 +736,9 @@ def arm_refrows() -> None:
     # The CONDITIONING encode is not the target encode: it samples and rounds to fp16.
     import inspect
 
-    from h3_arch.video_vae import VideoVae
+    from h3_arch.video_vae import AutoencoderKLMiniMaxH3
 
-    src = inspect.getsource(VideoVae.encode_condition)
+    src = inspect.getsource(AutoencoderKLMiniMaxH3.encode_condition)
     check("torch.float16" in src, "the conditioning encode rounds the sample to float16")
     check("manual_seed" in src, "the conditioning posterior is SAMPLED under a fixed seed")
     check(
@@ -738,8 +746,8 @@ def arm_refrows() -> None:
         "the logvar is clamped the way upstream's DiagonalGaussianDistribution clamps it",
     )
     check(
-        "chunk" in inspect.getsource(VideoVae.encode)
-        and "float16" not in inspect.getsource(VideoVae.encode),
+        "chunk" in inspect.getsource(AutoencoderKLMiniMaxH3.encode)
+        and "float16" not in inspect.getsource(AutoencoderKLMiniMaxH3.encode),
         "RED: the TARGET encode still takes the mean and does NOT round — the two differ",
     )
 

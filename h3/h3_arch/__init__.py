@@ -70,27 +70,27 @@ __all__ = [
 
 
 def build_dit(config: DitConfig | None = None) -> nn.Module:
-    from .dit import MiniMaxH3Dit
+    from .dit import MiniMaxH3Transformer3DModel
 
-    return MiniMaxH3Dit(config or DitConfig())
+    return MiniMaxH3Transformer3DModel(config or DitConfig())
 
 
 def build_text_encoder(config: TextEncoderConfig | None = None) -> nn.Module:
-    from .text_encoder import Qwen3VLTextEncoder
+    from .text_encoder import Qwen3VLForConditionalGeneration
 
-    return Qwen3VLTextEncoder(config or TextEncoderConfig())
+    return Qwen3VLForConditionalGeneration(config or TextEncoderConfig())
 
 
 def build_video_vae(config: VideoVaeConfig | None = None) -> nn.Module:
-    from .video_vae import VideoVae
+    from .video_vae import AutoencoderKLMiniMaxH3
 
-    return VideoVae(config or VideoVaeConfig())
+    return AutoencoderKLMiniMaxH3(config or VideoVaeConfig())
 
 
 def build_audio_vae(config: AudioVaeConfig | None = None) -> nn.Module:
-    from .audio_vae import AudioVae
+    from .audio_vae import AutoencoderKLMiniMaxH3Audio
 
-    return AudioVae(config or AudioVaeConfig())
+    return AutoencoderKLMiniMaxH3Audio(config or AudioVaeConfig())
 
 
 #: COMPONENT NAME -> builder. The two transformer components build the same class from the

@@ -225,7 +225,7 @@ def dit_block(comfy_root: str, device: str) -> int:
         pos = values.clamp(0.0, 1.0) * (table.shape[0] - 1)
         i0 = pos.floor().long().clamp(max=table.shape[0] - 2)
         ref_curve = torch.lerp(table[i0], table[i0 + 1], (pos - i0).unsqueeze(1))
-        model = ours.MiniMaxH3Dit.__new__(ours.MiniMaxH3Dit)
+        model = ours.MiniMaxH3Transformer3DModel.__new__(ours.MiniMaxH3Transformer3DModel)
         torch.nn.Module.__init__(model)
         model.config = DitConfig()
         model.register_buffer("adaln_t_table", table)
