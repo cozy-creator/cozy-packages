@@ -36,20 +36,6 @@ from torch import Tensor, nn
 
 from .config import DitConfig
 
-#: A visual condition sits at 0.999 rather than 1.0 so it is near-clean but not identically
-#: the clean-latent class. This is the checkpoint's training convention, not a tunable.
-VISUAL_COND_TIMESTEP = 0.999
-
-
-def time_shift_sigma(sigma: Tensor | float, from_shift: float, to_shift: float) -> Tensor:
-    """Map one flow-match schedule's sigma onto another's shift, in closed form.
-
-    H3 runs video at shift 12 and audio at shift 3 off the SAME sampler clock, so the audio
-    stream's own sigma is always derivable and never separately sampled."""
-    s = torch.as_tensor(sigma, dtype=torch.float32)
-    base = s / (from_shift + s * (1.0 - from_shift))
-    return to_shift * base / (1.0 + (to_shift - 1.0) * base)
-
 
 def patchify_video(latent: Tensor, patch_size: tuple[int, int, int]) -> Tensor:
     """[B, C, T, H, W] -> [B*t*h*w, C*pt*ph*pw] rows in (t, h, w) order."""

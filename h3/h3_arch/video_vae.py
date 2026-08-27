@@ -43,9 +43,9 @@ one-window decode kept as the red control.
 
 STILL DIVERGENT, stated rather than fixed: `encode` does NOT window spatially, and the
 reference's `tiled_encode` does. The encoder's GroupNorm reduces over the spatial extent, so
-that is the same class of defect on the same argument. It is not fixed here because the only
-caller is the vision seam, which refuses (`vision_seam_unbuilt`), and an unprovable change to
-an unreachable path is a claim. It becomes real work the moment that seam is built.
+that is the same class of defect on the same argument. The live `condition_visual` seam now
+calls `encode_condition`; its full-resolution output remains unverified against upstream tiled
+encode. Changing the arithmetic without that comparison would replace one unknown with another.
 
 MEASURED ROUND-TRIP FACT, not a bug in this port: `encode` drops the last `vae_token_drop`
 tokens of the whole clip sequence, so `decode(encode(x))` is 12 frames shorter than `x`.
