@@ -624,7 +624,9 @@ def arm_live_probe() -> None:
     load_request = cast(Callable[..., Any], probe["load_request"])
     load_plan_facts = cast(Callable[..., dict[str, dict[str, str]]], probe["load_plan_facts"])
     reserve_output = cast(Callable[[Path], Path], probe["reserve_output"])
-    seal_requests = cast(Callable[[Path, list[Path]], None], probe["seal_requests"])
+    make_requests_read_only = cast(
+        Callable[[Path, list[Path]], None], probe["make_requests_read_only"]
+    )
     stage_request = cast(Callable[..., Path], probe["stage_request"])
     verify_bindings = cast(Callable[..., list[dict[str, Any]]], probe["verify_bindings"])
     verify_staged_request = cast(Callable[..., None], probe["verify_staged_request"])
@@ -782,7 +784,9 @@ def arm_live_probe() -> None:
             path.write_bytes(raw)
             return path, f"sha256:{hashlib.sha256(raw).hexdigest()}"
 
-        good_path, good_digest = request("good.json", b'{ "prompt": "proof", "seed": 17 }\n')
+        good_path, good_digest = request(
+            "good.json", b'{ "prompt": "proof", "mute": false, "seed": 17 }\n'
+        )
         request_snapshot = load_request(good_path, expected_sha256=good_digest)
         check("proof request preserves its exact integer seed", request_snapshot.seed, 17)
         refusal(
@@ -801,6 +805,12 @@ def arm_live_probe() -> None:
                 partial(load_request, path, expected_sha256=digest),
                 "RuntimeError",
             )
+        muted, muted_digest = request("muted.json", b'{"prompt":"proof","mute":true,"seed":17}')
+        refusal(
+            "muted proof refuses before inference",
+            partial(load_request, muted, expected_sha256=muted_digest),
+            "RuntimeError",
+        )
 
         existing = root / "existing-proof"
         existing.mkdir()
@@ -821,7 +831,7 @@ def arm_live_probe() -> None:
         check("staged request bytes are exact", staged.read_bytes(), request_snapshot.raw)
         check("staged request has no writable mode", staged.stat().st_mode & 0o222, 0)
         refusal(
-            "a sealed request cannot be rewritten",
+            "a read-only request cannot be rewritten without changing its mode",
             lambda: staged.write_bytes(b"different"),
             "PermissionError",
         )
@@ -836,9 +846,9 @@ def arm_live_probe() -> None:
         staged.chmod(0o644)
         staged.write_bytes(request_snapshot.raw)
         staged.chmod(0o444)
-        seal_requests(requests, [staged])
+        make_requests_read_only(requests, [staged])
         verify_staged_request(staged, request_snapshot)
-        observe("sealed request identity validates after directory seal")
+        observe("read-only request identity validates after directory mode change")
 
     result = {
         "frames": 345,

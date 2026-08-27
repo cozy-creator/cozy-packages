@@ -152,6 +152,8 @@ def load_request(path: Path, *, expected_sha256: str) -> RequestSnapshot:
     seed = value.get("seed")
     if type(seed) is not int:
         raise RuntimeError(f"request {path} must contain one integer seed")
+    if value.get("mute") is not False:
+        raise RuntimeError(f"request {path} must explicitly contain mute:false for listened proof")
     return RequestSnapshot(raw=raw, sha256=actual, seed=seed)
 
 
@@ -188,7 +190,7 @@ def stage_request(path: Path, snapshot: RequestSnapshot) -> Path:
     return path
 
 
-def seal_requests(directory: Path, paths: list[Path]) -> None:
+def make_requests_read_only(directory: Path, paths: list[Path]) -> None:
     directory.chmod(0o555)
     for path in paths:
         if path.stat().st_mode & 0o222:
@@ -508,7 +510,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime", default="cozy-runtime")
     parser.add_argument("--endpoint", type=Path, default=H3)
-    parser.add_argument("--expected-gpu", required=True)
     parser.add_argument("--expected-binding-ref", required=True)
     parser.add_argument("--expected-checkpoint", required=True)
     parser.add_argument("--expected-fl-runtime-plan-digest")
@@ -621,19 +622,12 @@ def main() -> int:
                 requests_root / "ref2va.json", snapshots["reference_media_to_video"]
             ),
         }
-        seal_requests(requests_root, list(staged_requests.values()))
+        make_requests_read_only(requests_root, list(staged_requests.values()))
 
     base = [args.runtime, "--dir", str(endpoint_path), "--json"]
     description = command_json([*base, "describe", "--check"])
     surface_digest = verify_surface(description, expected=expected_surface)
     doctor = command_json([*base, "doctor"])
-    device = doctor.get("device")
-    actual_gpu = device.get("name") if isinstance(device, dict) else None
-    if actual_gpu != args.expected_gpu:
-        raise RuntimeError(
-            f"doctor GPU identity {actual_gpu!r} differs from admitted identity "
-            f"{args.expected_gpu!r}; refusing before inference"
-        )
     bindings = command_json([*base, "bindings"])
     verify_bindings(
         bindings,
@@ -649,10 +643,9 @@ def main() -> int:
         },
         "doctor": doctor,
         "bindings": bindings,
-        "expected_gpu": args.expected_gpu,
         "expected_binding_ref": args.expected_binding_ref,
         "expected_checkpoint": expected_checkpoint,
-        "automated_status": "runtime-device-and-binding-inspected",
+        "automated_status": "runtime-device-observed-and-binding-inspected",
         "human_viewed_listened_status": "pending",
     }
     if not args.inspect_only:

@@ -117,18 +117,18 @@ uv sync --locked
 uv run ../scripts/h3-conform.py
 ```
 
-`scripts/h3-live.py` is the local installed-endpoint stage of the RunPod proof. It requires the
-expected Runtime device identity, endpoint surface, two timestep plans, binding ref, component
-snapshot, accepted Runtime plan/construction identities, and raw request bytes. Each request must be
-a UTF-8 JSON object with an explicit integer `seed`. Before inference it refuses identity drift, an
-absent/narrow task binding, a component outside the expected snapshot, request mutation, or a reused
-output root. It seals the exact request bytes inside that fresh root, runs both actions offline,
-checks the complete accepted Runtime outcome, probes the stored H264/AAC MP4 and PNG, and writes a
-machine receipt whose human viewed/listened status remains explicitly pending.
+`scripts/h3-live.py` is the local installed-endpoint stage of the RunPod proof. It records the
+Runtime device observation and requires the endpoint surface, two timestep plans, binding ref,
+component snapshot, accepted Runtime plan/construction identities, and raw request bytes. Each
+request must be a UTF-8 JSON object with an explicit integer `seed` and `mute: false`. Before
+inference it refuses identity drift, an absent/narrow task binding, a component outside the expected
+snapshot, request mutation, or a reused output root. It stages a read-only copy of the exact request
+bytes inside that fresh root, runs both actions offline, checks the complete accepted Runtime
+outcome, probes the stored H264/AAC MP4 and PNG, and writes a machine receipt whose human
+viewed/listened status remains explicitly pending.
 
 ```bash
 h3/.venv/bin/python scripts/h3-live.py \
-  --expected-gpu 'EXACT DOCTOR IDENTITY' \
   --expected-binding-ref 'cozy/minimax-h3@se-012' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
   --expected-fl-runtime-plan-digest 'sha256:EXACT_64_LOWERCASE_HEX_FL_PLAN' \
@@ -152,11 +152,14 @@ Compute each request identity from the file that will be supplied (for example,
 `sha256sum /proof/fl2va.json`) and prefix the 64 lowercase hexadecimal characters with `sha256:`.
 The `--out` path must not exist; a proof attempt never reuses prior request or media bytes.
 
-This stage does not establish provider readback or an endpoint release/container digest. The outer
-launch proof must join those authoritative receipts to this local receipt. The request digest also
+This stage records Runtime doctor output but does not interpret it as provider identity. It does not
+establish provider readback or an endpoint release/container digest. The outer launch proof must
+join those authoritative receipts to this local receipt. The request digest also
 commits only the JSON bytes, not transitive media: the vendored Runtime CLI does not yet expose the
 input-asset grant mapping needed for FL2VA keyframes or Ref2VA references. That cr-012 CLI boundary
-must land before the paid media proof; the endpoint must not hydrate files itself.
+and its canonical invocation receipt must land before the paid media proof; the endpoint must not
+hydrate files itself. Until then the read-only copy and pre/post digest checks detect accidental
+mutation but are not an execution identity or a same-user security boundary.
 
 A green static, CPU, or stored-container gate does not prove accepted video generation; both public
 actions still require viewed and listened outputs from the exact released artifact on the exact
