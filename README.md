@@ -8,7 +8,7 @@ conformance drivers, and default development bindings.
 
 | path | responsibility |
 |---|---|
-| `h3/` | MiniMax H3 FL2VA and Ref2VA FULL reference endpoint (se-012) |
+| `h3/` | MiniMax H3 FL2VA and Ref2VA FULL reference endpoint (se-013) |
 | `sdxl/` | SDXL text-to-image endpoint (se-008) |
 | `quality-judge/` | evaluation actions (ev-003) |
 | `video-assembly/` | fixed CPU-only 2-8-shot streaming assembler (se-014) |
@@ -159,10 +159,10 @@ must bind them to the request, release, placement, and generation before product
 
 ```bash
 h3/.venv/bin/python scripts/h3-live.py \
-  --expected-binding-ref 'cozy/minimax-h3@se-012' \
+  --expected-binding-ref 'cozy/minimax-h3@se-013' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
   --expected-surface-digest \
-    'sha256:bbd26cb36df308c9e6b36b476af7d57fbc3ab86d96088bec2561b33d5cd111a9' \
+    'sha256:182fa958535588f715e873b89a557fa57258aed346077b331b8de97e66e2b06d' \
   --expected-fl-plan-digest \
     'sha256:b72b46a6d753b4db3be175cd2c14ea012bd3524327e170d9bf064dd2fd1f2075' \
   --expected-ref-plan-digest \

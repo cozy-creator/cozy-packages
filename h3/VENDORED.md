@@ -10,7 +10,7 @@ of the pinned model stack).
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.2-py3-none-any.whl` | `cozy-runtime` `e11b05a6fe142874ee65812ad626422a5439ffbc` | 653,427 | `270fc44aa5124cd41c64a5525e5856e79c999286e628703b0e48097cc0c1e5b9` |
+| `vendor/cozy_runtime-0.0.2-py3-none-any.whl` | `cozy-runtime` `80e96b945defbc71a7beb6cf8068f135121f3221` | 653,931 | `26be95b68e9c90993b20c9ff03209a72c5b17e1c96e8e779ddc956f78af6e0cf` |
 | `vendor/cozy_eval-2.3.0-py3-none-any.whl` | `cozy-eval` `61560ff5cc0bce2403b7e2bc9e6bff753be58ca1` | 293,042 | `8b2af65159e9b5446d7fb1025988ba1aea74f14aea0bb27668c73260344f23a8` |
 
 The checked-in Runtime wheel reproduced byte-for-byte on 2026-08-27 and the Eval wheel on

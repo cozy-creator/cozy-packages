@@ -324,9 +324,20 @@
             "name": "references",
             "type": {
               "list": {
+                "tag_field": "type",
                 "union": [
                   {
                     "fields": [
+                      {
+                        "discriminator": true,
+                        "name": "type",
+                        "type": {
+                          "literal": [
+                            "audio"
+                          ]
+                        },
+                        "wire": "required"
+                      },
                       {
                         "asset_bound": {
                           "max_audio_channels": 8,
@@ -342,10 +353,52 @@
                       }
                     ],
                     "forbid_unknown_fields": true,
-                    "struct": "AudioReference"
+                    "struct": "AudioReference",
+                    "tag": "audio",
+                    "tag_field": "type"
                   },
                   {
                     "fields": [
+                      {
+                        "discriminator": true,
+                        "name": "type",
+                        "type": {
+                          "literal": [
+                            "image"
+                          ]
+                        },
+                        "wire": "required"
+                      },
+                      {
+                        "asset_bound": {
+                          "max_bytes": 67108864,
+                          "max_decoded_bytes": 268435456,
+                          "max_pixels_per_frame": 67108864
+                        },
+                        "name": "image",
+                        "type": {
+                          "asset": "image"
+                        },
+                        "wire": "required"
+                      }
+                    ],
+                    "forbid_unknown_fields": true,
+                    "struct": "ImageReference",
+                    "tag": "image",
+                    "tag_field": "type"
+                  },
+                  {
+                    "fields": [
+                      {
+                        "discriminator": true,
+                        "name": "type",
+                        "type": {
+                          "literal": [
+                            "video"
+                          ]
+                        },
+                        "wire": "required"
+                      },
                       {
                         "asset_bound": {
                           "max_audio_channels": 8,
@@ -363,25 +416,9 @@
                       }
                     ],
                     "forbid_unknown_fields": true,
-                    "struct": "VideoReference"
-                  },
-                  {
-                    "fields": [
-                      {
-                        "asset_bound": {
-                          "max_bytes": 67108864,
-                          "max_decoded_bytes": 268435456,
-                          "max_pixels_per_frame": 67108864
-                        },
-                        "name": "image",
-                        "type": {
-                          "asset": "image"
-                        },
-                        "wire": "required"
-                      }
-                    ],
-                    "forbid_unknown_fields": true,
-                    "struct": "ImageReference"
+                    "struct": "VideoReference",
+                    "tag": "video",
+                    "tag_field": "type"
                   }
                 ]
               }
@@ -630,5 +667,5 @@
       "service": "Telemetry"
     }
   },
-  "surface_digest": "sha256:1c038d8fceac155617c9395dcaede8d660ca49317dc0e18bea1e09f9ed7d729d"
+  "surface_digest": "sha256:182fa958535588f715e873b89a557fa57258aed346077b331b8de97e66e2b06d"
 }
