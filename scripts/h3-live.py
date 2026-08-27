@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-"""Installed-artifact MiniMax-H3 production probe.
+"""Installed-endpoint MiniMax-H3 local proof stage.
 
-Run this inside the fixed RunPod worker only after provider readback and Runtime `doctor`
-agree on the exact admitted GPU. It executes both public actions through the installed
-Runtime, probes their stored MP4/PNG media, and writes one machine receipt. It does not
-select/rent a pod, fetch an artifact, or turn automated checks into viewed/listened proof.
+Run this inside the fixed RunPod worker only after external provider and release receipts exist.
+It executes both public actions through the installed Runtime, probes their stored MP4/PNG media,
+and writes one local machine receipt. It does not inspect provider state, establish release or
+container identity, or turn automated checks into viewed/listened proof.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ import argparse
 import hashlib
 import json
 import math
+import os
+import struct
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -48,24 +50,79 @@ def _sha256(raw: bytes) -> str:
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
 
 
-def verify_plan_digests(
-    endpoint: Path, expected: dict[str, str]
-) -> dict[str, str]:
-    observed = {}
+def _bare_sha256(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+def exact_bare_sha256(value: Any, *, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise RuntimeError(f"{field} must be exactly 64 lowercase hexadecimal characters")
+    return value
+
+
+def _float_digest(values: list[float]) -> str:
+    return _bare_sha256(b"".join(struct.pack("<f", value) for value in values))
+
+
+def _schedule_digests(document: dict[str, Any]) -> dict[str, str]:
+    try:
+        evaluations = document["evaluations"]
+        terminal = document["terminal"]
+        video_sigmas = [float.fromhex(row["video_sigma"]) for row in evaluations]
+        audio_sigmas = [float.fromhex(row["audio_sigma"]) for row in evaluations]
+        video_sigmas.append(float.fromhex(terminal["video_sigma"]))
+        audio_sigmas.append(float.fromhex(terminal["audio_sigma"]))
+
+        def timesteps(name: str) -> list[float]:
+            return [
+                float.fromhex(
+                    next(
+                        item["timestep"]
+                        for item in row["modulation_classes"]
+                        if item["name"] == name
+                    )
+                )
+                for row in evaluations
+            ]
+
+        return {
+            "video_sigma_digest": _float_digest(video_sigmas),
+            "audio_sigma_digest": _float_digest(audio_sigmas),
+            "video_timestep_digest": _float_digest(timesteps("target_video")),
+            "audio_timestep_digest": _float_digest(timesteps("target_audio")),
+        }
+    except (KeyError, StopIteration, TypeError, ValueError) as exc:
+        raise RuntimeError("selected endpoint timestep plan is malformed") from exc
+
+
+def load_plan_facts(endpoint: Path, expected: dict[str, str]) -> dict[str, dict[str, str]]:
+    observed: dict[str, dict[str, str]] = {}
     for action, filename in PLAN_FILES.items():
-        expected_digest = exact_sha256(
-            expected[action], option=f"expected {action} plan digest"
-        )
+        expected_digest = exact_sha256(expected[action], option=f"expected {action} plan digest")
         path = endpoint / "timestep-plans" / filename
         try:
-            digest = _sha256(path.read_bytes())
+            raw = path.read_bytes()
         except OSError as exc:
             raise RuntimeError(f"cannot read selected endpoint plan {path}: {exc}") from exc
+        digest = _sha256(raw)
         if digest != expected_digest:
             raise RuntimeError(
                 f"selected endpoint {action} plan is {digest}, expected {expected_digest}"
             )
-        observed[action] = digest
+        try:
+            document = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"selected endpoint plan {path} is not UTF-8 JSON") from exc
+        if not isinstance(document, dict):
+            raise RuntimeError(f"selected endpoint plan {path} is not a JSON object")
+        observed[action] = {
+            "document_digest": digest,
+            **_schedule_digests(document),
+        }
     return observed
 
 
@@ -107,23 +164,35 @@ def reserve_output(path: Path) -> Path:
     return output
 
 
-def verify_file_digest(path: Path, *, expected_sha256: str) -> None:
+def verify_staged_request(path: Path, snapshot: RequestSnapshot) -> None:
+    if path.stat().st_mode & 0o222:
+        raise RuntimeError(f"staged request is writable: {path}")
     try:
         actual = _sha256(path.read_bytes())
     except OSError as exc:
         raise RuntimeError(f"cannot re-read staged request {path}: {exc}") from exc
-    if actual != expected_sha256:
-        raise RuntimeError(f"staged request {path} changed: {actual}, expected {expected_sha256}")
+    if actual != snapshot.sha256:
+        raise RuntimeError(f"staged request {path} changed: {actual}, expected {snapshot.sha256}")
 
 
 def stage_request(path: Path, snapshot: RequestSnapshot) -> Path:
     try:
         with path.open("xb") as staged:
             staged.write(snapshot.raw)
+            staged.flush()
+            os.fsync(staged.fileno())
     except OSError as exc:
         raise RuntimeError(f"cannot stage request {path}: {exc}") from exc
-    verify_file_digest(path, expected_sha256=snapshot.sha256)
+    path.chmod(0o444)
+    verify_staged_request(path, snapshot)
     return path
+
+
+def seal_requests(directory: Path, paths: list[Path]) -> None:
+    directory.chmod(0o555)
+    for path in paths:
+        if path.stat().st_mode & 0o222:
+            raise RuntimeError(f"staged request is writable: {path}")
 
 
 def command_json(command: list[str], *, timeout: int = 7200) -> dict[str, Any]:
@@ -191,24 +260,58 @@ def _result(document: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
-def verify_outcome(document: dict[str, Any]) -> None:
+def verify_outcome(
+    document: dict[str, Any],
+    *,
+    expected_plan_digest: str,
+    expected_construction_digest: str,
+) -> dict[str, str]:
+    expected_plan_digest = exact_sha256(
+        expected_plan_digest, option="--expected-runtime-plan-digest"
+    )
+    expected_construction_digest = exact_sha256(
+        expected_construction_digest, option="--expected-model-construction-digest"
+    )
     if document.get("status") != "OUTCOME_STATUS_SUCCEEDED":
         raise RuntimeError(f"Runtime outcome is not succeeded: {document.get('status')!r}")
-    expected_types = {
-        "result": dict,
-        "outputs": dict,
-        "plan": dict,
-        "ledger": dict,
-        "timings": dict,
-        "warnings": list,
+    expected_keys = {"status", "result", "outputs", "plan", "ledger", "timings", "warnings"}
+    if set(document) != expected_keys:
+        raise RuntimeError(
+            f"Runtime outcome fields differ: missing={sorted(expected_keys - set(document))}, "
+            f"unexpected={sorted(set(document) - expected_keys)}"
+        )
+    plan = document.get("plan")
+    if not isinstance(plan, dict):
+        raise RuntimeError("Runtime outcome has no accepted plan")
+    expected_plan = {
+        "plan_digest": expected_plan_digest,
+        "model_construction_digest": expected_construction_digest,
     }
-    malformed = {
-        key: type(document.get(key)).__name__
-        for key, expected_type in expected_types.items()
-        if not isinstance(document.get(key), expected_type)
+    mismatches = {
+        key: {"got": plan.get(key), "want": value}
+        for key, value in expected_plan.items()
+        if plan.get(key) != value
     }
-    if malformed:
-        raise RuntimeError(f"Runtime outcome is incomplete or malformed: {malformed}")
+    if mismatches:
+        raise RuntimeError(f"Runtime accepted-plan identity mismatch: {mismatches}")
+
+    outputs = document.get("outputs")
+    if (
+        not isinstance(outputs, dict)
+        or set(outputs) != {"video", "continuation_frame"}
+        or not all(isinstance(value, str) and value for value in outputs.values())
+    ):
+        raise RuntimeError("Runtime outcome must contain exactly video and continuation_frame")
+
+    ledger = document.get("ledger")
+    if not isinstance(ledger, dict) or not ledger:
+        raise RuntimeError("Runtime outcome has no ledger")
+    timings = document.get("timings")
+    if not isinstance(timings, dict) or not timings:
+        raise RuntimeError("Runtime outcome has no timings")
+    if document.get("warnings") != []:
+        raise RuntimeError(f"Runtime outcome carries warnings: {document.get('warnings')!r}")
+    return cast(dict[str, str], outputs)
 
 
 def verify_result(
@@ -216,21 +319,28 @@ def verify_result(
     document: dict[str, Any],
     *,
     expected_checkpoint: str,
-    expected_plan_digest: str,
-) -> dict[str, Any]:
-    verify_outcome(document)
-    result = _result(document)
-    expected_plan_digest = exact_sha256(
-        expected_plan_digest, option=f"expected {action} plan digest"
+    expected_plan: dict[str, str],
+    expected_runtime_plan_digest: str,
+    expected_construction_digest: str,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    runtime_outputs = verify_outcome(
+        document,
+        expected_plan_digest=expected_runtime_plan_digest,
+        expected_construction_digest=expected_construction_digest,
     )
+    result = _result(document)
     expected = {
         "frames": 345,
         "fps": 24,
         "sample_rate": 32000,
         "sigma_grid_points": 30,
         "transformer_evaluations": 29,
-        "timestep_plan_digest": expected_plan_digest.removeprefix("sha256:"),
+        "timestep_plan_digest": expected_plan["document_digest"].removeprefix("sha256:"),
         "checkpoint": expected_checkpoint,
+        "video_sigma_digest": expected_plan["video_sigma_digest"],
+        "audio_sigma_digest": expected_plan["audio_sigma_digest"],
+        "video_timestep_digest": expected_plan["video_timestep_digest"],
+        "audio_timestep_digest": expected_plan["audio_timestep_digest"],
     }
     mismatches = {
         key: {"got": result.get(key), "want": want}
@@ -240,18 +350,13 @@ def verify_result(
     if mismatches:
         raise RuntimeError(f"{action} receipt mismatch: {mismatches}")
     for key in (
-        "video_sigma_digest",
-        "audio_sigma_digest",
-        "video_timestep_digest",
-        "audio_timestep_digest",
         "video_pixel_digest",
         "audio_sample_digest",
-        "continuation_frame_digest",
         "continuation_pixel_digest",
     ):
-        if not result.get(key):
-            raise RuntimeError(f"{action} result has no {key}")
-    return result
+        exact_bare_sha256(result.get(key), field=f"{action} result {key}")
+    _digest(result.get("continuation_frame_digest"))
+    return result, runtime_outputs
 
 
 def _digest(value: Any) -> str:
@@ -259,25 +364,60 @@ def _digest(value: Any) -> str:
         value = value.get("digest")
     if not isinstance(value, str):
         raise RuntimeError(f"output asset has no digest: {value!r}")
-    return value.removeprefix("sha256:")
+    if value.startswith("sha256:"):
+        return exact_sha256(value, option="output asset digest").removeprefix("sha256:")
+    return exact_bare_sha256(value, field="output asset digest")
 
 
-def probe_media(output: Path, result: dict[str, Any]) -> dict[str, Any]:
-    import av
-
-    videos = sorted(output.rglob("*.mp4"))
-    images = sorted(output.rglob("*.png"))
-    if len(videos) != 1 or len(images) != 1:
+def verify_media_contract(
+    *,
+    video_format: str,
+    video_codec: str,
+    audio_codec: str,
+    video_width: int,
+    video_height: int,
+    image_format: str,
+    image_codec: str,
+    expected_width: int,
+    expected_height: int,
+) -> None:
+    if "mp4" not in video_format.split(","):
+        raise RuntimeError(f"stored video container is {video_format!r}, expected MP4")
+    if video_codec != "h264" or audio_codec != "aac":
         raise RuntimeError(
-            f"expected one MP4 and one PNG under {output}, got {len(videos)} and {len(images)}"
+            f"stored MP4 codecs are {video_codec!r}/{audio_codec!r}, expected H264/AAC"
+        )
+    if (video_width, video_height) != (expected_width, expected_height):
+        raise RuntimeError("stored video dimensions differ from the result geometry")
+    if image_format != "png_pipe" or image_codec != "png":
+        raise RuntimeError(
+            f"stored continuation container/codec is {image_format!r}/{image_codec!r}, expected PNG"
         )
 
-    video_path, image_path = videos[0], images[0]
+
+def probe_media(
+    output: Path, result: dict[str, Any], runtime_outputs: dict[str, str]
+) -> dict[str, Any]:
+    import av
+
+    output = output.resolve()
+    video_path = Path(runtime_outputs["video"]).resolve()
+    image_path = Path(runtime_outputs["continuation_frame"]).resolve()
+    try:
+        video_path.relative_to(output)
+        image_path.relative_to(output)
+    except ValueError as exc:
+        raise RuntimeError("Runtime output grant escaped the fresh action directory") from exc
+    if not video_path.is_file() or not image_path.is_file():
+        raise RuntimeError("Runtime output grant does not name two stored media files")
     with av.open(str(video_path)) as container:
         if len(container.streams.video) != 1 or len(container.streams.audio) != 1:
             raise RuntimeError("output MP4 must contain exactly one video and one audio stream")
         video_stream = container.streams.video[0]
         audio_stream = container.streams.audio[0]
+        video_format = container.format.name
+        video_codec = video_stream.codec_context.name
+        audio_codec = audio_stream.codec_context.name
         frames = 0
         first_mean = last_mean = 0.0
         for frame in container.decode(video=0):
@@ -306,14 +446,28 @@ def probe_media(output: Path, result: dict[str, Any]) -> dict[str, Any]:
         )
 
     with av.open(str(image_path)) as container:
+        image_format = container.format.name
         decoded = list(container.decode(video=0))
         if len(decoded) != 1:
             raise RuntimeError(f"continuation PNG decoded {len(decoded)} frames")
         image = decoded[0].to_ndarray(format="rgb24")
+        image_codec = container.streams.video[0].codec_context.name
+
+    verify_media_contract(
+        video_format=video_format,
+        video_codec=video_codec,
+        audio_codec=audio_codec,
+        video_width=int(video_stream.width),
+        video_height=int(video_stream.height),
+        image_format=image_format,
+        image_codec=image_codec,
+        expected_width=int(result["width"]),
+        expected_height=int(result["height"]),
+    )
 
     video_sha = hashlib.sha256(video_path.read_bytes()).hexdigest()
     continuation_sha = hashlib.sha256(image_path.read_bytes()).hexdigest()
-    continuation_pixels = hashlib.sha256(image).hexdigest()
+    continuation_pixels = hashlib.sha256(image.tobytes(order="C")).hexdigest()
     if video_sha != _digest(result["video"]):
         raise RuntimeError("stored MP4 digest differs from the returned VideoAsset")
     if continuation_sha != _digest(result["continuation_frame"]):
@@ -331,6 +485,9 @@ def probe_media(output: Path, result: dict[str, Any]) -> dict[str, Any]:
         "video_bytes": video_path.stat().st_size,
         "video_frames": frames,
         "video_fps": rate,
+        "video_container": video_format,
+        "video_codec": video_codec,
+        "audio_codec": audio_codec,
         "audio_sample_rate": sample_rate,
         "audio_samples": audio_samples,
         "audio_seconds": audio_seconds,
@@ -342,6 +499,8 @@ def probe_media(output: Path, result: dict[str, Any]) -> dict[str, Any]:
         "continuation_bytes": image_path.stat().st_size,
         "continuation_width": int(image.shape[1]),
         "continuation_height": int(image.shape[0]),
+        "continuation_container": image_format,
+        "continuation_codec": image_codec,
     }
 
 
@@ -352,6 +511,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-gpu", required=True)
     parser.add_argument("--expected-binding-ref", required=True)
     parser.add_argument("--expected-checkpoint", required=True)
+    parser.add_argument("--expected-fl-runtime-plan-digest")
+    parser.add_argument("--expected-fl-model-construction-digest")
+    parser.add_argument("--expected-ref-runtime-plan-digest")
+    parser.add_argument("--expected-ref-model-construction-digest")
     parser.add_argument("--expected-surface-digest", required=True)
     parser.add_argument("--expected-fl-plan-digest", required=True)
     parser.add_argument("--expected-ref-plan-digest", required=True)
@@ -369,20 +532,23 @@ def parse_args() -> argparse.Namespace:
             args.expected_fl_input_sha256,
             args.ref_input,
             args.expected_ref_input_sha256,
+            args.expected_fl_runtime_plan_digest,
+            args.expected_fl_model_construction_digest,
+            args.expected_ref_runtime_plan_digest,
+            args.expected_ref_model_construction_digest,
         )
     ):
         parser.error(
             "--fl-input, --expected-fl-input-sha256, --ref-input, and "
-            "--expected-ref-input-sha256 are required unless --inspect-only is set"
+            "--expected-ref-input-sha256, and all four per-action Runtime plan/construction "
+            "digests are required unless --inspect-only is set"
         )
     return args
 
 
 def main() -> int:
     args = parse_args()
-    expected_checkpoint = exact_sha256(
-        args.expected_checkpoint, option="--expected-checkpoint"
-    )
+    expected_checkpoint = exact_sha256(args.expected_checkpoint, option="--expected-checkpoint")
     expected_surface = exact_sha256(
         args.expected_surface_digest, option="--expected-surface-digest"
     )
@@ -397,7 +563,7 @@ def main() -> int:
     endpoint_path = args.endpoint.expanduser().resolve()
     if not endpoint_path.is_dir():
         raise RuntimeError(f"selected endpoint is not a directory: {endpoint_path}")
-    plan_digests = verify_plan_digests(endpoint_path, expected_plans)
+    plan_facts = load_plan_facts(endpoint_path, expected_plans)
 
     snapshots: dict[str, RequestSnapshot] = {}
     if not args.inspect_only:
@@ -405,6 +571,32 @@ def main() -> int:
         assert args.ref_input is not None
         assert args.expected_fl_input_sha256 is not None
         assert args.expected_ref_input_sha256 is not None
+        assert args.expected_fl_runtime_plan_digest is not None
+        assert args.expected_fl_model_construction_digest is not None
+        assert args.expected_ref_runtime_plan_digest is not None
+        assert args.expected_ref_model_construction_digest is not None
+        expected_runtime = {
+            "first_last_frame_to_video": (
+                exact_sha256(
+                    args.expected_fl_runtime_plan_digest,
+                    option="--expected-fl-runtime-plan-digest",
+                ),
+                exact_sha256(
+                    args.expected_fl_model_construction_digest,
+                    option="--expected-fl-model-construction-digest",
+                ),
+            ),
+            "reference_media_to_video": (
+                exact_sha256(
+                    args.expected_ref_runtime_plan_digest,
+                    option="--expected-ref-runtime-plan-digest",
+                ),
+                exact_sha256(
+                    args.expected_ref_model_construction_digest,
+                    option="--expected-ref-model-construction-digest",
+                ),
+            ),
+        }
         snapshots = {
             "first_last_frame_to_video": load_request(
                 args.fl_input.expanduser().resolve(),
@@ -429,6 +621,7 @@ def main() -> int:
                 requests_root / "ref2va.json", snapshots["reference_media_to_video"]
             ),
         }
+        seal_requests(requests_root, list(staged_requests.values()))
 
     base = [args.runtime, "--dir", str(endpoint_path), "--json"]
     description = command_json([*base, "describe", "--check"])
@@ -452,14 +645,14 @@ def main() -> int:
         "endpoint": {
             "resolved_path": str(endpoint_path),
             "surface_digest": surface_digest,
-            "plan_digests": plan_digests,
+            "plans": plan_facts,
         },
         "doctor": doctor,
         "bindings": bindings,
         "expected_gpu": args.expected_gpu,
         "expected_binding_ref": args.expected_binding_ref,
         "expected_checkpoint": expected_checkpoint,
-        "automated_status": "provider-and-binding-inspected",
+        "automated_status": "runtime-device-and-binding-inspected",
         "human_viewed_listened_status": "pending",
     }
     if not args.inspect_only:
@@ -470,6 +663,7 @@ def main() -> int:
         results = {}
         for action, output in actions:
             payload = staged_requests[action]
+            verify_staged_request(payload, snapshots[action])
             document = command_json(
                 [
                     *base,
@@ -480,14 +674,18 @@ def main() -> int:
                     "--out",
                     str(output),
                     "--offline",
+                    "--strict-keys",
                 ]
             )
-            verify_file_digest(payload, expected_sha256=snapshots[action].sha256)
-            result = verify_result(
+            verify_staged_request(payload, snapshots[action])
+            runtime_plan_digest, construction_digest = expected_runtime[action]
+            result, runtime_outputs = verify_result(
                 action,
                 document,
                 expected_checkpoint=expected_checkpoint,
-                expected_plan_digest=plan_digests[action],
+                expected_plan=plan_facts[action],
+                expected_runtime_plan_digest=runtime_plan_digest,
+                expected_construction_digest=construction_digest,
             )
             results[action] = {
                 "request": {
@@ -498,9 +696,9 @@ def main() -> int:
                 },
                 "runtime": document,
             }
-            results[action]["media"] = probe_media(output, result)
+            results[action]["media"] = probe_media(output, result, runtime_outputs)
         receipt["actions"] = results
-        receipt["automated_status"] = "both-actions-stored-media-green"
+        receipt["automated_status"] = "both-actions-runtime-and-stored-media-green"
     receipt_path = output_root / "h3-production-probe.json"
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     print(receipt_path)
