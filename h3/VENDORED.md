@@ -1,23 +1,19 @@
 # H3 dependency and asset closure
 
 This directory has one Python dependency authority: `pyproject.toml` plus
-`uv.lock`. Cozy-owned libraries are immutable release URLs in that lock;
-third-party packages are exact lock entries. The two checked-in wheels are
-byte-identical CI mirrors of their locked release assets, not a second
-selection authority. TensorFS is not an endpoint dependency, and Pillow is a
-transitive dependency of the pinned model stack.
+`uv.lock`. Cozy-owned libraries are immutable local wheels; third-party
+packages are exact lock entries. TensorFS is not an endpoint dependency, and
+Pillow is not a direct endpoint dependency (it remains a transitive dependency
+of the pinned model stack).
 
 ## Cozy-owned wheels
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.1-py3-none-any.whl` | `cozy-runtime` `dc8d847eff7a07205aa47282a51dc6c321b5fbf2` | 573,141 | `bf9011aa67bb913495eb77059b07fc42b46bd57e71c99be9e0b3b641b0a2dc9b` |
-| `vendor/cozy_eval-2.3.0-py3-none-any.whl` | `cozy-eval` `61560ff5cc0bce2403b7e2bc9e6bff753be58ca1` | 293,042 | `e54f6a6c17b412d461b6c9e755a3fe7b692b40353a28e8d142a606ba63563eeb` |
+| `vendor/cozy_runtime-0.0.1-py3-none-any.whl` | `cozy-runtime` `1bbf0bd934fe605db70401566ac4c3f12dfbe6c1` | 583,723 | `3af60632326a34f336571f4cc46c0e0288a86c96f61aa0443208c1b342a4dca8` |
+| `vendor/cozy_eval-2.3.0-py3-none-any.whl` | `cozy-eval` `61560ff5cc0bce2403b7e2bc9e6bff753be58ca1` | 293,042 | `8b2af65159e9b5446d7fb1025988ba1aea74f14aea0bb27668c73260344f23a8` |
 
-Both checked-in files were copied from and reverified against the exact th-044
-CAS objects selected from the immutable release URLs. Rebuilding from the
-source commits is a separate provenance check, not a substitute for those
-stored bytes:
+Both checked-in wheels reproduced byte-for-byte on 2026-08-26 with uv 0.9.18:
 
 ```sh
 runtime_src=/absolute/path/to/cozy-runtime

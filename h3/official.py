@@ -36,6 +36,13 @@ MAX_VIDEO_REFERENCES = 3
 MAX_AUDIO_REFERENCES = 3
 MAX_REFERENCES = 12
 MAX_CONDITIONER_VISION_TOKENS = 32768
+_WEIGHTED_CONFIG_SECTIONS = {
+    "audio_vae",
+    "text_encoder",
+    "transformer",
+    "transformer_ref",
+    "video_vae",
+}
 _ASSETS = Path(__file__).resolve().parent
 
 
@@ -317,7 +324,7 @@ class OfficialH3Pipeline:
         )
         from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
 
-        mapping = config.mapping()
+        mapping = _artifact_sections(config.mapping())
         blocks = MiniMaxH3Blocks().get_workflow(task)
         pipe = MiniMaxH3ModularPipeline(blocks=blocks)
 
@@ -556,6 +563,20 @@ def _section(mapping: Mapping[str, object], name: str) -> dict[str, Any]:
             f"artifact config has no {name!r} mapping", code="artifact_config", fields=[name]
         )
     return dict(value)
+
+
+def _artifact_sections(mapping: Mapping[str, object]) -> Mapping[str, object]:
+    present = set(mapping)
+    if present != _WEIGHTED_CONFIG_SECTIONS:
+        missing = sorted(_WEIGHTED_CONFIG_SECTIONS - present)
+        unexpected = sorted(present - _WEIGHTED_CONFIG_SECTIONS)
+        raise ConformanceError(
+            f"artifact config sections differ from the uniform dual FULL contract: "
+            f"missing={missing}, unexpected={unexpected}",
+            code="artifact_config",
+            fields=[*missing, *unexpected],
+        )
+    return mapping
 
 
 def _apply_transformer_dtype(transformer: Any) -> Any:

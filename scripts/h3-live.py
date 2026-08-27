@@ -16,7 +16,7 @@ import math
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parent.parent
 H3 = ROOT / "h3"
@@ -36,14 +36,61 @@ def command_json(command: list[str], *, timeout: int = 7200) -> dict[str, Any]:
         print(result.stdout, end="")
         print(result.stderr, end="", file=sys.stderr)
         raise RuntimeError(f"command exited {result.returncode}: {' '.join(command)}")
-    for line in reversed(result.stdout.splitlines()):
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            return value
-    raise RuntimeError(f"command printed no JSON object: {' '.join(command)}")
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"command printed invalid JSON: {' '.join(command)}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError(f"command JSON is not an object: {' '.join(command)}")
+    return value
+
+
+def verify_bindings(
+    document: dict[str, Any], *, expected_ref: str, expected_checkpoint: str
+) -> list[dict[str, Any]]:
+    if not expected_checkpoint.startswith("sha256:") or len(expected_checkpoint) != 71:
+        raise RuntimeError(
+            "--expected-checkpoint must be one exact sha256:<64 lowercase hex> value"
+        )
+    if any(character not in "0123456789abcdef" for character in expected_checkpoint[7:]):
+        raise RuntimeError("--expected-checkpoint is not lowercase hexadecimal")
+
+    bindings = document.get("bindings")
+    if not isinstance(bindings, list) or not all(isinstance(row, dict) for row in bindings):
+        raise RuntimeError("Runtime bindings result has no binding-record list")
+    records = cast(list[dict[str, Any]], bindings)
+    expected_paths = {
+        "first_last_frame_to_video.models.model",
+        "reference_media_to_video.models.model",
+    }
+    if len(records) != 2 or {row.get("model_binding_path") for row in records} != expected_paths:
+        raise RuntimeError("Runtime bindings do not contain exactly the two H3 model slots")
+
+    expected_components = {
+        "audio_vae",
+        "text_encoder",
+        "transformer",
+        "transformer_ref",
+        "video_vae",
+    }
+    for row in records:
+        path = row["model_binding_path"]
+        if row.get("ref") != expected_ref:
+            raise RuntimeError(f"{path} resolved {row.get('ref')!r}, expected {expected_ref!r}")
+        if row.get("installed") is not True:
+            raise RuntimeError(f"{path} is not installed")
+        if set(row.get("components", ())) != expected_components:
+            raise RuntimeError(f"{path} does not resolve the complete dual H3 component set")
+        snapshots = row.get("snapshots")
+        if not isinstance(snapshots, dict) or set(snapshots) != expected_components:
+            raise RuntimeError(f"{path} has an incomplete component snapshot map")
+        if set(snapshots.values()) != {expected_checkpoint}:
+            raise RuntimeError(f"{path} does not resolve only {expected_checkpoint}")
+        stamps = row.get("stamps")
+        tasks = stamps.get("task") if isinstance(stamps, dict) else None
+        if not isinstance(tasks, list) or set(tasks) != {"fl2va", "ref2va"}:
+            raise RuntimeError(f"{path} does not carry the exact dual task stamp")
+    return records
 
 
 def _result(document: dict[str, Any]) -> dict[str, Any]:
@@ -152,7 +199,7 @@ def probe_media(output: Path, result: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("stored MP4 digest differs from the returned VideoAsset")
     if continuation_sha != _digest(result["continuation_frame"]):
         raise RuntimeError("stored PNG digest differs from the returned ImageAsset")
-    if continuation_sha != result["continuation_frame_digest"]:
+    if continuation_sha != _digest(result["continuation_frame_digest"]):
         raise RuntimeError("stored PNG digest differs from continuation_frame_digest")
     if continuation_pixels != result["continuation_pixel_digest"]:
         raise RuntimeError("decoded PNG pixels differ from the pre-encode continuation pixels")
@@ -184,12 +231,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime", default="cozy-runtime")
     parser.add_argument("--endpoint", type=Path, default=H3)
     parser.add_argument("--expected-gpu", required=True)
+    parser.add_argument("--expected-binding-ref", required=True)
     parser.add_argument("--expected-checkpoint", required=True)
-    parser.add_argument("--fl-input", type=Path, required=True)
-    parser.add_argument("--ref-input", type=Path, required=True)
+    parser.add_argument("--fl-input", type=Path)
+    parser.add_argument("--ref-input", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--inspect-only", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.inspect_only and (args.fl_input is None or args.ref_input is None):
+        parser.error("--fl-input and --ref-input are required unless --inspect-only is set")
+    return args
 
 
 def main() -> int:
@@ -204,17 +255,25 @@ def main() -> int:
             f"{args.expected_gpu!r}; refusing before inference"
         )
     bindings = command_json([*base, "bindings"])
+    verify_bindings(
+        bindings,
+        expected_ref=args.expected_binding_ref,
+        expected_checkpoint=args.expected_checkpoint,
+    )
     receipt: dict[str, Any] = {
         "schema": "cozy.minimax_h3.production_probe/1",
         "doctor": doctor,
         "bindings": bindings,
         "expected_gpu": args.expected_gpu,
+        "expected_binding_ref": args.expected_binding_ref,
         "expected_checkpoint": args.expected_checkpoint,
         "automated_status": "provider-and-binding-inspected",
         "human_viewed_listened_status": "pending",
     }
     args.out.mkdir(parents=True, exist_ok=True)
     if not args.inspect_only:
+        assert args.fl_input is not None
+        assert args.ref_input is not None
         actions = (
             ("first_last_frame_to_video", args.fl_input, args.out / "fl2va"),
             ("reference_media_to_video", args.ref_input, args.out / "ref2va"),

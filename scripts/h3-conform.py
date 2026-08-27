@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import runpy
 import struct
 import sys
 from collections import Counter
@@ -33,6 +34,7 @@ from official import (  # noqa: E402
     SIGMA_GRID_POINTS,
     _aligned_soundtrack,
     _apply_transformer_dtype,
+    _artifact_sections,
     _as_float32,
     _processor,
     _validate_model_contract,
@@ -318,6 +320,23 @@ def arm_graph_and_dtypes() -> None:
         lambda: _validate_model_contract(fl_pipe, transformer, video_vae, wrong_audio_vae),
         "artifact_config",
     )
+    full_sections: dict[str, dict[str, object]] = {
+        "audio_vae": {},
+        "text_encoder": {},
+        "transformer": {},
+        "transformer_ref": {},
+        "video_vae": {},
+    }
+    check(
+        "uniform dual FULL config sections",
+        set(_artifact_sections(full_sections)),
+        set(full_sections),
+    )
+    refusal(
+        "an unweighted processor config cannot hide in the artifact",
+        lambda: _artifact_sections({**full_sections, "processor": {}}),
+        "artifact_config",
+    )
     transformer_counts = Counter(str(value.dtype) for value in transformer.state_dict().values())
     check("transformer destination count", len(transformer.state_dict()), 638)
     check(
@@ -596,6 +615,114 @@ def arm_descriptor() -> None:
         check(f"{name} media capability", "media_decode" in entry["capabilities"], True)
 
 
+def arm_live_probe() -> None:
+    print("\n== installed-artifact production probe boundary ==")
+    probe = runpy.run_path(str(ROOT / "scripts" / "h3-live.py"))
+    command_json = cast(Callable[[list[str]], dict[str, Any]], probe["command_json"])
+    verify_bindings = cast(Callable[..., list[dict[str, Any]]], probe["verify_bindings"])
+
+    check(
+        "Runtime multiline JSON is one document",
+        command_json(
+            [
+                sys.executable,
+                "-c",
+                "import json; print(json.dumps({'multiline': True}, indent=2))",
+            ]
+        ),
+        {"multiline": True},
+    )
+
+    binding_ref = "cozy/minimax-h3@se-012"
+    snapshot = "sha256:" + "1" * 64
+    components = ["audio_vae", "text_encoder", "transformer", "transformer_ref", "video_vae"]
+
+    def binding(path: str, *, installed: bool = True) -> dict[str, Any]:
+        return {
+            "model_binding_path": path,
+            "ref": binding_ref,
+            "installed": installed,
+            "components": components,
+            "snapshots": dict.fromkeys(components, snapshot),
+            "stamps": {"task": ["fl2va", "ref2va"]},
+        }
+
+    document = {
+        "bindings": [
+            binding("first_last_frame_to_video.models.model"),
+            binding("reference_media_to_video.models.model"),
+        ]
+    }
+    check(
+        "one installed uniform dual binding arms both actions",
+        len(
+            verify_bindings(
+                document,
+                expected_ref=binding_ref,
+                expected_checkpoint=snapshot,
+            )
+        ),
+        2,
+    )
+    refusal(
+        "an uninstalled action refuses before inference",
+        lambda: verify_bindings(
+            {
+                "bindings": [
+                    binding("first_last_frame_to_video.models.model", installed=False),
+                    binding("reference_media_to_video.models.model"),
+                ]
+            },
+            expected_ref=binding_ref,
+            expected_checkpoint=snapshot,
+        ),
+        "RuntimeError",
+    )
+    refusal(
+        "a narrow artifact refuses before inference",
+        lambda: verify_bindings(
+            {
+                "bindings": [
+                    {
+                        **binding("first_last_frame_to_video.models.model"),
+                        "components": components[:-1],
+                    },
+                    binding("reference_media_to_video.models.model"),
+                ]
+            },
+            expected_ref=binding_ref,
+            expected_checkpoint=snapshot,
+        ),
+        "RuntimeError",
+    )
+    refusal(
+        "a different component snapshot refuses before inference",
+        lambda: verify_bindings(
+            document,
+            expected_ref=binding_ref,
+            expected_checkpoint="sha256:" + "2" * 64,
+        ),
+        "RuntimeError",
+    )
+    refusal(
+        "a single-task artifact refuses before inference",
+        lambda: verify_bindings(
+            {
+                "bindings": [
+                    {
+                        **binding("first_last_frame_to_video.models.model"),
+                        "stamps": {"task": ["fl2va"]},
+                    },
+                    binding("reference_media_to_video.models.model"),
+                ]
+            },
+            expected_ref=binding_ref,
+            expected_checkpoint=snapshot,
+        ),
+        "RuntimeError",
+    )
+
+
 ARMS = {
     "schedule": arm_schedule,
     "graph": arm_graph_and_dtypes,
@@ -603,6 +730,7 @@ ARMS = {
     "media": arm_media,
     "gates": arm_output_gates,
     "descriptor": arm_descriptor,
+    "live-probe": arm_live_probe,
 }
 
 

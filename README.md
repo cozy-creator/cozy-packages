@@ -118,13 +118,15 @@ uv run ../scripts/h3-conform.py
 ```
 
 `scripts/h3-live.py` is the final installed-artifact/RunPod probe. It requires the exact admitted GPU
-identity plus one payload for each action, refuses identity drift before inference, runs both
-actions offline, probes the stored H264/AAC MP4 and PNG, and writes a machine receipt whose human
-viewed/listened status remains explicitly pending. For example:
+identity, binding ref, component snapshot, and one payload for each action. Before inference it
+refuses identity drift, an absent/narrow task binding, or a component that resolves outside that
+snapshot. It then runs both actions offline, probes the stored H264/AAC MP4 and PNG, and writes a
+machine receipt whose human viewed/listened status remains explicitly pending. For example:
 
 ```bash
 h3/.venv/bin/python scripts/h3-live.py \
   --expected-gpu 'EXACT DOCTOR IDENTITY' \
+  --expected-binding-ref 'cozy/minimax-h3@se-012' \
   --expected-checkpoint 'EXACT RESOLVED SNAPSHOT REF' \
   --fl-input /proof/fl2va.json --ref-input /proof/ref2va.json \
   --out /proof/output
