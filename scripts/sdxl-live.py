@@ -1081,6 +1081,9 @@ def section_judge() -> None:
     note(f"{image} — {image.stat().st_size:,} B, the same PNG `--out` wrote")
 
 
+FP8_RUNS = 6
+
+
 def section_fp8() -> None:
     """The fp8 rung's `staged_decode` route, run N times against ONE plan.
 
@@ -1110,7 +1113,7 @@ def section_fp8() -> None:
                "steps": 4, "aspect_ratio": "1:1", "seed": 1005}
 
     head("the fp8 staged_decode route, N times, ONE plan")
-    runs = int(os.environ.get("SE008_FP8_RUNS", "6"))
+    runs = FP8_RUNS
     plans: set[str] = set()
     digests: list[str] = []
     nan_runs = 0
@@ -1156,7 +1159,21 @@ SECTIONS = {
 
 
 def main(argv: list[str]) -> int:
-    names = argv[1:] or ["product"]
+    global FP8_RUNS
+    names: list[str] = []
+    rest = argv[1:]
+    index = 0
+    while index < len(rest):
+        if rest[index] == "--fp8-runs":
+            if index + 1 >= len(rest) or not rest[index + 1].isdigit():
+                print("--fp8-runs needs an integer count", file=sys.stderr)
+                return 2
+            FP8_RUNS = int(rest[index + 1])
+            index += 2
+        else:
+            names.append(rest[index])
+            index += 1
+    names = names or ["product"]
     unknown = [n for n in names if n not in SECTIONS]
     if unknown:
         print(f"unknown section(s): {', '.join(unknown)}", file=sys.stderr)

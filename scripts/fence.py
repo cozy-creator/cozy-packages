@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Structural fences for the endpoint packages. Static analysis, never a test suite.
 
-Seven properties CI must not let drift, each checked as a fact about the source rather than
+Eight properties CI must not let drift, each checked as a fact about the source rather than
 as a convention someone remembers:
 
   1. author-surface-only  an endpoint imports `cozy_runtime.author` and nothing else from
@@ -25,6 +25,10 @@ as a convention someone remembers:
   5. no-test-suite        tracker README #160.
   6. h3-media-boundary    H3 consumes Runtime decoded values; it does not open media itself.
   7. h3-official-hardcut  the official dual-task implementation has no legacy/community route.
+  8. env-free-endpoints   endpoint code reads no environment (se-016). Configuration is
+                          typed bindings and settings; the executor ERASES `COZY_*`/token
+                          env anyway, so an env read is a channel that never works in
+                          production.
 
     nice -n 19 .venv/bin/python scripts/fence.py
 """
@@ -400,6 +404,37 @@ def fence_h3_official_hardcut() -> Fence:
     return bad, "legacy graph/actions and community imports are absent from H3"
 
 
+_ENV_ATTRS = {"environ", "environb", "getenv", "getenvb", "putenv", "unsetenv"}
+
+
+def fence_no_env() -> Fence:
+    """se-016: any `os.environ`/`os.getenv` spelling in endpoint code is red — whether
+    dotted, imported by name, or aliased at import."""
+    bad: list[str] = []
+    for path in endpoint_modules():
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "os"
+                and node.attr in _ENV_ATTRS
+            ):
+                bad.append(
+                    f"{rel(path)}:{node.lineno}: os.{node.attr} — endpoint code reads no "
+                    "environment; configuration arrives as typed bindings and settings"
+                )
+            if isinstance(node, ast.ImportFrom) and node.module == "os":
+                for alias in node.names:
+                    if alias.name in _ENV_ATTRS:
+                        bad.append(
+                            f"{rel(path)}:{node.lineno}: from os import {alias.name} — "
+                            "endpoint code reads no environment"
+                        )
+    modules = len(endpoint_modules())
+    return bad, f"{len(_ENV_ATTRS)} env-read spellings absent from {modules} modules"
+
+
 FENCES = (
     ("author-surface-only", fence_author_surface),
     ("no-identifiers-in-code", fence_identifiers),
@@ -408,6 +443,7 @@ FENCES = (
     ("no-test-suite", fence_no_tests),
     ("h3-media-boundary", fence_h3_media_boundary),
     ("h3-official-hardcut", fence_h3_official_hardcut),
+    ("env-free-endpoints", fence_no_env),
 )
 
 
