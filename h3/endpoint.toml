@@ -12,4 +12,4 @@ object = "h3:app"
 
 [bindings."Ref2VAModel"]
 repo = "cozy/minimax-h3"
-release = "dual-full-r2"
+release = "dual-full-r3"
