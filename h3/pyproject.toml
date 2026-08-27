@@ -8,6 +8,7 @@ dependencies = [
     "diffusers==0.40.0",
     "msgspec>=0.19",
     "numpy>=1.26",
+    "tensorfs==0.0.1",
     "torch==2.9.1+cu129",
     "torchaudio==2.9.1+cu129",
     "torchvision==0.24.1+cu129",
@@ -17,6 +18,7 @@ dependencies = [
 [tool.uv.sources]
 cozy-runtime = { path = "vendor/cozy_runtime-0.0.2-py3-none-any.whl" }
 cozy-eval = { path = "vendor/cozy_eval-2.3.0-py3-none-any.whl" }
+tensorfs = { path = "vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl" }
 torch = { index = "pytorch-cu129" }
 torchaudio = { index = "pytorch-cu129" }
 torchvision = { index = "pytorch-cu129" }
