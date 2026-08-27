@@ -1025,6 +1025,8 @@ def arm_live_probe() -> None:
         frame_count: int = 345,
         audio_rate: int = 32000,
         audio_sample_count: int = 460000,
+        continuation_width: int = 32,
+        continuation_height: int = 32,
     ) -> tuple[dict[str, Any], dict[str, str]]:
         import av
         import numpy as np
@@ -1066,11 +1068,15 @@ def arm_live_probe() -> None:
         for packet in audio_stream.encode():
             container.mux(packet)
         container.close()
-        Image.fromarray(last).save(continuation)
+        continuation_pixels_array = np.zeros(
+            (continuation_height, continuation_width, 3), dtype=np.uint8
+        )
+        continuation_pixels_array.fill(last[0, 0, 0])
+        Image.fromarray(continuation_pixels_array).save(continuation)
 
         video_digest = hashlib.sha256(video.read_bytes()).hexdigest()
         continuation_digest = hashlib.sha256(continuation.read_bytes()).hexdigest()
-        continuation_pixels = hashlib.sha256(last.tobytes()).hexdigest()
+        continuation_pixels = hashlib.sha256(continuation_pixels_array.tobytes()).hexdigest()
         result = {
             "video": {"digest": f"sha256:{video_digest}"},
             "continuation_frame": {"digest": f"sha256:{continuation_digest}"},
@@ -1195,9 +1201,10 @@ def arm_live_probe() -> None:
         refusal(
             "a real continuation geometry mismatch refuses",
             lambda: probe_media(
-                good_root,
-                {**good_result, "width": 31},
-                good_outputs,
+                media_root / "wrong-continuation-geometry",
+                *encoded_media_fixture(
+                    media_root / "wrong-continuation-geometry", continuation_width=31
+                ),
             ),
             "RuntimeError",
         )
