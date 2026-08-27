@@ -175,7 +175,7 @@ dependencies = [
     { name = "protobuf", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.2-py3-none-any.whl", hash = "sha256:0afb67748718df33b3e23abc3303d7b3f2dcd6da649e090a0d558c81fad422ca" },
+    { filename = "cozy_runtime-0.0.2-py3-none-any.whl", hash = "sha256:af21106ba921e3f5cb97377fc20e700b70fde361142864ab7562fb194cfd697f" },
 ]
 
 [package.optional-dependencies]
