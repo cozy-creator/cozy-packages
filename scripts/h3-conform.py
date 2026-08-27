@@ -12,6 +12,7 @@ import hashlib
 import json
 import runpy
 import struct
+import subprocess
 import sys
 import tempfile
 from collections import Counter
@@ -34,6 +35,7 @@ from official import (  # noqa: E402
     FRAMES,
     MAX_CONDITIONER_VISION_TOKENS,
     SIGMA_GRID_POINTS,
+    ScheduleFacts,
     _aligned_soundtrack,
     _apply_transformer_dtype,
     _artifact_sections,
@@ -460,7 +462,8 @@ def _video(seconds: int, *, soundtrack: Any | None = None) -> Any:
 
 def arm_media() -> None:
     import torch
-    from cozy_runtime.author import AudioAsset, VideoAsset
+    from cozy_runtime.author import AudioAsset, ImageAsset, VideoAsset
+    from cozy_runtime.author.fakes import fake_attempt, fake_telemetry
 
     print("\n== ordered mixed references, exact clocks, and continuation identity ==")
     check(
@@ -549,6 +552,20 @@ def arm_media() -> None:
         ),
         3,
     )
+    check(
+        "both reference modalities admit their exact independent 15-second boundary",
+        len(
+            decode(
+                [video_ref, video_ref, audio_ref, audio_ref],
+                videos=[
+                    _video(10, soundtrack=_audio(10)),
+                    _video(5, soundtrack=_audio(5)),
+                ],
+                audios=[_audio(10), _audio(5)],
+            )
+        ),
+        4,
+    )
     refusal(
         "soundtracks ride the video cap: 16 seconds of soundtracked video refuse as video",
         lambda: decode(
@@ -584,6 +601,132 @@ def arm_media() -> None:
         "continuation is the last pre-encode RGB frame",
         continuation,
         bytes([255, 64, 26, 0, 191, 230]),
+    )
+
+    class FinishModel:
+        pipe = SimpleNamespace(sample_rate=32000)
+
+        @staticmethod
+        def decode_audio(state: Any) -> tuple[Any, int]:
+            return state.audio, 32000
+
+        @staticmethod
+        def decode_video(state: Any) -> Any:
+            return state.video
+
+    class FinishOutputs:
+        def __init__(self) -> None:
+            self.continuation = b""
+            self.video_pixels = b""
+            self.video_audio = b""
+            self.fps = 0
+            self.sample_rate = 0
+
+        def save_video(self, pixels: Any, **kwargs: Any) -> VideoAsset:
+            self.video_pixels = bytes(pixels.numpy())
+            self.video_audio = bytes(kwargs["audio"].numpy())
+            self.fps = kwargs["fps"]
+            self.sample_rate = kwargs["sample_rate"]
+            digest = hashlib.sha256(self.video_pixels).hexdigest()
+            return VideoAsset(f"sha256:{digest}")
+
+        def save_image(self, frame: Any, *, format: str) -> ImageAsset:
+            check("continuation encoder format", format, "png")
+            self.continuation = frame.rgb
+            digest = hashlib.sha256(frame.rgb).hexdigest()
+            return ImageAsset(f"sha256:{digest}")
+
+    finish_video = torch.zeros((1, FRAMES, 3, 2, 3), dtype=torch.float32)
+    finish_video[0, -1] = torch.tensor(
+        [
+            [[1.0, 0.0, 0.25], [0.5, 0.75, 0.0]],
+            [[0.5, 1.0, 0.0], [0.25, 0.75, 1.0]],
+            [[0.25, 0.5, 1.0], [0.0, 0.75, 0.5]],
+        ]
+    )
+    expected_continuation = bytes(
+        [255, 128, 64, 0, 255, 128, 64, 0, 255, 128, 64, 0, 191, 191, 191, 0, 255, 128]
+    )
+    finish_audio = torch.tensor([[[0.0, 0.25, -0.25, 0.5]]], dtype=torch.float32)
+    schedule = ScheduleFacts(*[character * 64 for character in "abcde"])
+    finish_outputs = FinishOutputs()
+    attempt = fake_attempt("h3-finish-receipt")
+    telemetry = fake_telemetry(attempt)
+    endpoint_module = cast(Any, endpoint)
+    original_gate = endpoint_module.pre_encode_gate
+    endpoint_module.pre_encode_gate = lambda *args, **kwargs: None
+    try:
+        finished = endpoint._finish(
+            cast(Any, FinishModel()),
+            SimpleNamespace(audio=finish_audio, video=finish_video),
+            schedule,
+            mute=False,
+            out=cast(Any, finish_outputs),
+            tel=telemetry,
+            cancel=lambda: None,
+        )
+    finally:
+        endpoint_module.pre_encode_gate = original_gate
+    check(
+        "finish returns exactly two typed media assets",
+        (type(finished.video), type(finished.continuation_frame)),
+        (VideoAsset, ImageAsset),
+    )
+    check(
+        "finish continuation preserves the final pre-encode pixel",
+        finish_outputs.continuation,
+        expected_continuation,
+    )
+    red(
+        "first-frame continuation regression",
+        bytes(finish_outputs.video_pixels[: len(expected_continuation)]),
+        finish_outputs.continuation,
+    )
+    check(
+        "finish passes the exact soundtrack and clocks to the video encoder",
+        (finish_outputs.video_audio, finish_outputs.fps, finish_outputs.sample_rate),
+        (bytes(finish_audio[0].numpy()), FPS, 32000),
+    )
+    log_events = [event for event in telemetry.events if event.kind == "log"]
+    check(
+        "finish emits exactly the three ordered proof rows",
+        [event.name for event in log_events],
+        ["h3 output geometry", "h3 schedule facts", "h3 source digests"],
+    )
+    logs = {event.name: dict(event.fields) for event in log_events}
+    check(
+        "Runtime-admitted output geometry receipt",
+        logs.get("h3 output geometry"),
+        {"width": 3, "height": 2, "frames": FRAMES, "fps": FPS, "sample_rate": 32000},
+    )
+    check(
+        "Runtime-admitted schedule receipt",
+        logs.get("h3 schedule facts"),
+        {
+            "timestep_plan_digest": "a" * 64,
+            "video_sigma_digest": "b" * 64,
+            "audio_sigma_digest": "c" * 64,
+            "video_timestep_digest": "d" * 64,
+            "audio_timestep_digest": "e" * 64,
+            "sigma_grid_points": SIGMA_GRID_POINTS,
+            "transformer_evaluations": 29,
+        },
+    )
+    expected_pixels = finish_outputs.video_pixels
+    expected_audio = finish_outputs.video_audio
+    check(
+        "Runtime-admitted source digest receipt",
+        logs.get("h3 source digests"),
+        {
+            "video_pixel_digest": hashlib.sha256(expected_pixels).hexdigest(),
+            "audio_sample_digest": hashlib.sha256(expected_audio).hexdigest(),
+            "continuation_pixel_digest": hashlib.sha256(finish_outputs.continuation).hexdigest(),
+        },
+    )
+    check(
+        "finish receipt loses and refuses no Runtime observations",
+        (attempt.ring.dropped, attempt.ring.refused),
+        (0, 0),
     )
 
     check("single-shot frame cell", (FRAMES, FPS), (345, 24))
@@ -648,6 +791,11 @@ def arm_descriptor() -> None:
         set(entries),
         {"first_last_frame_to_video", "reference_media_to_video"},
     )
+    check(
+        "exact currently visible action",
+        {name for name, entry in entries.items() if entry["hidden"] is not True},
+        {"reference_media_to_video"},
+    )
     expected = {
         "first_last_frame_to_video": (
             ["prompt", "first_frame", "last_frame", "mute", "seed"],
@@ -670,6 +818,11 @@ def arm_descriptor() -> None:
         check(f"{name} model", entry["models"][0]["class"], model)
         check(f"{name} task stamp", entry["models"][0]["stamps"]["task"], task)
         check(f"{name} media capability", "media_decode" in entry["capabilities"], True)
+        check(
+            f"{name} exact customer result fields",
+            [field["name"] for field in entry["result"]["fields"]],
+            ["video", "continuation_frame"],
+        )
 
 
 def arm_live_probe() -> None:
@@ -691,6 +844,9 @@ def arm_live_probe() -> None:
         Callable[..., tuple[dict[str, Any], dict[str, str]]], probe["verify_result"]
     )
     verify_surface = cast(Callable[..., str], probe["verify_surface"])
+    require_visible = cast(Callable[..., set[str]], probe["require_visible"])
+    select_actions = cast(Callable[[list[str] | None], set[str]], probe["select_actions"])
+    receipt_schema = cast(str, probe["RECEIPT_SCHEMA"])
 
     check(
         "Runtime multiline JSON is one document",
@@ -704,7 +860,7 @@ def arm_live_probe() -> None:
         {"multiline": True},
     )
 
-    binding_ref = "cozy/minimax-h3@se-012"
+    binding_ref = "cozy/minimax-h3@dual-full-r1"
     snapshot = "sha256:" + "1" * 64
     surface = "sha256:" + "2" * 64
     runtime_plan = "sha256:" + "5" * 64
@@ -727,6 +883,7 @@ def arm_live_probe() -> None:
             binding("reference_media_to_video.models.model"),
         ]
     }
+    ref_action = {"reference_media_to_video"}
     check(
         "one installed uniform dual binding arms both actions",
         len(
@@ -737,6 +894,28 @@ def arm_live_probe() -> None:
             )
         ),
         2,
+    )
+    check(
+        "one selected Ref2VA slot still requires the complete dual release",
+        len(
+            verify_bindings(
+                {"bindings": [binding("reference_media_to_video.models.model")]},
+                expected_ref=binding_ref,
+                expected_checkpoint=snapshot,
+                expected_actions=ref_action,
+            )
+        ),
+        1,
+    )
+    refusal(
+        "a selected action cannot accept its sibling binding slot",
+        lambda: verify_bindings(
+            {"bindings": [binding("first_last_frame_to_video.models.model")]},
+            expected_ref=binding_ref,
+            expected_checkpoint=snapshot,
+            expected_actions=ref_action,
+        ),
+        "RuntimeError",
     )
     refusal(
         "an uninstalled action refuses before inference",
@@ -800,6 +979,27 @@ def arm_live_probe() -> None:
         "the described endpoint surface must equal the launch contract",
         verify_surface({"surface_digest": surface}, expected=surface),
         surface,
+    )
+    installed_descriptor = json.loads((H3 / "endpoint.descriptor.json").read_text())
+    check(
+        "default proof selection remains both public product actions",
+        select_actions(None),
+        {"first_last_frame_to_video", "reference_media_to_video"},
+    )
+    check(
+        "explicit Ref2VA proof selection is singular",
+        select_actions(["reference_media_to_video"]),
+        ref_action,
+    )
+    check(
+        "currently visible Ref2VA action is selectable",
+        require_visible(ref_action, installed_descriptor),
+        ref_action,
+    )
+    refusal(
+        "hidden FL2VA action refuses before inference",
+        lambda: require_visible({"first_last_frame_to_video"}, installed_descriptor),
+        "RuntimeError",
     )
     refusal(
         "a different endpoint surface refuses before inference",
@@ -905,6 +1105,104 @@ def arm_live_probe() -> None:
         verify_staged_request(staged, request_snapshot)
         observe("read-only request identity validates after directory mode change")
 
+        descriptor_surface = installed_descriptor["surface_digest"]
+        fake_runtime = root / "cozy-runtime-fake"
+        responses = {
+            ("describe", "--check"): {
+                "descriptor": "current",
+                "surface_digest": descriptor_surface,
+                "next": [],
+            },
+            ("describe",): installed_descriptor,
+            ("doctor",): {"device": {"type": "cuda", "name": "contract-fake"}},
+            ("bindings",): {"bindings": [binding("reference_media_to_video.models.model")]},
+        }
+        fake_runtime.write_text(
+            f"#!{sys.executable}\n"
+            "import json\n"
+            "import sys\n"
+            f"responses = {responses!r}\n"
+            "command = tuple(sys.argv[sys.argv.index('--json') + 1:])\n"
+            "if command not in responses:\n"
+            "    print(f'unsupported fake Runtime command: {command}', file=sys.stderr)\n"
+            "    raise SystemExit(2)\n"
+            "print(json.dumps(responses[command]))\n"
+        )
+        fake_runtime.chmod(0o755)
+        live_base = [
+            sys.executable,
+            str(ROOT / "scripts" / "h3-live.py"),
+            "--runtime",
+            str(fake_runtime),
+            "--endpoint",
+            str(H3),
+            "--expected-binding-ref",
+            binding_ref,
+            "--expected-checkpoint",
+            snapshot,
+            "--expected-surface-digest",
+            descriptor_surface,
+            "--expected-fl-plan-digest",
+            expected_plans["first_last_frame_to_video"],
+            "--expected-ref-plan-digest",
+            expected_plans["reference_media_to_video"],
+            "--inspect-only",
+        ]
+        ref_main = subprocess.run(
+            [
+                *live_base,
+                "--action",
+                "reference_media_to_video",
+                "--out",
+                str(root / "main-ref-proof"),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        check("selected Ref2VA main path exits green", ref_main.returncode, 0)
+        if ref_main.returncode == 0:
+            receipt_path = Path(ref_main.stdout.strip().splitlines()[-1])
+            receipt = json.loads(receipt_path.read_text())
+            check("selected-action receipt schema", receipt["schema"], receipt_schema)
+            check(
+                "selected-action receipt identity",
+                receipt["selected_actions"],
+                ["reference_media_to_video"],
+            )
+            check(
+                "inspect-only receipt status",
+                (
+                    receipt["automated_status"],
+                    receipt["endpoint_observations_status"],
+                ),
+                (
+                    "runtime-device-observed-and-binding-inspected",
+                    "pending-runtime-triage-join",
+                ),
+            )
+        else:
+            fail("selected Ref2VA main path receipt", ref_main.stderr[:500])
+
+        hidden_main = subprocess.run(
+            [
+                *live_base,
+                "--action",
+                "first_last_frame_to_video",
+                "--out",
+                str(root / "main-hidden-proof"),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        check("hidden FL2VA main path exits nonzero", hidden_main.returncode != 0, True)
+        check(
+            "hidden FL2VA main path explains visibility refusal",
+            "selected actions are not visible" in hidden_main.stderr,
+            True,
+        )
+
     result = {
         "video": {"digest": "sha256:" + "7" * 64},
         "continuation_frame": {"digest": "sha256:" + "9" * 64},
@@ -912,6 +1210,7 @@ def arm_live_probe() -> None:
     accepted_plan = {
         "plan_digest": runtime_plan,
         "model_construction_digest": construction,
+        "invocation_spec_digest": "sha256:" + "e" * 64,
         "delivery": "resident",
         "materialization": "installed",
         "placement": "all_resident",
@@ -922,6 +1221,10 @@ def arm_live_probe() -> None:
         "status": "OUTCOME_STATUS_SUCCEEDED",
         "result": result,
         "outputs": {"video": "/proof/video.mp4", "continuation_frame": "/proof/frame.png"},
+        "invocation": {
+            "digest": "sha256:" + "e" * 64,
+            "document": {"format": "cozy.worker.v1.InvocationSpec/1"},
+        },
         "plan": accepted_plan,
         "ledger": {"format": "cozy.runtime.Ledger/0", "classes": [{"class": "vram"}]},
         "timings": {"wall_ms": 1.0},
@@ -958,6 +1261,53 @@ def arm_live_probe() -> None:
         lambda: verify_result(
             "first_last_frame_to_video",
             {**outcome, "plan": {**accepted_plan, "model_construction_digest": "b" * 64}},
+        ),
+        "RuntimeError",
+    )
+    refusal(
+        "an empty canonical invocation receipt refuses",
+        lambda: verify_result(
+            "first_last_frame_to_video",
+            {**outcome, "invocation": {}},
+        ),
+        "RuntimeError",
+    )
+    refusal(
+        "a canonical invocation receipt without its document refuses",
+        lambda: verify_result(
+            "first_last_frame_to_video",
+            {
+                **outcome,
+                "invocation": {"digest": "sha256:" + "e" * 64},
+            },
+        ),
+        "RuntimeError",
+    )
+    refusal(
+        "a malformed canonical invocation digest refuses",
+        lambda: verify_result(
+            "first_last_frame_to_video",
+            {
+                **outcome,
+                "invocation": {
+                    **cast(dict[str, Any], outcome["invocation"]),
+                    "digest": "e" * 64,
+                },
+            },
+        ),
+        "RuntimeError",
+    )
+    refusal(
+        "accepted plan and canonical invocation disagreement refuses",
+        lambda: verify_result(
+            "first_last_frame_to_video",
+            {
+                **outcome,
+                "plan": {
+                    **accepted_plan,
+                    "invocation_spec_digest": "sha256:" + "f" * 64,
+                },
+            },
         ),
         "RuntimeError",
     )
