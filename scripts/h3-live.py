@@ -254,7 +254,7 @@ def verify_bindings(
     *,
     expected_ref: str,
     expected_checkpoint: str,
-    expected_actions: set[str] | None = None,
+    expected_lane: str,
 ) -> list[dict[str, Any]]:
     exact_sha256(expected_checkpoint, option="--expected-checkpoint")
 
@@ -262,28 +262,31 @@ def verify_bindings(
     if not isinstance(bindings, list) or not all(isinstance(row, dict) for row in bindings):
         raise RuntimeError("Runtime bindings result has no binding-record list")
     records = cast(list[dict[str, Any]], bindings)
-    actions = set(PLAN_FILES) if expected_actions is None else expected_actions
-    expected_paths = {BINDING_PATHS[action] for action in actions}
+    expected_paths = set(BINDING_PATHS.values())
     if (
         len(records) != len(expected_paths)
         or {row.get("model_binding_path") for row in records} != expected_paths
     ):
         raise RuntimeError(
-            f"Runtime bindings do not contain exactly the selected H3 model slots: "
+            f"Runtime bindings do not contain exactly the dual H3 model slots: "
             f"{sorted(expected_paths)}"
         )
 
     expected_components = {
         "audio_vae",
+        "fl2va_dit",
+        "ref2va_dit",
         "text_encoder",
-        "transformer",
-        "transformer_ref",
         "video_vae",
     }
     for row in records:
         path = row["model_binding_path"]
         if row.get("ref") != expected_ref:
             raise RuntimeError(f"{path} resolved {row.get('ref')!r}, expected {expected_ref!r}")
+        if row.get("lane") != expected_lane:
+            raise RuntimeError(
+                f"{path} resolved lane {row.get('lane')!r}, expected {expected_lane!r}"
+            )
         if row.get("installed") is not True:
             raise RuntimeError(f"{path} is not installed")
         if set(row.get("components", ())) != expected_components:
@@ -529,6 +532,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime", default="cozy-runtime")
     parser.add_argument("--endpoint", type=Path, default=H3)
     parser.add_argument("--expected-binding-ref", required=True)
+    parser.add_argument("--expected-lane", required=True)
     parser.add_argument("--expected-checkpoint", required=True)
     parser.add_argument("--expected-descriptor-digest", required=True)
     parser.add_argument("--expected-fl-plan-digest", required=True)
@@ -613,7 +617,7 @@ def main() -> int:
         bindings,
         expected_ref=args.expected_binding_ref,
         expected_checkpoint=expected_checkpoint,
-        expected_actions=selected_actions,
+        expected_lane=args.expected_lane,
     )
     receipt: dict[str, Any] = {
         "schema": RECEIPT_SCHEMA,

@@ -1,4 +1,4 @@
-"""MiniMax-H3's two official FULL serving actions.
+"""MiniMax-H3's two official serving actions over one dual-DiT construction.
 
 Runtime decodes typed assets and encodes outputs. Official Diffusers owns H3 presentation,
 conditioning, AdaLN, solver, and decode math. This module validates the product contract,
@@ -44,8 +44,8 @@ from official import (
     OfficialH3Pipeline,
     ReferencePolicyFacts,
     ScheduleFacts,
-    build_fl2va_pipeline,
-    build_ref2va_pipeline,
+    Task,
+    build_h3_pipeline,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
     validate_reference_policy,
@@ -118,49 +118,42 @@ def _reference_kind(reference: Reference) -> str:
     return "audio"
 
 
-class _H3Model(Model[OfficialH3Pipeline]):
+class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept"):
     pipe: OfficialH3Pipeline
+
+    def load(self, loader: Loader) -> None:
+        self.pipe = loader.construct(OfficialH3Pipeline, factory=build_h3_pipeline)
 
     def unload(self, loader: Loader) -> None:
         return None
 
     @uses_components("text_encoder")
-    def condition_text(self, state: Any) -> None:
-        self.pipe.condition_text(state)
+    def condition_text(self, task: Task, state: Any) -> None:
+        self.pipe.condition_text(task, state)
 
     @uses_components("audio_vae")
-    def decode_audio(self, state: Any) -> tuple[Any, int]:
-        return self.pipe.decode_audio(state), int(state.sampling_rate)
+    def decode_audio(self, task: Task, state: Any) -> tuple[Any, int]:
+        return self.pipe.decode_audio(task, state), int(state.sampling_rate)
 
     @uses_components("video_vae")
-    def decode_video(self, state: Any) -> Any:
-        return self.pipe.decode_video(state)
-
-
-class Fl2VAModel(_H3Model, task="fl2va"):
-    def load(self, loader: Loader) -> None:
-        self.pipe = loader.construct(OfficialH3Pipeline, factory=build_fl2va_pipeline)
+    def decode_video(self, task: Task, state: Any) -> Any:
+        return self.pipe.decode_video(task, state)
 
     @uses_components("video_vae")
-    def condition_media(self, state: Any) -> None:
-        self.pipe.condition_media(state)
-
-    @uses_components("transformer")
-    def sample(self, state: Any, *, on_step: Any, cancel: Any) -> ScheduleFacts:
-        return self.pipe.denoise(state, on_step=on_step, cancel=cancel)
-
-
-class Ref2VAModel(_H3Model, task="ref2va"):
-    def load(self, loader: Loader) -> None:
-        self.pipe = loader.construct(OfficialH3Pipeline, factory=build_ref2va_pipeline)
+    def condition_fl2va_media(self, state: Any) -> None:
+        self.pipe.condition_media("fl2va", state)
 
     @uses_components("video_vae", "audio_vae")
-    def condition_media(self, state: Any) -> None:
-        self.pipe.condition_media(state)
+    def condition_ref2va_media(self, state: Any) -> None:
+        self.pipe.condition_media("ref2va", state)
 
-    @uses_components("transformer_ref")
-    def sample(self, state: Any, *, on_step: Any, cancel: Any) -> ScheduleFacts:
-        return self.pipe.denoise(state, on_step=on_step, cancel=cancel)
+    @uses_components("fl2va_dit")
+    def sample_fl2va(self, state: Any, *, on_step: Any, cancel: Any) -> ScheduleFacts:
+        return self.pipe.denoise("fl2va", state, on_step=on_step, cancel=cancel)
+
+    @uses_components("ref2va_dit")
+    def sample_ref2va(self, state: Any, *, on_step: Any, cancel: Any) -> ScheduleFacts:
+        return self.pipe.denoise("ref2va", state, on_step=on_step, cancel=cancel)
 
 
 def _decode_keyframe(
@@ -318,7 +311,8 @@ def _validate_duration(duration: Fraction, field: str) -> None:
 
 
 def _finish(
-    model: _H3Model,
+    model: H3Model,
+    task: Task,
     state: Any,
     schedule: ScheduleFacts,
     *,
@@ -331,7 +325,7 @@ def _finish(
 
     cancel()
     with tel.stage("decode_audio"):
-        audio, sample_rate = model.decode_audio(state)
+        audio, sample_rate = model.decode_audio(task, state)
         release_rate = model.pipe.sample_rate
         if audio.ndim != 3 or int(audio.shape[0]) != 1 or sample_rate != release_rate:
             raise OutputError(
@@ -342,7 +336,7 @@ def _finish(
         waveform = audio[0].to(torch.float32).contiguous().cpu()
     cancel()
     with tel.stage("decode_video"):
-        decoded = model.decode_video(state)
+        decoded = model.decode_video(task, state)
         if decoded.ndim != 5 or int(decoded.shape[0]) != 1 or int(decoded.shape[2]) != 3:
             raise OutputError(
                 f"official H3 video decode returned shape {tuple(decoded.shape)}",
@@ -445,11 +439,11 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
     return float(bad / int(value.numel()))
 
 
-@app.entrypoint(hidden=True)
+@app.entrypoint()
 def first_last_frame_to_video(
     ctx: Context,
     payload: FirstLastFrameToVideoInput,
-    model: Fl2VAModel,
+    model: H3Model,
     decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
@@ -470,18 +464,19 @@ def first_last_frame_to_video(
             generator=model.pipe.generator(view.generator),
         )
     with tel.stage("condition_text"):
-        model.condition_text(state)
+        model.condition_text("fl2va", state)
     if first is not None or last is not None:
         with tel.stage("condition_media"):
-            model.condition_media(state)
+            model.condition_fl2va_media(state)
     with tel.stage("denoise"):
-        schedule = model.sample(
+        schedule = model.sample_fl2va(
             state,
             on_step=tel.step_callback(TRANSFORMER_EVALUATIONS, stage="denoise"),
             cancel=ctx.raise_if_cancelled,
         )
     return _finish(
         model,
+        "fl2va",
         state,
         schedule,
         mute=payload.mute,
@@ -496,7 +491,7 @@ def reference_media_to_video(
     ctx: Context,
     payload: ReferenceMediaToVideoInput,
     facts: Preflight[ReferencePolicyFacts],
-    model: Ref2VAModel,
+    model: H3Model,
     decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
@@ -512,17 +507,18 @@ def reference_media_to_video(
             generator=model.pipe.generator(view.generator),
         )
     with tel.stage("condition_text"):
-        model.condition_text(state)
+        model.condition_text("ref2va", state)
     with tel.stage("condition_media"):
-        model.condition_media(state)
+        model.condition_ref2va_media(state)
     with tel.stage("denoise"):
-        schedule = model.sample(
+        schedule = model.sample_ref2va(
             state,
             on_step=tel.step_callback(TRANSFORMER_EVALUATIONS, stage="denoise"),
             cancel=ctx.raise_if_cancelled,
         )
     return _finish(
         model,
+        "ref2va",
         state,
         schedule,
         mute=payload.mute,
