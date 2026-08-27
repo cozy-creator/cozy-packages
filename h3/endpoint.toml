@@ -4,17 +4,12 @@
 # Code states CAPABILITY; bindings state SELECTION. Nothing in `h3.py` or `official.py` names
 # a repo, release, checkpoint or revision — the artifact and its release live here.
 #
-# Both task models select the same uniform dual FULL release. Each model constructs only its
-# task-stamped transformer; the shared text encoder and VAEs remain ordinary shared components.
-# A narrow, mixed-mode, curve, or baked artifact cannot satisfy this reference release.
+# This release stages one Ref2VA construction. FL2VA remains declared hidden in the descriptor;
+# exposing both distinct constructions to a one-generation worker would fail closed before serve.
 
 [application]
 object = "h3:app"
 
-[bindings."Fl2VAModel"]
-repo = "cozy/minimax-h3"
-release = "se-013"
-
 [bindings."Ref2VAModel"]
 repo = "cozy/minimax-h3"
-release = "se-013"
+release = "se-014"

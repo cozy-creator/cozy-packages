@@ -8,7 +8,7 @@ conformance drivers, and default development bindings.
 
 | path | responsibility |
 |---|---|
-| `h3/` | MiniMax H3 FL2VA and Ref2VA FULL reference endpoint (se-013) |
+| `h3/` | MiniMax H3 Ref2VA FULL serving endpoint (se-014); FL2VA declared hidden |
 | `sdxl/` | SDXL text-to-image endpoint (se-008) |
 | `quality-judge/` | evaluation actions (ev-003) |
 | `video-assembly/` | fixed CPU-only 2-8-shot streaming assembler (se-014) |
@@ -34,9 +34,9 @@ conformance drivers, and default development bindings.
 
 ## MiniMax H3
 
-The H3 package exposes exactly two actions:
+The H3 package declares two actions, but this one-generation release exposes only Ref2VA:
 
-- `first_last_frame_to_video` uses `Fl2VAModel` and accepts zero, first, last, or both keyframes.
+- `first_last_frame_to_video` remains declared but hidden until it has a separate worker generation.
 - `reference_media_to_video` uses `Ref2VAModel` and accepts one ordered tagged list of image,
   video, and standalone-audio references.
 
@@ -159,10 +159,10 @@ must bind them to the request, release, placement, and generation before product
 
 ```bash
 h3/.venv/bin/python scripts/h3-live.py \
-  --expected-binding-ref 'cozy/minimax-h3@se-013' \
+  --expected-binding-ref 'cozy/minimax-h3@se-014' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
   --expected-surface-digest \
-    'sha256:182fa958535588f715e873b89a557fa57258aed346077b331b8de97e66e2b06d' \
+    'sha256:0818306a152374430a2a6ae88635b82b3f38d32d868afc26a5113c34ccc84c1e' \
   --expected-fl-plan-digest \
     'sha256:b72b46a6d753b4db3be175cd2c14ea012bd3524327e170d9bf064dd2fd1f2075' \
   --expected-ref-plan-digest \

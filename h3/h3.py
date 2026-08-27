@@ -472,7 +472,7 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
     return float(bad / int(value.numel()))
 
 
-@app.entrypoint
+@app.entrypoint(hidden=True)
 def first_last_frame_to_video(
     ctx: Context,
     payload: FirstLastFrameToVideoInput,

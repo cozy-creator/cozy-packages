@@ -175,7 +175,7 @@ dependencies = [
     { name = "protobuf", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.2-py3-none-any.whl", hash = "sha256:26be95b68e9c90993b20c9ff03209a72c5b17e1c96e8e779ddc956f78af6e0cf" },
+    { filename = "cozy_runtime-0.0.2-py3-none-any.whl", hash = "sha256:4aadb0d08b28530b8e5037685a6072f4b467bf3bc7ad0eb5fbaca3ef0eeb2784" },
 ]
 
 [package.optional-dependencies]
@@ -267,6 +267,7 @@ dependencies = [
     { name = "diffusers", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "msgspec", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "tensorfs", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torchaudio", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torchvision", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -280,6 +281,7 @@ requires-dist = [
     { name = "diffusers", specifier = "==0.40.0" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "tensorfs", path = "vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl" },
     { name = "torch", specifier = "==2.9.1+cu129", index = "https://download.pytorch.org/whl/cu129" },
     { name = "torchaudio", specifier = "==2.9.1+cu129", index = "https://download.pytorch.org/whl/cu129" },
     { name = "torchvision", specifier = "==0.24.1+cu129", index = "https://download.pytorch.org/whl/cu129" },
@@ -719,6 +721,14 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921, upload-time = "2025-04-27T18:05:01.611Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5", size = 6299353, upload-time = "2025-04-27T18:04:59.103Z" },
+]
+
+[[package]]
+name = "tensorfs"
+version = "0.0.1"
+source = { path = "vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl" }
+wheels = [
+    { filename = "tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:a28b8a8061498d088bec80dd92335e260efc99b418f020edabe6e80ca1ab0002" },
 ]
 
 [[package]]
