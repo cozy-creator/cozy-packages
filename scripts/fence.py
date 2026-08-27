@@ -48,11 +48,11 @@ def projects() -> list[pathlib.Path]:
 
 
 def endpoint_modules() -> list[pathlib.Path]:
-    return sorted(f for project in projects() for f in project.rglob("*.py"))
+    return sorted(f for project in projects() for f in project.rglob("*.py") if ours(f))
 
 
 def h3_modules() -> list[pathlib.Path]:
-    return sorted((ROOT / "h3").rglob("*.py"))
+    return sorted(f for f in (ROOT / "h3").rglob("*.py") if ours(f))
 
 
 def rel(path: pathlib.Path) -> str:
