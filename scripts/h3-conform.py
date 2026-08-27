@@ -18,6 +18,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import replace
 from fractions import Fraction
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -625,9 +626,7 @@ def arm_live_probe() -> None:
     stage_request = cast(Callable[..., Path], probe["stage_request"])
     verify_bindings = cast(Callable[..., list[dict[str, Any]]], probe["verify_bindings"])
     verify_file_digest = cast(Callable[..., None], probe["verify_file_digest"])
-    verify_plan_digests = cast(
-        Callable[..., dict[str, str]], probe["verify_plan_digests"]
-    )
+    verify_plan_digests = cast(Callable[..., dict[str, str]], probe["verify_plan_digests"])
     verify_result = cast(Callable[..., dict[str, Any]], probe["verify_result"])
     verify_surface = cast(Callable[..., str], probe["verify_surface"])
 
@@ -740,9 +739,7 @@ def arm_live_probe() -> None:
     )
     refusal(
         "a different endpoint surface refuses before inference",
-        lambda: verify_surface(
-            {"surface_digest": surface}, expected="sha256:" + "3" * 64
-        ),
+        lambda: verify_surface({"surface_digest": surface}, expected="sha256:" + "3" * 64),
         "RuntimeError",
     )
 
@@ -777,9 +774,7 @@ def arm_live_probe() -> None:
             path.write_bytes(raw)
             return path, f"sha256:{hashlib.sha256(raw).hexdigest()}"
 
-        good_path, good_digest = request(
-            "good.json", b'{ "prompt": "proof", "seed": 17 }\n'
-        )
+        good_path, good_digest = request("good.json", b'{ "prompt": "proof", "seed": 17 }\n')
         request_snapshot = load_request(good_path, expected_sha256=good_digest)
         check("proof request preserves its exact integer seed", request_snapshot.seed, 17)
         refusal(
@@ -795,9 +790,7 @@ def arm_live_probe() -> None:
             path, digest = request(name, raw)
             refusal(
                 f"{name.removesuffix('.json')} refuses before inference",
-                lambda path=path, digest=digest: load_request(
-                    path, expected_sha256=digest
-                ),
+                partial(load_request, path, expected_sha256=digest),
                 "RuntimeError",
             )
 
@@ -821,9 +814,7 @@ def arm_live_probe() -> None:
         staged.write_bytes(staged.read_bytes() + b" ")
         refusal(
             "a staged request mutation refuses",
-            lambda: verify_file_digest(
-                staged, expected_sha256=request_snapshot.sha256
-            ),
+            lambda: verify_file_digest(staged, expected_sha256=request_snapshot.sha256),
             "RuntimeError",
         )
 
