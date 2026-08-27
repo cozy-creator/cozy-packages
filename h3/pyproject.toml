@@ -4,14 +4,14 @@ version = "1.0.0"
 requires-python = "==3.12.*"
 dependencies = [
     "cozy-runtime[media]==0.0.1",
-    "tensorfs==0.0.1",
     "cozy-eval==2.3.0",
+    "diffusers==0.40.0",
     "msgspec>=0.19",
     "numpy>=1.26",
-    "pillow>=10",
     "torch==2.9.1+cu129",
+    "torchaudio==2.9.1+cu129",
     "torchvision==0.24.1+cu129",
-    "transformers>=5.13,<6",
+    "transformers==5.16.1",
 ]
 
 [tool.uv.sources]
@@ -19,6 +19,7 @@ cozy-runtime = { url = "https://github.com/cozy-creator/cozy-runtime-v2/releases
 tensorfs = { url = "https://github.com/cozy-creator/tensorfs-v2/releases/download/wheel-v0.0.1-c6c598b/tensorfs-0.0.1-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 cozy-eval = { url = "https://github.com/cozy-creator/cozy-eval-v2/releases/download/wheel-v2.3.0-61560ff/cozy_eval-2.3.0-py3-none-any.whl" }
 torch = { index = "pytorch-cu129" }
+torchaudio = { index = "pytorch-cu129" }
 torchvision = { index = "pytorch-cu129" }
 
 [[tool.uv.index]]
