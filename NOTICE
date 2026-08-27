@@ -25,9 +25,10 @@ build commands, sizes, and SHA-256 digests are recorded in `h3/VENDORED.md`.
 
 BUNDLED MODEL INPUT DATA
 
-H3 bundles tokenizer and processor configuration/data from the pinned official
-`MiniMaxAI/MiniMax-H3` snapshot. Those files remain governed by the upstream model repository's
-terms. No model weights are stored here.
+H3 bundles the minimal vocabulary, merges, tokenizer settings, and image/video processor settings
+from the pinned official `MiniMaxAI/MiniMax-H3` snapshot. Duplicate fast-tokenizer and processor
+copies were removed. These files remain governed by the upstream model repository's terms. No
+model weights are stored here.
 
 MODEL LICENSE
 
