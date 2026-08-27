@@ -118,19 +118,36 @@ uv run ../scripts/h3-conform.py
 ```
 
 `scripts/h3-live.py` is the final installed-artifact/RunPod probe. It requires the exact admitted GPU
-identity, binding ref, component snapshot, and one payload for each action. Before inference it
-refuses identity drift, an absent/narrow task binding, or a component that resolves outside that
-snapshot. It then runs both actions offline, probes the stored H264/AAC MP4 and PNG, and writes a
-machine receipt whose human viewed/listened status remains explicitly pending. For example:
+identity, endpoint surface, two timestep plans, binding ref, component snapshot, and raw request
+bytes. Each request must be a UTF-8 JSON object with an explicit integer `seed`. Before inference it
+refuses identity drift, an absent/narrow task binding, a component outside the expected snapshot,
+request mutation, or a reused output root. It stages the exact request bytes into that fresh root,
+runs both actions offline, probes the stored H264/AAC MP4 and PNG, and preserves each complete
+Runtime outcome in a machine receipt whose human viewed/listened status remains explicitly pending.
+The request digest commits the JSON bytes only; Runtime binds referenced media assets separately.
+For example:
 
 ```bash
 h3/.venv/bin/python scripts/h3-live.py \
   --expected-gpu 'EXACT DOCTOR IDENTITY' \
   --expected-binding-ref 'cozy/minimax-h3@se-012' \
-  --expected-checkpoint 'EXACT RESOLVED SNAPSHOT REF' \
-  --fl-input /proof/fl2va.json --ref-input /proof/ref2va.json \
-  --out /proof/output
+  --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
+  --expected-surface-digest \
+    'sha256:c7f7af2a7c857694da63ce6d3f5723257b111b461547659fa75b3f7c3b93aff7' \
+  --expected-fl-plan-digest \
+    'sha256:b72b46a6d753b4db3be175cd2c14ea012bd3524327e170d9bf064dd2fd1f2075' \
+  --expected-ref-plan-digest \
+    'sha256:86143d5ad14f3936b01cc1732241c0bb9b943138d585d8f7b887c7533e4a8732' \
+  --fl-input /proof/fl2va.json \
+  --expected-fl-input-sha256 'sha256:EXACT_64_LOWERCASE_HEX_REQUEST' \
+  --ref-input /proof/ref2va.json \
+  --expected-ref-input-sha256 'sha256:EXACT_64_LOWERCASE_HEX_REQUEST' \
+  --out /proof/new-output
 ```
+
+Compute each request identity from the file that will be supplied (for example,
+`sha256sum /proof/fl2va.json`) and prefix the 64 lowercase hexadecimal characters with `sha256:`.
+The `--out` path must not exist; a proof attempt never reuses prior request or media bytes.
 
 A green static, CPU, or stored-container gate does not prove accepted video generation; both public
 actions still require viewed and listened outputs from the exact released artifact on the exact

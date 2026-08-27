@@ -13,6 +13,7 @@ import json
 import runpy
 import struct
 import sys
+import tempfile
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import replace
@@ -619,7 +620,16 @@ def arm_live_probe() -> None:
     print("\n== installed-artifact production probe boundary ==")
     probe = runpy.run_path(str(ROOT / "scripts" / "h3-live.py"))
     command_json = cast(Callable[[list[str]], dict[str, Any]], probe["command_json"])
+    load_request = cast(Callable[..., Any], probe["load_request"])
+    reserve_output = cast(Callable[[Path], Path], probe["reserve_output"])
+    stage_request = cast(Callable[..., Path], probe["stage_request"])
     verify_bindings = cast(Callable[..., list[dict[str, Any]]], probe["verify_bindings"])
+    verify_file_digest = cast(Callable[..., None], probe["verify_file_digest"])
+    verify_plan_digests = cast(
+        Callable[..., dict[str, str]], probe["verify_plan_digests"]
+    )
+    verify_result = cast(Callable[..., dict[str, Any]], probe["verify_result"])
+    verify_surface = cast(Callable[..., str], probe["verify_surface"])
 
     check(
         "Runtime multiline JSON is one document",
@@ -635,6 +645,7 @@ def arm_live_probe() -> None:
 
     binding_ref = "cozy/minimax-h3@se-012"
     snapshot = "sha256:" + "1" * 64
+    surface = "sha256:" + "2" * 64
     components = ["audio_vae", "text_encoder", "transformer", "transformer_ref", "video_vae"]
 
     def binding(path: str, *, installed: bool = True) -> dict[str, Any]:
@@ -718,6 +729,157 @@ def arm_live_probe() -> None:
             },
             expected_ref=binding_ref,
             expected_checkpoint=snapshot,
+        ),
+        "RuntimeError",
+    )
+
+    check(
+        "the described endpoint surface must equal the launch contract",
+        verify_surface({"surface_digest": surface}, expected=surface),
+        surface,
+    )
+    refusal(
+        "a different endpoint surface refuses before inference",
+        lambda: verify_surface(
+            {"surface_digest": surface}, expected="sha256:" + "3" * 64
+        ),
+        "RuntimeError",
+    )
+
+    expected_plans = {
+        "first_last_frame_to_video": "sha256:" + PLAN_DIGESTS["fl2va"],
+        "reference_media_to_video": "sha256:" + PLAN_DIGESTS["ref2va"],
+    }
+    check(
+        "selected endpoint plan bytes match both launch identities",
+        verify_plan_digests(H3, expected_plans),
+        expected_plans,
+    )
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        selected = root / "selected-endpoint"
+        plans = selected / "timestep-plans"
+        plans.mkdir(parents=True)
+        for task in ("fl2va", "ref2va"):
+            (plans / f"{task}.json").write_bytes(
+                (H3 / "timestep-plans" / f"{task}.json").read_bytes()
+            )
+        (plans / "fl2va.json").write_bytes((plans / "fl2va.json").read_bytes() + b" ")
+        refusal(
+            "selected endpoint plan drift cannot fall back to checkout-global plans",
+            lambda: verify_plan_digests(selected, expected_plans),
+            "RuntimeError",
+        )
+
+        def request(name: str, raw: bytes) -> tuple[Path, str]:
+            path = root / name
+            path.write_bytes(raw)
+            return path, f"sha256:{hashlib.sha256(raw).hexdigest()}"
+
+        good_path, good_digest = request(
+            "good.json", b'{ "prompt": "proof", "seed": 17 }\n'
+        )
+        request_snapshot = load_request(good_path, expected_sha256=good_digest)
+        check("proof request preserves its exact integer seed", request_snapshot.seed, 17)
+        refusal(
+            "a wrong raw request digest refuses before inference",
+            lambda: load_request(good_path, expected_sha256="sha256:" + "4" * 64),
+            "RuntimeError",
+        )
+        for name, raw in (
+            ("missing-seed.json", b'{"prompt":"proof"}'),
+            ("null-seed.json", b'{"seed":null}'),
+            ("bool-seed.json", b'{"seed":true}'),
+        ):
+            path, digest = request(name, raw)
+            refusal(
+                f"{name.removesuffix('.json')} refuses before inference",
+                lambda path=path, digest=digest: load_request(
+                    path, expected_sha256=digest
+                ),
+                "RuntimeError",
+            )
+
+        existing = root / "existing-proof"
+        existing.mkdir()
+        refusal(
+            "a pre-existing proof root refuses",
+            lambda: reserve_output(existing),
+            "RuntimeError",
+        )
+        output = reserve_output(root / "fresh-proof")
+        refusal(
+            "a proof root is single-use",
+            lambda: reserve_output(output),
+            "RuntimeError",
+        )
+        requests = output / "requests"
+        requests.mkdir()
+        staged = stage_request(requests / "fl2va.json", request_snapshot)
+        check("staged request bytes are exact", staged.read_bytes(), request_snapshot.raw)
+        staged.write_bytes(staged.read_bytes() + b" ")
+        refusal(
+            "a staged request mutation refuses",
+            lambda: verify_file_digest(
+                staged, expected_sha256=request_snapshot.sha256
+            ),
+            "RuntimeError",
+        )
+
+    result = {
+        "frames": 345,
+        "fps": 24,
+        "sample_rate": 32000,
+        "sigma_grid_points": 30,
+        "transformer_evaluations": 29,
+        "timestep_plan_digest": PLAN_DIGESTS["fl2va"],
+        "checkpoint": snapshot,
+        "video_sigma_digest": "present",
+        "audio_sigma_digest": "present",
+        "video_timestep_digest": "present",
+        "audio_timestep_digest": "present",
+        "video_pixel_digest": "present",
+        "audio_sample_digest": "present",
+        "continuation_frame_digest": "present",
+        "continuation_pixel_digest": "present",
+    }
+    outcome = {
+        "status": "OUTCOME_STATUS_SUCCEEDED",
+        "result": result,
+        "outputs": {},
+        "plan": {},
+        "ledger": {},
+        "timings": {},
+        "warnings": [],
+    }
+    check(
+        "full Runtime outcome carries the expected action plan",
+        verify_result(
+            "first_last_frame_to_video",
+            outcome,
+            expected_checkpoint=snapshot,
+            expected_plan_digest=expected_plans["first_last_frame_to_video"],
+        )["timestep_plan_digest"],
+        PLAN_DIGESTS["fl2va"],
+    )
+    refusal(
+        "a sibling action plan in the Runtime result refuses",
+        lambda: verify_result(
+            "first_last_frame_to_video",
+            outcome,
+            expected_checkpoint=snapshot,
+            expected_plan_digest=expected_plans["reference_media_to_video"],
+        ),
+        "RuntimeError",
+    )
+    refusal(
+        "a partial Runtime result cannot masquerade as the execution outcome",
+        lambda: verify_result(
+            "first_last_frame_to_video",
+            {"result": result},
+            expected_checkpoint=snapshot,
+            expected_plan_digest=expected_plans["first_last_frame_to_video"],
         ),
         "RuntimeError",
     )
