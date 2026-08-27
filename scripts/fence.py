@@ -470,11 +470,12 @@ def fence_h3_binding_identity() -> Fence:
                 f"h3/endpoint.toml: release {release!r} contains a tracker issue, "
                 "not only content identity"
             )
-    if lanes != ["fp8-adaln-pruned"]:
+    if lanes != ["profile=fp8-adaln-pruned"]:
         bad.append(
-            f"h3/endpoint.toml: bare local binding lane is {lanes!r}, expected ['fp8-adaln-pruned']"
+            "h3/endpoint.toml: bare local binding must use the exact "
+            f"profile selector, got {lanes!r}"
         )
-    return bad, "H3 binds release 1.0.0 with the Hopper/local fp8-adaln-pruned default lane"
+    return bad, "H3 binds release 1.0.0 with the Hopper/local profile=fp8-adaln-pruned selector"
 
 
 def fence_h3_adaln_pruned_vocabulary() -> Fence:

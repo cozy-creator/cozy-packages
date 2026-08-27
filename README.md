@@ -66,8 +66,10 @@ FP8-rowwise Hopper, or qualified MXFP8 Blackwell artifacts before fetch. Request
 variables cannot choose a lane.
 
 The release has exactly four lanes: `bf16-full`, `bf16-adaln-pruned`, `fp8-adaln-pruned`, and
-`mxfp8-adaln-pruned`. The bare local binding selects `cozy/minimax-h3@1.0.0` lane
-`fp8-adaln-pruned`; Tensorhub may bind `mxfp8-adaln-pruned` for a qualified Blackwell execution.
+`mxfp8-adaln-pruned`. The bare local binding selects `cozy/minimax-h3@1.0.0` through the exact
+`profile=fp8-adaln-pruned` selector. `profile` is a curator stamp on the immutable lane contract,
+not a second artifact identity or compatibility alias. Tensorhub may bind
+`profile=mxfp8-adaln-pruned` for a qualified Blackwell execution.
 That deployment override does not change endpoint source or expose a request-time choice.
 `adaln-curve` is reserved for approximate community curve artifacts and is not a lane in this
 release.
@@ -185,7 +187,7 @@ must bind them to the request, release, placement, and generation before product
 h3/.venv/bin/python scripts/h3-live.py \
   --action reference_media_to_video \
   --expected-binding-ref 'cozy/minimax-h3@1.0.0' \
-  --expected-lane 'fp8-adaln-pruned' \
+  --expected-lane 'profile=fp8-adaln-pruned' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
   --expected-descriptor-digest \
     'sha256:c8c73bb64ee4a0c4edb7cbd09624cd0687f12850b8bdac76bec6210a45680b87' \
