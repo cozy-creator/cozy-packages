@@ -137,7 +137,7 @@ h3/.venv/bin/python scripts/h3-live.py \
   --expected-binding-ref 'cozy/minimax-h3@se-012' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
   --expected-surface-digest \
-    'sha256:c7f7af2a7c857694da63ce6d3f5723257b111b461547659fa75b3f7c3b93aff7' \
+    'sha256:bbd26cb36df308c9e6b36b476af7d57fbc3ab86d96088bec2561b33d5cd111a9' \
   --expected-fl-plan-digest \
     'sha256:b72b46a6d753b4db3be175cd2c14ea012bd3524327e170d9bf064dd2fd1f2075' \
   --expected-ref-plan-digest \
