@@ -262,12 +262,15 @@
     },
     "media_decode": {
       "limits": {
+        "max_active_streams": 2,
         "max_attempt_decoded_bytes": 2147483648
       },
       "members": [
         "decode_audio",
         "decode_image",
-        "decode_video"
+        "decode_video",
+        "stream_audio",
+        "stream_video"
       ],
       "service": "MediaDecoder"
     },
@@ -278,6 +281,7 @@
         "save_file",
         "save_image",
         "save_video",
+        "save_video_stream",
         "temporary_file"
       ],
       "service": "Outputs"
@@ -310,5 +314,5 @@
       "service": "Telemetry"
     }
   },
-  "surface_digest": "sha256:b03541be1e95c6756aaea8ca6d001619f90582a88e25a27b5f0a76ba63571b4a"
+  "surface_digest": "sha256:db46bef8f9076c792b084227e384a68140f38ffd3fa2989482577a7c7aa519a2"
 }
