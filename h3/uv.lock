@@ -167,15 +167,15 @@ provides-extras = ["all", "audio", "detail", "dev", "hpsv3", "judge", "ocr", "pr
 
 [[package]]
 name = "cozy-runtime"
-version = "0.0.1"
-source = { path = "vendor/cozy_runtime-0.0.1-py3-none-any.whl" }
+version = "0.0.2"
+source = { path = "vendor/cozy_runtime-0.0.2-py3-none-any.whl" }
 dependencies = [
     { name = "grpcio", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "msgspec", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "protobuf", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.1-py3-none-any.whl", hash = "sha256:3af60632326a34f336571f4cc46c0e0288a86c96f61aa0443208c1b342a4dca8" },
+    { filename = "cozy_runtime-0.0.2-py3-none-any.whl", hash = "sha256:0afb67748718df33b3e23abc3303d7b3f2dcd6da649e090a0d558c81fad422ca" },
 ]
 
 [package.optional-dependencies]
@@ -276,7 +276,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cozy-eval", path = "vendor/cozy_eval-2.3.0-py3-none-any.whl" },
-    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.1-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.2-py3-none-any.whl" },
     { name = "diffusers", specifier = "==0.40.0" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },

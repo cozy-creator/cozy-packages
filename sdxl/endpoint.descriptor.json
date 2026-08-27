@@ -211,7 +211,7 @@
       "request",
       "runtime"
     ],
-    "retryability": "a coordinator projection over these facts; never author-declared",
+    "retryability": "a RecordOwner projection over these facts; never author-declared",
     "terminals": [
       "succeeded",
       "refused",
@@ -221,8 +221,8 @@
   },
   "jobs": [],
   "protocol": {
-    "python_contract_max": "0.0.1",
-    "python_contract_min": "0.0.1",
+    "python_contract_max": "0.0.2",
+    "python_contract_min": "0.0.2",
     "wire_minor_max": 0,
     "wire_minor_min": 0,
     "wire_package": "cozy.worker.v1"
@@ -310,5 +310,5 @@
       "service": "Telemetry"
     }
   },
-  "surface_digest": "sha256:b31fb47a1053bd401fe535c157407d04ad8a98b30b4ca13bd3c1550030471103"
+  "surface_digest": "sha256:b03541be1e95c6756aaea8ca6d001619f90582a88e25a27b5f0a76ba63571b4a"
 }
