@@ -148,91 +148,6 @@
               "asset": "image"
             },
             "wire": "required"
-          },
-          {
-            "name": "width",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "height",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "frames",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "fps",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "sample_rate",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "sigma_grid_points",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "transformer_evaluations",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "timestep_plan_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "video_sigma_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "audio_sigma_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "video_timestep_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "audio_timestep_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "video_pixel_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "audio_sample_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "continuation_frame_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "continuation_pixel_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "checkpoint",
-            "type": "str",
-            "wire": "required"
           }
         ],
         "struct": "H3VideoOutput"
@@ -461,91 +376,6 @@
               "asset": "image"
             },
             "wire": "required"
-          },
-          {
-            "name": "width",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "height",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "frames",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "fps",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "sample_rate",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "sigma_grid_points",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "transformer_evaluations",
-            "type": "int",
-            "wire": "required"
-          },
-          {
-            "name": "timestep_plan_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "video_sigma_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "audio_sigma_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "video_timestep_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "audio_timestep_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "video_pixel_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "audio_sample_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "continuation_frame_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "continuation_pixel_digest",
-            "type": "str",
-            "wire": "required"
-          },
-          {
-            "name": "checkpoint",
-            "type": "str",
-            "wire": "required"
           }
         ],
         "struct": "H3VideoOutput"
@@ -667,5 +497,5 @@
       "service": "Telemetry"
     }
   },
-  "surface_digest": "sha256:5b2a04cbf50c3939d9e569b2ecc9fbb0b89d9c2580e8ba79df083867e6348705"
+  "surface_digest": "sha256:b70b08daed8b1a3078c280c6d0ef3762cb0aaee829034f6375d9ebe7e3d0ebf6"
 }

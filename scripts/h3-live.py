@@ -301,41 +301,18 @@ def verify_outcome(document: dict[str, Any]) -> dict[str, str]:
 
 
 def verify_result(
-    action: str,
-    document: dict[str, Any],
-    *,
-    expected_checkpoint: str,
-    expected_plan: dict[str, str],
+    action: str, document: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, str]]:
+    """The customer result is EXACTLY the two-field catalog shape (se-012): checkpoint,
+    plan, geometry, and digest facts are attempt observations, never result fields."""
     runtime_outputs = verify_outcome(document)
     result = _result(document)
-    expected = {
-        "frames": 345,
-        "fps": 24,
-        "sample_rate": 32000,
-        "sigma_grid_points": 30,
-        "transformer_evaluations": 29,
-        "timestep_plan_digest": expected_plan["document_digest"].removeprefix("sha256:"),
-        "checkpoint": expected_checkpoint,
-        "video_sigma_digest": expected_plan["video_sigma_digest"],
-        "audio_sigma_digest": expected_plan["audio_sigma_digest"],
-        "video_timestep_digest": expected_plan["video_timestep_digest"],
-        "audio_timestep_digest": expected_plan["audio_timestep_digest"],
-    }
-    mismatches = {
-        key: {"got": result.get(key), "want": want}
-        for key, want in expected.items()
-        if result.get(key) != want
-    }
-    if mismatches:
-        raise RuntimeError(f"{action} receipt mismatch: {mismatches}")
-    for key in (
-        "video_pixel_digest",
-        "audio_sample_digest",
-        "continuation_pixel_digest",
-    ):
-        exact_bare_sha256(result.get(key), field=f"{action} result {key}")
-    _digest(result.get("continuation_frame_digest"))
+    if set(result) != {"video", "continuation_frame"}:
+        raise RuntimeError(
+            f"{action} result is not the two-field catalog shape: got {sorted(result)}"
+        )
+    _digest(result["video"])
+    _digest(result["continuation_frame"])
     return result, runtime_outputs
 
 
@@ -359,8 +336,8 @@ def verify_media_contract(
     video_height: int,
     image_format: str,
     image_codec: str,
-    expected_width: int,
-    expected_height: int,
+    continuation_width: int,
+    continuation_height: int,
 ) -> None:
     if "mp4" not in video_format.split(","):
         raise RuntimeError(f"stored video container is {video_format!r}, expected MP4")
@@ -372,8 +349,8 @@ def verify_media_contract(
         raise RuntimeError(
             f"stored MP4 codecs are {video_codec!r}/{audio_codec!r}, expected H264/AAC"
         )
-    if (video_width, video_height) != (expected_width, expected_height):
-        raise RuntimeError("stored video dimensions differ from the result geometry")
+    if (continuation_width, continuation_height) != (video_width, video_height):
+        raise RuntimeError("stored continuation dimensions differ from the stored video's")
     if image_format != "png_pipe" or image_codec != "png":
         raise RuntimeError(
             f"stored continuation container/codec is {image_format!r}/{image_codec!r}, expected PNG"
@@ -448,8 +425,8 @@ def probe_media(
         video_height=int(video_stream.height),
         image_format=image_format,
         image_codec=image_codec,
-        expected_width=int(result["width"]),
-        expected_height=int(result["height"]),
+        continuation_width=int(image.shape[1]),
+        continuation_height=int(image.shape[0]),
     )
 
     video_sha = hashlib.sha256(video_path.read_bytes()).hexdigest()
@@ -459,12 +436,6 @@ def probe_media(
         raise RuntimeError("stored MP4 digest differs from the returned VideoAsset")
     if continuation_sha != _digest(result["continuation_frame"]):
         raise RuntimeError("stored PNG digest differs from the returned ImageAsset")
-    if continuation_sha != _digest(result["continuation_frame_digest"]):
-        raise RuntimeError("stored PNG digest differs from continuation_frame_digest")
-    if continuation_pixels != result["continuation_pixel_digest"]:
-        raise RuntimeError("decoded PNG pixels differ from the pre-encode continuation pixels")
-    if (int(image.shape[1]), int(image.shape[0])) != (result["width"], result["height"]):
-        raise RuntimeError("continuation PNG dimensions differ from the result geometry")
 
     return {
         "video": str(video_path),
@@ -622,12 +593,7 @@ def main() -> int:
                 ]
             )
             verify_staged_request(payload, snapshots[action])
-            result, runtime_outputs = verify_result(
-                action,
-                document,
-                expected_checkpoint=expected_checkpoint,
-                expected_plan=plan_facts[action],
-            )
+            result, runtime_outputs = verify_result(action, document)
             results[action] = {
                 "request": {
                     "sha256": snapshots[action].sha256,

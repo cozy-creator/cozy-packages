@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 import msgspec
-
 from cozy_runtime.author import (
     Config,
     ConformanceError,

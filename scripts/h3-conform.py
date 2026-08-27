@@ -34,12 +34,12 @@ from official import (  # noqa: E402
     FRAMES,
     MAX_CONDITIONER_VISION_TOKENS,
     SIGMA_GRID_POINTS,
-    _ScopedPipeline,
     _aligned_soundtrack,
     _apply_transformer_dtype,
     _artifact_sections,
     _as_float32,
     _processor,
+    _ScopedPipeline,
     _validate_model_contract,
     _validate_row_timestep_plan,
     _video_at_24fps,
@@ -906,22 +906,8 @@ def arm_live_probe() -> None:
         observe("read-only request identity validates after directory mode change")
 
     result = {
-        "frames": 345,
-        "fps": 24,
-        "sample_rate": 32000,
-        "sigma_grid_points": 30,
-        "transformer_evaluations": 29,
-        "timestep_plan_digest": PLAN_DIGESTS["fl2va"],
-        "checkpoint": snapshot,
-        **{
-            key: value
-            for key, value in selected_plan_facts["first_last_frame_to_video"].items()
-            if key != "document_digest"
-        },
-        "video_pixel_digest": "7" * 64,
-        "audio_sample_digest": "8" * 64,
-        "continuation_frame_digest": "9" * 64,
-        "continuation_pixel_digest": "a" * 64,
+        "video": {"digest": "sha256:" + "7" * 64},
+        "continuation_frame": {"digest": "sha256:" + "9" * 64},
     }
     accepted_plan = {
         "plan_digest": runtime_plan,
@@ -942,33 +928,21 @@ def arm_live_probe() -> None:
         "warnings": [],
     }
     check(
-        "full Runtime outcome carries the expected action plan",
-        verify_result(
-            "first_last_frame_to_video",
-            outcome,
-            expected_checkpoint=snapshot,
-            expected_plan=selected_plan_facts["first_last_frame_to_video"],
-        )[0]["timestep_plan_digest"],
-        PLAN_DIGESTS["fl2va"],
+        "full Runtime outcome carries the exact two-field catalog result",
+        sorted(verify_result("first_last_frame_to_video", outcome)[0]),
+        ["continuation_frame", "video"],
     )
     refusal(
-        "a sibling action plan in the Runtime result refuses",
+        "an identity or digest rider in the customer result refuses",
         lambda: verify_result(
             "first_last_frame_to_video",
-            outcome,
-            expected_checkpoint=snapshot,
-            expected_plan=selected_plan_facts["reference_media_to_video"],
+            {**outcome, "result": {**result, "checkpoint": snapshot}},
         ),
         "RuntimeError",
     )
     refusal(
         "an empty accepted Runtime plan cannot masquerade as an execution outcome",
-        lambda: verify_result(
-            "first_last_frame_to_video",
-            {**outcome, "plan": {}},
-            expected_checkpoint=snapshot,
-            expected_plan=selected_plan_facts["first_last_frame_to_video"],
-        ),
+        lambda: verify_result("first_last_frame_to_video", {**outcome, "plan": {}}),
         "RuntimeError",
     )
     refusal(
@@ -976,8 +950,6 @@ def arm_live_probe() -> None:
         lambda: verify_result(
             "first_last_frame_to_video",
             {**outcome, "plan": {**accepted_plan, "plan_digest": "b" * 64}},
-            expected_checkpoint=snapshot,
-            expected_plan=selected_plan_facts["first_last_frame_to_video"],
         ),
         "RuntimeError",
     )
@@ -985,12 +957,7 @@ def arm_live_probe() -> None:
         "malformed Runtime model-construction identity refuses",
         lambda: verify_result(
             "first_last_frame_to_video",
-            {
-                **outcome,
-                "plan": {**accepted_plan, "model_construction_digest": "b" * 64},
-            },
-            expected_checkpoint=snapshot,
-            expected_plan=selected_plan_facts["first_last_frame_to_video"],
+            {**outcome, "plan": {**accepted_plan, "model_construction_digest": "b" * 64}},
         ),
         "RuntimeError",
     )
@@ -999,19 +966,12 @@ def arm_live_probe() -> None:
         lambda: verify_result(
             "first_last_frame_to_video",
             {**outcome, "outputs": {"video": "/proof/video.mp4"}},
-            expected_checkpoint=snapshot,
-            expected_plan=selected_plan_facts["first_last_frame_to_video"],
         ),
         "RuntimeError",
     )
     refusal(
         "an extra Runtime outcome field refuses",
-        lambda: verify_result(
-            "first_last_frame_to_video",
-            {**outcome, "unbound": True},
-            expected_checkpoint=snapshot,
-            expected_plan=selected_plan_facts["first_last_frame_to_video"],
-        ),
+        lambda: verify_result("first_last_frame_to_video", {**outcome, "unbound": True}),
         "RuntimeError",
     )
     refusal(
@@ -1019,31 +979,9 @@ def arm_live_probe() -> None:
         lambda: verify_result(
             "first_last_frame_to_video",
             {**outcome, "warnings": ["ignored extra key"]},
-            expected_checkpoint=snapshot,
-            expected_plan=selected_plan_facts["first_last_frame_to_video"],
         ),
         "RuntimeError",
     )
-
-    def verify_drifting_schedule(field: str) -> None:
-        verify_result(
-            "first_last_frame_to_video",
-            {**outcome, "result": {**result, field: "c" * 64}},
-            expected_checkpoint=snapshot,
-            expected_plan=selected_plan_facts["first_last_frame_to_video"],
-        )
-
-    for schedule_field in (
-        "video_sigma_digest",
-        "audio_sigma_digest",
-        "video_timestep_digest",
-        "audio_timestep_digest",
-    ):
-        refusal(
-            f"a drifting {schedule_field} observation refuses",
-            partial(verify_drifting_schedule, schedule_field),
-            "RuntimeError",
-        )
 
     media_contract = {
         "video_format": "mov,mp4,m4a,3gp,3g2,mj2",
@@ -1054,8 +992,8 @@ def arm_live_probe() -> None:
         "video_height": 512,
         "image_format": "png_pipe",
         "image_codec": "png",
-        "expected_width": 768,
-        "expected_height": 512,
+        "continuation_width": 768,
+        "continuation_height": 512,
     }
     verify_media_contract(**media_contract)
     observe("stored H264/AAC MP4 and PNG contract validates")
@@ -1131,14 +1069,9 @@ def arm_live_probe() -> None:
 
         video_digest = hashlib.sha256(video.read_bytes()).hexdigest()
         continuation_digest = hashlib.sha256(continuation.read_bytes()).hexdigest()
-        continuation_pixels = hashlib.sha256(continuation_pixels_array.tobytes()).hexdigest()
         result = {
             "video": {"digest": f"sha256:{video_digest}"},
             "continuation_frame": {"digest": f"sha256:{continuation_digest}"},
-            "continuation_frame_digest": continuation_digest,
-            "continuation_pixel_digest": continuation_pixels,
-            "width": 32,
-            "height": 32,
         }
         outputs = {"video": str(video), "continuation_frame": str(continuation)}
         return result, outputs
@@ -1231,24 +1164,6 @@ def arm_live_probe() -> None:
                     **good_result,
                     "continuation_frame": {"digest": "sha256:" + "0" * 64},
                 },
-                good_outputs,
-            ),
-            "RuntimeError",
-        )
-        refusal(
-            "a real continuation receipt digest mismatch refuses",
-            lambda: probe_media(
-                good_root,
-                {**good_result, "continuation_frame_digest": "0" * 64},
-                good_outputs,
-            ),
-            "RuntimeError",
-        )
-        refusal(
-            "a real continuation pixel mismatch refuses",
-            lambda: probe_media(
-                good_root,
-                {**good_result, "continuation_pixel_digest": "0" * 64},
                 good_outputs,
             ),
             "RuntimeError",

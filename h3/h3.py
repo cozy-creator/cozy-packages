@@ -94,25 +94,11 @@ class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
 
 
 class H3VideoOutput(msgspec.Struct):
+    """The catalog wire shape. Checkpoint, plan, geometry, and digest facts remain
+    attempt observations (se-012): they ride Telemetry, never the customer result."""
+
     video: VideoAsset
     continuation_frame: ImageAsset
-    width: int
-    height: int
-    frames: int
-    fps: int
-    sample_rate: int
-    sigma_grid_points: int
-    transformer_evaluations: int
-    timestep_plan_digest: str
-    video_sigma_digest: str
-    audio_sigma_digest: str
-    video_timestep_digest: str
-    audio_timestep_digest: str
-    video_pixel_digest: str
-    audio_sample_digest: str
-    continuation_frame_digest: str
-    continuation_pixel_digest: str
-    checkpoint: str
 
 
 def preflight_reference_media(payload: ReferenceMediaToVideoInput) -> ReferencePolicyFacts:
@@ -407,16 +393,19 @@ def _finish(
         )
         continuation = out.save_image(ImageFrame(width, height, frame_bytes), format="png")
 
-    return H3VideoOutput(
-        video=video,
-        continuation_frame=continuation,
-        width=width,
-        height=height,
-        frames=frames,
-        fps=FPS,
-        sample_rate=sample_rate,
-        sigma_grid_points=SIGMA_GRID_POINTS,
-        transformer_evaluations=TRANSFORMER_EVALUATIONS,
+    for name, value in (
+        ("width", width),
+        ("height", height),
+        ("frames", frames),
+        ("fps", FPS),
+        ("sample_rate", sample_rate),
+        ("sigma_grid_points", SIGMA_GRID_POINTS),
+        ("transformer_evaluations", TRANSFORMER_EVALUATIONS),
+    ):
+        tel.metric(name, value)
+    tel.log(
+        "generation_receipt",
+        checkpoint=model.checkpoint_ref,
         timestep_plan_digest=schedule.timestep_plan_digest,
         video_sigma_digest=schedule.video_sigma_digest,
         audio_sigma_digest=schedule.audio_sigma_digest,
@@ -426,8 +415,8 @@ def _finish(
         audio_sample_digest=hashlib.sha256(audio_array).hexdigest(),
         continuation_frame_digest=continuation.digest,
         continuation_pixel_digest=hashlib.sha256(frame_bytes).hexdigest(),
-        checkpoint=model.checkpoint_ref,
     )
+    return H3VideoOutput(video=video, continuation_frame=continuation)
 
 
 def _rgb8(torch: Any, decoded: Any) -> Any:

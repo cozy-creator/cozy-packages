@@ -65,9 +65,11 @@ audio sigmas, 29 timesteps, all five finite modulation classes (including option
 audio), and a deduplicated order of 89 block-modulation keys plus 59 final-normalization keys. These
 documents are job-010's input boundary; that job must not import endpoint code.
 
-Both actions return one muxed MP4 and one lossless PNG continuation frame. The continuation frame is
-captured from the final decoded RGB8 frame before MP4 encoding; its stored-byte digest and source
-RGB digest are separate identities.
+Both actions return exactly one muxed MP4 and one lossless PNG continuation frame — the customer
+result carries nothing else. The continuation frame is captured from the final decoded RGB8 frame
+before MP4 encoding. Checkpoint, plan, geometry, and digest facts (including the continuation
+frame's separate stored-byte and source-RGB identities) are attempt observations emitted through
+Telemetry, never result fields.
 
 ### Release closure
 
@@ -162,7 +164,7 @@ h3/.venv/bin/python scripts/h3-live.py \
   --expected-binding-ref 'cozy/minimax-h3@dual-full-r1' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
   --expected-surface-digest \
-    'sha256:0818306a152374430a2a6ae88635b82b3f38d32d868afc26a5113c34ccc84c1e' \
+    'sha256:b70b08daed8b1a3078c280c6d0ef3762cb0aaee829034f6375d9ebe7e3d0ebf6' \
   --expected-fl-plan-digest \
     'sha256:b72b46a6d753b4db3be175cd2c14ea012bd3524327e170d9bf064dd2fd1f2075' \
   --expected-ref-plan-digest \
