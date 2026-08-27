@@ -924,6 +924,18 @@ def arm_live_probe() -> None:
         "RuntimeError",
     )
     refusal(
+        "wrong Runtime model-construction identity refuses",
+        lambda: verify_result(
+            "first_last_frame_to_video",
+            outcome,
+            expected_checkpoint=snapshot,
+            expected_plan=selected_plan_facts["first_last_frame_to_video"],
+            expected_runtime_plan_digest=runtime_plan,
+            expected_construction_digest="sha256:" + "b" * 64,
+        ),
+        "RuntimeError",
+    )
+    refusal(
         "incomplete Runtime output grants refuse",
         lambda: verify_result(
             "first_last_frame_to_video",
