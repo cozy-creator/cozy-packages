@@ -868,19 +868,20 @@ def arm_live_probe() -> None:
         "continuation_frame_digest": "9" * 64,
         "continuation_pixel_digest": "a" * 64,
     }
+    accepted_plan = {
+        "plan_digest": runtime_plan,
+        "model_construction_digest": construction,
+        "delivery": "resident",
+        "materialization": "installed",
+        "placement": "all_resident",
+        "compute_dtype": "bfloat16",
+        "reserved_device_memory_bytes": 1,
+    }
     outcome = {
         "status": "OUTCOME_STATUS_SUCCEEDED",
         "result": result,
         "outputs": {"video": "/proof/video.mp4", "continuation_frame": "/proof/frame.png"},
-        "plan": {
-            "plan_digest": runtime_plan,
-            "model_construction_digest": construction,
-            "delivery": "resident",
-            "materialization": "installed",
-            "placement": "all_resident",
-            "compute_dtype": "bfloat16",
-            "reserved_device_memory_bytes": 1,
-        },
+        "plan": accepted_plan,
         "ledger": {"format": "cozy.runtime.Ledger/0", "classes": [{"class": "vram"}]},
         "timings": {"wall_ms": 1.0},
         "warnings": [],
@@ -892,8 +893,6 @@ def arm_live_probe() -> None:
             outcome,
             expected_checkpoint=snapshot,
             expected_plan=selected_plan_facts["first_last_frame_to_video"],
-            expected_runtime_plan_digest=runtime_plan,
-            expected_construction_digest=construction,
         )[0]["timestep_plan_digest"],
         PLAN_DIGESTS["fl2va"],
     )
@@ -904,8 +903,6 @@ def arm_live_probe() -> None:
             outcome,
             expected_checkpoint=snapshot,
             expected_plan=selected_plan_facts["reference_media_to_video"],
-            expected_runtime_plan_digest=runtime_plan,
-            expected_construction_digest=construction,
         ),
         "RuntimeError",
     )
@@ -916,32 +913,29 @@ def arm_live_probe() -> None:
             {**outcome, "plan": {}},
             expected_checkpoint=snapshot,
             expected_plan=selected_plan_facts["first_last_frame_to_video"],
-            expected_runtime_plan_digest=runtime_plan,
-            expected_construction_digest=construction,
         ),
         "RuntimeError",
     )
     refusal(
-        "wrong Runtime accepted-plan identity refuses",
+        "malformed Runtime accepted-plan identity refuses",
         lambda: verify_result(
             "first_last_frame_to_video",
-            outcome,
+            {**outcome, "plan": {**accepted_plan, "plan_digest": "b" * 64}},
             expected_checkpoint=snapshot,
             expected_plan=selected_plan_facts["first_last_frame_to_video"],
-            expected_runtime_plan_digest="sha256:" + "b" * 64,
-            expected_construction_digest=construction,
         ),
         "RuntimeError",
     )
     refusal(
-        "wrong Runtime model-construction identity refuses",
+        "malformed Runtime model-construction identity refuses",
         lambda: verify_result(
             "first_last_frame_to_video",
-            outcome,
+            {
+                **outcome,
+                "plan": {**accepted_plan, "model_construction_digest": "b" * 64},
+            },
             expected_checkpoint=snapshot,
             expected_plan=selected_plan_facts["first_last_frame_to_video"],
-            expected_runtime_plan_digest=runtime_plan,
-            expected_construction_digest="sha256:" + "b" * 64,
         ),
         "RuntimeError",
     )
@@ -952,8 +946,6 @@ def arm_live_probe() -> None:
             {**outcome, "outputs": {"video": "/proof/video.mp4"}},
             expected_checkpoint=snapshot,
             expected_plan=selected_plan_facts["first_last_frame_to_video"],
-            expected_runtime_plan_digest=runtime_plan,
-            expected_construction_digest=construction,
         ),
         "RuntimeError",
     )
@@ -964,8 +956,6 @@ def arm_live_probe() -> None:
             {**outcome, "unbound": True},
             expected_checkpoint=snapshot,
             expected_plan=selected_plan_facts["first_last_frame_to_video"],
-            expected_runtime_plan_digest=runtime_plan,
-            expected_construction_digest=construction,
         ),
         "RuntimeError",
     )
@@ -976,26 +966,33 @@ def arm_live_probe() -> None:
             {**outcome, "warnings": ["ignored extra key"]},
             expected_checkpoint=snapshot,
             expected_plan=selected_plan_facts["first_last_frame_to_video"],
-            expected_runtime_plan_digest=runtime_plan,
-            expected_construction_digest=construction,
-        ),
-        "RuntimeError",
-    )
-    refusal(
-        "a drifting schedule observation refuses",
-        lambda: verify_result(
-            "first_last_frame_to_video",
-            {**outcome, "result": {**result, "video_sigma_digest": "c" * 64}},
-            expected_checkpoint=snapshot,
-            expected_plan=selected_plan_facts["first_last_frame_to_video"],
-            expected_runtime_plan_digest=runtime_plan,
-            expected_construction_digest=construction,
         ),
         "RuntimeError",
     )
 
+    def verify_drifting_schedule(field: str) -> None:
+        verify_result(
+            "first_last_frame_to_video",
+            {**outcome, "result": {**result, field: "c" * 64}},
+            expected_checkpoint=snapshot,
+            expected_plan=selected_plan_facts["first_last_frame_to_video"],
+        )
+
+    for schedule_field in (
+        "video_sigma_digest",
+        "audio_sigma_digest",
+        "video_timestep_digest",
+        "audio_timestep_digest",
+    ):
+        refusal(
+            f"a drifting {schedule_field} observation refuses",
+            partial(verify_drifting_schedule, schedule_field),
+            "RuntimeError",
+        )
+
     media_contract = {
         "video_format": "mov,mp4,m4a,3gp,3g2,mj2",
+        "video_major_brand": "isom",
         "video_codec": "h264",
         "audio_codec": "aac",
         "video_width": 768,
@@ -1010,6 +1007,7 @@ def arm_live_probe() -> None:
     for name, changes in (
         ("wrong stored video codec refuses", {"video_codec": "hevc"}),
         ("wrong stored audio codec refuses", {"audio_codec": "pcm_s16le"}),
+        ("QuickTime major brand refuses", {"video_major_brand": "qt  "}),
         ("wrong stored video geometry refuses", {"video_width": 640}),
         ("wrong continuation container refuses", {"image_format": "image2"}),
     ):
@@ -1020,7 +1018,13 @@ def arm_live_probe() -> None:
         )
 
     def encoded_media_fixture(
-        root: Path, *, video_codec: str = "libx264", extension: str = "mp4"
+        root: Path,
+        *,
+        video_codec: str = "libx264",
+        extension: str = "mp4",
+        frame_count: int = 345,
+        audio_rate: int = 32000,
+        audio_sample_count: int = 460000,
     ) -> tuple[dict[str, Any], dict[str, str]]:
         import av
         import numpy as np
@@ -1036,10 +1040,10 @@ def arm_live_probe() -> None:
         video_stream.width = 32
         video_stream.height = 32
         video_stream.pix_fmt = "yuv420p"
-        audio_stream: AudioStream = container.add_stream("aac", rate=32000)
+        audio_stream: AudioStream = container.add_stream("aac", rate=audio_rate)
         audio_stream.layout = "mono"
         last = np.zeros((32, 32, 3), dtype=np.uint8)
-        for index in range(345):
+        for index in range(frame_count):
             last.fill(index % 256)
             frame = av.VideoFrame.from_ndarray(last, format="rgb24")
             frame.pts = index
@@ -1049,12 +1053,12 @@ def arm_live_probe() -> None:
             container.mux(packet)
 
         audio_pts = 0
-        while audio_pts < 460000:
-            samples = min(1024, 460000 - audio_pts)
+        while audio_pts < audio_sample_count:
+            samples = min(1024, audio_sample_count - audio_pts)
             audio_frame = av.AudioFrame.from_ndarray(
                 np.zeros((1, samples), dtype=np.float32), format="fltp", layout="mono"
             )
-            audio_frame.sample_rate = 32000
+            audio_frame.sample_rate = audio_rate
             audio_frame.pts = audio_pts
             for packet in audio_stream.encode(audio_frame):
                 container.mux(packet)
@@ -1105,10 +1109,94 @@ def arm_live_probe() -> None:
             "RuntimeError",
         )
         refusal(
+            "a real QuickTime MOV refuses",
+            lambda: probe_media(
+                media_root / "quicktime",
+                *encoded_media_fixture(media_root / "quicktime", extension="mov"),
+            ),
+            "RuntimeError",
+        )
+        refusal(
+            "a real wrong frame clock refuses",
+            lambda: probe_media(
+                media_root / "short-video",
+                *encoded_media_fixture(media_root / "short-video", frame_count=344),
+            ),
+            "RuntimeError",
+        )
+        refusal(
+            "a real wrong audio sample rate refuses",
+            lambda: probe_media(
+                media_root / "wrong-audio-rate",
+                *encoded_media_fixture(
+                    media_root / "wrong-audio-rate",
+                    audio_rate=44100,
+                    audio_sample_count=633938,
+                ),
+            ),
+            "RuntimeError",
+        )
+        refusal(
+            "a real A/V duration mismatch refuses",
+            lambda: probe_media(
+                media_root / "short-audio",
+                *encoded_media_fixture(media_root / "short-audio", audio_sample_count=450000),
+            ),
+            "RuntimeError",
+        )
+        refusal(
+            "a Runtime output path outside the action root refuses",
+            lambda: probe_media(
+                good_root,
+                good_result,
+                {**good_outputs, "video": str(media_root / "outside.mp4")},
+            ),
+            "RuntimeError",
+        )
+        refusal(
             "a real stored asset digest mismatch refuses",
             lambda: probe_media(
                 good_root,
                 {**good_result, "video": {"digest": "sha256:" + "0" * 64}},
+                good_outputs,
+            ),
+            "RuntimeError",
+        )
+        refusal(
+            "a real continuation asset digest mismatch refuses",
+            lambda: probe_media(
+                good_root,
+                {
+                    **good_result,
+                    "continuation_frame": {"digest": "sha256:" + "0" * 64},
+                },
+                good_outputs,
+            ),
+            "RuntimeError",
+        )
+        refusal(
+            "a real continuation receipt digest mismatch refuses",
+            lambda: probe_media(
+                good_root,
+                {**good_result, "continuation_frame_digest": "0" * 64},
+                good_outputs,
+            ),
+            "RuntimeError",
+        )
+        refusal(
+            "a real continuation pixel mismatch refuses",
+            lambda: probe_media(
+                good_root,
+                {**good_result, "continuation_pixel_digest": "0" * 64},
+                good_outputs,
+            ),
+            "RuntimeError",
+        )
+        refusal(
+            "a real continuation geometry mismatch refuses",
+            lambda: probe_media(
+                good_root,
+                {**good_result, "width": 31},
                 good_outputs,
             ),
             "RuntimeError",

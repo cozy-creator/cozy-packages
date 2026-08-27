@@ -36,9 +36,10 @@ class RequestSnapshot:
     seed: int
 
 
-def exact_sha256(value: str, *, option: str) -> str:
+def exact_sha256(value: Any, *, option: str) -> str:
     if (
-        len(value) != 71
+        not isinstance(value, str)
+        or len(value) != 71
         or not value.startswith("sha256:")
         or any(character not in "0123456789abcdef" for character in value[7:])
     ):
@@ -262,18 +263,7 @@ def _result(document: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
-def verify_outcome(
-    document: dict[str, Any],
-    *,
-    expected_plan_digest: str,
-    expected_construction_digest: str,
-) -> dict[str, str]:
-    expected_plan_digest = exact_sha256(
-        expected_plan_digest, option="--expected-runtime-plan-digest"
-    )
-    expected_construction_digest = exact_sha256(
-        expected_construction_digest, option="--expected-model-construction-digest"
-    )
+def verify_outcome(document: dict[str, Any]) -> dict[str, str]:
     if document.get("status") != "OUTCOME_STATUS_SUCCEEDED":
         raise RuntimeError(f"Runtime outcome is not succeeded: {document.get('status')!r}")
     expected_keys = {"status", "result", "outputs", "plan", "ledger", "timings", "warnings"}
@@ -285,17 +275,11 @@ def verify_outcome(
     plan = document.get("plan")
     if not isinstance(plan, dict):
         raise RuntimeError("Runtime outcome has no accepted plan")
-    expected_plan = {
-        "plan_digest": expected_plan_digest,
-        "model_construction_digest": expected_construction_digest,
-    }
-    mismatches = {
-        key: {"got": plan.get(key), "want": value}
-        for key, value in expected_plan.items()
-        if plan.get(key) != value
-    }
-    if mismatches:
-        raise RuntimeError(f"Runtime accepted-plan identity mismatch: {mismatches}")
+    exact_sha256(plan.get("plan_digest"), option="Runtime accepted plan digest")
+    exact_sha256(
+        plan.get("model_construction_digest"),
+        option="Runtime accepted model-construction digest",
+    )
 
     outputs = document.get("outputs")
     if (
@@ -322,14 +306,8 @@ def verify_result(
     *,
     expected_checkpoint: str,
     expected_plan: dict[str, str],
-    expected_runtime_plan_digest: str,
-    expected_construction_digest: str,
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    runtime_outputs = verify_outcome(
-        document,
-        expected_plan_digest=expected_runtime_plan_digest,
-        expected_construction_digest=expected_construction_digest,
-    )
+    runtime_outputs = verify_outcome(document)
     result = _result(document)
     expected = {
         "frames": 345,
@@ -374,6 +352,7 @@ def _digest(value: Any) -> str:
 def verify_media_contract(
     *,
     video_format: str,
+    video_major_brand: str,
     video_codec: str,
     audio_codec: str,
     video_width: int,
@@ -385,6 +364,10 @@ def verify_media_contract(
 ) -> None:
     if "mp4" not in video_format.split(","):
         raise RuntimeError(f"stored video container is {video_format!r}, expected MP4")
+    if video_major_brand != "isom":
+        raise RuntimeError(
+            f"stored video major brand is {video_major_brand!r}, expected exact MP4 brand 'isom'"
+        )
     if video_codec != "h264" or audio_codec != "aac":
         raise RuntimeError(
             f"stored MP4 codecs are {video_codec!r}/{audio_codec!r}, expected H264/AAC"
@@ -418,6 +401,7 @@ def probe_media(
         video_stream = container.streams.video[0]
         audio_stream = container.streams.audio[0]
         video_format = container.format.name
+        video_major_brand = container.metadata.get("major_brand", "")
         video_codec = video_stream.codec_context.name
         audio_codec = audio_stream.codec_context.name
         frames = 0
@@ -457,6 +441,7 @@ def probe_media(
 
     verify_media_contract(
         video_format=video_format,
+        video_major_brand=video_major_brand,
         video_codec=video_codec,
         audio_codec=audio_codec,
         video_width=int(video_stream.width),
@@ -488,6 +473,7 @@ def probe_media(
         "video_frames": frames,
         "video_fps": rate,
         "video_container": video_format,
+        "video_major_brand": video_major_brand,
         "video_codec": video_codec,
         "audio_codec": audio_codec,
         "audio_sample_rate": sample_rate,
@@ -512,10 +498,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--endpoint", type=Path, default=H3)
     parser.add_argument("--expected-binding-ref", required=True)
     parser.add_argument("--expected-checkpoint", required=True)
-    parser.add_argument("--expected-fl-runtime-plan-digest")
-    parser.add_argument("--expected-fl-model-construction-digest")
-    parser.add_argument("--expected-ref-runtime-plan-digest")
-    parser.add_argument("--expected-ref-model-construction-digest")
     parser.add_argument("--expected-surface-digest", required=True)
     parser.add_argument("--expected-fl-plan-digest", required=True)
     parser.add_argument("--expected-ref-plan-digest", required=True)
@@ -533,16 +515,11 @@ def parse_args() -> argparse.Namespace:
             args.expected_fl_input_sha256,
             args.ref_input,
             args.expected_ref_input_sha256,
-            args.expected_fl_runtime_plan_digest,
-            args.expected_fl_model_construction_digest,
-            args.expected_ref_runtime_plan_digest,
-            args.expected_ref_model_construction_digest,
         )
     ):
         parser.error(
             "--fl-input, --expected-fl-input-sha256, --ref-input, and "
-            "--expected-ref-input-sha256, and all four per-action Runtime plan/construction "
-            "digests are required unless --inspect-only is set"
+            "--expected-ref-input-sha256 are required unless --inspect-only is set"
         )
     return args
 
@@ -572,32 +549,6 @@ def main() -> int:
         assert args.ref_input is not None
         assert args.expected_fl_input_sha256 is not None
         assert args.expected_ref_input_sha256 is not None
-        assert args.expected_fl_runtime_plan_digest is not None
-        assert args.expected_fl_model_construction_digest is not None
-        assert args.expected_ref_runtime_plan_digest is not None
-        assert args.expected_ref_model_construction_digest is not None
-        expected_runtime = {
-            "first_last_frame_to_video": (
-                exact_sha256(
-                    args.expected_fl_runtime_plan_digest,
-                    option="--expected-fl-runtime-plan-digest",
-                ),
-                exact_sha256(
-                    args.expected_fl_model_construction_digest,
-                    option="--expected-fl-model-construction-digest",
-                ),
-            ),
-            "reference_media_to_video": (
-                exact_sha256(
-                    args.expected_ref_runtime_plan_digest,
-                    option="--expected-ref-runtime-plan-digest",
-                ),
-                exact_sha256(
-                    args.expected_ref_model_construction_digest,
-                    option="--expected-ref-model-construction-digest",
-                ),
-            ),
-        }
         snapshots = {
             "first_last_frame_to_video": load_request(
                 args.fl_input.expanduser().resolve(),
@@ -671,14 +622,11 @@ def main() -> int:
                 ]
             )
             verify_staged_request(payload, snapshots[action])
-            runtime_plan_digest, construction_digest = expected_runtime[action]
             result, runtime_outputs = verify_result(
                 action,
                 document,
                 expected_checkpoint=expected_checkpoint,
                 expected_plan=plan_facts[action],
-                expected_runtime_plan_digest=runtime_plan_digest,
-                expected_construction_digest=construction_digest,
             )
             results[action] = {
                 "request": {

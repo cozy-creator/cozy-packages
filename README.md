@@ -119,7 +119,8 @@ uv run ../scripts/h3-conform.py
 
 `scripts/h3-live.py` is the local installed-endpoint stage of the RunPod proof. It records the
 Runtime device observation and requires the endpoint surface, two timestep plans, binding ref,
-component snapshot, accepted Runtime plan/construction identities, and raw request bytes. Each
+component snapshot, exact Runtime-owned accepted plan/construction observations, and raw request
+bytes. Each
 request must be a UTF-8 JSON object with an explicit integer `seed` and `mute: false`. Before
 inference it refuses identity drift, an absent/narrow task binding, a component outside the expected
 snapshot, request mutation, or a reused output root. It stages a read-only copy of the exact request
@@ -127,14 +128,14 @@ bytes inside that fresh root, runs both actions offline, checks the complete acc
 outcome, probes the stored H264/AAC MP4 and PNG, and writes a machine receipt whose human
 viewed/listened status remains explicitly pending.
 
+The accepted Runtime identities are outputs, not circular pre-run command inputs. This stage checks
+their exact syntax and preserves the complete Runtime document; the canonical invocation receipt
+must bind them to the request, release, placement, and generation before production acceptance.
+
 ```bash
 h3/.venv/bin/python scripts/h3-live.py \
   --expected-binding-ref 'cozy/minimax-h3@se-012' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
-  --expected-fl-runtime-plan-digest 'sha256:EXACT_64_LOWERCASE_HEX_FL_PLAN' \
-  --expected-fl-model-construction-digest 'sha256:EXACT_64_LOWERCASE_HEX_FL_CONSTRUCTION' \
-  --expected-ref-runtime-plan-digest 'sha256:EXACT_64_LOWERCASE_HEX_REF_PLAN' \
-  --expected-ref-model-construction-digest 'sha256:EXACT_64_LOWERCASE_HEX_REF_CONSTRUCTION' \
   --expected-surface-digest \
     'sha256:c7f7af2a7c857694da63ce6d3f5723257b111b461547659fa75b3f7c3b93aff7' \
   --expected-fl-plan-digest \
