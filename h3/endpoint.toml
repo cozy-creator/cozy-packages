@@ -13,8 +13,8 @@ object = "h3:app"
 
 [bindings."Fl2VAModel"]
 repo = "cozy/minimax-h3"
-release = "se-012"
+release = "se-013"
 
 [bindings."Ref2VAModel"]
 repo = "cozy/minimax-h3"
-release = "se-012"
+release = "se-013"
