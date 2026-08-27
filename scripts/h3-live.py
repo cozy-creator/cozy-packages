@@ -2,9 +2,9 @@
 """Installed-endpoint MiniMax-H3 local proof stage.
 
 Run this inside the fixed RunPod worker only after external provider and release receipts exist.
-It executes both public actions through the installed Runtime, probes their stored MP4/PNG media,
-and writes one local machine receipt. It does not inspect provider state, establish release or
-container identity, or turn automated checks into viewed/listened proof.
+It executes the selected public actions through the installed Runtime, probes their stored
+MP4/PNG media, and writes one local machine receipt. It does not inspect provider state,
+establish release or container identity, or turn automated checks into viewed/listened proof.
 """
 
 from __future__ import annotations
@@ -27,6 +27,11 @@ PLAN_FILES = {
     "first_last_frame_to_video": "fl2va.json",
     "reference_media_to_video": "ref2va.json",
 }
+BINDING_PATHS = {
+    "first_last_frame_to_video": "first_last_frame_to_video.models.model",
+    "reference_media_to_video": "reference_media_to_video.models.model",
+}
+RECEIPT_SCHEMA = "cozy.minimax_h3.production_probe/3"
 
 
 @dataclass(frozen=True)
@@ -135,6 +140,37 @@ def verify_surface(document: dict[str, Any], *, expected: str) -> str:
     return expected
 
 
+def visible_actions(document: dict[str, Any]) -> set[str]:
+    entrypoints = document.get("entrypoints")
+    if not isinstance(entrypoints, list) or not all(isinstance(row, dict) for row in entrypoints):
+        raise RuntimeError("Runtime descriptor has no entrypoint list")
+    actions = {
+        row.get("name")
+        for row in cast(list[dict[str, Any]], entrypoints)
+        if row.get("hidden") is not True
+    }
+    if not actions or not all(
+        isinstance(action, str) and action in PLAN_FILES for action in actions
+    ):
+        rendered = sorted(str(action) for action in actions)
+        raise RuntimeError(f"Runtime descriptor has invalid visible H3 actions: {rendered}")
+    return cast(set[str], actions)
+
+
+def select_actions(values: list[str] | None) -> set[str]:
+    return set(PLAN_FILES) if not values else set(values)
+
+
+def require_visible(selected: set[str], descriptor: dict[str, Any]) -> set[str]:
+    visible = visible_actions(descriptor)
+    missing = selected - visible
+    if missing:
+        raise RuntimeError(
+            f"selected actions are not visible in the installed descriptor: {sorted(missing)}"
+        )
+    return visible
+
+
 def load_request(path: Path, *, expected_sha256: str) -> RequestSnapshot:
     expected_sha256 = exact_sha256(expected_sha256, option=f"expected digest for {path}")
     try:
@@ -214,7 +250,11 @@ def command_json(command: list[str], *, timeout: int = 7200) -> dict[str, Any]:
 
 
 def verify_bindings(
-    document: dict[str, Any], *, expected_ref: str, expected_checkpoint: str
+    document: dict[str, Any],
+    *,
+    expected_ref: str,
+    expected_checkpoint: str,
+    expected_actions: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     exact_sha256(expected_checkpoint, option="--expected-checkpoint")
 
@@ -222,12 +262,16 @@ def verify_bindings(
     if not isinstance(bindings, list) or not all(isinstance(row, dict) for row in bindings):
         raise RuntimeError("Runtime bindings result has no binding-record list")
     records = cast(list[dict[str, Any]], bindings)
-    expected_paths = {
-        "first_last_frame_to_video.models.model",
-        "reference_media_to_video.models.model",
-    }
-    if len(records) != 2 or {row.get("model_binding_path") for row in records} != expected_paths:
-        raise RuntimeError("Runtime bindings do not contain exactly the two H3 model slots")
+    actions = set(PLAN_FILES) if expected_actions is None else expected_actions
+    expected_paths = {BINDING_PATHS[action] for action in actions}
+    if (
+        len(records) != len(expected_paths)
+        or {row.get("model_binding_path") for row in records} != expected_paths
+    ):
+        raise RuntimeError(
+            f"Runtime bindings do not contain exactly the selected H3 model slots: "
+            f"{sorted(expected_paths)}"
+        )
 
     expected_components = {
         "audio_vae",
@@ -266,7 +310,16 @@ def _result(document: dict[str, Any]) -> dict[str, Any]:
 def verify_outcome(document: dict[str, Any]) -> dict[str, str]:
     if document.get("status") != "OUTCOME_STATUS_SUCCEEDED":
         raise RuntimeError(f"Runtime outcome is not succeeded: {document.get('status')!r}")
-    expected_keys = {"status", "result", "outputs", "plan", "ledger", "timings", "warnings"}
+    expected_keys = {
+        "status",
+        "result",
+        "outputs",
+        "invocation",
+        "plan",
+        "ledger",
+        "timings",
+        "warnings",
+    }
     if set(document) != expected_keys:
         raise RuntimeError(
             f"Runtime outcome fields differ: missing={sorted(expected_keys - set(document))}, "
@@ -280,6 +333,16 @@ def verify_outcome(document: dict[str, Any]) -> dict[str, str]:
         plan.get("model_construction_digest"),
         option="Runtime accepted model-construction digest",
     )
+    invocation = document.get("invocation")
+    if not isinstance(invocation, dict) or set(invocation) != {"digest", "document"}:
+        raise RuntimeError("Runtime outcome has no canonical invocation receipt")
+    invocation_digest = exact_sha256(
+        invocation.get("digest"), option="Runtime canonical invocation digest"
+    )
+    if not isinstance(invocation.get("document"), dict) or not invocation["document"]:
+        raise RuntimeError("Runtime canonical invocation receipt has no document")
+    if plan.get("invocation_spec_digest") != invocation_digest:
+        raise RuntimeError("Runtime accepted plan and canonical invocation receipt disagree")
 
     outputs = document.get("outputs")
     if (
@@ -300,9 +363,7 @@ def verify_outcome(document: dict[str, Any]) -> dict[str, str]:
     return cast(dict[str, str], outputs)
 
 
-def verify_result(
-    action: str, document: dict[str, Any]
-) -> tuple[dict[str, Any], dict[str, str]]:
+def verify_result(action: str, document: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
     """The customer result is EXACTLY the two-field catalog shape (se-012): checkpoint,
     plan, geometry, and digest facts are attempt observations, never result fields."""
     runtime_outputs = verify_outcome(document)
@@ -472,6 +533,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-surface-digest", required=True)
     parser.add_argument("--expected-fl-plan-digest", required=True)
     parser.add_argument("--expected-ref-plan-digest", required=True)
+    parser.add_argument(
+        "--action",
+        action="append",
+        choices=tuple(PLAN_FILES),
+        help="action to prove; repeat for both. Default: both actions",
+    )
     parser.add_argument("--fl-input", type=Path)
     parser.add_argument("--expected-fl-input-sha256")
     parser.add_argument("--ref-input", type=Path)
@@ -479,24 +546,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--inspect-only", action="store_true")
     args = parser.parse_args()
-    if not args.inspect_only and any(
-        value is None
-        for value in (
-            args.fl_input,
-            args.expected_fl_input_sha256,
-            args.ref_input,
-            args.expected_ref_input_sha256,
-        )
-    ):
-        parser.error(
-            "--fl-input, --expected-fl-input-sha256, --ref-input, and "
-            "--expected-ref-input-sha256 are required unless --inspect-only is set"
-        )
+    selected = select_actions(args.action)
+    if not args.inspect_only:
+        supplied = {
+            "first_last_frame_to_video": (args.fl_input, args.expected_fl_input_sha256),
+            "reference_media_to_video": (args.ref_input, args.expected_ref_input_sha256),
+        }
+        missing = [action for action in sorted(selected) if None in supplied[action]]
+        if missing:
+            parser.error(f"selected actions have no exact input/digest pair: {missing}")
     return args
 
 
 def main() -> int:
     args = parse_args()
+    selected_actions = select_actions(args.action)
     expected_checkpoint = exact_sha256(args.expected_checkpoint, option="--expected-checkpoint")
     expected_surface = exact_sha256(
         args.expected_surface_digest, option="--expected-surface-digest"
@@ -516,20 +580,14 @@ def main() -> int:
 
     snapshots: dict[str, RequestSnapshot] = {}
     if not args.inspect_only:
-        assert args.fl_input is not None
-        assert args.ref_input is not None
-        assert args.expected_fl_input_sha256 is not None
-        assert args.expected_ref_input_sha256 is not None
-        snapshots = {
-            "first_last_frame_to_video": load_request(
-                args.fl_input.expanduser().resolve(),
-                expected_sha256=args.expected_fl_input_sha256,
-            ),
-            "reference_media_to_video": load_request(
-                args.ref_input.expanduser().resolve(),
-                expected_sha256=args.expected_ref_input_sha256,
-            ),
+        supplied = {
+            "first_last_frame_to_video": (args.fl_input, args.expected_fl_input_sha256),
+            "reference_media_to_video": (args.ref_input, args.expected_ref_input_sha256),
         }
+        for action in selected_actions:
+            path, digest = supplied[action]
+            assert path is not None and digest is not None
+            snapshots[action] = load_request(path.expanduser().resolve(), expected_sha256=digest)
 
     output_root = reserve_output(args.out)
     staged_requests: dict[str, Path] = {}
@@ -537,27 +595,27 @@ def main() -> int:
         requests_root = output_root / "requests"
         requests_root.mkdir()
         staged_requests = {
-            "first_last_frame_to_video": stage_request(
-                requests_root / "fl2va.json", snapshots["first_last_frame_to_video"]
-            ),
-            "reference_media_to_video": stage_request(
-                requests_root / "ref2va.json", snapshots["reference_media_to_video"]
-            ),
+            action: stage_request(requests_root / PLAN_FILES[action], snapshots[action])
+            for action in selected_actions
         }
         make_requests_read_only(requests_root, list(staged_requests.values()))
 
     base = [args.runtime, "--dir", str(endpoint_path), "--json"]
-    description = command_json([*base, "describe", "--check"])
+    descriptor_check = command_json([*base, "describe", "--check"])
+    verify_surface(descriptor_check, expected=expected_surface)
+    description = command_json([*base, "describe"])
     surface_digest = verify_surface(description, expected=expected_surface)
+    require_visible(selected_actions, description)
     doctor = command_json([*base, "doctor"])
     bindings = command_json([*base, "bindings"])
     verify_bindings(
         bindings,
         expected_ref=args.expected_binding_ref,
         expected_checkpoint=expected_checkpoint,
+        expected_actions=selected_actions,
     )
     receipt: dict[str, Any] = {
-        "schema": "cozy.minimax_h3.production_probe/2",
+        "schema": RECEIPT_SCHEMA,
         "endpoint": {
             "resolved_path": str(endpoint_path),
             "surface_digest": surface_digest,
@@ -567,16 +625,15 @@ def main() -> int:
         "bindings": bindings,
         "expected_binding_ref": args.expected_binding_ref,
         "expected_checkpoint": expected_checkpoint,
+        "selected_actions": sorted(selected_actions),
+        "endpoint_observations_status": "pending-runtime-triage-join",
         "automated_status": "runtime-device-observed-and-binding-inspected",
         "human_viewed_listened_status": "pending",
     }
     if not args.inspect_only:
-        actions = (
-            ("first_last_frame_to_video", output_root / "fl2va"),
-            ("reference_media_to_video", output_root / "ref2va"),
-        )
         results = {}
-        for action, output in actions:
+        for action in sorted(selected_actions):
+            output = output_root / action
             payload = staged_requests[action]
             verify_staged_request(payload, snapshots[action])
             document = command_json(
@@ -605,7 +662,7 @@ def main() -> int:
             }
             results[action]["media"] = probe_media(output, result, runtime_outputs)
         receipt["actions"] = results
-        receipt["automated_status"] = "both-actions-runtime-and-stored-media-green"
+        receipt["automated_status"] = "selected-actions-runtime-and-stored-media-green"
     receipt_path = output_root / "h3-production-probe.json"
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     print(receipt_path)

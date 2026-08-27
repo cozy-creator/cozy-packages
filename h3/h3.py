@@ -393,27 +393,28 @@ def _finish(
         )
         continuation = out.save_image(ImageFrame(width, height, frame_bytes), format="png")
 
-    for name, value in (
-        ("width", width),
-        ("height", height),
-        ("frames", frames),
-        ("fps", FPS),
-        ("sample_rate", sample_rate),
-        ("sigma_grid_points", SIGMA_GRID_POINTS),
-        ("transformer_evaluations", TRANSFORMER_EVALUATIONS),
-    ):
-        tel.metric(name, value)
     tel.log(
-        "generation_receipt",
-        checkpoint=model.checkpoint_ref,
+        "h3 output geometry",
+        width=width,
+        height=height,
+        frames=frames,
+        fps=FPS,
+        sample_rate=sample_rate,
+    )
+    tel.log(
+        "h3 schedule facts",
         timestep_plan_digest=schedule.timestep_plan_digest,
         video_sigma_digest=schedule.video_sigma_digest,
         audio_sigma_digest=schedule.audio_sigma_digest,
         video_timestep_digest=schedule.video_timestep_digest,
         audio_timestep_digest=schedule.audio_timestep_digest,
+        sigma_grid_points=SIGMA_GRID_POINTS,
+        transformer_evaluations=TRANSFORMER_EVALUATIONS,
+    )
+    tel.log(
+        "h3 source digests",
         video_pixel_digest=hashlib.sha256(pixel_array).hexdigest(),
         audio_sample_digest=hashlib.sha256(audio_array).hexdigest(),
-        continuation_frame_digest=continuation.digest,
         continuation_pixel_digest=hashlib.sha256(frame_bytes).hexdigest(),
     )
     return H3VideoOutput(video=video, continuation_frame=continuation)

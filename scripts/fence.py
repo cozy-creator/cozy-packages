@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Structural fences for the endpoint packages. Static analysis, never a test suite.
 
-Eight properties CI must not let drift, each checked as a fact about the source rather than
+Nine properties CI must not let drift, each checked as a fact about the source rather than
 as a convention someone remembers:
 
   1. author-surface-only  an endpoint imports `cozy_runtime.author` and nothing else from
@@ -29,6 +29,8 @@ as a convention someone remembers:
                           typed bindings and settings; the executor ERASES `COZY_*`/token
                           env anyway, so an env read is a channel that never works in
                           production.
+  9. h3-binding-identity  H3 releases describe content, never tracker issue numbers; every
+                          default model binding selects the same immutable release.
 
     nice -n 19 .venv/bin/python scripts/fence.py
 """
@@ -435,6 +437,24 @@ def fence_no_env() -> Fence:
     return bad, f"{len(_ENV_ATTRS)} env-read spellings absent from {modules} modules"
 
 
+def fence_h3_binding_identity() -> Fence:
+    """A release name is product identity, not the issue that happened to cut it."""
+    binding = (ROOT / "h3" / "endpoint.toml").read_text()
+    releases = re.findall(r'^release\s*=\s*"([^"]+)"\s*$', binding, flags=re.MULTILINE)
+    bad: list[str] = []
+    if not releases:
+        bad.append("h3/endpoint.toml: no default model release is bound")
+    if len(set(releases)) > 1:
+        bad.append(f"h3/endpoint.toml: default model bindings disagree: {sorted(set(releases))}")
+    for release in releases:
+        if re.search(r"(?:^|[-_.])se-\d+(?:$|[-_.])", release):
+            bad.append(
+                f"h3/endpoint.toml: release {release!r} contains a tracker issue, "
+                "not only content identity"
+            )
+    return bad, "H3 bindings share one content-named immutable release"
+
+
 FENCES = (
     ("author-surface-only", fence_author_surface),
     ("no-identifiers-in-code", fence_identifiers),
@@ -444,6 +464,7 @@ FENCES = (
     ("h3-media-boundary", fence_h3_media_boundary),
     ("h3-official-hardcut", fence_h3_official_hardcut),
     ("env-free-endpoints", fence_no_env),
+    ("h3-binding-identity", fence_h3_binding_identity),
 )
 
 

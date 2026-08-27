@@ -147,13 +147,14 @@ uv run ../scripts/h3-conform.py
 `scripts/h3-live.py` is the local installed-endpoint stage of the RunPod proof. It records the
 Runtime device observation and requires the endpoint surface, two timestep plans, binding ref,
 component snapshot, exact Runtime-owned accepted plan/construction observations, and raw request
-bytes. Each
-request must be a UTF-8 JSON object with an explicit integer `seed` and `mute: false`. Before
-inference it refuses identity drift, an absent/narrow task binding, a component outside the expected
-snapshot, request mutation, or a reused output root. It stages a read-only copy of the exact request
-bytes inside that fresh root, runs both actions offline, checks the complete accepted Runtime
-outcome, probes the stored H264/AAC MP4 and PNG, and writes a machine receipt whose human
-viewed/listened status remains explicitly pending.
+bytes. Each request must be a UTF-8 JSON object with an explicit integer `seed` and `mute: false`.
+Before inference it refuses identity drift, a selected action that is not visible, an absent/narrow
+task binding, a component outside the expected snapshot, request mutation, or a reused output root.
+It stages a read-only copy of each selected request inside that fresh root, runs the selected visible
+actions offline, checks each complete accepted Runtime outcome, probes the stored H264/AAC MP4 and
+PNG, and writes a versioned machine receipt whose human viewed/listened status remains explicitly
+pending. `--action` is repeatable and defaults to both actions; use an explicit action while only
+Ref2VA is visible in the current descriptor.
 
 The accepted Runtime identities are outputs, not circular pre-run command inputs. This stage checks
 their exact syntax and preserves the complete Runtime document; the canonical invocation receipt
@@ -161,6 +162,7 @@ must bind them to the request, release, placement, and generation before product
 
 ```bash
 h3/.venv/bin/python scripts/h3-live.py \
+  --action reference_media_to_video \
   --expected-binding-ref 'cozy/minimax-h3@dual-full-r1' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
   --expected-surface-digest \
@@ -169,20 +171,21 @@ h3/.venv/bin/python scripts/h3-live.py \
     'sha256:b72b46a6d753b4db3be175cd2c14ea012bd3524327e170d9bf064dd2fd1f2075' \
   --expected-ref-plan-digest \
     'sha256:86143d5ad14f3936b01cc1732241c0bb9b943138d585d8f7b887c7533e4a8732' \
-  --fl-input /proof/fl2va.json \
-  --expected-fl-input-sha256 'sha256:EXACT_64_LOWERCASE_HEX_REQUEST' \
   --ref-input /proof/ref2va.json \
   --expected-ref-input-sha256 'sha256:EXACT_64_LOWERCASE_HEX_REQUEST' \
   --out /proof/new-output
 ```
 
 Compute each request identity from the file that will be supplied (for example,
-`sha256sum /proof/fl2va.json`) and prefix the 64 lowercase hexadecimal characters with `sha256:`.
+`sha256sum /proof/ref2va.json`) and prefix the 64 lowercase hexadecimal characters with `sha256:`.
 The `--out` path must not exist; a proof attempt never reuses prior request or media bytes.
 
 This stage records Runtime doctor output but does not interpret it as provider identity. It does not
-establish provider readback or an endpoint release/container digest. The outer launch proof must
-join those authoritative receipts to this local receipt. The request digest also
+establish provider readback or an endpoint release/container digest. The Runtime currently does not
+project the endpoint's bounded geometry, schedule, and source-digest observations into `run --json`,
+so the local receipt marks that join as pending rather than pretending those facts were observed.
+The outer launch proof must join the untruncated Runtime triage rows and authoritative provider and
+release receipts to this local receipt. The request digest also
 commits only the JSON bytes, not transitive media: the vendored Runtime CLI does not yet expose the
 input-asset grant mapping needed for FL2VA keyframes or Ref2VA references. That cr-012 CLI boundary
 and its canonical invocation receipt must land before the paid media proof; the endpoint must not
