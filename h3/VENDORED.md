@@ -10,7 +10,7 @@ dependency of the pinned model stack).
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.2-py3-none-any.whl` | `cozy-runtime` `a22bc39a217e66960a72fe666d66ac7f0daa1e79` | 654,855 | `266c8a063534532e729e17e72ef8cf05d6e84461c9e872195c2446dc7f174e84` |
+| `vendor/cozy_runtime-0.0.2-py3-none-any.whl` | `cozy-runtime` `430e052bc4f5bf5b41a65e0e71d19a7ffe7653e0` | 651,479 | `793d5c3f4c8fad4ede5a68a148134285b56dd21db4ba0b2f207a9caaa79b2f63` |
 | `vendor/cozy_eval-2.3.0-py3-none-any.whl` | `cozy-eval` `61560ff5cc0bce2403b7e2bc9e6bff753be58ca1` | 293,042 | `8b2af65159e9b5446d7fb1025988ba1aea74f14aea0bb27668c73260344f23a8` |
 | `vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl` | `tensorfs` `940973ff3409f049aa25044fccdf43a6f85f8ca1` | 841,454 | `a28b8a8061498d088bec80dd92335e260efc99b418f020edabe6e80ca1ab0002` |
 

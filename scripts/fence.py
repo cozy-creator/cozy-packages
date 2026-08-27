@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Structural fences for the endpoint packages. Static analysis, never a test suite.
 
-Nine properties CI must not let drift, each checked as a fact about the source rather than
+Ten properties CI must not let drift, each checked as a fact about the source rather than
 as a convention someone remembers:
 
   1. author-surface-only  an endpoint imports `cozy_runtime.author` and nothing else from
@@ -31,6 +31,8 @@ as a convention someone remembers:
                           production.
   9. h3-binding-identity  H3 releases describe content, never tracker issue numbers; every
                           default model binding selects the same immutable release.
+ 10. descriptor-minimality
+                          committed descriptor/1 files carry no retired unused facts.
 
     nice -n 19 .venv/bin/python scripts/fence.py
 """
@@ -39,6 +41,7 @@ from __future__ import annotations
 
 import ast
 import io
+import json
 import pathlib
 import re
 import sys
@@ -455,6 +458,42 @@ def fence_h3_binding_identity() -> Fence:
     return bad, "H3 bindings share one content-named immutable release"
 
 
+def fence_descriptor_minimality() -> Fence:
+    forbidden = {
+        "attribute", "capabilities", "config_schema", "context_facts", "default",
+        "default_sources", "demand", "discriminator", "emits_media", "error_model",
+        "frozen", "gpu", "kind", "max_audio_channels", "max_audio_samples",
+        "max_decoded_bytes", "max_pixels_per_frame", "max_video_frames", "placement",
+        "preflight", "protocol", "request_features", "requires", "schema",
+        "secret_schema", "secrets", "services", "settings", "shape_axes", "struct",
+        "surface_digest", "values",
+    }
+    bad: list[str] = []
+
+    def visit(value: object, where: str) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in forbidden:
+                    bad.append(f"{where}.{key}: retired descriptor fact")
+                visit(item, f"{where}.{key}")
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                visit(item, f"{where}[{index}]")
+
+    expected = {"application", "entrypoints", "format", "jobs"}
+    for project in projects():
+        path = project / "endpoint.descriptor.json"
+        try:
+            document = json.loads(path.read_bytes())
+        except (OSError, json.JSONDecodeError) as exc:
+            bad.append(f"{rel(path)}: unreadable: {exc}")
+            continue
+        if set(document) != expected or document.get("format") != "cozy.endpoint.descriptor/1":
+            bad.append(f"{rel(path)}: root fields/format are not exact descriptor/1")
+        visit(document, rel(path))
+    return bad, f"{len(projects())} descriptor/1 files carry only consumed facts"
+
+
 FENCES = (
     ("author-surface-only", fence_author_surface),
     ("no-identifiers-in-code", fence_identifiers),
@@ -465,6 +504,7 @@ FENCES = (
     ("h3-official-hardcut", fence_h3_official_hardcut),
     ("env-free-endpoints", fence_no_env),
     ("h3-binding-identity", fence_h3_binding_identity),
+    ("descriptor-minimality", fence_descriptor_minimality),
 )
 
 
