@@ -10,7 +10,7 @@ of the pinned model stack).
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.1-py3-none-any.whl` | `cozy-runtime` `1bbf0bd934fe605db70401566ac4c3f12dfbe6c1` | 583,723 | `3af60632326a34f336571f4cc46c0e0288a86c96f61aa0443208c1b342a4dca8` |
+| `vendor/cozy_runtime-0.0.2-py3-none-any.whl` | `cozy-runtime` `ef21fb4440a09ea335177f8762269170830ee7e5` | 614,497 | `e383908c186e89bd446be77dc984ff0c85dac985f5860cfec871421197718dbf` |
 | `vendor/cozy_eval-2.3.0-py3-none-any.whl` | `cozy-eval` `61560ff5cc0bce2403b7e2bc9e6bff753be58ca1` | 293,042 | `8b2af65159e9b5446d7fb1025988ba1aea74f14aea0bb27668c73260344f23a8` |
 
 Both checked-in wheels reproduced byte-for-byte on 2026-08-26 with uv 0.9.18:
@@ -27,7 +27,7 @@ sha256sum "$runtime_out"/*.whl "$eval_out"/*.whl
 
 The source checkouts were at the commits in the table. The Runtime wheel
 metadata declares `av>=18.1,<19` only for its `media` extra; this endpoint asks
-for `cozy-runtime[media]==0.0.1`.
+for `cozy-runtime[media]==0.0.2`.
 
 ## MiniMax H3 tokenizer and processor
 

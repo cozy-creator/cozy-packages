@@ -17,7 +17,7 @@ no GPL-derived H3 source remains in this repository.
 
 VENDORED FIRST-PARTY WHEELS
 
-  h3/vendor/cozy_runtime-0.0.1-py3-none-any.whl — Cozy Runtime, first-party
+  h3/vendor/cozy_runtime-0.0.2-py3-none-any.whl — Cozy Runtime, first-party
   h3/vendor/cozy_eval-2.3.0-py3-none-any.whl — Cozy Eval, first-party
 
 These are exact build inputs pending publication of the first-party packages. Their source commits,
