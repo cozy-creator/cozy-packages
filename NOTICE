@@ -23,11 +23,15 @@ VENDORED FIRST-PARTY WHEELS
 These are exact build inputs pending publication of the first-party packages. Their source commits,
 build commands, sizes, and SHA-256 digests are recorded in `h3/VENDORED.md`.
 
+BUNDLED MODEL INPUT DATA
+
+H3 bundles tokenizer and processor configuration/data from the pinned official
+`MiniMaxAI/MiniMax-H3` snapshot. Those files remain governed by the upstream model repository's
+terms. No model weights are stored here.
+
 MODEL LICENSE
 
 MiniMax H3 weights are covered by the model publisher's license, separately from the code licenses
 above. Tracker issue #532 records territory restrictions that exclude the United States, European
 Union, United Kingdom, and South Korea, and an open owner ruling on public/customer serving from an
-excluded territory. The bound artifact also owns tokenizer and processor configuration under the
-model repository's terms; no model weights or model configuration bytes are stored here. Internal
-development does not erase that release gate.
+excluded territory. Internal development does not erase that release gate.

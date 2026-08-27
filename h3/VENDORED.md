@@ -8,20 +8,18 @@ of the pinned model stack).
 
 ## Cozy-owned wheels
 
-| file | source commit | bytes | SHA256 |
-| --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.1-py3-none-any.whl` | `cozy-runtime` `1bbf0bd934fe605db70401566ac4c3f12dfbe6c1` | 583,723 | `3af60632326a34f336571f4cc46c0e0288a86c96f61aa0443208c1b342a4dca8` |
-| `vendor/cozy_eval-2.3.0-py3-none-any.whl` | `cozy-eval` `61560ff5cc0bce2403b7e2bc9e6bff753be58ca1` | 293,042 | `8b2af65159e9b5446d7fb1025988ba1aea74f14aea0bb27668c73260344f23a8` |
+| file | source commit | SHA256 |
+| --- | --- | --- |
+| `vendor/cozy_runtime-0.0.1-py3-none-any.whl` | `cozy-runtime` `1bbf0bd934fe605db70401566ac4c3f12dfbe6c1` | `3af60632326a34f336571f4cc46c0e0288a86c96f61aa0443208c1b342a4dca8` |
+| `vendor/cozy_eval-2.3.0-py3-none-any.whl` | `cozy-eval` `61560ff5cc0bce2403b7e2bc9e6bff753be58ca1` | `8b2af65159e9b5446d7fb1025988ba1aea74f14aea0bb27668c73260344f23a8` |
 
 Both checked-in wheels reproduced byte-for-byte on 2026-08-26 with uv 0.9.18:
 
 ```sh
-runtime_src=/absolute/path/to/cozy-runtime
-eval_src=/absolute/path/to/cozy-eval
 runtime_out=$(mktemp -d /tmp/cozy-runtime-wheel.XXXXXX)
 eval_out=$(mktemp -d /tmp/cozy-eval-wheel.XXXXXX)
-uv build --wheel --out-dir "$runtime_out" "$runtime_src"
-uv build --wheel --out-dir "$eval_out" "$eval_src"
+uv build --wheel --out-dir "$runtime_out" /home/fidika/cozy_v2/cozy-runtime
+uv build --wheel --out-dir "$eval_out" /home/fidika/cozy_v2/cozy-eval
 sha256sum "$runtime_out"/*.whl "$eval_out"/*.whl
 ```
 
@@ -29,18 +27,39 @@ The source checkouts were at the commits in the table. The Runtime wheel
 metadata declares `av>=18.1,<19` only for its `media` extra; this endpoint asks
 for `cozy-runtime[media]==0.0.1`.
 
-## Model configuration authority
+## MiniMax H3 tokenizer and processor
 
-Tokenizer vocabulary, merges, tokenizer settings, image/video processor settings, and chat
-template belong to the exact bound model artifact's `Config`. The endpoint package carries no
-second copy and performs no model-hub lookup. A missing or malformed mapping refuses model
-construction.
+The only accepted source is
+`MiniMaxAI/MiniMax-H3@42ed227ee7df40d41602854ae760620d6eb651fe`.
+The revision's own `model_index.json` binds `Qwen2TokenizerFast` to
+`tokenizer/` and `Qwen3VLProcessor` to `processor/`. Files here are regular
+copies of that exact immutable Hugging Face snapshot, not cache symlinks.
 
-The final job-001 artifact must record the stored-byte identities and provenance of those mappings
-against the accepted official `MiniMaxAI/MiniMax-H3` revision
-`42ed227ee7df40d41602854ae760620d6eb651fe`. The initially supplied
-`MiniMaxAI/MiniMax-Hailuo-2.3` name returned HTTP 401 and contradicted the cached official snapshot;
-it is not an alias or fallback.
+The initially supplied name `MiniMaxAI/MiniMax-Hailuo-2.3` was rejected: both
+its model API and exact-revision tree returned HTTP 401 without credentials,
+while the existing exact-revision official snapshot and its model metadata use
+`MiniMaxAI/MiniMax-H3`. The rejected name is not retained as an alias or
+fallback. A live re-fetch of the accepted gated repository still requires an
+authorized Hugging Face token; verification below used the already-fetched
+exact-revision snapshot.
+
+| file | SHA256 |
+| --- | --- |
+| `tokenizer/merges.txt` | `599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3` |
+| `tokenizer/tokenizer.json` | `a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7` |
+| `tokenizer/tokenizer_config.json` | `a07e942ac874baa13758de8d1fbdb186683cc03416b5589e1b6671c6b3057c68` |
+| `tokenizer/vocab.json` | `ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910` |
+| `processor/chat_template.json` | `5c72a170d2a4a1a3bc5adad2e689ae28138a9700e5b8c96c0266331e86c0acce` |
+| `processor/merges.txt` | `599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3` |
+| `processor/preprocessor_config.json` | `27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516` |
+| `processor/tokenizer.json` | `a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7` |
+| `processor/tokenizer_config.json` | `a07e942ac874baa13758de8d1fbdb186683cc03416b5589e1b6671c6b3057c68` |
+| `processor/video_preprocessor_config.json` | `7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13` |
+| `processor/vocab.json` | `ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910` |
+
+With network access disabled and CUDA hidden, Transformers 5.16.1 loaded the
+local files as `Qwen2Tokenizer` (vocabulary size 151643) and
+`Qwen3VLProcessor` with the same tokenizer vocabulary.
 
 ## Third-party binary closure
 
