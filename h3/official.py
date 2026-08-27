@@ -308,6 +308,18 @@ class _ScopedPipeline:
             return self._overrides[name]
         return getattr(self._pipe, name)
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        # Blocks communicate through PipelineState. A write landing on this per-call view
+        # would evaporate silently, and forwarding it would mutate the shared pipeline
+        # across requests — so a non-private write is a typed refusal, never a silent one.
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+        raise ConformanceError(
+            f"a wrapped Diffusers block set {name!r} on the request-local pipeline view",
+            code="scoped_pipeline_write",
+        )
+
 
 class OfficialH3Pipeline:
     """One task-pruned official workflow and its four weighted component roots."""

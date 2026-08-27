@@ -34,6 +34,7 @@ from official import (  # noqa: E402
     FRAMES,
     MAX_CONDITIONER_VISION_TOKENS,
     SIGMA_GRID_POINTS,
+    _ScopedPipeline,
     _aligned_soundtrack,
     _apply_transformer_dtype,
     _artifact_sections,
@@ -354,6 +355,31 @@ def arm_graph_and_dtypes() -> None:
     check("audio VAE state count", len(audio_vae.state_dict()), 1087)
     check("audio VAE parameter destinations", len(dict(audio_vae.named_parameters())), 832)
     red("uniform bf16 transformer cast", transformer_counts, Counter({"torch.bfloat16": 638}))
+
+    class _Component:
+        device = "meta"
+
+    class _Pipe:
+        def __init__(self) -> None:
+            self.existing = 1
+
+    inner = _Pipe()
+    scoped = _ScopedPipeline(inner, _Component(), overrides={"over": 2})
+    check(
+        "scoped view forwards reads, overrides, and the admitted component device",
+        (scoped.existing, scoped.over, scoped.device),
+        (1, 2, "meta"),
+    )
+    refusal(
+        "a block attribute write on the scoped view refuses instead of evaporating",
+        lambda: setattr(scoped, "communicated", 3),
+        "scoped_pipeline_write",
+    )
+    check(
+        "the refused write reached neither the view nor the wrapped pipe",
+        (sorted(vars(inner)), "communicated" in vars(scoped)),
+        (["existing"], False),
+    )
 
 
 def arm_processor() -> None:
