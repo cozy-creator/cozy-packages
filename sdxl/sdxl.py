@@ -40,6 +40,7 @@ from typing import Annotated, Any
 import msgspec
 from cozy_runtime.author import (
     App,
+    ConformanceError,
     Context,
     ImageAsset,
     ImageFrame,
@@ -311,6 +312,24 @@ def _integrity(torch: Any, image: Any, pixels: Any, tel: Telemetry) -> None:
         )
 
 
+def _request_generator(torch: Any, source: object, *, device: Any) -> Any:
+    """Adapt Runtime's public request generator to a device-placed torch generator.
+
+    `view.generator` is a `random.Random` while the runtime is weightless and a
+    `torch.Generator` once real fills exist; both spellings resolve here.
+    """
+    import random
+
+    if isinstance(source, torch.Generator):
+        return source
+    if not isinstance(source, random.Random):
+        raise ConformanceError(
+            f"request generator has unsupported type {type(source).__name__}",
+            code="generator_type",
+        )
+    return torch.Generator(device=device).manual_seed(source.getrandbits(63))
+
+
 @app.entrypoint
 def generate(
     ctx: Context,
@@ -353,7 +372,7 @@ def generate(
 
     scheduler = EulerDiscreteScheduler.from_config(model.pipe.scheduler_config)
     scheduler.set_timesteps(steps, device=device)
-    generator = torch.Generator(device=device).manual_seed(view._seed)
+    generator = _request_generator(torch, view.generator, device=device)
     latents = (
         torch.randn(
             1, 4, height // 8, width // 8, generator=generator, device=device,
