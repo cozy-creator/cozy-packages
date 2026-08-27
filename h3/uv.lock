@@ -62,13 +62,13 @@ wheels = [
 [[package]]
 name = "cozy-eval"
 version = "2.3.0"
-source = { path = "vendor/cozy_eval-2.3.0-py3-none-any.whl" }
+source = { url = "https://github.com/cozy-creator/cozy-eval-v2/releases/download/wheel-v2.3.0-61560ff/cozy_eval-2.3.0-py3-none-any.whl" }
 dependencies = [
     { name = "msgspec", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { filename = "cozy_eval-2.3.0-py3-none-any.whl", hash = "sha256:e54f6a6c17b412d461b6c9e755a3fe7b692b40353a28e8d142a606ba63563eeb" },
+    { url = "https://github.com/cozy-creator/cozy-eval-v2/releases/download/wheel-v2.3.0-61560ff/cozy_eval-2.3.0-py3-none-any.whl", hash = "sha256:e54f6a6c17b412d461b6c9e755a3fe7b692b40353a28e8d142a606ba63563eeb" },
 ]
 
 [package.metadata]
@@ -139,14 +139,14 @@ provides-extras = ["all", "audio", "detail", "dev", "hpsv3", "judge", "ocr", "pr
 [[package]]
 name = "cozy-runtime"
 version = "0.0.1"
-source = { path = "vendor/cozy_runtime-0.0.1-py3-none-any.whl" }
+source = { url = "https://github.com/cozy-creator/cozy-runtime-v2/releases/download/wheel-v0.0.1-dc8d847/cozy_runtime-0.0.1-py3-none-any.whl" }
 dependencies = [
     { name = "grpcio", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "msgspec", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "protobuf", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.1-py3-none-any.whl", hash = "sha256:81fdeb41843b906d55d3aef11c6f2df9a6eea6846564bd9c335298b1747dd207" },
+    { url = "https://github.com/cozy-creator/cozy-runtime-v2/releases/download/wheel-v0.0.1-dc8d847/cozy_runtime-0.0.1-py3-none-any.whl", hash = "sha256:bf9011aa67bb913495eb77059b07fc42b46bd57e71c99be9e0b3b641b0a2dc9b" },
 ]
 
 [package.optional-dependencies]
@@ -226,12 +226,12 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-eval", path = "vendor/cozy_eval-2.3.0-py3-none-any.whl" },
-    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.1-py3-none-any.whl" },
+    { name = "cozy-eval", url = "https://github.com/cozy-creator/cozy-eval-v2/releases/download/wheel-v2.3.0-61560ff/cozy_eval-2.3.0-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media"], url = "https://github.com/cozy-creator/cozy-runtime-v2/releases/download/wheel-v0.0.1-dc8d847/cozy_runtime-0.0.1-py3-none-any.whl" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=10" },
-    { name = "tensorfs", path = "vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl" },
+    { name = "tensorfs", url = "https://github.com/cozy-creator/tensorfs-v2/releases/download/wheel-v0.0.1-c6c598b/tensorfs-0.0.1-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
     { name = "torch", specifier = "==2.9.1+cu129", index = "https://download.pytorch.org/whl/cu129" },
     { name = "torchvision", specifier = "==0.24.1+cu129", index = "https://download.pytorch.org/whl/cu129" },
     { name = "transformers", specifier = ">=5.13,<6" },
@@ -648,9 +648,9 @@ wheels = [
 [[package]]
 name = "tensorfs"
 version = "0.0.1"
-source = { path = "vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl" }
+source = { url = "https://github.com/cozy-creator/tensorfs-v2/releases/download/wheel-v0.0.1-c6c598b/tensorfs-0.0.1-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 wheels = [
-    { filename = "tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:30ac8ebf4b2644ef73034247c8a3b80567b33b5ad8b7b9c7d8bb596d895f333a" },
+    { url = "https://github.com/cozy-creator/tensorfs-v2/releases/download/wheel-v0.0.1-c6c598b/tensorfs-0.0.1-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a201e69e259c9d1b4b37d2feb85f0894906eeb07b420cc8b866928b0be509599" },
 ]
 
 [[package]]

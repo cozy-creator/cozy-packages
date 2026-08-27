@@ -15,9 +15,9 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.0.1-py3-none-any.whl" }
-tensorfs = { path = "vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl" }
-cozy-eval = { path = "vendor/cozy_eval-2.3.0-py3-none-any.whl" }
+cozy-runtime = { url = "https://github.com/cozy-creator/cozy-runtime-v2/releases/download/wheel-v0.0.1-dc8d847/cozy_runtime-0.0.1-py3-none-any.whl" }
+tensorfs = { url = "https://github.com/cozy-creator/tensorfs-v2/releases/download/wheel-v0.0.1-c6c598b/tensorfs-0.0.1-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
+cozy-eval = { url = "https://github.com/cozy-creator/cozy-eval-v2/releases/download/wheel-v2.3.0-61560ff/cozy_eval-2.3.0-py3-none-any.whl" }
 torch = { index = "pytorch-cu129" }
 torchvision = { index = "pytorch-cu129" }
 
