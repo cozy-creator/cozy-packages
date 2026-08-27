@@ -56,6 +56,10 @@ HEAD_LATENTS = 2
 FPS = 24
 AUDIO_LATENT_FPS = 40
 
+#: A visual condition sits near-clean but outside the clean-latent class. The timestep
+#: plan owns this checkpoint convention; model-weight code must not duplicate it.
+VISUAL_COND_TIMESTEP = 0.999
+
 #: The packed order, and the modality tag each kind carries into AdaLN. Tags are the
 #: checkpoint's: 0 video, 1 text, 2 audio.
 SegmentKind = Literal["text", "cond", "audio", "video"]

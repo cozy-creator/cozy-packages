@@ -98,6 +98,7 @@ from h3_arch.layout import (
     FPS,
     FRAMES_PER_CLIP,
     HEAD_FRAMES,
+    VISUAL_COND_TIMESTEP,
     H3Solver,
     LatentGrid,
     MediaFacts,
@@ -329,9 +330,9 @@ def _present_keyframes(payload: GenerateInput, *, width: int, height: int) -> tu
     named = (("first_frame", payload.first_frame), ("last_frame", payload.last_frame))
     assets = [(name, a) for name, a in named if a is not None]
     out: list[Any] = []
-    for position, (name, asset) in enumerate(assets):
+    for name, asset in assets:
         image = _decode_image(asset, where=name)
-        if position == 0:
+        if name == "first_frame":
             out.append(image.resize((width, height), Image.Resampling.LANCZOS))
             continue
         scale = max(width / image.size[0], height / image.size[1])
@@ -621,7 +622,7 @@ def _run(
         layout=layout,
         sigma_shift_video=config.sigma_shift_video,
         sigma_shift_audio=config.sigma_shift_audio,
-        visual_cond_timestep=0.999 if plan.keyframes else None,
+        visual_cond_timestep=VISUAL_COND_TIMESTEP if plan.keyframes else None,
         adapters=tuple(str(a) for a in view.adapters),
     )
     solver = H3Solver(timestep_plan)
