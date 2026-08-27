@@ -165,8 +165,8 @@ h3/.venv/bin/python scripts/h3-live.py \
   --action reference_media_to_video \
   --expected-binding-ref 'cozy/minimax-h3@dual-full-r3' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
-  --expected-surface-digest \
-    'sha256:b70b08daed8b1a3078c280c6d0ef3762cb0aaee829034f6375d9ebe7e3d0ebf6' \
+  --expected-descriptor-digest \
+    'sha256:084bdad577744b27b5c94417090910659d87d3efa7968debc5fd94d29da5210c' \
   --expected-fl-plan-digest \
     'sha256:b72b46a6d753b4db3be175cd2c14ea012bd3524327e170d9bf064dd2fd1f2075' \
   --expected-ref-plan-digest \

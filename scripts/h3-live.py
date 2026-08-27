@@ -132,11 +132,11 @@ def load_plan_facts(endpoint: Path, expected: dict[str, str]) -> dict[str, dict[
     return observed
 
 
-def verify_surface(document: dict[str, Any], *, expected: str) -> str:
-    expected = exact_sha256(expected, option="--expected-surface-digest")
-    actual = document.get("surface_digest")
+def verify_descriptor_digest(document: dict[str, Any], *, expected: str) -> str:
+    expected = exact_sha256(expected, option="--expected-descriptor-digest")
+    actual = document.get("descriptor_digest")
     if actual != expected:
-        raise RuntimeError(f"endpoint surface is {actual!r}, expected {expected}")
+        raise RuntimeError(f"endpoint descriptor is {actual!r}, expected {expected}")
     return expected
 
 
@@ -530,7 +530,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--endpoint", type=Path, default=H3)
     parser.add_argument("--expected-binding-ref", required=True)
     parser.add_argument("--expected-checkpoint", required=True)
-    parser.add_argument("--expected-surface-digest", required=True)
+    parser.add_argument("--expected-descriptor-digest", required=True)
     parser.add_argument("--expected-fl-plan-digest", required=True)
     parser.add_argument("--expected-ref-plan-digest", required=True)
     parser.add_argument(
@@ -562,8 +562,8 @@ def main() -> int:
     args = parse_args()
     selected_actions = select_actions(args.action)
     expected_checkpoint = exact_sha256(args.expected_checkpoint, option="--expected-checkpoint")
-    expected_surface = exact_sha256(
-        args.expected_surface_digest, option="--expected-surface-digest"
+    expected_descriptor = exact_sha256(
+        args.expected_descriptor_digest, option="--expected-descriptor-digest"
     )
     expected_plans = {
         "first_last_frame_to_video": exact_sha256(
@@ -602,9 +602,10 @@ def main() -> int:
 
     base = [args.runtime, "--dir", str(endpoint_path), "--json"]
     descriptor_check = command_json([*base, "describe", "--check"])
-    verify_surface(descriptor_check, expected=expected_surface)
+    descriptor_digest = verify_descriptor_digest(
+        descriptor_check, expected=expected_descriptor
+    )
     description = command_json([*base, "describe"])
-    surface_digest = verify_surface(description, expected=expected_surface)
     require_visible(selected_actions, description)
     doctor = command_json([*base, "doctor"])
     bindings = command_json([*base, "bindings"])
@@ -618,7 +619,7 @@ def main() -> int:
         "schema": RECEIPT_SCHEMA,
         "endpoint": {
             "resolved_path": str(endpoint_path),
-            "surface_digest": surface_digest,
+            "descriptor_digest": descriptor_digest,
             "plans": plan_facts,
         },
         "doctor": doctor,

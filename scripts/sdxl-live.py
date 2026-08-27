@@ -399,8 +399,8 @@ def section_product() -> None:
     started = time.perf_counter()
     code, out = cozy.run("describe", FP16_ENDPOINT)
     describe_ms = (time.perf_counter() - started) * 1000.0
-    check("describe lists the release's one function and its committed surface digest",
-          code == 0 and "generate" in out and "surface_digest" in out,
+    check("describe lists the release's one function and its exact descriptor digest",
+          code == 0 and "generate" in out and "descriptor_digest" in out,
           out.splitlines()[0] if out else "")
     print("\n".join(f"    {line}" for line in out.strip().splitlines()))
     code, detail = cozy.run("describe", f"{FP16_ENDPOINT}/generate")

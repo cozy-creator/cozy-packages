@@ -28,6 +28,8 @@ ROOT = Path(__file__).resolve().parent.parent
 H3 = ROOT / "h3"
 sys.path.insert(0, str(H3))
 
+from cozy_runtime.author import describe  # noqa: E402
+
 import h3 as endpoint  # noqa: E402
 from gates import MediaFacts, pre_encode_gate  # noqa: E402
 from official import (  # noqa: E402
@@ -786,6 +788,7 @@ def arm_descriptor() -> None:
     print("\n== committed public surface ==")
     descriptor = json.loads((H3 / "endpoint.descriptor.json").read_text())
     entries = {entry["name"]: entry for entry in descriptor["entrypoints"]}
+    surfaces = {surface.name: surface for surface in describe(endpoint.app)}
     check(
         "exact action names",
         set(entries),
@@ -817,7 +820,7 @@ def arm_descriptor() -> None:
         )
         check(f"{name} model", entry["models"][0]["class"], model)
         check(f"{name} task stamp", entry["models"][0]["stamps"]["task"], task)
-        check(f"{name} media capability", "media_decode" in entry["capabilities"], True)
+        check(f"{name} media capability", "media_decode" in surfaces[name].capabilities, True)
         check(
             f"{name} exact customer result fields",
             [field["name"] for field in entry["result"]["fields"]],
@@ -843,7 +846,9 @@ def arm_live_probe() -> None:
     verify_result = cast(
         Callable[..., tuple[dict[str, Any], dict[str, str]]], probe["verify_result"]
     )
-    verify_surface = cast(Callable[..., str], probe["verify_surface"])
+    verify_descriptor_digest = cast(
+        Callable[..., str], probe["verify_descriptor_digest"]
+    )
     require_visible = cast(Callable[..., set[str]], probe["require_visible"])
     select_actions = cast(Callable[[list[str] | None], set[str]], probe["select_actions"])
     receipt_schema = cast(str, probe["RECEIPT_SCHEMA"])
@@ -860,9 +865,9 @@ def arm_live_probe() -> None:
         {"multiline": True},
     )
 
-    binding_ref = "cozy/minimax-h3@dual-full-r1"
+    binding_ref = "cozy/minimax-h3@dual-full-r3"
     snapshot = "sha256:" + "1" * 64
-    surface = "sha256:" + "2" * 64
+    descriptor_digest = "sha256:" + "2" * 64
     runtime_plan = "sha256:" + "5" * 64
     construction = "sha256:" + "6" * 64
     components = ["audio_vae", "text_encoder", "transformer", "transformer_ref", "video_vae"]
@@ -976,9 +981,11 @@ def arm_live_probe() -> None:
     )
 
     check(
-        "the described endpoint surface must equal the launch contract",
-        verify_surface({"surface_digest": surface}, expected=surface),
-        surface,
+        "the described endpoint digest must equal the launch contract",
+        verify_descriptor_digest(
+            {"descriptor_digest": descriptor_digest}, expected=descriptor_digest
+        ),
+        descriptor_digest,
     )
     installed_descriptor = json.loads((H3 / "endpoint.descriptor.json").read_text())
     check(
@@ -1002,8 +1009,10 @@ def arm_live_probe() -> None:
         "RuntimeError",
     )
     refusal(
-        "a different endpoint surface refuses before inference",
-        lambda: verify_surface({"surface_digest": surface}, expected="sha256:" + "3" * 64),
+        "a different endpoint descriptor refuses before inference",
+        lambda: verify_descriptor_digest(
+            {"descriptor_digest": descriptor_digest}, expected="sha256:" + "3" * 64
+        ),
         "RuntimeError",
     )
 
@@ -1105,12 +1114,13 @@ def arm_live_probe() -> None:
         verify_staged_request(staged, request_snapshot)
         observe("read-only request identity validates after directory mode change")
 
-        descriptor_surface = installed_descriptor["surface_digest"]
+        descriptor_bytes = (H3 / "endpoint.descriptor.json").read_bytes()
+        descriptor_identity = "sha256:" + hashlib.sha256(descriptor_bytes).hexdigest()
         fake_runtime = root / "cozy-runtime-fake"
         responses = {
             ("describe", "--check"): {
                 "descriptor": "current",
-                "surface_digest": descriptor_surface,
+                "descriptor_digest": descriptor_identity,
                 "next": [],
             },
             ("describe",): installed_descriptor,
@@ -1140,8 +1150,8 @@ def arm_live_probe() -> None:
             binding_ref,
             "--expected-checkpoint",
             snapshot,
-            "--expected-surface-digest",
-            descriptor_surface,
+            "--expected-descriptor-digest",
+            descriptor_identity,
             "--expected-fl-plan-digest",
             expected_plans["first_last_frame_to_video"],
             "--expected-ref-plan-digest",
