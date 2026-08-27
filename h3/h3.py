@@ -93,13 +93,6 @@ class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     seed: int | None = None
 
 
-class ReferenceFacts(msgspec.Struct, frozen=True):
-    images: int
-    videos: int
-    standalone_audios: int
-    total: int
-
-
 class H3VideoOutput(msgspec.Struct):
     video: VideoAsset
     continuation_frame: ImageAsset
@@ -122,14 +115,13 @@ class H3VideoOutput(msgspec.Struct):
     checkpoint: str
 
 
-def preflight_reference_media(payload: ReferenceMediaToVideoInput) -> ReferenceFacts:
+def preflight_reference_media(payload: ReferenceMediaToVideoInput) -> ReferencePolicyFacts:
     """Refuse cross-field count errors before Runtime hydrates a single asset."""
     kinds = [_reference_kind(reference) for reference in payload.references]
     try:
-        policy = validate_reference_policy(kinds)
+        return validate_reference_policy(kinds)
     except ValueError as exc:
         raise UnsupportedInput(str(exc), code="reference_policy", fields=["references"]) from exc
-    return _reference_facts(policy)
 
 
 def _reference_kind(reference: Reference) -> str:
@@ -138,15 +130,6 @@ def _reference_kind(reference: Reference) -> str:
     if isinstance(reference, VideoReference):
         return "video"
     return "audio"
-
-
-def _reference_facts(policy: ReferencePolicyFacts) -> ReferenceFacts:
-    return ReferenceFacts(
-        images=policy.images,
-        videos=policy.videos,
-        standalone_audios=policy.audios,
-        total=policy.total,
-    )
 
 
 class _H3Model(Model[OfficialH3Pipeline]):
@@ -363,10 +346,11 @@ def _finish(
     cancel()
     with tel.stage("decode_audio"):
         audio, sample_rate = model.decode_audio(state)
-        if audio.ndim != 3 or int(audio.shape[0]) != 1 or sample_rate != 32000:
+        release_rate = model.pipe.sample_rate
+        if audio.ndim != 3 or int(audio.shape[0]) != 1 or sample_rate != release_rate:
             raise OutputError(
                 f"official H3 audio decode returned shape {tuple(audio.shape)} at {sample_rate}Hz; "
-                "the release clock is 32000Hz",
+                f"the release clock is {release_rate}Hz",
                 code="output_audio_shape",
             )
         waveform = audio[0].to(torch.float32).contiguous().cpu()
@@ -521,7 +505,7 @@ def first_last_frame_to_video(
 def reference_media_to_video(
     ctx: Context,
     payload: ReferenceMediaToVideoInput,
-    facts: Preflight[ReferenceFacts],
+    facts: Preflight[ReferencePolicyFacts],
     model: Ref2VAModel,
     decoder: MediaDecoder,
     out: Outputs,

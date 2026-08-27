@@ -290,7 +290,7 @@
               "wire": "required"
             },
             {
-              "name": "standalone_audios",
+              "name": "audios",
               "type": "int",
               "wire": "required"
             },
@@ -301,7 +301,7 @@
             }
           ],
           "frozen": true,
-          "struct": "ReferenceFacts"
+          "struct": "ReferencePolicyFacts"
         },
         "identity": "h3:preflight_reference_media"
       },
@@ -667,5 +667,5 @@
       "service": "Telemetry"
     }
   },
-  "surface_digest": "sha256:0818306a152374430a2a6ae88635b82b3f38d32d868afc26a5113c34ccc84c1e"
+  "surface_digest": "sha256:5b2a04cbf50c3939d9e569b2ecc9fbb0b89d9c2580e8ba79df083867e6348705"
 }

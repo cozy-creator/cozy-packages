@@ -17,6 +17,8 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Literal
 
+import msgspec
+
 from cozy_runtime.author import (
     Config,
     ConformanceError,
@@ -204,8 +206,9 @@ class TimestepPlan:
         return json.dumps(document, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
-@dataclass(frozen=True, slots=True)
-class ReferencePolicyFacts:
+class ReferencePolicyFacts(msgspec.Struct, frozen=True):
+    """Preflight facts: the one reference-cardinality record both modules share."""
+
     images: int
     videos: int
     audios: int
@@ -377,6 +380,9 @@ class OfficialH3Pipeline:
             "audio_vae": audio_vae,
         }
         self.task = task
+        # The one release audio clock, read off the contract-checked artifact config
+        # rather than respelled by callers.
+        self.sample_rate = int(audio_vae.config.sampling_rate)
         self._blocks = blocks
         self._pipe = pipe
         self._transformer_name = transformer_name
