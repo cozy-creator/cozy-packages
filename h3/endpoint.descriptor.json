@@ -2,12 +2,16 @@
   "application": "h3:app",
   "entrypoints": [
     {
-      "hidden": true,
+      "hidden": false,
       "models": [
         {
-          "class": "Fl2VAModel",
+          "class": "H3Model",
           "component_use": {
-            "condition_media": [
+            "condition_fl2va_media": [
+              "video_vae"
+            ],
+            "condition_ref2va_media": [
+              "audio_vae",
               "video_vae"
             ],
             "condition_text": [
@@ -19,15 +23,16 @@
             "decode_video": [
               "video_vae"
             ],
-            "sample": [
-              "transformer"
+            "sample_fl2va": [
+              "fl2va_dit"
+            ],
+            "sample_ref2va": [
+              "ref2va_dit"
             ]
           },
           "param": "model",
           "path": "first_last_frame_to_video.models.model",
-          "stamps": {
-            "task": "fl2va"
-          }
+          "stamps": {}
         }
       ],
       "name": "first_last_frame_to_video",
@@ -112,9 +117,12 @@
       "hidden": false,
       "models": [
         {
-          "class": "Ref2VAModel",
+          "class": "H3Model",
           "component_use": {
-            "condition_media": [
+            "condition_fl2va_media": [
+              "video_vae"
+            ],
+            "condition_ref2va_media": [
               "audio_vae",
               "video_vae"
             ],
@@ -127,15 +135,16 @@
             "decode_video": [
               "video_vae"
             ],
-            "sample": [
-              "transformer_ref"
+            "sample_fl2va": [
+              "fl2va_dit"
+            ],
+            "sample_ref2va": [
+              "ref2va_dit"
             ]
           },
           "param": "model",
           "path": "reference_media_to_video.models.model",
-          "stamps": {
-            "task": "ref2va"
-          }
+          "stamps": {}
         }
       ],
       "name": "reference_media_to_video",

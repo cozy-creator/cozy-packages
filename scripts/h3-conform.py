@@ -42,8 +42,10 @@ from official import (  # noqa: E402
     _apply_transformer_dtype,
     _artifact_sections,
     _as_float32,
+    _dit_specs,
     _processor,
     _ScopedPipeline,
+    _validate_dual_dit_topology,
     _validate_model_contract,
     _validate_row_timestep_plan,
     _video_at_24fps,
@@ -81,6 +83,18 @@ ASSET_DIGESTS = {
     ),
 }
 TOKEN_CORPUS_DIGEST = "47759c8d2e1a24944edb8f712c7ffe66b650aa3481352487970bcdb3cd55fa58"
+
+
+def dit_config(task: str, modulation: str = "full") -> dict[str, object]:
+    plan = canonical_timestep_plan(cast(Any, task))
+    return {
+        "cozy_h3": {
+            "schema": "cozy.minimax_h3.dit/1",
+            "task": task,
+            "modulation": modulation,
+            "timestep_plan_digest": f"sha256:{plan.digest}",
+        }
+    }
 
 
 def observe(name: str, detail: str = "") -> None:
@@ -329,9 +343,9 @@ def arm_graph_and_dtypes() -> None:
     )
     full_sections: dict[str, dict[str, object]] = {
         "audio_vae": {},
+        "fl2va_dit": dit_config("fl2va"),
+        "ref2va_dit": dit_config("ref2va"),
         "text_encoder": {},
-        "transformer": {},
-        "transformer_ref": {},
         "video_vae": {},
     }
     check(
@@ -342,6 +356,34 @@ def arm_graph_and_dtypes() -> None:
     refusal(
         "an unweighted processor config cannot hide in the artifact",
         lambda: _artifact_sections({**full_sections, "processor": {}}),
+        "artifact_config",
+    )
+    check(
+        "uniform dual FULL structure",
+        {spec[1] for spec in _dit_specs(full_sections).values()},
+        {"full"},
+    )
+    mixed = {
+        **full_sections,
+        "ref2va_dit": dit_config("ref2va", "exact-baked"),
+    }
+    refusal(
+        "mixed FULL and baked task structures refuse",
+        lambda: _dit_specs(mixed),
+        "artifact_config",
+    )
+    refusal(
+        "task DiTs with different architecture config refuse",
+        lambda: _dit_specs(
+            {**full_sections, "ref2va_dit": {**full_sections["ref2va_dit"], "hidden_size": 7}}
+        ),
+        "artifact_config",
+    )
+    wrong_plan = dit_config("fl2va")
+    cast(dict[str, Any], wrong_plan["cozy_h3"])["timestep_plan_digest"] = "sha256:" + "0" * 64
+    refusal(
+        "a baked plan digest is exact artifact config",
+        lambda: _dit_specs({**full_sections, "fl2va_dit": wrong_plan}),
         "artifact_config",
     )
     transformer_counts = Counter(str(value.dtype) for value in transformer.state_dict().values())
@@ -383,6 +425,191 @@ def arm_graph_and_dtypes() -> None:
         "the refused write reached neither the view nor the wrapped pipe",
         (sorted(vars(inner)), "communicated" in vars(scoped)),
         (["existing"], False),
+    )
+
+
+def arm_exact_baked() -> None:
+    import torch
+    from diffusers import MiniMaxH3Transformer3DModel
+
+    from exact_baked import ExactBakedMiniMaxH3Transformer
+
+    print("\n== exact baked modulation over the inherited Diffusers forward ==")
+    plan = canonical_timestep_plan("fl2va")
+    timesteps, block_keys = plan.baked_table_layout()
+    config = {
+        "num_attention_heads": 1,
+        "attention_head_dim": 8,
+        "hidden_size": 8,
+        "num_layers": 2,
+        "num_refiner_layers": 1,
+        "ffn_dim": 16,
+        "in_channels": 2,
+        "audio_in_channels": 2,
+        "patch_size": (1, 1, 1),
+        "text_dim": 8,
+        "freq_dim": 4,
+        "time_embed_hidden_dim": 8,
+        "time_embed_dim": 4,
+        "rope_freq_dim": 1,
+    }
+    torch.manual_seed(7)
+    full = MiniMaxH3Transformer3DModel(**config).eval()
+    baked = ExactBakedMiniMaxH3Transformer.from_official_config(
+        config,
+        baked_timesteps=timesteps,
+        baked_block_keys=block_keys,
+    ).eval()
+    baked_twin = ExactBakedMiniMaxH3Transformer.from_official_config(
+        config,
+        baked_timesteps=timesteps,
+        baked_block_keys=block_keys,
+    ).eval()
+    _validate_dual_dit_topology({"fl2va": baked, "ref2va": baked_twin})
+    observe("two weight instances share one exact DiT class and topology")
+    refusal(
+        "two task component names cannot alias one DiT instance",
+        lambda: _validate_dual_dit_topology({"fl2va": baked, "ref2va": baked}),
+        "artifact_config",
+    )
+    check(
+        "baked DiT inherits the official forward",
+        "forward" in ExactBakedMiniMaxH3Transformer.__dict__,
+        False,
+    )
+
+    baked_state = baked.state_dict()
+    full_state = full.state_dict()
+    common = {
+        name: value
+        for name, value in full_state.items()
+        if name in baked_state and baked_state[name].shape == value.shape
+    }
+    loaded = baked.load_state_dict(common, strict=False)
+    check("no official destination becomes an unexpected baked key", loaded.unexpected_keys, [])
+    check(
+        "baked construction omits every dynamic modulation destination",
+        any(
+            name.startswith("time_embedder.")
+            or ".adaln_proj.linear." in name
+            or name.startswith("norm_out.linear.")
+            for name in baked_state
+        ),
+        False,
+    )
+    expected_tables = {
+        *(f"transformer_blocks.{index}.adaln_proj.table" for index in range(2)),
+        "norm_out.table",
+    }
+    check(
+        "only exact tables remain to fill after shared weights",
+        set(loaded.missing_keys),
+        expected_tables,
+    )
+
+    with torch.no_grad():
+        all_timesteps = torch.tensor(timesteps, dtype=torch.float32)
+        full_temb = full.time_embedder(full.time_proj(all_timesteps))
+        sparse_rows = torch.tensor(
+            [timestep_row * 3 + modality_tag for timestep_row, modality_tag in block_keys]
+        )
+        for full_block, baked_block in zip(
+            full.transformer_blocks, baked.transformer_blocks, strict=True
+        ):
+            dense = torch.stack(full_block.adaln_proj(full_temb), dim=1)
+            baked_block.adaln_proj.table.copy_(dense.index_select(0, sparse_rows))
+        final = full.norm_out.linear(torch.nn.functional.silu(full_temb)).reshape(
+            len(timesteps), 2, config["hidden_size"]
+        )
+        baked.norm_out.table.copy_(final)
+
+    document = json.loads(plan.canonical_bytes())
+    for evaluation in document["evaluations"]:
+        classes = evaluation["modulation_classes"]
+        local = sorted({float.fromhex(row["timestep"]) for row in classes})
+        local_tensor = torch.tensor(local, dtype=torch.float32)
+        full_local_temb = full.time_embedder(full.time_proj(local_tensor))
+        baked_rows = baked.time_embedder(baked.time_proj(local_tensor))
+        for full_block, baked_block in zip(
+            full.transformer_blocks, baked.transformer_blocks, strict=True
+        ):
+            full_values = full_block.adaln_proj(full_local_temb)
+            baked_values = baked_block.adaln_proj(baked_rows)
+            for row in classes:
+                index = local.index(float.fromhex(row["timestep"])) * 3 + row["modality_tag"]
+                for full_value, baked_value in zip(full_values, baked_values, strict=True):
+                    if not torch.allclose(
+                        full_value[index], baked_value[index], rtol=2e-6, atol=2e-7
+                    ):
+                        fail(
+                            "all canonical block rows equal the dynamic fixture",
+                            f"evaluation={evaluation['index']} row={row['name']}",
+                        )
+                        return
+    observe("all canonical block rows equal the dynamic fixture", "29 evaluations")
+
+    local = torch.tensor([0.0, _as_float32(0.999)], dtype=torch.float32)
+    full_temb = full.time_embedder(full.time_proj(local))
+    baked_rows = baked.time_embedder(baked.time_proj(local))
+    hidden = torch.randn(1, 4, config["hidden_size"])
+    indices = torch.tensor([0, 0, 1, 0])
+    check(
+        "final normalization table equals the dynamic fixture",
+        torch.allclose(
+            full.norm_out(hidden, full_temb, indices),
+            baked.norm_out(hidden, baked_rows, indices),
+            rtol=2e-6,
+            atol=2e-7,
+        ),
+        True,
+    )
+    torch.manual_seed(11)
+    forward = {
+        "hidden_states": torch.randn(1, 2, 2),
+        "audio_hidden_states": torch.randn(1, 1, 2),
+        "encoder_hidden_states": torch.randn(1, 1, 8),
+        "timestep": local,
+        "timestep_indices": indices,
+        "token_tags": torch.tensor([1, 0, 0, 2]),
+        "position_ids": torch.tensor(
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 2.0], [0.0, 0.0, 3.0]]
+        ),
+        "video_indices": torch.tensor([1, 2]),
+        "audio_indices": torch.tensor([3]),
+        "text_indices": torch.tensor([0]),
+        "return_dict": False,
+    }
+    full_output = full(**forward)
+    baked_output = baked(**forward)
+    check(
+        "the inherited forward changes only the baked modulation source",
+        all(
+            torch.allclose(left, right, rtol=2e-5, atol=2e-6)
+            for left, right in zip(full_output, baked_output, strict=True)
+        ),
+        True,
+    )
+    refusal(
+        "a non-plan timestep refuses rather than interpolating",
+        lambda: baked.time_proj(torch.tensor([0.123456], dtype=torch.float32)),
+        "baked_timestep",
+    )
+    refusal(
+        "a plan timestep paired with an unbaked modality refuses",
+        lambda: baked(
+            hidden_states=torch.empty(1, 0, 2),
+            audio_hidden_states=torch.empty(1, 0, 2),
+            encoder_hidden_states=torch.empty(1, 1, 8),
+            timestep=torch.tensor([_as_float32(0.999)]),
+            timestep_indices=torch.tensor([0]),
+            token_tags=torch.tensor([1]),
+            position_ids=torch.zeros(1, 3),
+            video_indices=torch.empty(0, dtype=torch.int64),
+            audio_indices=torch.empty(0, dtype=torch.int64),
+            text_indices=torch.tensor([0]),
+            return_dict=False,
+        ),
+        "baked_timestep",
     )
 
 
@@ -609,11 +836,13 @@ def arm_media() -> None:
         pipe = SimpleNamespace(sample_rate=32000)
 
         @staticmethod
-        def decode_audio(state: Any) -> tuple[Any, int]:
+        def decode_audio(task: Any, state: Any) -> tuple[Any, int]:
+            del task
             return state.audio, 32000
 
         @staticmethod
-        def decode_video(state: Any) -> Any:
+        def decode_video(task: Any, state: Any) -> Any:
+            del task
             return state.video
 
     class FinishOutputs:
@@ -660,6 +889,7 @@ def arm_media() -> None:
     try:
         finished = endpoint._finish(
             cast(Any, FinishModel()),
+            "fl2va",
             SimpleNamespace(audio=finish_audio, video=finish_video),
             schedule,
             mute=False,
@@ -795,37 +1025,42 @@ def arm_descriptor() -> None:
         {"first_last_frame_to_video", "reference_media_to_video"},
     )
     check(
-        "exact currently visible action",
+        "both official actions are visible",
         {name for name, entry in entries.items() if entry["hidden"] is not True},
-        {"reference_media_to_video"},
+        {"first_last_frame_to_video", "reference_media_to_video"},
     )
     expected = {
         "first_last_frame_to_video": (
             ["prompt", "first_frame", "last_frame", "mute", "seed"],
-            "Fl2VAModel",
-            "fl2va",
+            "fl2va_dit",
         ),
         "reference_media_to_video": (
             ["prompt", "references", "mute", "seed"],
-            "Ref2VAModel",
-            "ref2va",
+            "ref2va_dit",
         ),
     }
-    for name, (fields, model, task) in expected.items():
+    for name, (fields, dit) in expected.items():
         entry = entries[name]
         check(
             f"{name} request fields",
             [field["name"] for field in entry["request"]["fields"]],
             fields,
         )
-        check(f"{name} model", entry["models"][0]["class"], model)
-        check(f"{name} task stamp", entry["models"][0]["stamps"]["task"], task)
+        check(f"{name} shared model", entry["models"][0]["class"], "H3Model")
+        check(f"{name} carries no task-selection stamp", entry["models"][0]["stamps"], {})
+        component_use = entry["models"][0]["component_use"]
+        check(
+            f"{name} task DiT lease exists",
+            component_use[f"sample_{dit.removesuffix('_dit')}"] ,
+            [dit],
+        )
         check(f"{name} media capability", "media_decode" in surfaces[name].capabilities, True)
         check(
             f"{name} exact customer result fields",
             [field["name"] for field in entry["result"]["fields"]],
             ["video", "continuation_frame"],
         )
+    check("H3 permits Runtime encoded linear leaves", endpoint.H3Model.__encoded_leaves__, "accept")
 
 
 def arm_live_probe() -> None:
@@ -865,17 +1100,19 @@ def arm_live_probe() -> None:
         {"multiline": True},
     )
 
-    binding_ref = "cozy/minimax-h3@dual-full-r3"
+    binding_ref = "cozy/minimax-h3@1.0.0"
+    binding_lane = "fp8-baked"
     snapshot = "sha256:" + "1" * 64
     descriptor_digest = "sha256:" + "2" * 64
     runtime_plan = "sha256:" + "5" * 64
     construction = "sha256:" + "6" * 64
-    components = ["audio_vae", "text_encoder", "transformer", "transformer_ref", "video_vae"]
+    components = ["audio_vae", "fl2va_dit", "ref2va_dit", "text_encoder", "video_vae"]
 
     def binding(path: str, *, installed: bool = True) -> dict[str, Any]:
         return {
             "model_binding_path": path,
             "ref": binding_ref,
+            "lane": binding_lane,
             "installed": installed,
             "components": components,
             "snapshots": dict.fromkeys(components, snapshot),
@@ -896,29 +1133,18 @@ def arm_live_probe() -> None:
                 document,
                 expected_ref=binding_ref,
                 expected_checkpoint=snapshot,
+                expected_lane=binding_lane,
             )
         ),
         2,
     )
-    check(
-        "one selected Ref2VA slot still requires the complete dual release",
-        len(
-            verify_bindings(
-                {"bindings": [binding("reference_media_to_video.models.model")]},
-                expected_ref=binding_ref,
-                expected_checkpoint=snapshot,
-                expected_actions=ref_action,
-            )
-        ),
-        1,
-    )
     refusal(
-        "a selected action cannot accept its sibling binding slot",
+        "a partial binding set refuses even when probing one action",
         lambda: verify_bindings(
-            {"bindings": [binding("first_last_frame_to_video.models.model")]},
+            {"bindings": [binding("reference_media_to_video.models.model")]},
             expected_ref=binding_ref,
             expected_checkpoint=snapshot,
-            expected_actions=ref_action,
+            expected_lane=binding_lane,
         ),
         "RuntimeError",
     )
@@ -933,6 +1159,22 @@ def arm_live_probe() -> None:
             },
             expected_ref=binding_ref,
             expected_checkpoint=snapshot,
+            expected_lane=binding_lane,
+        ),
+        "RuntimeError",
+    )
+    refusal(
+        "a different quantization lane refuses before inference",
+        lambda: verify_bindings(
+            {
+                "bindings": [
+                    {**binding("first_last_frame_to_video.models.model"), "lane": "mxfp8-baked"},
+                    binding("reference_media_to_video.models.model"),
+                ]
+            },
+            expected_ref=binding_ref,
+            expected_checkpoint=snapshot,
+            expected_lane=binding_lane,
         ),
         "RuntimeError",
     )
@@ -950,6 +1192,7 @@ def arm_live_probe() -> None:
             },
             expected_ref=binding_ref,
             expected_checkpoint=snapshot,
+            expected_lane=binding_lane,
         ),
         "RuntimeError",
     )
@@ -959,6 +1202,7 @@ def arm_live_probe() -> None:
             document,
             expected_ref=binding_ref,
             expected_checkpoint="sha256:" + "2" * 64,
+            expected_lane=binding_lane,
         ),
         "RuntimeError",
     )
@@ -976,6 +1220,7 @@ def arm_live_probe() -> None:
             },
             expected_ref=binding_ref,
             expected_checkpoint=snapshot,
+            expected_lane=binding_lane,
         ),
         "RuntimeError",
     )
@@ -999,14 +1244,9 @@ def arm_live_probe() -> None:
         ref_action,
     )
     check(
-        "currently visible Ref2VA action is selectable",
+        "selecting Ref2VA preserves the complete visible surface",
         require_visible(ref_action, installed_descriptor),
-        ref_action,
-    )
-    refusal(
-        "hidden FL2VA action refuses before inference",
-        lambda: require_visible({"first_last_frame_to_video"}, installed_descriptor),
-        "RuntimeError",
+        {"first_last_frame_to_video", "reference_media_to_video"},
     )
     refusal(
         "a different endpoint descriptor refuses before inference",
@@ -1125,7 +1365,7 @@ def arm_live_probe() -> None:
             },
             ("describe",): installed_descriptor,
             ("doctor",): {"device": {"type": "cuda", "name": "contract-fake"}},
-            ("bindings",): {"bindings": [binding("reference_media_to_video.models.model")]},
+            ("bindings",): document,
         }
         fake_runtime.write_text(
             f"#!{sys.executable}\n"
@@ -1148,6 +1388,8 @@ def arm_live_probe() -> None:
             str(H3),
             "--expected-binding-ref",
             binding_ref,
+            "--expected-lane",
+            binding_lane,
             "--expected-checkpoint",
             snapshot,
             "--expected-descriptor-digest",
@@ -1194,24 +1436,29 @@ def arm_live_probe() -> None:
         else:
             fail("selected Ref2VA main path receipt", ref_main.stderr[:500])
 
-        hidden_main = subprocess.run(
+        fl_main = subprocess.run(
             [
                 *live_base,
                 "--action",
                 "first_last_frame_to_video",
                 "--out",
-                str(root / "main-hidden-proof"),
+                str(root / "main-fl-proof"),
             ],
             text=True,
             capture_output=True,
             check=False,
         )
-        check("hidden FL2VA main path exits nonzero", hidden_main.returncode != 0, True)
-        check(
-            "hidden FL2VA main path explains visibility refusal",
-            "selected actions are not visible" in hidden_main.stderr,
-            True,
-        )
+        check("selected FL2VA main path exits green", fl_main.returncode, 0)
+        if fl_main.returncode == 0:
+            receipt_path = Path(fl_main.stdout.strip().splitlines()[-1])
+            receipt = json.loads(receipt_path.read_text())
+            check(
+                "selected FL2VA receipt identity",
+                receipt["selected_actions"],
+                ["first_last_frame_to_video"],
+            )
+        else:
+            fail("selected FL2VA main path receipt", fl_main.stderr[:500])
 
     result = {
         "video": {"digest": "sha256:" + "7" * 64},
@@ -1543,6 +1790,7 @@ def arm_live_probe() -> None:
 ARMS = {
     "schedule": arm_schedule,
     "graph": arm_graph_and_dtypes,
+    "exact-baked": arm_exact_baked,
     "processor": arm_processor,
     "media": arm_media,
     "gates": arm_output_gates,

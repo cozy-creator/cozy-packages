@@ -8,7 +8,7 @@ conformance drivers, and default development bindings.
 
 | path | responsibility |
 |---|---|
-| `h3/` | MiniMax H3 Ref2VA FULL serving endpoint (release `dual-full-r3`); FL2VA declared hidden |
+| `h3/` | MiniMax H3 dual-task endpoint; immutable deployment binding selects FULL or exact-baked weights |
 | `sdxl/` | SDXL text-to-image endpoint (se-008) |
 | `quality-judge/` | evaluation actions (ev-003) |
 | `video-assembly/` | fixed CPU-only 2-8-shot streaming assembler (se-014) |
@@ -34,23 +34,40 @@ conformance drivers, and default development bindings.
 
 ## MiniMax H3
 
-The H3 package declares two actions, but this one-generation release exposes only Ref2VA:
+The H3 package exposes both official actions from one model generation:
 
-- `first_last_frame_to_video` remains declared but hidden until it has a separate worker generation.
-- `reference_media_to_video` uses `Ref2VAModel` and accepts one ordered tagged list of image,
+- `first_last_frame_to_video` accepts zero, first, last, or first-and-last keyframes.
+- `reference_media_to_video` accepts one ordered tagged list of image,
   video, and standalone-audio references.
 
-Both actions use the official Diffusers MiniMax H3 implementation and the same shared text encoder,
-video VAE, audio VAE, and schedulers. Each thin model role constructs only its task transformer:
-`transformer` for FL2VA or `transformer_ref` for Ref2VA. The interim community curve architecture
-was deleted instead of retained as a second graph.
+Both actions use the official Diffusers MiniMax H3 implementation and share one BF16 text encoder,
+one video VAE and one audio VAE at their official FP32 destination dtypes, and one scheduler
+contract. The same construction carries task-stamped
+`fl2va_dit` and `ref2va_dit` components; Runtime's component leases make only the selected task DiT
+resident while its action runs. `transformer` and `transformer_ref` exist only as the explicit
+adapter names expected by the two upstream Diffusers workflows. The interim community curve
+architecture was deleted instead of retained as a second graph.
+
+The two DiT components are distinct weight instances of the same class and exact topology. They
+cannot be two names for one module: Runtime fills, fences, stages, and evicts by component name, so
+an alias would let the second checkpoint fill overwrite the first and an eviction through either
+name invalidate both. Artifact config equality and the constructed destination topology are both
+checked before fill; only checkpoint contents and the task-specific upstream interface differ.
 
 The launch cell is part of the release, not request policy: 345 frames at 24 fps, with the official
 30-point sigma grid including terminal zero and exactly 29 transformer evaluations. Duration,
 frame-count, step-count, task-selector, graph-selector, and AdaLN-mode request fields are absent.
-This reference release supports only the official FULL AdaLN computation. The later production
-release will use exact precomputed tables and omit replaced AdaLN weights and computation entirely;
-there is no runtime toggle between the two.
+The artifact config fixes both DiTs to one modulation structure before construction: reference
+artifacts use the official FULL AdaLN path, while production artifacts use exact table rows for the
+two committed TimestepPlans and contain no replaced timestep/AdaLN projection destinations. The
+exact-baked extension inherits Diffusers' forward and changes only those projection modules; it
+does not interpolate a curve or carry a second model port. The hub/runtime selects BF16 reference,
+FP8-rowwise Hopper, or qualified MXFP8 Blackwell artifacts before fetch. Requests and environment
+variables cannot choose a lane.
+
+The bare local binding selects `cozy/minimax-h3@1.0.0` lane `fp8-baked`. Tensorhub may bind the
+same release's `mxfp8-baked` lane for a qualified Blackwell execution; that deployment override
+does not change endpoint source or expose a request-time choice.
 
 Ref2VA preserves request order and enforces the official product bounds: at most 9 images, 3 videos,
 3 standalone audio clips, and 12 entries total. Video and audio clips are 2–15 seconds, with at most
@@ -153,8 +170,8 @@ task binding, a component outside the expected snapshot, request mutation, or a 
 It stages a read-only copy of each selected request inside that fresh root, runs the selected visible
 actions offline, checks each complete accepted Runtime outcome, probes the stored H264/AAC MP4 and
 PNG, and writes a versioned machine receipt whose human viewed/listened status remains explicitly
-pending. `--action` is repeatable and defaults to both actions; use an explicit action while only
-Ref2VA is visible in the current descriptor.
+pending. `--action` is repeatable and defaults to both actions; use an explicit action to focus a
+proof on either visible interface.
 
 The accepted Runtime identities are outputs, not circular pre-run command inputs. This stage checks
 their exact syntax and preserves the complete Runtime document; the canonical invocation receipt
@@ -163,10 +180,11 @@ must bind them to the request, release, placement, and generation before product
 ```bash
 h3/.venv/bin/python scripts/h3-live.py \
   --action reference_media_to_video \
-  --expected-binding-ref 'cozy/minimax-h3@dual-full-r3' \
+  --expected-binding-ref 'cozy/minimax-h3@1.0.0' \
+  --expected-lane 'fp8-baked' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
   --expected-descriptor-digest \
-    'sha256:084bdad577744b27b5c94417090910659d87d3efa7968debc5fd94d29da5210c' \
+    'sha256:c236398b0c2205e196a3ca91f70be6e89bb94dd515f8f736aa31534ee3f244fa' \
   --expected-fl-plan-digest \
     'sha256:b72b46a6d753b4db3be175cd2c14ea012bd3524327e170d9bf064dd2fd1f2075' \
   --expected-ref-plan-digest \

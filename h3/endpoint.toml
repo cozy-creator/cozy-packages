@@ -4,12 +4,12 @@
 # Code states CAPABILITY; bindings state SELECTION. Nothing in `h3.py` or `official.py` names
 # a repo, release, checkpoint or revision — the artifact and its release live here.
 #
-# This release stages one Ref2VA construction. FL2VA remains declared hidden in the descriptor;
-# exposing both distinct constructions to a one-generation worker would fail closed before serve.
+# Both actions bind one uniform dual-DiT artifact and therefore share one model generation.
 
 [application]
 object = "h3:app"
 
-[bindings."Ref2VAModel"]
+[bindings."H3Model"]
 repo = "cozy/minimax-h3"
-release = "dual-full-r3"
+release = "1.0.0"
+lane = "fp8-baked"

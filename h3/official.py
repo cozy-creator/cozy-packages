@@ -2,7 +2,8 @@
 
 This module contains no media decoder and no checkpoint loader. Runtime supplies immutable
 decoded values and fills the component roots constructed here. Diffusers owns every model
-operation: presentation, conditioning, layout, schedules, FULL AdaLN, solver, and decode.
+operation: presentation, conditioning, layout, schedules, solver, and decode. Artifact config
+selects the official FULL modulation modules or exact baked-table replacements before fill.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ import struct
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import lru_cache
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,6 +30,7 @@ from cozy_runtime.author import (
 )
 
 Task = Literal["fl2va", "ref2va"]
+_TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
 
 FPS = 24
 FRAMES = 345
@@ -39,11 +43,14 @@ MAX_REFERENCES = 12
 MAX_CONDITIONER_VISION_TOKENS = 32768
 _WEIGHTED_CONFIG_SECTIONS = {
     "audio_vae",
+    "fl2va_dit",
+    "ref2va_dit",
     "text_encoder",
-    "transformer",
-    "transformer_ref",
     "video_vae",
 }
+_DIT_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
+_DIFFUSERS_DIT = {"fl2va": "transformer", "ref2va": "transformer_ref"}
+_DIT_CONFIG_SCHEMA = "cozy.minimax_h3.dit/1"
 _ASSETS = Path(__file__).resolve().parent
 
 
@@ -88,14 +95,16 @@ class TimestepPlan:
             raise ValueError("a MiniMax-H3 plan must contain exactly 29 video and audio timesteps")
         if self.video_sigmas[-1] != 0.0 or self.audio_sigmas[-1] != 0.0:
             raise ValueError("the terminal video and audio sigmas must both be zero")
-        if self.video_sigmas != _shifted_sigmas(
-            self.video_shift
-        ) or self.audio_sigmas != _shifted_sigmas(self.audio_shift):
-            raise ValueError("MiniMax-H3 sigmas must exactly match their official float32 shifts")
         for sigmas, timesteps in (
             (self.video_sigmas, self.video_timesteps),
             (self.audio_sigmas, self.audio_timesteps),
         ):
+            if (
+                sigmas[0] != 1.0
+                or any(not math.isfinite(value) or value != _as_float32(value) for value in sigmas)
+                or any(left <= right for left, right in pairwise(sigmas))
+            ):
+                raise ValueError("MiniMax-H3 sigmas must be finite descending float32 values")
             expected = tuple(_as_float32(1.0 - sigma) for sigma in sigmas[:-1])
             if timesteps != expected:
                 raise ValueError("MiniMax-H3 timesteps must be float32 one-minus-sigma values")
@@ -122,6 +131,21 @@ class TimestepPlan:
 
     def canonical_bytes(self) -> bytes:
         """Canonical job-010 handoff; float32 values are exact hex strings."""
+        return json.dumps(self._document(), sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+    def baked_table_layout(self) -> tuple[tuple[float, ...], tuple[tuple[int, int], ...]]:
+        """The table order named by these exact canonical plan bytes."""
+        keys = self._document()["baked_table_keys"]
+        final_rows = keys["final_normalization"]
+        timesteps = tuple(float.fromhex(row["timestep"]) for row in final_rows)
+        timestep_rows = {value: index for index, value in enumerate(timesteps)}
+        block_rows = tuple(
+            (timestep_rows[float.fromhex(row["timestep"])], int(row["modality_tag"]))
+            for row in keys["block_modulation"]
+        )
+        return timesteps, block_rows
+
+    def _document(self) -> dict[str, Any]:
         clean_video = _as_float32(0.999)
         condition_audio = _as_float32(1.0)
         evaluations: list[dict[str, Any]] = []
@@ -202,7 +226,7 @@ class TimestepPlan:
                 "transformer_evaluation": False,
             },
         }
-        return json.dumps(document, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        return document
 
 
 class ReferencePolicyFacts(msgspec.Struct, frozen=True):
@@ -241,19 +265,35 @@ def validate_reference_policy(kinds: Sequence[str]) -> ReferencePolicyFacts:
     return facts
 
 
+@lru_cache(maxsize=2)
 def canonical_timestep_plan(task: Task) -> TimestepPlan:
-    """Derive Diffusers' exact float32 FULL schedule without constructing any model."""
-    video_sigmas = _shifted_sigmas(12.0)
-    audio_sigmas = _shifted_sigmas(3.0)
-    return TimestepPlan(
-        task=task,
-        video_shift=12.0,
-        audio_shift=3.0,
-        video_sigmas=video_sigmas,
-        audio_sigmas=audio_sigmas,
-        video_timesteps=_timesteps(video_sigmas),
-        audio_timesteps=_timesteps(audio_sigmas),
-    )
+    """Read and self-verify the committed official-oracle plan without a tensor device."""
+    raw = (_ASSETS / "timestep-plans" / f"{task}.json").read_bytes()
+    try:
+        document = json.loads(raw)
+        evaluations = document["evaluations"]
+        video_sigmas = tuple(
+            [float.fromhex(row["video_sigma"]) for row in evaluations]
+            + [float.fromhex(document["terminal"]["video_sigma"])]
+        )
+        audio_sigmas = tuple(
+            [float.fromhex(row["audio_sigma"]) for row in evaluations]
+            + [float.fromhex(document["terminal"]["audio_sigma"])]
+        )
+        plan = TimestepPlan(
+            task=task,
+            video_shift=float.fromhex(document["video_shift"]),
+            audio_shift=float.fromhex(document["audio_shift"]),
+            video_sigmas=video_sigmas,
+            audio_sigmas=audio_sigmas,
+            video_timesteps=tuple(_as_float32(1.0 - value) for value in video_sigmas[:-1]),
+            audio_timesteps=tuple(_as_float32(1.0 - value) for value in audio_sigmas[:-1]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"committed MiniMax-H3 {task} TimestepPlan is malformed") from exc
+    if document.get("schema") != "cozy.minimax_h3.timestep_plan/1" or plan.canonical_bytes() != raw:
+        raise ValueError(f"committed MiniMax-H3 {task} TimestepPlan is not canonical")
+    return plan
 
 
 def reference_image_vision_tokens(width: int, height: int) -> int:
@@ -324,9 +364,9 @@ class _ScopedPipeline:
 
 
 class OfficialH3Pipeline:
-    """One task-pruned official workflow and its four weighted component roots."""
+    """Both official task workflows over one shared, dual-DiT construction."""
 
-    def __init__(self, config: Config, *, task: Task) -> None:
+    def __init__(self, config: Config) -> None:
         import torch
         from diffusers import (
             AutoencoderKLMiniMaxH3,
@@ -334,18 +374,21 @@ class OfficialH3Pipeline:
             MiniMaxH3Blocks,
             MiniMaxH3ModularPipeline,
             MiniMaxH3Scheduler,
-            MiniMaxH3Transformer3DModel,
         )
         from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
 
         mapping = _artifact_sections(config.mapping())
-        blocks = MiniMaxH3Blocks().get_workflow(task)
-        pipe = MiniMaxH3ModularPipeline(blocks=blocks)
-
-        transformer_name = "transformer" if task == "fl2va" else "transformer_ref"
-        transformer = _apply_transformer_dtype(
-            MiniMaxH3Transformer3DModel.from_config(_section(mapping, transformer_name))
-        )
+        blocks = {task: MiniMaxH3Blocks().get_workflow(task) for task in _TASKS}
+        pipes = {
+            task: MiniMaxH3ModularPipeline(blocks=blocks[task])
+            for task in _TASKS
+        }
+        dit_specs = _dit_specs(mapping)
+        dits = {
+            task: _build_dit(upstream, structure, plan)
+            for task, (upstream, structure, plan) in dit_specs.items()
+        }
+        _validate_dual_dit_topology(dits)
         text_encoder = (
             Qwen3VLForConditionalGeneration(Qwen3VLConfig(**_section(mapping, "text_encoder")))
             .to(dtype=torch.bfloat16)
@@ -353,38 +396,38 @@ class OfficialH3Pipeline:
         )
         video_vae = AutoencoderKLMiniMaxH3.from_config(_section(mapping, "video_vae")).eval()
         audio_vae = AutoencoderKLMiniMaxH3Audio.from_config(_section(mapping, "audio_vae")).eval()
-        _validate_model_contract(pipe, transformer, video_vae, audio_vae)
+        for task in _TASKS:
+            _validate_model_contract(pipes[task], dits[task], video_vae, audio_vae)
         tokenizer, processor = _processor()
 
-        registered = {
-            "text_encoder": text_encoder,
-            "tokenizer": tokenizer,
-            "processor": processor,
-            "vae": video_vae,
-            "audio_vae": audio_vae,
-            "scheduler": MiniMaxH3Scheduler(shift=12.0),
-            "audio_scheduler": MiniMaxH3Scheduler(shift=3.0),
-            transformer_name: transformer,
-        }
-        pipe.register_components(**registered)
+        for task in _TASKS:
+            pipes[task].register_components(
+                text_encoder=text_encoder,
+                tokenizer=tokenizer,
+                processor=processor,
+                vae=video_vae,
+                audio_vae=audio_vae,
+                scheduler=MiniMaxH3Scheduler(shift=12.0),
+                audio_scheduler=MiniMaxH3Scheduler(shift=3.0),
+                **{_DIFFUSERS_DIT[task]: dits[task]},
+            )
 
         # Runtime reads this mapping and nothing under ``pipe`` when deriving/filling
         # checkpoint destinations. Config-only processors and schedulers are deliberately
         # absent; ``video_vae`` is the artifact name while official Diffusers calls it
         # ``vae``.
         self.components: dict[str, Any] = {
-            transformer_name: transformer,
+            "fl2va_dit": dits["fl2va"],
+            "ref2va_dit": dits["ref2va"],
             "text_encoder": text_encoder,
             "video_vae": video_vae,
             "audio_vae": audio_vae,
         }
-        self.task = task
         # The one release audio clock, read off the contract-checked artifact config
         # rather than respelled by callers.
         self.sample_rate = int(audio_vae.config.sampling_rate)
         self._blocks = blocks
-        self._pipe = pipe
-        self._transformer_name = transformer_name
+        self._pipes = pipes
 
     def generator(self, source: object) -> Any:
         """Adapt Runtime's public request generator to Diffusers' torch generator."""
@@ -413,7 +456,9 @@ class OfficialH3Pipeline:
         import numpy as np
 
         pixels = np.frombuffer(image.rgb, dtype=np.uint8).reshape(image.height, image.width, 3)
-        return self._pipe.image_processor.numpy_to_pil(pixels.astype(np.float32) / 255.0)[0]
+        return self._pipes["fl2va"].image_processor.numpy_to_pil(
+            pixels.astype(np.float32) / 255.0
+        )[0]
 
     def audio_reference(self, audio: DecodedAudio) -> Any:
         from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3AudioReference
@@ -443,6 +488,7 @@ class OfficialH3Pipeline:
         # dimensions absent makes the first supplied keyframe the geometry authority.
         height, width = (768, 1344) if first_frame is None and last_frame is None else (None, None)
         return self._start(
+            "fl2va",
             prompt=prompt,
             generator=generator,
             image=first_frame,
@@ -452,9 +498,11 @@ class OfficialH3Pipeline:
         )
 
     def start_ref2va(self, *, prompt: str, references: Sequence[Any], generator: Any) -> Any:
-        return self._start(prompt=prompt, generator=generator, references=list(references))
+        return self._start(
+            "ref2va", prompt=prompt, generator=generator, references=list(references)
+        )
 
-    def _start(self, *, prompt: str, generator: Any, **values: Any) -> Any:
+    def _start(self, task: Task, *, prompt: str, generator: Any, **values: Any) -> Any:
         from diffusers.modular_pipelines.modular_pipeline import PipelineState
 
         state = PipelineState()
@@ -468,17 +516,18 @@ class OfficialH3Pipeline:
         }
         for name, value in fixed.items():
             state.set(name, value)
-        self._run("before_encode", state)
+        self._run(task, "before_encode", state)
         return state
 
-    def condition_text(self, state: Any) -> None:
-        self._run("text_encoder", state, component="text_encoder")
+    def condition_text(self, task: Task, state: Any) -> None:
+        self._run(task, "text_encoder", state, component="text_encoder")
 
-    def condition_media(self, state: Any) -> None:
-        self._run("vae_encoder", state, component="video_vae")
+    def condition_media(self, task: Task, state: Any) -> None:
+        self._run(task, "vae_encoder", state, component="video_vae")
 
     def denoise(
         self,
+        task: Task,
         state: Any,
         *,
         on_step: Callable[[int], None],
@@ -487,8 +536,8 @@ class OfficialH3Pipeline:
         from diffusers import MiniMaxH3Scheduler
 
         scoped = _ScopedPipeline(
-            self._pipe,
-            self.components[self._transformer_name],
+            self._pipes[task],
+            self.components[_DIT_COMPONENT[task]],
             overrides={
                 "scheduler": MiniMaxH3Scheduler(shift=12.0),
                 "audio_scheduler": MiniMaxH3Scheduler(shift=3.0),
@@ -500,49 +549,51 @@ class OfficialH3Pipeline:
             "denoise.prepare_latents",
             (
                 "denoise.prepare_latents_fl2va"
-                if self.task == "fl2va"
+                if task == "fl2va"
                 else "denoise.prepare_latents_ref2va"
             ),
             "denoise.set_timesteps",
         ]
         for name in names:
-            self._run_with(scoped, name, state)
+            self._run_with(task, scoped, name, state)
 
-        facts = self._schedule_facts(scoped, state)
-        loop = self._blocks.sub_blocks["denoise.denoise"]
+        facts = self._schedule_facts(task, scoped, state)
+        loop = self._blocks[task].sub_blocks["denoise.denoise"]
         block_state = loop.get_block_state(state)
         for index, timestep in enumerate(block_state.timesteps):
             cancel()
             _, block_state = loop.loop_step(scoped, block_state, i=index, t=timestep)
             on_step(index)
         loop.set_block_state(state, block_state)
-        self._run_with(scoped, "denoise.after_denoise", state)
+        self._run_with(task, scoped, "denoise.after_denoise", state)
         return facts
 
-    def decode_audio(self, state: Any) -> Any:
-        self._run("decode.audio", state, component="audio_vae")
+    def decode_audio(self, task: Task, state: Any) -> Any:
+        self._run(task, "decode.audio", state, component="audio_vae")
         return state.audio
 
-    def decode_video(self, state: Any) -> Any:
-        self._run("decode.video", state, component="video_vae")
+    def decode_video(self, task: Task, state: Any) -> Any:
+        self._run(task, "decode.video", state, component="video_vae")
         return state.videos
 
-    def _run(self, name: str, state: Any, *, component: str | None = None) -> None:
+    def _run(
+        self, task: Task, name: str, state: Any, *, component: str | None = None
+    ) -> None:
         pipe = (
-            self._pipe
+            self._pipes[task]
             if component is None
-            else _ScopedPipeline(self._pipe, self.components[component])
+            else _ScopedPipeline(self._pipes[task], self.components[component])
         )
-        self._run_with(pipe, name, state)
+        self._run_with(task, pipe, name, state)
 
-    def _run_with(self, pipe: Any, name: str, state: Any) -> None:
-        block = self._blocks.sub_blocks[name]
+    def _run_with(self, task: Task, pipe: Any, name: str, state: Any) -> None:
+        block = self._blocks[task].sub_blocks[name]
         block(pipe, state)
 
-    def _schedule_facts(self, pipe: Any, state: Any) -> ScheduleFacts:
+    def _schedule_facts(self, task: Task, pipe: Any, state: Any) -> ScheduleFacts:
         video_sigmas = pipe.scheduler.sigmas
         audio_sigmas = pipe.audio_scheduler.sigmas
-        expected = canonical_timestep_plan(self.task)
+        expected = canonical_timestep_plan(task)
         if (
             video_sigmas is None
             or audio_sigmas is None
@@ -565,12 +616,8 @@ class OfficialH3Pipeline:
         )
 
 
-def build_fl2va_pipeline(config: Config) -> OfficialH3Pipeline:
-    return OfficialH3Pipeline(config, task="fl2va")
-
-
-def build_ref2va_pipeline(config: Config) -> OfficialH3Pipeline:
-    return OfficialH3Pipeline(config, task="ref2va")
+def build_h3_pipeline(config: Config) -> OfficialH3Pipeline:
+    return OfficialH3Pipeline(config)
 
 
 def _section(mapping: Mapping[str, object], name: str) -> dict[str, Any]:
@@ -594,6 +641,107 @@ def _artifact_sections(mapping: Mapping[str, object]) -> Mapping[str, object]:
             fields=[*missing, *unexpected],
         )
     return mapping
+
+
+def _dit_spec(
+    mapping: Mapping[str, object], task: Task
+) -> tuple[dict[str, Any], str, TimestepPlan]:
+    component = _DIT_COMPONENT[task]
+    upstream = _section(mapping, component)
+    extension = upstream.pop("cozy_h3", None)
+    if not isinstance(extension, Mapping) or set(extension) != {
+        "schema",
+        "task",
+        "modulation",
+        "timestep_plan_digest",
+    }:
+        raise ConformanceError(
+            f"artifact config {component!r} has no closed cozy_h3 structure",
+            code="artifact_config",
+            fields=[component, "cozy_h3"],
+        )
+    plan = canonical_timestep_plan(task)
+    expected_digest = f"sha256:{plan.digest}"
+    expected = {
+        "schema": _DIT_CONFIG_SCHEMA,
+        "task": task,
+        "timestep_plan_digest": expected_digest,
+    }
+    for name, want in expected.items():
+        if extension[name] != want:
+            raise ConformanceError(
+                f"artifact config {component!r} {name!r} is {extension[name]!r}, expected {want!r}",
+                code="artifact_config",
+                fields=[component, "cozy_h3", name],
+            )
+    structure = extension["modulation"]
+    if structure not in {"full", "exact-baked"}:
+        raise ConformanceError(
+            f"artifact config {component!r} has unknown modulation structure {structure!r}",
+            code="artifact_config",
+            fields=[component, "cozy_h3", "modulation"],
+        )
+    return upstream, str(structure), plan
+
+
+def _dit_specs(
+    mapping: Mapping[str, object],
+) -> dict[Task, tuple[dict[str, Any], str, TimestepPlan]]:
+    specs = {task: _dit_spec(mapping, task) for task in _TASKS}
+    if len({spec[1] for spec in specs.values()}) != 1:
+        raise ConformanceError(
+            "FL2VA and Ref2VA DiTs use different modulation structures",
+            code="artifact_config",
+            fields=["fl2va_dit", "ref2va_dit"],
+        )
+    if specs["fl2va"][0] != specs["ref2va"][0]:
+        raise ConformanceError(
+            "FL2VA and Ref2VA DiTs do not carry the same upstream architecture config",
+            code="artifact_config",
+            fields=["fl2va_dit", "ref2va_dit"],
+        )
+    return specs
+
+
+def _build_dit(config: Mapping[str, Any], structure: str, plan: TimestepPlan) -> Any:
+    from diffusers import MiniMaxH3Transformer3DModel
+
+    if structure == "full":
+        transformer = MiniMaxH3Transformer3DModel.from_config(dict(config))
+    else:
+        from exact_baked import ExactBakedMiniMaxH3Transformer
+
+        timesteps, block_keys = plan.baked_table_layout()
+        transformer = ExactBakedMiniMaxH3Transformer.from_official_config(
+            config,
+            baked_timesteps=timesteps,
+            baked_block_keys=block_keys,
+        )
+    return _apply_transformer_dtype(transformer)
+
+
+def _validate_dual_dit_topology(dits: Mapping[Task, Any]) -> None:
+    """Prove one architecture instantiated twice for two independent weight identities."""
+    fl2va, ref2va = dits["fl2va"], dits["ref2va"]
+    if fl2va is ref2va:
+        raise ConformanceError(
+            "FL2VA and Ref2VA component names alias one module instance",
+            code="artifact_config",
+            fields=["fl2va_dit", "ref2va_dit"],
+        )
+
+    def topology(module: Any) -> tuple[tuple[str, tuple[int, ...], str], ...]:
+        return tuple(
+            (name, tuple(int(value) for value in tensor.shape), str(tensor.dtype))
+            for name, tensor in module.state_dict().items()
+        )
+
+    if type(fl2va) is not type(ref2va) or topology(fl2va) != topology(ref2va):
+        raise ConformanceError(
+            "FL2VA and Ref2VA DiTs do not have one identical class and destination topology",
+            code="artifact_config",
+            fields=["fl2va_dit", "ref2va_dit"],
+        )
 
 
 def _apply_transformer_dtype(transformer: Any) -> Any:

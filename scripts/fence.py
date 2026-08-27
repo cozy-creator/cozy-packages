@@ -374,6 +374,12 @@ def fence_h3_media_boundary() -> Fence:
                     f"{rel(path)}:{line}: imports {module!r} — Runtime owns media decode"
                 )
         for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr == "read_bytes"
+                and ast.unparse(node.value).startswith("_ASSETS /")
+            ):
+                continue  # Exact package assets are model code, never request media.
             if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs:
                 bad.append(
                     f"{rel(path)}:{node.lineno}: uses .{node.attr} — H3 receives only public "
@@ -392,6 +398,10 @@ def fence_h3_official_hardcut() -> Fence:
     forbidden_defs = {"generate", "reference_to_video", "generate_long"}
     forbidden_import_roots = {"comfy", "comfy_kitchen", "diffsynth", "h3_arch"}
     for path in h3_owned_modules():
+        if "trust_remote_code" in _strip_docs(path.read_text()):
+            bad.append(
+                f"{rel(path)}: trust_remote_code — H3 executes only the pinned installed libraries"
+            )
         tree = ast.parse(path.read_text(), filename=str(path))
         for module, line in imports(tree):
             if module.split(".")[0] in forbidden_import_roots:
@@ -444,18 +454,25 @@ def fence_h3_binding_identity() -> Fence:
     """A release name is product identity, not the issue that happened to cut it."""
     binding = (ROOT / "h3" / "endpoint.toml").read_text()
     releases = re.findall(r'^release\s*=\s*"([^"]+)"\s*$', binding, flags=re.MULTILINE)
+    lanes = re.findall(r'^lane\s*=\s*"([^"]+)"\s*$', binding, flags=re.MULTILINE)
     bad: list[str] = []
     if not releases:
         bad.append("h3/endpoint.toml: no default model release is bound")
     if len(set(releases)) > 1:
         bad.append(f"h3/endpoint.toml: default model bindings disagree: {sorted(set(releases))}")
+    if releases != ["1.0.0"]:
+        bad.append(f"h3/endpoint.toml: default release is {releases!r}, expected ['1.0.0']")
     for release in releases:
         if re.search(r"(?:^|[-_.])se-\d+(?:$|[-_.])", release):
             bad.append(
                 f"h3/endpoint.toml: release {release!r} contains a tracker issue, "
                 "not only content identity"
             )
-    return bad, "H3 bindings share one content-named immutable release"
+    if lanes != ["fp8-baked"]:
+        bad.append(
+            f"h3/endpoint.toml: bare local binding lane is {lanes!r}, expected ['fp8-baked']"
+        )
+    return bad, "H3 binds release 1.0.0 with the Hopper/local fp8-baked default lane"
 
 
 def fence_descriptor_minimality() -> Fence:
