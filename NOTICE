@@ -33,6 +33,6 @@ model weights are stored here.
 MODEL LICENSE
 
 MiniMax H3 weights are covered by the model publisher's license, separately from the code licenses
-above. Tracker issue #532 records territory restrictions that exclude the United States, European
-Union, United Kingdom, and South Korea, and an open owner ruling on public/customer serving from an
-excluded territory. Internal development does not erase that release gate.
+above. Tracker decision #532 records the license review; decision #535 records the owner's ensuing
+operational ruling. This notice preserves that provenance without restating it as a code-enforced
+territory policy or offering a legal conclusion.

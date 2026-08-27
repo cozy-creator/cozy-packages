@@ -122,3 +122,8 @@ PCM S16LE, and PCM F32LE. Input demuxer construction succeeded for MOV/MP4,
 Matroska/WebM, WAV, Ogg, FLAC, MP3, and image sequences. This is the PyAV
 wheel's bundled FFmpeg capability census; it does not rely on a system
 `ffmpeg` executable.
+
+The output path is covered separately: encoder construction succeeded for
+`libx264` and `aac`, and the vendored Runtime's real `Outputs.save_video`
+wrote a 2,208-byte MP4 containing H264 video and AAC audio. This is a tiny
+encode/mux mechanism receipt, not an H3 generation or quality proof.

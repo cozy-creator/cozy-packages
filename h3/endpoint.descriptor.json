@@ -30,6 +30,7 @@
   "entrypoints": [
     {
       "capabilities": [
+        "media_decode",
         "save",
         "telemetry"
       ],
@@ -40,11 +41,11 @@
         {
           "class": "Fl2VAModel",
           "component_use": {
+            "condition_media": [
+              "video_vae"
+            ],
             "condition_text": [
               "text_encoder"
-            ],
-            "condition_visual": [
-              "video_vae"
             ],
             "decode_audio": [
               "audio_vae"
@@ -52,26 +53,35 @@
             "decode_video": [
               "video_vae"
             ],
-            "predict_data_velocity": [
+            "sample": [
               "transformer"
             ]
           },
           "param": "model",
-          "path": "generate.models.model",
+          "path": "first_last_frame_to_video.models.model",
           "stamps": {
             "task": "fl2va"
           }
         }
       ],
-      "name": "generate",
+      "name": "first_last_frame_to_video",
       "request": {
         "fields": [
           {
+            "constraints": {
+              "max_length": 4096,
+              "min_length": 1
+            },
             "name": "prompt",
             "type": "str",
             "wire": "required"
           },
           {
+            "asset_bound": {
+              "max_bytes": 67108864,
+              "max_decoded_bytes": 268435456,
+              "max_pixels_per_frame": 67108864
+            },
             "default": null,
             "name": "first_frame",
             "type": {
@@ -85,6 +95,11 @@
             "wire": "optional"
           },
           {
+            "asset_bound": {
+              "max_bytes": 67108864,
+              "max_decoded_bytes": 268435456,
+              "max_pixels_per_frame": 67108864
+            },
             "default": null,
             "name": "last_frame",
             "type": {
@@ -96,69 +111,6 @@
               ]
             },
             "wire": "optional"
-          },
-          {
-            "default": "16:9",
-            "name": "aspect_ratio",
-            "shape_axes": [
-              "width",
-              "height",
-              "pixels"
-            ],
-            "type": {
-              "enum": "AspectPreset",
-              "values": [
-                "16:9",
-                "1:1",
-                "21:9",
-                "3:4",
-                "4:3",
-                "9:16",
-                "9:21"
-              ]
-            },
-            "wire": "optional"
-          },
-          {
-            "default": 5,
-            "name": "duration_s",
-            "shape_axes": [
-              "frames"
-            ],
-            "type": {
-              "literal": [
-                10,
-                11,
-                12,
-                13,
-                14,
-                15,
-                5,
-                6,
-                7,
-                8,
-                9
-              ]
-            },
-            "wire": "optional"
-          },
-          {
-            "default": 30,
-            "default_sources": [
-              "code_fallback",
-              "checkpoint_recipe",
-              "adapter_recipe",
-              "request"
-            ],
-            "name": "num_inference_steps",
-            "type": {
-              "literal": [
-                20,
-                30,
-                50
-              ]
-            },
-            "wire": "omissible"
           },
           {
             "default": false,
@@ -179,41 +131,21 @@
           }
         ],
         "forbid_unknown_fields": true,
-        "struct": "GenerateInput"
+        "struct": "FirstLastFrameToVideoInput"
       },
-      "request_features": [
-        {
-          "axis": "frames",
-          "field": "duration_s",
-          "source": "shape"
-        },
-        {
-          "axis": "height",
-          "field": "aspect_ratio",
-          "source": "shape"
-        },
-        {
-          "axis": "pixels",
-          "field": "aspect_ratio",
-          "source": "shape"
-        },
-        {
-          "axis": "steps",
-          "field": "num_inference_steps",
-          "source": "field"
-        },
-        {
-          "axis": "width",
-          "field": "aspect_ratio",
-          "source": "shape"
-        }
-      ],
       "result": {
         "fields": [
           {
             "name": "video",
             "type": {
               "asset": "video"
+            },
+            "wire": "required"
+          },
+          {
+            "name": "continuation_frame",
+            "type": {
+              "asset": "image"
             },
             "wire": "required"
           },
@@ -238,22 +170,62 @@
             "wire": "required"
           },
           {
-            "name": "steps",
+            "name": "sample_rate",
             "type": "int",
             "wire": "required"
           },
           {
-            "name": "plan_digest",
+            "name": "sigma_grid_points",
+            "type": "int",
+            "wire": "required"
+          },
+          {
+            "name": "transformer_evaluations",
+            "type": "int",
+            "wire": "required"
+          },
+          {
+            "name": "timestep_plan_digest",
             "type": "str",
             "wire": "required"
           },
           {
-            "name": "video_digest",
+            "name": "video_sigma_digest",
             "type": "str",
             "wire": "required"
           },
           {
-            "name": "audio_digest",
+            "name": "audio_sigma_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "video_timestep_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "audio_timestep_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "video_pixel_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "audio_sample_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "continuation_frame_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "continuation_pixel_digest",
             "type": "str",
             "wire": "required"
           },
@@ -263,7 +235,283 @@
             "wire": "required"
           }
         ],
-        "struct": "GenerateOutput"
+        "struct": "H3VideoOutput"
+      }
+    },
+    {
+      "capabilities": [
+        "media_decode",
+        "save",
+        "telemetry"
+      ],
+      "gpu": true,
+      "hidden": false,
+      "kind": "entrypoint",
+      "models": [
+        {
+          "class": "Ref2VAModel",
+          "component_use": {
+            "condition_media": [
+              "audio_vae",
+              "video_vae"
+            ],
+            "condition_text": [
+              "text_encoder"
+            ],
+            "decode_audio": [
+              "audio_vae"
+            ],
+            "decode_video": [
+              "video_vae"
+            ],
+            "sample": [
+              "transformer_ref"
+            ]
+          },
+          "param": "model",
+          "path": "reference_media_to_video.models.model",
+          "stamps": {
+            "task": "ref2va"
+          }
+        }
+      ],
+      "name": "reference_media_to_video",
+      "preflight": {
+        "facts": {
+          "fields": [
+            {
+              "name": "images",
+              "type": "int",
+              "wire": "required"
+            },
+            {
+              "name": "videos",
+              "type": "int",
+              "wire": "required"
+            },
+            {
+              "name": "standalone_audios",
+              "type": "int",
+              "wire": "required"
+            },
+            {
+              "name": "total",
+              "type": "int",
+              "wire": "required"
+            }
+          ],
+          "frozen": true,
+          "struct": "ReferenceFacts"
+        },
+        "identity": "h3:preflight_reference_media"
+      },
+      "request": {
+        "fields": [
+          {
+            "constraints": {
+              "max_length": 4096,
+              "min_length": 1
+            },
+            "name": "prompt",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "constraints": {
+              "max_length": 12,
+              "min_length": 1
+            },
+            "name": "references",
+            "type": {
+              "list": {
+                "union": [
+                  {
+                    "fields": [
+                      {
+                        "asset_bound": {
+                          "max_audio_channels": 8,
+                          "max_audio_samples": 28800000,
+                          "max_bytes": 134217728,
+                          "max_decoded_bytes": 134217728
+                        },
+                        "name": "audio",
+                        "type": {
+                          "asset": "audio"
+                        },
+                        "wire": "required"
+                      }
+                    ],
+                    "forbid_unknown_fields": true,
+                    "struct": "AudioReference"
+                  },
+                  {
+                    "fields": [
+                      {
+                        "asset_bound": {
+                          "max_audio_channels": 8,
+                          "max_audio_samples": 28800000,
+                          "max_bytes": 2147483648,
+                          "max_decoded_bytes": 2147483648,
+                          "max_pixels_per_frame": 67108864,
+                          "max_video_frames": 3600
+                        },
+                        "name": "video",
+                        "type": {
+                          "asset": "video"
+                        },
+                        "wire": "required"
+                      }
+                    ],
+                    "forbid_unknown_fields": true,
+                    "struct": "VideoReference"
+                  },
+                  {
+                    "fields": [
+                      {
+                        "asset_bound": {
+                          "max_bytes": 67108864,
+                          "max_decoded_bytes": 268435456,
+                          "max_pixels_per_frame": 67108864
+                        },
+                        "name": "image",
+                        "type": {
+                          "asset": "image"
+                        },
+                        "wire": "required"
+                      }
+                    ],
+                    "forbid_unknown_fields": true,
+                    "struct": "ImageReference"
+                  }
+                ]
+              }
+            },
+            "wire": "required"
+          },
+          {
+            "default": false,
+            "name": "mute",
+            "type": "bool",
+            "wire": "optional"
+          },
+          {
+            "default": null,
+            "name": "seed",
+            "type": {
+              "union": [
+                "int",
+                "null"
+              ]
+            },
+            "wire": "optional"
+          }
+        ],
+        "forbid_unknown_fields": true,
+        "struct": "ReferenceMediaToVideoInput"
+      },
+      "result": {
+        "fields": [
+          {
+            "name": "video",
+            "type": {
+              "asset": "video"
+            },
+            "wire": "required"
+          },
+          {
+            "name": "continuation_frame",
+            "type": {
+              "asset": "image"
+            },
+            "wire": "required"
+          },
+          {
+            "name": "width",
+            "type": "int",
+            "wire": "required"
+          },
+          {
+            "name": "height",
+            "type": "int",
+            "wire": "required"
+          },
+          {
+            "name": "frames",
+            "type": "int",
+            "wire": "required"
+          },
+          {
+            "name": "fps",
+            "type": "int",
+            "wire": "required"
+          },
+          {
+            "name": "sample_rate",
+            "type": "int",
+            "wire": "required"
+          },
+          {
+            "name": "sigma_grid_points",
+            "type": "int",
+            "wire": "required"
+          },
+          {
+            "name": "transformer_evaluations",
+            "type": "int",
+            "wire": "required"
+          },
+          {
+            "name": "timestep_plan_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "video_sigma_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "audio_sigma_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "video_timestep_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "audio_timestep_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "video_pixel_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "audio_sample_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "continuation_frame_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "continuation_pixel_digest",
+            "type": "str",
+            "wire": "required"
+          },
+          {
+            "name": "checkpoint",
+            "type": "str",
+            "wire": "required"
+          }
+        ],
+        "struct": "H3VideoOutput"
       }
     }
   ],
@@ -328,6 +576,17 @@
       ],
       "service": "Egress"
     },
+    "media_decode": {
+      "limits": {
+        "max_attempt_decoded_bytes": 2147483648
+      },
+      "members": [
+        "decode_audio",
+        "decode_image",
+        "decode_video"
+      ],
+      "service": "MediaDecoder"
+    },
     "save": {
       "members": [
         "save_audio",
@@ -367,5 +626,5 @@
       "service": "Telemetry"
     }
   },
-  "surface_digest": "sha256:b20ea23705c23b4b822001260bb0ecdf6d9fe3e847579f8660d685b6e7979760"
+  "surface_digest": "sha256:c7f7af2a7c857694da63ce6d3f5723257b111b461547659fa75b3f7c3b93aff7"
 }

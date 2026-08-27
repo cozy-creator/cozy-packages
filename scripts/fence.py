@@ -55,6 +55,10 @@ def h3_modules() -> list[pathlib.Path]:
     return sorted(f for f in (ROOT / "h3").rglob("*.py") if ours(f))
 
 
+def h3_owned_modules() -> list[pathlib.Path]:
+    return sorted([*h3_modules(), *ROOT.glob("scripts/h3-*.py")])
+
+
 def rel(path: pathlib.Path) -> str:
     return str(path.relative_to(ROOT))
 
@@ -377,8 +381,8 @@ def fence_h3_official_hardcut() -> Fence:
         bad.append("h3/h3_arch: legacy community architecture still exists")
 
     forbidden_defs = {"generate", "reference_to_video", "generate_long"}
-    forbidden_import_roots = {"comfy", "comfy_kitchen", "diffsynth"}
-    for path in h3_modules():
+    forbidden_import_roots = {"comfy", "comfy_kitchen", "diffsynth", "h3_arch"}
+    for path in h3_owned_modules():
         tree = ast.parse(path.read_text(), filename=str(path))
         for module, line in imports(tree):
             if module.split(".")[0] in forbidden_import_roots:

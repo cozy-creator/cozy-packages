@@ -21,8 +21,9 @@ conformance drivers, and default development bindings.
 
 - Code states capability; bindings state selection. Endpoint modules contain no repository,
   checkpoint, release, or download identity.
-- Runtime alone hydrates and decodes typed assets, places model components, and encodes outputs.
-  Endpoint code receives public decoded values and never opens a path, URL, container, or packet.
+- Runtime alone hydrates and decodes request assets, places model components, and encodes outputs.
+  Endpoint code receives public decoded values and never opens a request path, URL, container, or
+  packet. The model package does read its own five immutable tokenizer/processor data files.
 - Model code owns model-specific normalization, conditioning, schedules, inference, and output
   semantics. It does not own storage, networking, device placement, offload, or quantization.
 - Module scope stays light. `cozy-runtime describe` must work without Torch, model libraries, a
@@ -54,6 +55,14 @@ Ref2VA preserves request order and enforces the official product bounds: at most
 3 standalone audio clips, and 12 entries total. Video and audio clips are 2–15 seconds, with at most
 15 seconds per modality in aggregate. A video's embedded soundtrack belongs to that video and does
 not consume the standalone-audio count. Standalone audio cannot be the only reference modality.
+Prompts are bounded to 4,096 characters. After generic decode, exact official presentation
+arithmetic also refuses more than 32,768 Qwen vision tokens before entering a component scope; this
+is a conservative capacity fence, not yet the required measured maximum-cell H200 fit proof.
+
+The task-stamped canonical plans live in `h3/timestep-plans/`. Each contains the exact 30 video and
+audio sigmas, 29 timesteps, all five finite modulation classes (including optional clean video and
+audio), and a deduplicated order of 89 block-modulation keys plus 59 final-normalization keys. These
+documents are job-010's input boundary; that job must not import endpoint code.
 
 Both actions return one muxed MP4 and one lossless PNG continuation frame. The continuation frame is
 captured from the final decoded RGB8 frame before MP4 encoding; its stored-byte digest and source
@@ -108,6 +117,19 @@ uv sync --locked
 uv run ../scripts/h3-conform.py
 ```
 
-`scripts/h3-live.py` is the final installed-artifact/RunPod probe. A green static or CPU gate does
-not prove video generation; both public actions must still produce viewed and listened outputs from
-the exact released artifact on the exact read-back accelerator identity.
+`scripts/h3-live.py` is the final installed-artifact/RunPod probe. It requires the exact admitted GPU
+identity plus one payload for each action, refuses identity drift before inference, runs both
+actions offline, probes the stored H264/AAC MP4 and PNG, and writes a machine receipt whose human
+viewed/listened status remains explicitly pending. For example:
+
+```bash
+h3/.venv/bin/python scripts/h3-live.py \
+  --expected-gpu 'EXACT DOCTOR IDENTITY' \
+  --expected-checkpoint 'EXACT RESOLVED SNAPSHOT REF' \
+  --fl-input /proof/fl2va.json --ref-input /proof/ref2va.json \
+  --out /proof/output
+```
+
+A green static, CPU, or stored-container gate does not prove accepted video generation; both public
+actions still require viewed and listened outputs from the exact released artifact on the exact
+provider-read-back accelerator identity.
