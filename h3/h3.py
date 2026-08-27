@@ -1,772 +1,559 @@
-"""se-001 — the MiniMax H3 launch endpoint: joint video AND audio through FL2VA.
+"""MiniMax-H3's two official FULL serving actions.
 
-The release exposes one action and one model class over four components. Ref2VA is absent:
-the hidden action had no serving consumer and its advertised media forms either refused or
-had never produced viewed output. Future Ref2VA work returns as a new output-proven action,
-not as a placeholder in this release's descriptor and wheel identity.
-
-WHAT IS DECLARED HERE
-
-  * ONE EXECUTABLE GRAPH. `h3_arch/` constructs the four native roots the bound community
-    curve artifact fills: 2,913 destinations. Artifact config describes bytes; it cannot
-    activate a second, unfinished implementation inside this release.
-  * ONE TASK-STAMPED MODEL. `Fl2VAModel(task="fl2va")` binds `transformer`; there is no
-    partition selector, `load_state_dict` swap, twin binding, or hidden second action.
-  * FIVE COMPONENT-SCOPED OPERATIONS, none of them coarse: text condition (`text_encoder`),
-    visual condition and video decode (`video_vae`), audio decode (`audio_vae`), and
-    velocity prediction (`transformer`). The coarse
-    whole-pipeline declaration is legal and is not servable: the tuple is 72.9 GiB and the
-    smallest coherent one measured 40.56 GiB (proto-001), so a method that declares
-    everything leaves the residency ladder nothing to stage on any card we rent.
-  * ONE MODEL BOUNDARY, one SOLVER. `predict_data_velocity(run, text, video_latents,
-    audio_latents, modulation)` takes latents and returns LATENT-SHAPED, DATA-WARD
-    velocities; it owns projection, packing, the forward and unpacking, so nothing
-    row-shaped is visible to orchestration. `layout.H3Solver` owns sign and schedule and
-    touches no component. Those are the two halves se-002's first render got wrong at
-    once: the sign was inverted and the row-shaped middle leaked out of every scope.
-  * PURE ORCHESTRATION AS MODULE FUNCTIONS. `prepare`, `_sample` and the run object are
-    module-level; a Model method that touches no component is module code (§1.1), and the
-    runtime refuses `@uses_components()` empty for exactly that reason.
-  * TWO OUTPUT GATES ON EVERY REQUEST, over cozy-eval's own instruments (`gates.py`): the
-    tensors before encoding, and the MP4 after. #520's standing law — a generation that
-    fails the gate is a failed generation regardless of exit status.
-  * REQUEST ISOLATION AS STRUCTURE. Every call builds one `H3Run` holding its plan, its
-    layout, its generator and its keyframe conditioning. Component and cache leases are the
-    runtime's capabilities inside the `@uses_components` wrapper and are never `H3Run`
-    fields. Success, cancellation and failure all discard the run.
-
-WHAT IS DELIBERATELY ABSENT: no engine class, no device call, no placement, no offload, no
-pinning, no `.to()`, no compile marker, no runtime quantization, no source-format parsing,
-no checkpoint path. There is no such surface on `cozy_runtime.author` for this file to
-reach, and `scripts/fence.py` refuses the spellings.
-
-NO GUIDANCE. H3-Base is guidance-distilled: there is no `guidance_scale`, no
-`negative_prompt` and one forward pass per step. SDXL's two-layer clamp demo lives on that
-family because guidance is real there; here the omission is the checkpoint's fact.
-
-STATE OF PROOF (grades, honestly). The constructed graph is KEY-EXACT against the pinned
-safetensors header for all four constructed components at zero cost (`scripts/h3-keys.py`). The
-reference semantics this file's sampler depends on — the data-ward sign, the 17k+5 temporal
-geometry, the sigma grid and its evaluation count, the pixel conversion, the
-requested-vs-observed media agreement — are CONFORMANCE-PROVEN ON CPU against
-independently written upstream expressions (`scripts/h3-conform.py`, which runs in CI).
-The output gates are proven against digest-pinned real media, including the failed
-`daf50552…` render as a permanent red arm (`scripts/h3-live.py gates`).
-
-THE WHOLE-SEAM ORACLE HAS NOW RUN (2026-08-26, one H200; `scripts/h3-seam-oracle.py`
-carries the table). Against ComfyUI v0.33.0 on the same bf16 carriers, the same prompt and
-the same seed, every seam agrees at cosine >= 0.9993 — token ids identical, the text
-encoder EXACT at float32 — and a full-length 15.083 s / 362-frame / 30-evaluation render was
-produced and VIEWED: coherent motion matching the prompt, an audio track that follows the
-picture, adjacent-frame correlation 0.9882 against cozy-eval's 0.6 floor. The endpoint's
-model path is OUTPUT-VERIFIED.
-
-WHAT THAT DOES NOT COVER, said plainly. This file's SERVING path — the fill plane, the
-stamp plane, the residency ladder — is a separate subject with its own open defects (#529's
-seven), and the oracle drove the model path directly. Two artifacts remain in the picture,
-a 32-pixel spatial lattice and a 17-frame temporal seam, and both are reproduced identically
-by upstream on the same weights: they are the released carrier's, and they are the
-optimization lane's quality question (#531).
+Runtime decodes typed assets and encodes outputs. Official Diffusers owns H3 presentation,
+conditioning, AdaLN, solver, and decode math. This module validates the product contract,
+stages weighted roots, and joins those two boundaries.
 """
 
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Annotated, Any, Literal
+from fractions import Fraction
+from typing import Annotated, Any
 
 import msgspec
 from cozy_runtime.author import (
     App,
+    AssetBound,
+    AudioAsset,
     Context,
+    DecodedAudio,
+    DecodedVideo,
     ImageAsset,
+    ImageFrame,
     InvalidRequest,
     Loader,
+    MediaDecoder,
     Model,
-    ModelDefault,
+    OutputError,
     Outputs,
-    Shape,
+    Preflight,
     Telemetry,
+    UnsupportedInput,
     VideoAsset,
     uses_components,
 )
 
-from gates import post_encode_gate, pre_encode_gate
-from h3_arch import COMPONENTS, DIT_STRUCTURE, H3Config, build_component
-from h3_arch.layout import (
+from gates import MediaFacts, pre_encode_gate
+from official import (
     FPS,
-    FRAMES_PER_CLIP,
-    HEAD_FRAMES,
-    VISUAL_COND_TIMESTEP,
-    H3Solver,
-    LatentGrid,
-    MediaFacts,
-    Modulation,
-    PackedLayout,
-    TimestepPlan,
-    build_modulation,
-    build_timestep_plan,
-    latent_grid,
+    FRAMES,
+    MAX_CONDITIONER_VISION_TOKENS,
+    SIGMA_GRID_POINTS,
+    TRANSFORMER_EVALUATIONS,
+    OfficialH3Pipeline,
+    ReferencePolicyFacts,
+    ScheduleFacts,
+    build_fl2va_pipeline,
+    build_ref2va_pipeline,
+    reference_image_vision_tokens,
+    reference_video_vision_tokens,
+    validate_reference_policy,
 )
-from h3_arch.layout import (
-    Keyframe as PackedKeyframe,
-)
-from h3_arch.pixels import pixel_bytes
-from h3_arch.presentation import Tokenizer
-from h3_arch.presentation import build as build_presentation
-from h3_arch.sampling import condition_noise, initial_latents
-from h3_arch.vision import ExpandedPresentation, PatchedVision
 
 app = App()
 
-#: The VAE decodes on a 17k+5 frame grid, so a duration preset is a LABEL, not round
-#: seconds: 5 means 124 frames = 5.167 s. Snapping to slightly more than the requested
-#: duration is visible in the adjustments envelope, never silent.
-DurationS = Literal[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+_MIB = 1 << 20
+_GIB = 1 << 30
+_IMAGE_BOUND = AssetBound(max_bytes=64 * _MIB, max_decoded_bytes=256 * _MIB)
+_AUDIO_BOUND = AssetBound(max_bytes=128 * _MIB, max_decoded_bytes=128 * _MIB)
+_VIDEO_BOUND = AssetBound(max_bytes=2 * _GIB, max_decoded_bytes=2 * _GIB)
+_MIN_REFERENCE_DURATION = Fraction(2, 1)
+_MAX_REFERENCE_DURATION = Fraction(15, 1)
 
 
-def _frames_for(seconds: int) -> int:
-    """The smallest on-grid frame count that covers `seconds`. The grid constants are
-    `layout`'s — a second copy of `17` and `5` here is a second authority for the number
-    that was already wrong once (#522b)."""
-    clips = -(-(seconds * FPS - HEAD_FRAMES) // FRAMES_PER_CLIP)
-    return FRAMES_PER_CLIP * clips + HEAD_FRAMES
+class ImageReference(msgspec.Struct, tag="image", tag_field="type", forbid_unknown_fields=True):
+    image: Annotated[ImageAsset, _IMAGE_BOUND]
 
 
-_FRAMES = {d: _frames_for(d) for d in (5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)}
-
-#: Finite step presets. Each publishes an exact `(preset, task, condition presence)` ->
-#: TimestepPlan digest at conformance time, which is what an exact-baked artifact's
-#: coverage is matched against. A step COUNT never selects a table (§1.1.1).
-StepPreset = Literal[20, 30, 50]
+class VideoReference(msgspec.Struct, tag="video", tag_field="type", forbid_unknown_fields=True):
+    video: Annotated[VideoAsset, _VIDEO_BOUND]
 
 
-class AspectPreset(Enum):
-    """The offered canvases. A ratio absent here does not round — it refuses."""
-
-    W21_9 = "21:9"
-    W16_9 = "16:9"
-    W4_3 = "4:3"
-    SQUARE = "1:1"
-    T3_4 = "3:4"
-    T9_16 = "9:16"
-    T9_21 = "9:21"
+class AudioReference(msgspec.Struct, tag="audio", tag_field="type", forbid_unknown_fields=True):
+    audio: Annotated[AudioAsset, _AUDIO_BOUND]
 
 
-#: THE ONE CANONICAL FAMILY TABLE — request schema, demand features, geometry and the
-#: layout all read it. A copy of these numbers anywhere else is never a second authority.
-#: Values are the released checkpoint's own resolutions at its 768 short edge under the
-#: 1344x768 = 1,032,192-pixel budget, both axes on the 32 grid.
-_PIXELS: dict[AspectPreset, tuple[int, int]] = {
-    AspectPreset.W21_9: (1536, 672),
-    AspectPreset.W16_9: (1344, 768),
-    AspectPreset.W4_3: (1024, 768),
-    AspectPreset.SQUARE: (768, 768),
-    AspectPreset.T3_4: (768, 1024),
-    AspectPreset.T9_16: (768, 1344),
-    AspectPreset.T9_21: (672, 1536),
-}
-
-# ------------------------------------------------------------------ the wire
+Reference = ImageReference | VideoReference | AudioReference
+Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
 
 
-class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: str
-    first_frame: ImageAsset | None = None
-    """A TARGET-CLOCK anchor, not a reference. When present it fixes the output canvas."""
-    last_frame: ImageAsset | None = None
-    aspect_ratio: Annotated[AspectPreset, Shape(pixels=_PIXELS)] = AspectPreset.W16_9
-    duration_s: Annotated[DurationS, Shape(frames=_FRAMES)] = 5
-    num_inference_steps: ModelDefault[StepPreset] = 30
+class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
+    prompt: Prompt
+    first_frame: Annotated[ImageAsset | None, _IMAGE_BOUND] = None
+    last_frame: Annotated[ImageAsset | None, _IMAGE_BOUND] = None
     mute: bool = False
-    """An OUTPUT toggle: the audio track is omitted at finalization. Never a speed win —
-    the audio stream is denoised jointly and cannot be skipped."""
     seed: int | None = None
 
 
-class GenerateOutput(msgspec.Struct):
+class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
+    prompt: Prompt
+    references: Annotated[list[Reference], msgspec.Meta(min_length=1, max_length=12)]
+    mute: bool = False
+    seed: int | None = None
+
+
+class ReferenceFacts(msgspec.Struct, frozen=True):
+    images: int
+    videos: int
+    standalone_audios: int
+    total: int
+
+
+class H3VideoOutput(msgspec.Struct):
     video: VideoAsset
-    """ONE muxed mp4. The soundtrack rides INSIDE it; there is no sibling audio asset, and
-    `mute` omits the track at finalization rather than producing a second file."""
+    continuation_frame: ImageAsset
     width: int
     height: int
     frames: int
     fps: int
-    steps: int
-    plan_digest: str
-    """The request's complete `TimestepPlan` digest — the term exact-baked coverage is
-    matched against, and the determinism fence's identity half."""
-    video_digest: str
-    """sha256 of the decoded video pixel bytes. The fence over the WHOLE loop."""
-    audio_digest: str
+    sample_rate: int
+    sigma_grid_points: int
+    transformer_evaluations: int
+    timestep_plan_digest: str
+    video_sigma_digest: str
+    audio_sigma_digest: str
+    video_timestep_digest: str
+    audio_timestep_digest: str
+    video_pixel_digest: str
+    audio_sample_digest: str
+    continuation_frame_digest: str
+    continuation_pixel_digest: str
     checkpoint: str
 
 
-# ------------------------------------------------------------------ the pipeline
-
-
-class H3Pipeline:
-    """The four constructed component roots of the FL2VA action.
-
-    The `components` mapping is what the runtime censuses, so its keys ARE the artifact's
-    components. The action exposes its transformer plus the text encoder and both VAEs.
-
-    One release has one executable graph (#593). `h3_arch` answers to the bound community
-    curve carrier's key set. A future official graph arrives only with its exact artifact and
-    complete output proof, replacing this graph rather than becoming an artifact-selected
-    branch beside it.
-    """
-
-    def __init__(self, config: Any) -> None:
-        whole = H3Config.from_mapping(config.mapping())
-        self.config = whole
-        self.components = {component: build_component(component, whole) for component in COMPONENTS}
-
-    @property
-    def transformer(self) -> Any:
-        return self.components["transformer"]
-
-
-def build_fl2va_pipeline(config: Any) -> H3Pipeline:
-    return H3Pipeline(config)
-
-
-# ------------------------------------------------------------------ the run
-
-
-@dataclass(frozen=True, slots=True)
-class H3Plan:
-    """One request's resolved facts, before any component is touched."""
-
-    grid: LatentGrid
-    keyframes: tuple[PackedKeyframe, ...]
-    steps: int
-    mute: bool
-    condition_images: tuple[Any, ...] = ()
-    """The first/last keyframes in packed order."""
-    condition_geometry: tuple[tuple[int, int, int], ...] = ()
-    """The `(latent_t, latent_h, latent_w)` the layout reserved rows for, per condition."""
-
-
-@dataclass(slots=True)
-class H3Run:
-    """REQUEST SEMANTICS ONLY. Fresh per call, discarded on success, cancellation and
-    failure alike. It holds no component lease and no cache handle: those are runtime
-    capabilities of the `@uses_components` wrapper, and a field here would outlive them."""
-
-    plan: H3Plan
-    layout: PackedLayout
-    timestep_plan: TimestepPlan
-    generator: Any
-    expanded: ExpandedPresentation
-    """The presentation with its vision blocks expanded into real pad runs. THIS is the
-    sequence the text encoder ran on and the one `PackedLayout`'s text span was sized from;
-    `presentation.tags` carries one tag per PRESENTATION row and is one row per block."""
-    visual_conditioning: list[Any] = field(default_factory=list)
-
-    @property
-    def digest(self) -> str:
-        return self.timestep_plan.digest()
-
-
-def prepare(
-    payload: GenerateInput,
-    *,
-    tokenizer: Tokenizer,
-) -> tuple[H3Plan, PackedLayout, ExpandedPresentation, PatchedVision]:
-    """CPU media preparation and the exact request plan. No component is touched.
-
-    THE PATCHIFICATION HAPPENS HERE, not at conditioning time, and that placement is the
-    whole reason the layout can be right. A vision block stands in the presentation as ONE
-    row and becomes thousands of them, and `PackedLayout`'s text length plus the DiT's
-    per-row modality tags both have to be the EXPANDED count. Resolving it later would
-    build the packed sequence against a text span that does not exist. It is pure CPU work
-    with no weights in it, so it belongs in the stage that has no component lease.
-    """
-    from h3_arch import vision
-
-    width, height = _PIXELS[payload.aspect_ratio]
-    frames = _FRAMES[payload.duration_s]
-    grid = latent_grid(frames, width, height)
-    keyframes: list[PackedKeyframe] = []
-    if payload.first_frame is not None:
-        keyframes.append(PackedKeyframe(0))
-    if payload.last_frame is not None:
-        keyframes.append(PackedKeyframe(frames - 1))
-    keyframe_pixels = _present_keyframes(payload, width=width, height=height)
-    presentation = build_presentation(
-        tokenizer,
-        payload.prompt,
-        keyframes=keyframe_pixels,
-    )
-    patched = vision.patchify(presentation)
-    expanded = vision.expand(presentation, patched.token_counts)
-    condition_images = keyframe_pixels
-    condition_geometry = tuple(vision.conditioning_geometry(image) for image in condition_images)
-    plan = H3Plan(
-        grid=grid,
-        keyframes=tuple(keyframes),
-        steps=payload.num_inference_steps,
-        mute=payload.mute,
-        condition_images=condition_images,
-        condition_geometry=condition_geometry,
-    )
-    layout = PackedLayout(len(expanded.token_ids), grid, keyframes=plan.keyframes)
-    return plan, layout, expanded, patched
-
-
-def _present_keyframes(payload: GenerateInput, *, width: int, height: int) -> tuple[Any, ...]:
-    """The first/last keyframes as pixels on the TARGET canvas.
-
-    A keyframe is not a reference and does not take the reference rule: it is an anchor on
-    the generated clip's own clock, so it is put on the request's canvas rather than on a
-    2048 short edge of its own. Upstream stretches the geometry anchor onto the canvas and
-    cover-crops the follower; that asymmetry is reproduced, with the rounding upstream
-    documents `VaeImageProcessor` does NOT do.
-    """
-    from PIL import Image
-
-    named = (("first_frame", payload.first_frame), ("last_frame", payload.last_frame))
-    assets = [(name, a) for name, a in named if a is not None]
-    out: list[Any] = []
-    for name, asset in assets:
-        image = _decode_image(asset, where=name)
-        if name == "first_frame":
-            out.append(image.resize((width, height), Image.Resampling.LANCZOS))
-            continue
-        scale = max(width / image.size[0], height / image.size[1])
-        sized = (round(image.size[0] * scale), round(image.size[1] * scale))
-        left = max(0, (sized[0] - width) // 2)
-        top = max(0, (sized[1] - height) // 2)
-        resized = image.resize(sized, Image.Resampling.LANCZOS)
-        out.append(resized.crop((left, top, left + width, top + height)))
-    return tuple(out)
-
-
-def _decode_image(asset: Any, *, where: str) -> Any:
-    """A hydrated image asset -> an RGB `PIL.Image`. An asset that is not a decodable image
-    is a typed REQUEST refusal, not a backend fault: the caller sent it."""
-    import io
-
-    from PIL import Image, UnidentifiedImageError
-
+def preflight_reference_media(payload: ReferenceMediaToVideoInput) -> ReferenceFacts:
+    """Refuse cross-field count errors before Runtime hydrates a single asset."""
+    kinds = [_reference_kind(reference) for reference in payload.references]
     try:
-        image = Image.open(io.BytesIO(asset.read_bytes()))
-        image.load()
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
-        raise InvalidRequest(
-            f"{where} is not a decodable image ({type(exc).__name__}): {str(exc)[:120]}",
-            code="undecodable_image",
-            fields=[where],
-        ) from exc
-    return image.convert("RGB")
+        policy = validate_reference_policy(kinds)
+    except ValueError as exc:
+        raise UnsupportedInput(str(exc), code="reference_policy", fields=["references"]) from exc
+    return _reference_facts(policy)
 
 
-# ------------------------------------------------------------------ the models
+def _reference_kind(reference: Reference) -> str:
+    if isinstance(reference, ImageReference):
+        return "image"
+    if isinstance(reference, VideoReference):
+        return "video"
+    return "audio"
 
 
-class Fl2VAModel(Model[H3Pipeline], task="fl2va"):  # type: ignore[call-arg]
-    """The release's one model: text and optional first/last frames to joint video/audio."""
+def _reference_facts(policy: ReferencePolicyFacts) -> ReferenceFacts:
+    return ReferenceFacts(
+        images=policy.images,
+        videos=policy.videos,
+        standalone_audios=policy.audios,
+        total=policy.total,
+    )
 
-    pipe: H3Pipeline
-    tokenizer: Tokenizer
 
-    def load(self, loader: Loader) -> None:
-        self.pipe = loader.construct(H3Pipeline, factory=build_fl2va_pipeline)
-        self.tokenizer = Tokenizer()
+class _H3Model(Model[OfficialH3Pipeline]):
+    pipe: OfficialH3Pipeline
 
     def unload(self, loader: Loader) -> None:
         return None
 
     @uses_components("text_encoder")
-    def condition_text(
-        self, expanded: ExpandedPresentation, patched: PatchedVision
-    ) -> Any:
-        """Qwen3-VL over the expanded presentation: the UNNORMALIZED hidden state after
-        layer 50, `[1, L, text_dim]`.
-
-        THE VISION SEAM IS BUILT HERE. The text encoder takes `[batch, seq]` token ids plus
-        already-patchified `VisionBlock(patches, grid_thw, index)` splices; `prepare` has
-        produced both, from upstream's own processor. Every vision block's pad run is
-        already in `expanded.token_ids` at `expanded.splices[i]`, so the splice is an
-        overwrite of rows that exist rather than an insertion that would move the layout
-        out from under the packed sequence.
-        """
-        import torch
-
-        from h3_arch import vision
-
-        encoder = self.pipe.components["text_encoder"]
-        device = encoder.model.embed_tokens.weight.device
-        blocks = vision.text_encoder_blocks(patched, expanded)
-        with torch.inference_mode():
-            tokens = torch.tensor([expanded.token_ids], dtype=torch.long, device=device)
-            placed = [
-                type(b)(
-                    patches=b.patches.to(device=device),
-                    grid_thw=b.grid_thw.to(device=device),
-                    index=b.index,
-                )
-                for b in blocks
-            ]
-            states: Any = encoder(tokens, vision=placed)
-            return states
-
-    @uses_components("video_vae")
-    def condition_visual(self, run: H3Run, *, noise_level: float) -> list[Any]:
-        """First/last keyframe conditioning latents, one per packed block.
-
-        The same image reaches Qwen as a vision block and the DiT as VAE rows; the vision
-        tokens carry semantics and these rows carry the pixels.
-
-        A LIST, one entry per block, never one tensor for all of them. Each block is its own
-        geometry and lands at its own `cond` segment.
-
-        The anchors are noised ONCE, here, to `noise_level` and held there for the whole
-        loop — they are not on the sampler's schedule. `layout.build_modulation` pins their
-        rows to the same level, so this and the modulation state the same fact.
-        """
-        import torch
-
-        from h3_arch.vision import condition_pixels
-
-        vae = self.pipe.components["video_vae"]
-        device = vae.post_quant_conv.weight.device
-        out: list[Any] = []
-        with torch.inference_mode():
-            for position, image in enumerate(run.plan.condition_images):
-                latents = vae.encode_condition(condition_pixels(image).to(device))
-                expected = run.plan.condition_geometry[position]
-                got = tuple(int(n) for n in latents.shape[2:5])
-                if got != expected:
-                    raise RuntimeError(
-                        f"conditioning block {position} encoded to {got} latents and the "
-                        f"packed layout reserved rows for {expected}: the derived geometry "
-                        "and the encode disagree, so the packed sequence would misalign"
-                    )
-                # x_t = t*x_0 + (1-t)*noise, in H3's `t` convention — `t = 1` is clean. The
-                # noise is drawn on the HOST so two cards produce the same anchor.
-                noise = condition_noise(run.generator, latents)
-                out.append(noise_level * latents + (1.0 - noise_level) * noise)
-        return out
+    def condition_text(self, state: Any) -> None:
+        self.pipe.condition_text(state)
 
     @uses_components("audio_vae")
-    def decode_audio(self, latents: Any) -> Any:
-        """The SMALL decode runs first: it is 0.6 GiB against the video VAE's 5.2, so
-        taking it before the video decode is what keeps peak residency where it is."""
-        import torch
-
-        with torch.inference_mode():
-            return self.pipe.components["audio_vae"].decode(latents)
+    def decode_audio(self, state: Any) -> tuple[Any, int]:
+        return self.pipe.decode_audio(state), int(state.sampling_rate)
 
     @uses_components("video_vae")
-    def decode_video(self, latents: Any) -> Any:
-        import torch
+    def decode_video(self, state: Any) -> Any:
+        return self.pipe.decode_video(state)
 
-        with torch.inference_mode():
-            return self.pipe.components["video_vae"].decode(latents)
 
+class Fl2VAModel(_H3Model, task="fl2va"):
+    def load(self, loader: Loader) -> None:
+        self.pipe = loader.construct(OfficialH3Pipeline, factory=build_fl2va_pipeline)
+
+    @uses_components("video_vae")
+    def condition_media(self, state: Any) -> None:
+        self.pipe.condition_media(state)
 
     @uses_components("transformer")
-    def predict_data_velocity(
-        self,
-        run: H3Run,
-        text_states: Any,
-        video_latents: Any,
-        audio_latents: Any,
-        modulation: Modulation,
-    ) -> tuple[Any, Any]:
-        import torch
+    def sample(self, state: Any, *, on_step: Any, cancel: Any) -> ScheduleFacts:
+        return self.pipe.denoise(state, on_step=on_step, cancel=cancel)
 
-        with torch.inference_mode():
-            return _predict_data_velocity(
-                self.pipe.transformer,
-                run=run,
-                text_states=text_states,
-                video_latents=video_latents,
-                audio_latents=audio_latents,
-                modulation=modulation,
-            )
 
-def _predict_data_velocity(
-    transformer: Any,
+class Ref2VAModel(_H3Model, task="ref2va"):
+    def load(self, loader: Loader) -> None:
+        self.pipe = loader.construct(OfficialH3Pipeline, factory=build_ref2va_pipeline)
+
+    @uses_components("video_vae", "audio_vae")
+    def condition_media(self, state: Any) -> None:
+        self.pipe.condition_media(state)
+
+    @uses_components("transformer_ref")
+    def sample(self, state: Any, *, on_step: Any, cancel: Any) -> ScheduleFacts:
+        return self.pipe.denoise(state, on_step=on_step, cancel=cancel)
+
+
+def _decode_keyframe(
+    asset: ImageAsset | None,
     *,
-    run: H3Run,
-    text_states: Any,
-    video_latents: Any,
-    audio_latents: Any,
-    modulation: Modulation,
-) -> tuple[Any, Any]:
-    """THE MODEL BOUNDARY (#524): latents in, LATENT-SHAPED DATA-WARD VELOCITY out.
+    field: str,
+    decoder: MediaDecoder,
+    pipe: OfficialH3Pipeline,
+) -> Any | None:
+    if asset is None:
+        return None
+    image = decoder.decode_image(asset)
+    _validate_ratio(image.width, image.height, field)
+    return pipe.keyframe(image)
 
-    It owns the whole row-shaped middle — the in-projections, the pack, the forward and
-    the unpack — so nothing row-shaped crosses back into endpoint orchestration. The
-    previous shape leaked all of it: a module-level `_pack` assembled rows OUTSIDE any
-    declared component scope, could not have worked (text is 5120 wide, a video patch row
-    96 and an audio row 32, and `torch.cat` refuses that), and would have had to reach the
-    transformer's projections from outside its lease to fix. The solver then received ROWS
-    and multiplied them by a sigma delta as if they were latents.
 
-    Input latents are `[1, 24, t, h, w]` and `[1, 32, 2, audio_t]`; the returned
-    velocities have exactly those shapes. It takes the transformer as an ARGUMENT: which
-    one it is was decided by the caller's declared component set, and this function has no
-    opinion about it.
+def _decode_references(
+    references: list[Reference], *, decoder: MediaDecoder, pipe: OfficialH3Pipeline
+) -> list[Any]:
+    prepared: list[Any] = []
+    video_duration = Fraction(0)
+    audio_duration = Fraction(0)
+    vision_tokens = 0
 
-    DATA-WARD, and the heads are RAW. See `dit.MiniMaxH3Transformer3DModel.forward` and
-    `layout.H3Solver` — both state the same convention, and this is the seam between them.
-    """
-    import torch
-
-    from h3_arch.dit import pack_audio, patchify_video, unpack_audio, unpatchify_video
-
-    grid = run.plan.grid
-    patch = transformer.config.patch_size
-    weight = transformer.condition_proj.weight
-    device, hidden_dtype = weight.device, weight.dtype
-
-    text_rows = transformer.refine_text(text_states[0].to(device=device, dtype=hidden_dtype))
-    video_rows = transformer.video_patch_proj(
-        patchify_video(video_latents, patch).to(device=device, dtype=torch.float32)
-    ).to(hidden_dtype)
-    audio_rows = transformer.audio_patch_proj(
-        pack_audio(audio_latents).to(device=device, dtype=torch.float32)
-    ).to(hidden_dtype)
-
-    # One keyframe latent per `cond` segment, consumed in layout order. A count mismatch
-    # refuses instead of silently reusing one image for both anchors.
-    conditions = iter(run.visual_conditioning)
-
-    def _condition_rows(kind: str, count: int) -> Any:
-        try:
-            latents = next(conditions)
-        except StopIteration:
-            raise RuntimeError(
-                f"the packed layout carries a {kind!r} segment with no conditioning latents "
-                "left to fill it: the plan's condition list and the layout's segments "
-                "disagree, and the sequence would be built from a reused tensor"
-            ) from None
-        projected = transformer.video_patch_proj(
-            patchify_video(latents, patch).to(device=device, dtype=torch.float32)
-        ).to(hidden_dtype)
-        if projected.shape[0] != count:
-            raise RuntimeError(
-                f"a {kind!r} condition projected to {projected.shape[0]} rows and the "
-                f"layout reserved {count}"
+    for index, reference in enumerate(references):
+        field = f"references.{index}"
+        if isinstance(reference, ImageReference):
+            image = decoder.decode_image(reference.image)
+            _validate_ratio(image.width, image.height, field)
+            vision_tokens += reference_image_vision_tokens(image.width, image.height)
+            _validate_vision_budget(vision_tokens)
+            prepared.append(pipe.image_reference(image))
+        elif isinstance(reference, VideoReference):
+            video = decoder.decode_video(reference.video)
+            _validate_video(video, field)
+            video_duration += video.duration
+            if video_duration > _MAX_REFERENCE_DURATION:
+                raise InvalidRequest(
+                    "reference videos total more than 15 seconds",
+                    code="reference_video_duration_total",
+                    fields=["references"],
+                )
+            if video.soundtrack is not None:
+                audio_duration += video.duration
+                _validate_audio_aggregate(audio_duration)
+            vision_tokens += reference_video_vision_tokens(
+                video.width, video.height, video.duration
             )
-        return projected
-
-    rows: list[Any] = []
-    for start, end, kind in run.layout.segments:
-        if kind == "text":
-            rows.append(text_rows)
-        elif kind == "cond":
-            rows.append(_condition_rows(kind, end - start))
-        elif kind == "video":
-            rows.append(video_rows)
-        elif kind == "audio":
-            rows.append(audio_rows)
+            _validate_vision_budget(vision_tokens)
+            prepared.append(pipe.video_reference(video))
         else:
-            raise RuntimeError(
-                f"the FL2VA action cannot pack a {kind!r} segment; its request schema "
-                "admits only text, first/last conditions, target video, and target audio"
-            )
-    if next(conditions, None) is not None:
-        raise RuntimeError(
-            "more conditioning latents were encoded than the packed layout reserved "
-            "segments for — the plan and the layout disagree about what this request is"
+            audio = decoder.decode_audio(reference.audio)
+            _validate_audio(audio, field)
+            audio_duration += audio.duration
+            _validate_audio_aggregate(audio_duration)
+            prepared.append(pipe.audio_reference(audio))
+    return prepared
+
+
+def _validate_vision_budget(tokens: int) -> None:
+    if tokens > MAX_CONDITIONER_VISION_TOKENS:
+        raise UnsupportedInput(
+            f"reference vision presentation needs {tokens} tokens; this release admits at most "
+            f"{MAX_CONDITIONER_VISION_TOKENS}",
+            code="reference_capacity",
+            fields=["references"],
         )
 
-    video_out, audio_out = transformer(
-        torch.cat(rows, dim=0),
-        torch.tensor(modulation.timesteps, dtype=torch.float32, device=device),
-        list(modulation.segments),
-        torch.tensor(modulation.position_ids, dtype=torch.float64, device=device),
-        modulation.video_stream,
-        modulation.audio_stream,
-    )
-    return (
-        unpatchify_video(
-            video_out,
-            grid.latent_t // patch[0],
-            grid.latent_h // patch[1],
-            grid.latent_w // patch[2],
-            transformer.config.latents_dim,
-            patch,
-        ).to(video_latents.dtype),
-        unpack_audio(audio_out).to(audio_latents.dtype),
-    )
+
+def _validate_ratio(width: int, height: int, field: str) -> None:
+    if width > 4 * height or height > 4 * width:
+        raise UnsupportedInput(
+            f"{field} must have an aspect ratio between 1:4 and 4:1, got {width}x{height}",
+            code="reference_aspect_ratio",
+            fields=[field],
+        )
 
 
-# ------------------------------------------------------------------ the handlers
+def _validate_audio(audio: DecodedAudio, field: str) -> None:
+    _validate_audio_channels(audio, field)
+    _validate_duration(audio.duration, field)
 
 
-def _run(
-    model: Fl2VAModel,
-    ctx: Context,
-    payload: GenerateInput,
+def _validate_video(video: DecodedVideo, field: str) -> None:
+    _validate_ratio(video.width, video.height, field)
+    _validate_duration(video.duration, field)
+    if video.pixel_aspect_ratio != 1:
+        raise UnsupportedInput(
+            f"{field} must use square pixels, got {video.pixel_aspect_ratio}",
+            code="reference_pixel_aspect_ratio",
+            fields=[field],
+        )
+    for index, duration in enumerate(video.frame_durations):
+        if duration <= 0:
+            raise InvalidRequest(
+                f"{field} frame {index} has a non-positive presentation duration",
+                code="reference_clock",
+                fields=[field],
+            )
+        if (
+            index
+            and video.frame_pts[index - 1] + video.frame_durations[index - 1]
+            != video.frame_pts[index]
+        ):
+            raise InvalidRequest(
+                f"{field} has a presentation-clock gap or overlap before frame {index}",
+                code="reference_clock",
+                fields=[field],
+            )
+    if video.soundtrack is not None:
+        _validate_audio_channels(video.soundtrack, field)
+        offset_samples = (
+            video.soundtrack.start_time - video.start_time
+        ) * video.soundtrack.sample_rate
+        target_samples = video.duration * video.soundtrack.sample_rate
+        if offset_samples.denominator != 1 or target_samples.denominator != 1:
+            raise InvalidRequest(
+                f"{field} video and soundtrack clocks do not meet on exact samples",
+                code="reference_av_clock",
+                fields=[field],
+            )
+        offset = video.soundtrack.start_time - video.start_time
+        if offset >= video.duration or offset + video.soundtrack.duration <= 0:
+            raise InvalidRequest(
+                f"{field} soundtrack does not overlap its video timeline",
+                code="reference_av_clock",
+                fields=[field],
+            )
+
+
+def _validate_audio_aggregate(duration: Fraction) -> None:
+    if duration > _MAX_REFERENCE_DURATION:
+        raise InvalidRequest(
+            "embedded soundtracks and standalone audio total more than 15 seconds",
+            code="reference_audio_duration_total",
+            fields=["references"],
+        )
+
+
+def _validate_audio_channels(audio: DecodedAudio, field: str) -> None:
+    if audio.channels not in (1, 2):
+        raise UnsupportedInput(
+            f"{field} audio must be mono or stereo, got {audio.channels} channels",
+            code="reference_audio_channels",
+            fields=[field],
+        )
+
+
+def _validate_duration(duration: Fraction, field: str) -> None:
+    if not _MIN_REFERENCE_DURATION <= duration <= _MAX_REFERENCE_DURATION:
+        raise InvalidRequest(
+            f"{field} must be between 2 and 15 seconds, got {float(duration):.3f}",
+            code="reference_duration",
+            fields=[field],
+        )
+
+
+def _finish(
+    model: _H3Model,
+    state: Any,
+    schedule: ScheduleFacts,
+    *,
+    mute: bool,
     out: Outputs,
     tel: Telemetry,
-) -> GenerateOutput:
-    """The one generation body."""
+    cancel: Any,
+) -> H3VideoOutput:
     import torch
 
-    view = model.for_request(ctx, seed=payload.seed)
-    with tel.stage("prepare"):
-        plan, layout, expanded, patched = prepare(payload, tokenizer=model.tokenizer)
-    config = model.pipe.config.dit
-    timestep_plan = build_timestep_plan(
-        task="fl2va",
-        structure=DIT_STRUCTURE,
-        evaluations=plan.steps,
-        layout=layout,
-        sigma_shift_video=config.sigma_shift_video,
-        sigma_shift_audio=config.sigma_shift_audio,
-        visual_cond_timestep=VISUAL_COND_TIMESTEP if plan.keyframes else None,
-        adapters=tuple(str(a) for a in view.adapters),
-    )
-    solver = H3Solver(timestep_plan)
-    run = H3Run(
-        plan=plan,
-        layout=layout,
-        timestep_plan=timestep_plan,
-        generator=torch.Generator(device="cpu").manual_seed(view._seed),
-        expanded=expanded,
-    )
-    tel.metric("packed_rows", float(layout.seq_len))
-    tel.metric("text_rows", float(len(expanded.token_ids)))
-    tel.metric("vision_blocks", float(len(patched.token_counts)))
-    # BOTH numbers, named apart. One request's plan holds `grid_points` sigmas and costs
-    # `evaluations` forward passes, and they are never the same integer (#522c).
-    tel.metric("evaluations", float(solver.evaluations))
-    tel.metric("sigma_grid_points", float(timestep_plan.grid_points))
-    ctx.raise_if_cancelled()
-
-    with tel.stage("condition_text"):
-        text_states = model.condition_text(expanded, patched)
-    if plan.condition_images:
-        with tel.stage("condition_visual"):
-            run.visual_conditioning = model.condition_visual(
-                run, noise_level=timestep_plan.visual_cond_timestep or 1.0
+    cancel()
+    with tel.stage("decode_audio"):
+        audio, sample_rate = model.decode_audio(state)
+        if audio.ndim != 3 or int(audio.shape[0]) != 1 or sample_rate != 32000:
+            raise OutputError(
+                f"official H3 audio decode returned shape {tuple(audio.shape)} at {sample_rate}Hz; "
+                "the release clock is 32000Hz",
+                code="output_audio_shape",
+            )
+        waveform = audio[0].to(torch.float32).contiguous().cpu()
+    cancel()
+    with tel.stage("decode_video"):
+        decoded = model.decode_video(state)
+        if decoded.ndim != 5 or int(decoded.shape[0]) != 1 or int(decoded.shape[2]) != 3:
+            raise OutputError(
+                f"official H3 video decode returned shape {tuple(decoded.shape)}",
+                code="output_geometry",
             )
 
-    on_step = tel.step_callback(solver.evaluations, stage="denoise")
-    with tel.stage("denoise"):
-        latents = _sample(torch, model, run, solver, text_states, on_step, ctx)
-
-    with tel.stage("decode_audio"):
-        waveform = model.decode_audio(latents["audio"])
-        # The codec plane takes [S], [1, S] or [2, S] and refuses a leading batch dim by
-        # design (cr-017); the audio VAE returns [1, C, S]. Dropping the batch dim is the
-        # caller's job, and this is the caller.
-        if waveform.ndim == 3:
-            waveform = waveform[0]
-        waveform = waveform.to(torch.float32)
-    with tel.stage("decode_video"):
-        decoded = model.decode_video(latents["video"])
-
-    # ONE conversion. The VAE already returned [0, 1]; see `h3_arch.pixels`.
-    frames = pixel_bytes(decoded[0]).to(torch.uint8).permute(1, 2, 3, 0).contiguous()
+    cancel()
+    video_nonfinite_fraction = _nonfinite_fraction(torch, decoded)
+    audio_nonfinite_fraction = _nonfinite_fraction(torch, waveform)
+    pixels = _rgb8(torch, decoded)
+    del decoded
+    frames, height, width, channels = (int(value) for value in pixels.shape)
     facts = MediaFacts(
-        width=plan.grid.width,
-        height=plan.grid.height,
-        frames=plan.grid.frames,
+        width=width,
+        height=height,
+        frames=frames,
         fps=FPS,
-        sample_rate=model.pipe.config.audio_vae.sample_rate,
-        mute=plan.mute,
+        sample_rate=sample_rate,
+        mute=mute,
     )
+    if frames != FRAMES or channels != 3:
+        raise OutputError(
+            f"official H3 decode returned {frames} frames and {channels} channels",
+            code="output_geometry",
+        )
+
     with tel.stage("gate_pre_encode"):
         pre_encode_gate(
-            torch, decoded=decoded, pixels=frames, waveform=waveform, requested=facts, tel=tel
+            torch,
+            pixels=pixels,
+            waveform=waveform,
+            video_nonfinite_fraction=video_nonfinite_fraction,
+            audio_nonfinite_fraction=audio_nonfinite_fraction,
+            requested=facts,
+            tel=tel,
         )
-    rgb = bytes(frames.cpu().numpy().tobytes())
-    samples = bytes(waveform.cpu().numpy().tobytes())
 
-    with tel.stage("encode_mp4"):
-        asset = out.save_video(
-            frames,
+    cancel()
+    pixel_array = pixels.numpy()
+    audio_array = waveform.numpy()
+    frame_bytes = bytes(pixel_array[-1])
+    with tel.stage("encode_outputs"):
+        video = out.save_video(
+            pixels,
             fps=FPS,
-            audio=None if plan.mute else waveform,
-            sample_rate=facts.sample_rate,
+            audio=None if mute else waveform,
+            sample_rate=sample_rate,
         )
-    with tel.stage("gate_post_encode"):
-        # THE CONTAINER IS WHAT A CALLER OPENS, so the container is what gets decoded. The
-        # bytes come back through the asset's own reader; the spool file is the only way to
-        # hand a path to ffprobe and dies with the attempt.
-        probe = out.temporary_file(".mp4")
-        probe.write_bytes(asset.read_bytes())
-        post_encode_gate(probe, requested=facts, tel=tel)
+        continuation = out.save_image(ImageFrame(width, height, frame_bytes), format="png")
 
-    return GenerateOutput(
-        video=asset,
-        width=facts.width,
-        height=facts.height,
-        frames=facts.frames,
-        fps=facts.fps,
-        steps=solver.evaluations,
-        plan_digest=run.digest,
-        video_digest=hashlib.sha256(rgb).hexdigest(),
-        audio_digest=hashlib.sha256(samples).hexdigest(),
+    return H3VideoOutput(
+        video=video,
+        continuation_frame=continuation,
+        width=width,
+        height=height,
+        frames=frames,
+        fps=FPS,
+        sample_rate=sample_rate,
+        sigma_grid_points=SIGMA_GRID_POINTS,
+        transformer_evaluations=TRANSFORMER_EVALUATIONS,
+        timestep_plan_digest=schedule.timestep_plan_digest,
+        video_sigma_digest=schedule.video_sigma_digest,
+        audio_sigma_digest=schedule.audio_sigma_digest,
+        video_timestep_digest=schedule.video_timestep_digest,
+        audio_timestep_digest=schedule.audio_timestep_digest,
+        video_pixel_digest=hashlib.sha256(pixel_array).hexdigest(),
+        audio_sample_digest=hashlib.sha256(audio_array).hexdigest(),
+        continuation_frame_digest=continuation.digest,
+        continuation_pixel_digest=hashlib.sha256(frame_bytes).hexdigest(),
         checkpoint=model.checkpoint_ref,
     )
 
 
-def _sample(
-    torch: Any,
-    model: Fl2VAModel,
-    run: H3Run,
-    solver: H3Solver,
-    text_states: Any,
-    on_step: Any,
-    ctx: Context,
-) -> dict[str, Any]:
-    """The joint video+audio sampling loop. ONE model evaluation per step — no negative
-    branch, no zero-delta tail, and the sign is the solver's.
+def _rgb8(torch: Any, decoded: Any) -> Any:
+    """Bounded float-decode to one CPU RGB8 buffer, before either encoder."""
+    source = decoded[0]
+    frames, _, height, width = (int(value) for value in source.shape)
+    pixels = torch.empty((frames, height, width, 3), dtype=torch.uint8, device="cpu")
+    for start in range(0, frames, 8):
+        chunk = source[start : start + 8]
+        chunk.clamp_(0, 1).mul_(255).round_()
+        rgb = chunk.to(torch.uint8).permute(0, 2, 3, 1).contiguous().cpu()
+        pixels[start : start + len(rgb)].copy_(rgb)
+    return pixels
 
-    ORCHESTRATION ONLY: it holds latents, asks the boundary for their data-ward velocity,
-    and lets `SolverStep` apply it. Nothing row-shaped appears in this function, which is
-    the whole point of the boundary (#524) — the previous shape assembled transformer rows
-    here, outside every declared component scope, and then multiplied ROWS by a sigma
-    delta as if they were latents."""
-    plan = run.timestep_plan
-    dit = model.pipe.config.dit
-    grid = run.plan.grid
-    # SEEDED ON THE HOST, always: a device-side draw is not reproducible across cards, and
-    # the seed is a request fact. The latents then follow the conditioning to wherever the
-    # runtime placed the weights.
-    latents = initial_latents(run.generator, dit, grid, device=text_states.device)
-    video, audio = latents["video"], latents["audio"]
 
-    for step in solver.steps():
-        ctx.raise_if_cancelled()
-        modulation = build_modulation(
-            run.layout,
-            t_video=step.t_video,
-            t_audio=step.t_audio,
-            visual_cond_t=plan.visual_cond_timestep or 0.0,
-            # THE EXPANDED TAGS, one per text-encoder row. `presentation.tags` carries one
-            # tag per PRESENTATION row, where a whole vision block is a single row, so
-            # using it would tag the text span by a length the sequence does not have.
-            text_token_tags=run.expanded.tags,
-        )
-        v_video, v_audio = model.predict_data_velocity(
-            run, text_states, video, audio, modulation
-        )
-        video = step.advance_video(video, v_video)
-        audio = step.advance_audio(audio, v_audio)
-        # ONE progress advance per model evaluation. It used to fire per transformer BLOCK
-        # as well, so a 30-step request reported 1530 advances (#522e).
-        on_step(step.index)
-    return {"video": video, "audio": audio}
+def _nonfinite_fraction(torch: Any, value: Any) -> float:
+    """Count non-finite values with at most roughly 32 MiB of temporary mask."""
+    if value.ndim < 2:
+        chunks = (value,)
+    else:
+        values_per_column = value.numel() // int(value.shape[1])
+        columns = max(1, (32 * _MIB) // max(1, values_per_column))
+        chunks = value.split(columns, dim=1)
+    bad = sum(int(torch.count_nonzero(~torch.isfinite(chunk))) for chunk in chunks)
+    return float(bad / int(value.numel()))
 
 
 @app.entrypoint
-def generate(
+def first_last_frame_to_video(
     ctx: Context,
-    payload: GenerateInput,
+    payload: FirstLastFrameToVideoInput,
     model: Fl2VAModel,
+    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
-) -> GenerateOutput:
-    """Text, optionally anchored by a first and/or last frame, to one muxed mp4."""
-    return _run(model, ctx, payload, out, tel)
+) -> H3VideoOutput:
+    ctx.raise_if_cancelled()
+    view = model.for_request(ctx, seed=payload.seed)
+    with tel.stage("prepare"):
+        first = _decode_keyframe(
+            payload.first_frame, field="first_frame", decoder=decoder, pipe=model.pipe
+        )
+        last = _decode_keyframe(
+            payload.last_frame, field="last_frame", decoder=decoder, pipe=model.pipe
+        )
+        state = model.pipe.start_fl2va(
+            prompt=payload.prompt,
+            first_frame=first,
+            last_frame=last,
+            generator=model.pipe.generator(view.generator),
+        )
+    with tel.stage("condition_text"):
+        model.condition_text(state)
+    if first is not None or last is not None:
+        with tel.stage("condition_media"):
+            model.condition_media(state)
+    with tel.stage("denoise"):
+        schedule = model.sample(
+            state,
+            on_step=tel.step_callback(TRANSFORMER_EVALUATIONS, stage="denoise"),
+            cancel=ctx.raise_if_cancelled,
+        )
+    return _finish(
+        model,
+        state,
+        schedule,
+        mute=payload.mute,
+        out=out,
+        tel=tel,
+        cancel=ctx.raise_if_cancelled,
+    )
+
+
+@app.entrypoint(preflight=preflight_reference_media)
+def reference_media_to_video(
+    ctx: Context,
+    payload: ReferenceMediaToVideoInput,
+    facts: Preflight[ReferenceFacts],
+    model: Ref2VAModel,
+    decoder: MediaDecoder,
+    out: Outputs,
+    tel: Telemetry,
+) -> H3VideoOutput:
+    ctx.raise_if_cancelled()
+    del facts
+    view = model.for_request(ctx, seed=payload.seed)
+    with tel.stage("prepare"):
+        references = _decode_references(payload.references, decoder=decoder, pipe=model.pipe)
+        state = model.pipe.start_ref2va(
+            prompt=payload.prompt,
+            references=references,
+            generator=model.pipe.generator(view.generator),
+        )
+    with tel.stage("condition_text"):
+        model.condition_text(state)
+    with tel.stage("condition_media"):
+        model.condition_media(state)
+    with tel.stage("denoise"):
+        schedule = model.sample(
+            state,
+            on_step=tel.step_callback(TRANSFORMER_EVALUATIONS, stage="denoise"),
+            cancel=ctx.raise_if_cancelled,
+        )
+    return _finish(
+        model,
+        state,
+        schedule,
+        mute=payload.mute,
+        out=out,
+        tel=tel,
+        cancel=ctx.raise_if_cancelled,
+    )

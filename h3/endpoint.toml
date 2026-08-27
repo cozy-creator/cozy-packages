@@ -1,16 +1,20 @@
 # The in-repo DEFAULT bindings — what a bare-venv run with no --model uses, and never a
 # source of truth (cozy-runtime.md §1.0). Production authority is the deploy binding alone.
 #
-# Code states CAPABILITY; bindings state SELECTION. Nothing in `h3.py` or `h3_arch/` names
+# Code states CAPABILITY; bindings state SELECTION. Nothing in `h3.py` or `official.py` names
 # a repo, release, checkpoint or revision — the artifact and its release live here.
 #
-# ONE ACTION, ONE BINDING. The catalog artifact may still carry job-owned Ref2VA bytes, but
-# this release neither constructs nor advertises them. Artifact packaging does not widen an
-# endpoint contract.
+# Both task models select the same uniform dual FULL release. Each model constructs only its
+# task-stamped transformer; the shared text encoder and VAEs remain ordinary shared components.
+# A narrow, mixed-mode, curve, or baked artifact cannot satisfy this reference release.
 
 [application]
 object = "h3:app"
 
 [bindings."Fl2VAModel"]
 repo = "cozy/minimax-h3"
-release = "se-001"
+release = "se-012"
+
+[bindings."Ref2VAModel"]
+repo = "cozy/minimax-h3"
+release = "se-012"

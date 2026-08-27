@@ -1,145 +1,66 @@
 name: ci
-# Fences + static analysis + the DETERMINISTIC CONFORMANCE ARMS.
-#
-# The testing rule as of #533: "No mock-heavy behavioral suites or tests of implementation
-# trivia. Deterministic contract, arithmetic, codec, schema, and regression checks MUST run
-# in CI. Live end-to-end evidence remains mandatory." The four defects that produced
-# se-002's first garbage render — a reversed sampler sign, a generic temporal ratio, sigma
-# grid points counted as model evaluations, and a double pixel rescale — were every one of
-# them decidable on a CPU in milliseconds, and no manually-invoked script was running them.
-# So they run here, on every push, and they cost seconds.
-#
-# Live evidence (a real render on a real card, viewed) is still mandatory and still cannot
-# happen here. These arms make the CHEAP half unmissable; they do not replace the other.
-#
-# No GPU and no weights are needed here, and that is a PROPERTY being checked rather than a
-# convenience: endpoint module scope must stay light enough for `describe` to read the
-# surface in a disposable container.
-#
-# THE ONE THING CI CANNOT DO TODAY, said out loud rather than skipped quietly:
-# `cozy-runtime-v2` is a PRIVATE repo and this workflow has no credential for it (the org
-# holds no cross-repo token; `GITHUB_TOKEN` is scoped to this repository). So the steps
-# that need the author surface installed — `describe --check` and a mypy that can SEE
-# `cozy_runtime.author`'s types — run only when an owner adds `COZY_CI_TOKEN`. Until then
-# they are the builder's, run against a pinned checkout in `.venv-check` (README), and the
-# descriptor digest is recorded on ev-003. The steps below need nothing and are real.
-on: [push, pull_request]
+
+on:
+  push:
+  pull_request:
+  merge_group:
 
 jobs:
   checks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # The `secrets` context is not available in an `if:` expression, so the token's
-    # PRESENCE is lifted into the environment once and the two gated steps read that.
-    env:
-      COZY_CI_TOKEN: ${{ secrets.COZY_CI_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
-          version: "latest"
+          version: "0.9.18"
       - run: uv python install 3.13
 
+      # The exact Runtime wheel is a committed first-party build input. CI therefore sees
+      # the real author types and media capability on every run; there is no secret-gated
+      # skipped-green path.
       - name: Environment
         run: |
           uv venv --python 3.13
-          uv pip install msgspec mypy ruff
+          uv pip install \
+            h3/vendor/cozy_runtime-0.0.1-py3-none-any.whl \
+            "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4"
 
-      # Structural rules about the SOURCE: no runtime import, no artifact identifier in
-      # code, nothing heavy at module scope, no test suite. These parse the files and need
-      # no dependency at all.
       - name: Fences
         run: uv run --no-project python scripts/fence.py
 
       - name: Lint
         run: uv run --no-project ruff check h3/ quality-judge/ scripts/ sdxl/
 
-      # Static analysis is REQUIRED (tracker README, owner directive 2026-08-25). Without
-      # the private runtime installed, `cozy_runtime.*` resolves to Any here — the same
-      # treatment cozy-eval gives torch, and recorded the same way rather than hidden
-      # behind a per-module ignore_errors. The STRONG run, with the author surface's real
-      # types, is `.venv-check/bin/python -m mypy` against the pinned checkout.
       - name: Types
         run: uv run --no-project mypy
 
-      - name: Install the pinned author surface
-        if: env.COZY_CI_TOKEN != ''
-        env:
-          COZY_RUNTIME_SHA: 96b8c235fe1ce48e392256610eb47ad318dd6850
+      - name: Descriptors are current
         run: |
-          uv pip install 'protobuf>=6.31' 'grpcio>=1.76'
-          uv pip install --no-deps \
-            "cozy-runtime @ git+https://${COZY_CI_TOKEN}@github.com/cozy-creator/cozy-runtime-v2@${COZY_RUNTIME_SHA}"
-
-      # The committed descriptor IS the surface contract. `--check` exits 13 naming the
-      # pair that diverged, so a schema change that was not reviewed in a diff fails here.
-      - name: Descriptor is current
-        if: env.COZY_CI_TOKEN != ''
-        run: |
-          uv run --no-project cozy-runtime describe --dir quality-judge --check
           uv run --no-project cozy-runtime describe --dir h3 --check
+          uv run --no-project cozy-runtime describe --dir quality-judge --check
+          uv run --no-project cozy-runtime describe --dir sdxl --check
 
-  # A SEPARATE JOB ON PURPOSE. The arms must not be able to stop running because some
-  # earlier step in another job went red — that is precisely the failure mode #533 names,
-  # and it is not hypothetical: the `Types` step above has been red since before these
-  # arms existed (mypy cannot see the private runtime's types here, so the task stamps and
-  # the component decorator report against `Any`), and a step placed after it would have
-  # been skipped on every run while looking wired up.
-  arms:
-    name: Conformance arms
+  h3-conformance:
+    # Independent so a failure in static analysis cannot silently skip the red arms.
+    name: H3 deterministic conformance
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
-          version: "latest"
-      - run: uv python install 3.13
+          version: "0.9.18"
+      - run: uv python install 3.12
 
-      # The whole environment: msgspec for the plan struct, numpy for the pixel arm. No
-      # torch, no weights, no network, no card, and no runtime — the arms check reference
-      # SEMANTICS, and semantics do not need a GPU. Seconds, not minutes.
-      - name: Environment
+      # This is the exact locked source environment and a CPU semantic proof. It is not the
+      # separately required clean installed-wheel or GPU generation proof. --no-cache avoids
+      # retaining a second copy of the roughly 7.6 GiB CUDA closure on the hosted runner.
+      - name: Exact locked environment
         run: |
-          uv venv --python 3.13
-          uv pip install msgspec numpy
+          uv lock --check --project h3
+          cd h3
+          uv sync --locked --no-cache --no-install-project
 
-      # H3's reference semantics, each checked against an independently written expression
-      # rather than against the endpoint's own call shapes. Every arm carries its own RED
-      # CONTROL: the exact defective expression that shipped se-002's garbage render,
-      # asserted to DISAGREE with the reference.
-      - name: H3 deterministic conformance arms
-        run: uv run --no-project python scripts/h3-conform.py
-
-  # SEPARATE JOB, because its environment is the opposite of `arms`'. The vision arms use
-  # transformers' own image processor and therefore install torch; dragging that into
-  # `arms` would cost the fast job its seconds. Placed as its own job for the #533 reason
-  # the arms job exists at all: a step behind an already-red step looks wired and never
-  # fires.
-  vision-arms:
-    name: Vision seam conformance
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-        with:
-          version: "latest"
-      - run: uv python install 3.13
-
-      # The same Torch and Transformers versions the H3 lock names. A Git checkout is not
-      # a wheelhouse material and would make the offline environment impossible.
-      - name: Environment
-        run: |
-          uv venv --python 3.13
-          uv pip install --index-url https://download.pytorch.org/whl/cpu \
-            "torch==2.9.1" "torchvision==0.24.1"
-          uv pip install \
-            "msgspec==0.21.1" "numpy==2.5.2" "pillow==12.3.0" "transformers==5.16.1"
-
-      # The pixels-to-text-encoder seam, diffed against upstream rather than against a
-      # restatement of it: byte-identical reference pixels, a bit-identical patch matrix,
-      # token ids equal element for element, and a real text-encoder forward at toy width
-      # that proves the splice indices and the deepstack take-points are load-bearing.
-      - name: H3 vision seam conformance arms
-        run: uv run --no-project python scripts/h3-vision-conform.py
+      - name: Arms
+        run: h3/.venv/bin/python scripts/h3-conform.py

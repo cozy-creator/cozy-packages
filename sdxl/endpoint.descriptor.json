@@ -34,6 +34,7 @@
         "telemetry"
       ],
       "gpu": true,
+      "hidden": false,
       "kind": "entrypoint",
       "models": [
         {
@@ -248,6 +249,7 @@
     },
     "checkpoints": {
       "members": [
+        "declare",
         "save"
       ],
       "service": "Checkpoints"
@@ -257,6 +259,17 @@
         "fetch"
       ],
       "service": "Egress"
+    },
+    "media_decode": {
+      "limits": {
+        "max_attempt_decoded_bytes": 2147483648
+      },
+      "members": [
+        "decode_audio",
+        "decode_image",
+        "decode_video"
+      ],
+      "service": "MediaDecoder"
     },
     "save": {
       "members": [
@@ -297,5 +310,5 @@
       "service": "Telemetry"
     }
   },
-  "surface_digest": "sha256:36b751bdada420b2304d006781353441ef2d685ee683cc073ca4d7c033a6a074"
+  "surface_digest": "sha256:b31fb47a1053bd401fe535c157407d04ad8a98b30b4ca13bd3c1550030471103"
 }

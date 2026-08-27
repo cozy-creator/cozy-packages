@@ -309,7 +309,9 @@ def run_one(spec: dict[str, Any], out: Path) -> int:
         payload=spec["payload"],
         outputs=(),  # a judge returns numbers and text: no output asset is ever granted
         request_id=spec["request_id"],
-        deadline_ms=int(spec["deadline_ms"]),
+        # LocalRequest owns a duration; preserve the supervisor's absolute slice deadline
+        # by passing only the time that remains when this worker process actually starts.
+        timeout_ms=max(1, int(spec["deadline_ms"]) - int(time.time() * 1000)),
     )
     outcome = run_slice(
         config,

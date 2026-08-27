@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Structural fences for the endpoint packages. Static analysis, never a test suite.
 
-Five properties CI must not let drift, each checked as a fact about the source rather than
+Seven properties CI must not let drift, each checked as a fact about the source rather than
 as a convention someone remembers:
 
   1. author-surface-only  an endpoint imports `cozy_runtime.author` and nothing else from
@@ -23,6 +23,8 @@ as a convention someone remembers:
                           quantization, source-format parsing, offload/pinning, allocator
                           and stream commands, compile markers, checkpoint reads.
   5. no-test-suite        tracker README #160.
+  6. h3-media-boundary    H3 consumes Runtime decoded values; it does not open media itself.
+  7. h3-official-hardcut  the official dual-task implementation has no legacy/community route.
 
     nice -n 19 .venv/bin/python scripts/fence.py
 """
@@ -46,7 +48,15 @@ def projects() -> list[pathlib.Path]:
 
 
 def endpoint_modules() -> list[pathlib.Path]:
-    return sorted(f for project in projects() for f in project.rglob("*.py"))
+    return sorted(f for project in projects() for f in project.rglob("*.py") if ours(f))
+
+
+def h3_modules() -> list[pathlib.Path]:
+    return sorted(f for f in (ROOT / "h3").rglob("*.py") if ours(f))
+
+
+def h3_owned_modules() -> list[pathlib.Path]:
+    return sorted([*h3_modules(), *ROOT.glob("scripts/h3-*.py")])
 
 
 def rel(path: pathlib.Path) -> str:
@@ -342,12 +352,62 @@ def fence_no_tests() -> Fence:
     return bad, "no tests/ tree, no test_*.py, no test framework imported"
 
 
+def fence_h3_media_boundary() -> Fence:
+    """Ref2VA receives public Runtime values; a second media plane is a boundary defect."""
+    bad: list[str] = []
+    forbidden_imports = {"PIL", "av"}
+    forbidden_attrs = {"read_bytes", "_local", "from_file"}
+    for path in h3_modules():
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for module, line in imports(tree):
+            if module.split(".")[0] in forbidden_imports:
+                bad.append(
+                    f"{rel(path)}:{line}: imports {module!r} — Runtime owns media decode"
+                )
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs:
+                bad.append(
+                    f"{rel(path)}:{node.lineno}: uses .{node.attr} — H3 receives only public "
+                    "decoded media values"
+                )
+    return bad, "H3 has no Pillow, PyAV, private asset, or from-file decoder"
+
+
+def fence_h3_official_hardcut() -> Fence:
+    """The official Diffusers path replaces the interim port; it does not sit beside it."""
+    bad: list[str] = []
+    legacy_dir = ROOT / "h3" / "h3_arch"
+    if legacy_dir.exists():
+        bad.append("h3/h3_arch: legacy community architecture still exists")
+
+    forbidden_defs = {"generate", "reference_to_video", "generate_long"}
+    forbidden_import_roots = {"comfy", "comfy_kitchen", "diffsynth", "h3_arch"}
+    for path in h3_owned_modules():
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for module, line in imports(tree):
+            if module.split(".")[0] in forbidden_import_roots:
+                bad.append(
+                    f"{rel(path)}:{line}: imports community implementation {module!r}"
+                )
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+                and node.name in forbidden_defs
+            ):
+                bad.append(
+                    f"{rel(path)}:{node.lineno}: legacy or composite action {node.name!r} exists"
+                )
+    return bad, "legacy graph/actions and community imports are absent from H3"
+
+
 FENCES = (
     ("author-surface-only", fence_author_surface),
     ("no-identifiers-in-code", fence_identifiers),
     ("light-module-scope", fence_light_import),
     ("no-memory-choreography", fence_no_choreography),
     ("no-test-suite", fence_no_tests),
+    ("h3-media-boundary", fence_h3_media_boundary),
+    ("h3-official-hardcut", fence_h3_official_hardcut),
 )
 
 

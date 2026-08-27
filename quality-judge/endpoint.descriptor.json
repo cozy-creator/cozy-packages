@@ -33,6 +33,7 @@
         "telemetry"
       ],
       "gpu": true,
+      "hidden": false,
       "kind": "entrypoint",
       "models": [
         {
@@ -201,6 +202,7 @@
         "telemetry"
       ],
       "gpu": true,
+      "hidden": false,
       "kind": "entrypoint",
       "models": [
         {
@@ -379,6 +381,7 @@
         "telemetry"
       ],
       "gpu": true,
+      "hidden": false,
       "kind": "entrypoint",
       "models": [
         {
@@ -535,6 +538,7 @@
         "telemetry"
       ],
       "gpu": true,
+      "hidden": false,
       "kind": "entrypoint",
       "models": [
         {
@@ -715,11 +719,19 @@
       "service": "Adjustments"
     },
     "budget": {
-      "members": [],
+      "members": [
+        "elapsed_s",
+        "raise_if_exhausted",
+        "remaining_usd",
+        "spent_usd"
+      ],
       "service": "Budget"
     },
     "checkpoints": {
-      "members": [],
+      "members": [
+        "declare",
+        "save"
+      ],
       "service": "Checkpoints"
     },
     "egress": {
@@ -727,6 +739,17 @@
         "fetch"
       ],
       "service": "Egress"
+    },
+    "media_decode": {
+      "limits": {
+        "max_attempt_decoded_bytes": 2147483648
+      },
+      "members": [
+        "decode_audio",
+        "decode_image",
+        "decode_video"
+      ],
+      "service": "MediaDecoder"
     },
     "save": {
       "members": [
@@ -740,7 +763,11 @@
       "service": "Outputs"
     },
     "scratch": {
-      "members": [],
+      "members": [
+        "checkpoint_dir",
+        "materialize_blob",
+        "mktemp"
+      ],
       "service": "Scratch"
     },
     "secrets": {
@@ -763,5 +790,5 @@
       "service": "Telemetry"
     }
   },
-  "surface_digest": "sha256:f75133be2108ac7883706f6db34487b386688d8b4c26a4ff8c3267e673a5f298"
+  "surface_digest": "sha256:f812e10e73625d4ffb42c4190f53f2bf270af11511f21d9be7d36746e33a5c7f"
 }

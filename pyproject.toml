@@ -11,51 +11,21 @@ warn_unreachable = true
 disallow_any_generics = true
 implicit_reexport = false
 
-# The model libraries an endpoint constructs through are OPTIONAL to type checking: the
-# checking venv holds cozy-runtime, msgspec and nothing heavy, exactly like the container
-# `describe` runs in. `fence.py::light-module-scope` is what actually holds the packaging
-# rule; mypy never could. transformers additionally publishes no usable stubs for the
-# dynamic `Auto*` surface, so a stub package would be a fiction with a version number.
+# Static checks install the exact vendored, typed Runtime wheel. Heavy model libraries remain
+# absent because module-scope imports are forbidden and descriptor analysis must stay light.
 [[tool.mypy.overrides]]
 module = [
     "torch.*", "torchvision.*", "transformers.*", "tokenizers.*", "numpy.*", "PIL.*",
     "safetensors.*", "diffusers.*", "tfsbench", "tensorfs", "tensorfs.*", "cozy_eval.*",
-    # PyAV, the encoder the release closure carries as its `[media]` extra (#529 defect g).
-    # Imported only by the pod-side oracle, which writes the proof render's container itself.
     "av", "av.*",
-    # The REFERENCE LOADER, imported only by `scripts/h3-oracle.py` and only pod-side: it
-    # is a checkout on a rented card, never a dependency of anything here.
-    "comfy", "comfy.*", "comfy_kitchen", "comfy_kitchen.*",
 ]
 ignore_missing_imports = true
 
-# `cozy_runtime` is the author surface, and it SHIPS types — this is not an untyped
-# dependency, it is a private repo GitHub Actions has no credential for (see
-# .github/workflows/ci.yaml). So CI checks this code with the surface as Any, and the
-# builder checks it against the real thing in `.venv-check`. Recorded here beside the
-# config rather than hidden, because the difference is real: the CI run cannot catch a
-# wrong argument to `loader.construct` and the local one can.
+# These two older endpoints subclass optional Torch surfaces that are intentionally absent
+# from the light checking environment. H3's Runtime author surface remains fully typed.
 [[tool.mypy.overrides]]
-module = ["cozy_runtime", "cozy_runtime.*"]
-ignore_missing_imports = true
-
-# The two consequences of the line above, loosened HERE rather than papered over at each
-# site: with the author surface untyped, `Model` is an Any base class and `@app.entrypoint`
-# is an untyped decorator, so strict mode reports every model class and every handler. Both
-# are true statements about the CI environment and false statements about the code —
-# cozy-eval loosens the identical pair for the two modules that subclass a torch class.
-# Everything else stays strict, and no module carries `ignore_errors`.
-[[tool.mypy.overrides]]
-module = ["quality_judge", "sdxl", "h3", "h3_arch.*"]
+module = ["quality_judge", "sdxl"]
 disallow_subclassing_any = false
-disallow_untyped_decorators = false
-warn_unused_ignores = false
-
-# This driver imports the same private author surface as `h3`; CI cannot type that
-# dependency, so its component decorators are Any there. The real-surface run remains the
-# strong check, while the three `call-arg` ignores mark the exact missing-type consequence.
-[[tool.mypy.overrides]]
-module = ["h3-live"]
 disallow_untyped_decorators = false
 warn_unused_ignores = false
 
