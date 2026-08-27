@@ -184,11 +184,11 @@ h3/.venv/bin/python scripts/h3-live.py \
   --expected-lane 'fp8-baked' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
   --expected-descriptor-digest \
-    'sha256:c236398b0c2205e196a3ca91f70be6e89bb94dd515f8f736aa31534ee3f244fa' \
+    'sha256:c8c73bb64ee4a0c4edb7cbd09624cd0687f12850b8bdac76bec6210a45680b87' \
   --expected-fl-plan-digest \
-    'sha256:b72b46a6d753b4db3be175cd2c14ea012bd3524327e170d9bf064dd2fd1f2075' \
+    'sha256:1804b505d2a6a176ecd25f069f3f759ade3594c3e08bfad12fd33dfd324b9a12' \
   --expected-ref-plan-digest \
-    'sha256:86143d5ad14f3936b01cc1732241c0bb9b943138d585d8f7b887c7533e4a8732' \
+    'sha256:201a4e402b86680f07c6507c9795ce23da62c00c17087b1c35d53fa88c6b9109' \
   --ref-input /proof/ref2va.json \
   --expected-ref-input-sha256 'sha256:EXACT_64_LOWERCASE_HEX_REQUEST' \
   --out /proof/new-output
