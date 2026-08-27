@@ -19,9 +19,10 @@ VENDORED FIRST-PARTY WHEELS
 
   h3/vendor/cozy_runtime-0.0.2-py3-none-any.whl — Cozy Runtime, first-party
   h3/vendor/cozy_eval-2.3.0-py3-none-any.whl — Cozy Eval, first-party
+  video-assembly/vendor/cozy_runtime-0.0.2-py3-none-any.whl — Cozy Runtime, first-party
 
 These are exact build inputs pending publication of the first-party packages. Their source commits,
-build commands, sizes, and SHA-256 digests are recorded in `h3/VENDORED.md`.
+build commands, sizes, and SHA-256 digests are recorded in each package's `VENDORED.md`.
 
 BUNDLED MODEL INPUT DATA
 

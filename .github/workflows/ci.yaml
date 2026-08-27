@@ -64,3 +64,20 @@ jobs:
 
       - name: Arms
         run: h3/.venv/bin/python scripts/h3-conform.py
+
+  video-assembly:
+    name: Video assembly
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.9.18"
+      - run: uv python install 3.12
+      - run: uv sync --project video-assembly --locked --group dev
+      - run: uv run --project video-assembly ruff check video-assembly
+      - run: uv run --project video-assembly ruff format --check video-assembly
+      - run: uv run --project video-assembly mypy
+      - run: uv run --project video-assembly cozy-runtime describe --dir video-assembly --check
+      - run: uv run --project video-assembly python video-assembly/live.py
