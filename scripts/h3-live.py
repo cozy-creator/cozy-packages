@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from cozy_runtime.author import canonical_json
+
 ROOT = Path(__file__).resolve().parent.parent
 H3 = ROOT / "h3"
 PLAN_FILES = {
@@ -114,17 +116,17 @@ def load_plan_facts(endpoint: Path, expected: dict[str, str]) -> dict[str, dict[
             raw = path.read_bytes()
         except OSError as exc:
             raise RuntimeError(f"cannot read selected endpoint plan {path}: {exc}") from exc
-        digest = _sha256(raw)
+        try:
+            document = canonical_json.decode(raw)
+        except ValueError as exc:
+            raise RuntimeError(f"selected endpoint plan {path} is not strict JSON") from exc
+        if not isinstance(document, dict):
+            raise RuntimeError(f"selected endpoint plan {path} is not a JSON object")
+        digest = canonical_json.digest(document)
         if digest != expected_digest:
             raise RuntimeError(
                 f"selected endpoint {action} plan is {digest}, expected {expected_digest}"
             )
-        try:
-            document = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"selected endpoint plan {path} is not UTF-8 JSON") from exc
-        if not isinstance(document, dict):
-            raise RuntimeError(f"selected endpoint plan {path} is not a JSON object")
         observed[action] = {
             "document_digest": digest,
             **_schedule_digests(document),

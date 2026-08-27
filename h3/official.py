@@ -27,6 +27,7 @@ from cozy_runtime.author import (
     DecodedAudio,
     DecodedImage,
     DecodedVideo,
+    canonical_json,
 )
 
 Task = Literal["fl2va", "ref2va"]
@@ -127,11 +128,11 @@ class TimestepPlan:
 
     @property
     def digest(self) -> str:
-        return hashlib.sha256(self.canonical_bytes()).hexdigest()
+        return timestep_plan_digest(self.canonical_bytes())
 
     def canonical_bytes(self) -> bytes:
         """Canonical job-010 handoff; float32 values are exact hex strings."""
-        return json.dumps(self._document(), sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        return canonical_json.encode(self._document())
 
     def baked_table_layout(self) -> tuple[tuple[float, ...], tuple[tuple[int, int], ...]]:
         """The table order named by these exact canonical plan bytes."""
@@ -229,6 +230,14 @@ class TimestepPlan:
         return document
 
 
+def timestep_plan_digest(raw: bytes) -> str:
+    """Formatting-invariant identity for one parsed timestep-plan document."""
+    document = canonical_json.decode(raw)
+    if not isinstance(document, dict):
+        raise ValueError("a timestep plan must be a JSON object")
+    return canonical_json.digest(document).removeprefix("sha256:")
+
+
 class ReferencePolicyFacts(msgspec.Struct, frozen=True):
     """Preflight facts: the one reference-cardinality record both modules share."""
 
@@ -270,7 +279,9 @@ def canonical_timestep_plan(task: Task) -> TimestepPlan:
     """Read and self-verify the committed official-oracle plan without a tensor device."""
     raw = (_ASSETS / "timestep-plans" / f"{task}.json").read_bytes()
     try:
-        document = json.loads(raw)
+        document = canonical_json.decode(raw)
+        if not isinstance(document, dict):
+            raise TypeError("timestep plan is not an object")
         evaluations = document["evaluations"]
         video_sigmas = tuple(
             [float.fromhex(row["video_sigma"]) for row in evaluations]
@@ -291,8 +302,11 @@ def canonical_timestep_plan(task: Task) -> TimestepPlan:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"committed MiniMax-H3 {task} TimestepPlan is malformed") from exc
-    if document.get("schema") != "cozy.minimax_h3.timestep_plan/1" or plan.canonical_bytes() != raw:
-        raise ValueError(f"committed MiniMax-H3 {task} TimestepPlan is not canonical")
+    if (
+        document.get("schema") != "cozy.minimax_h3.timestep_plan/1"
+        or plan.canonical_bytes() != canonical_json.encode(document)
+    ):
+        raise ValueError(f"committed MiniMax-H3 {task} TimestepPlan has unexpected semantics")
     return plan
 
 

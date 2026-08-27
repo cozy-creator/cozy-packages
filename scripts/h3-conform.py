@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 H3 = ROOT / "h3"
 sys.path.insert(0, str(H3))
 
-from cozy_runtime.author import describe  # noqa: E402
+from cozy_runtime.author import canonical_json, describe  # noqa: E402
 
 import h3 as endpoint  # noqa: E402
 from gates import MediaFacts, pre_encode_gate  # noqa: E402
@@ -52,6 +52,7 @@ from official import (  # noqa: E402
     canonical_timestep_plan,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
+    timestep_plan_digest,
     validate_reference_policy,
 )
 
@@ -60,9 +61,10 @@ FAIL = "  FAIL "
 _failures = 0
 
 PLAN_DIGESTS = {
-    "fl2va": "b72b46a6d753b4db3be175cd2c14ea012bd3524327e170d9bf064dd2fd1f2075",
-    "ref2va": "86143d5ad14f3936b01cc1732241c0bb9b943138d585d8f7b887c7533e4a8732",
+    "fl2va": "1804b505d2a6a176ecd25f069f3f759ade3594c3e08bfad12fd33dfd324b9a12",
+    "ref2va": "201a4e402b86680f07c6507c9795ce23da62c00c17087b1c35d53fa88c6b9109",
 }
+DESCRIPTOR_DIGEST = "sha256:c8c73bb64ee4a0c4edb7cbd09624cd0687f12850b8bdac76bec6210a45680b87"
 VECTOR_DIGESTS = {
     "video_sigmas": "9908cdf87605da6006148af6e7ef8be63e806d40bf750efcaae24386c4eb4e86",
     "audio_sigmas": "120d46f5ce12fcbeb24f50707cc9f045a0fe283a5b35ad16dbd86f4810fb58e9",
@@ -150,10 +152,34 @@ def arm_schedule() -> None:
     plans = {task: canonical_timestep_plan(task) for task in ("fl2va", "ref2va")}
     for task, plan in plans.items():
         check(f"{task} canonical plan digest", plan.digest, PLAN_DIGESTS[task])
+        committed = (H3 / "timestep-plans" / f"{task}.json").read_bytes()
         check(
-            f"{task} committed canonical bytes",
-            hashlib.sha256((H3 / "timestep-plans" / f"{task}.json").read_bytes()).hexdigest(),
+            f"{task} committed semantic document",
+            canonical_json.encode(canonical_json.decode(committed)),
+            plan.canonical_bytes(),
+        )
+        check(f"{task} committed semantic identity", timestep_plan_digest(committed), plan.digest)
+        parsed = cast(dict[str, Any], canonical_json.decode(committed))
+        canonical = canonical_json.encode(parsed)
+        reordered = json.dumps(
+            dict(reversed(list(parsed.items()))), indent=2, ensure_ascii=False
+        ).encode()
+        check(f"{task} formatting-invariant identity", timestep_plan_digest(reordered), plan.digest)
+        changed = dict(parsed, frames=parsed["frames"] + 1)
+        red(
+            f"{task} meaning changes identity",
+            timestep_plan_digest(json.dumps(changed).encode()),
             plan.digest,
+        )
+        refusal(
+            f"{task} duplicate JSON key refuses",
+            partial(timestep_plan_digest, canonical[:-1] + b',"task":"other"}'),
+            "ValueError",
+        )
+        refusal(
+            f"{task} non-finite JSON number refuses",
+            partial(timestep_plan_digest, canonical[:-1] + b',"bad":NaN}'),
+            "ValueError",
         )
         document = json.loads(plan.canonical_bytes())
         check(f"{task} evaluation count", len(document["evaluations"]), 29)
@@ -1016,7 +1042,18 @@ def arm_output_gates() -> None:
 
 def arm_descriptor() -> None:
     print("\n== committed public surface ==")
-    descriptor = json.loads((H3 / "endpoint.descriptor.json").read_text())
+    descriptor_path = H3 / "endpoint.descriptor.json"
+    descriptor = json.loads(descriptor_path.read_text())
+    check(
+        "descriptor semantic identity",
+        canonical_json.digest_bytes(descriptor_path.read_bytes()),
+        DESCRIPTOR_DIGEST,
+    )
+    check(
+        "README launch contract names the current descriptor identity",
+        DESCRIPTOR_DIGEST in (ROOT / "README.md").read_text(),
+        True,
+    )
     entries = {entry["name"]: entry for entry in descriptor["entrypoints"]}
     surfaces = {surface.name: surface for surface in describe(endpoint.app)}
     check(
@@ -1262,7 +1299,7 @@ def arm_live_probe() -> None:
     }
     selected_plan_facts = load_plan_facts(H3, expected_plans)
     check(
-        "selected endpoint plan bytes match both launch identities",
+        "selected endpoint plan semantics match both launch identities",
         {action: facts["document_digest"] for action, facts in selected_plan_facts.items()},
         expected_plans,
     )
@@ -1276,9 +1313,35 @@ def arm_live_probe() -> None:
             (plans / f"{task}.json").write_bytes(
                 (H3 / "timestep-plans" / f"{task}.json").read_bytes()
             )
-        (plans / "fl2va.json").write_bytes((plans / "fl2va.json").read_bytes() + b" ")
+        fl_plan = plans / "fl2va.json"
+        fl_document = cast(dict[str, Any], canonical_json.decode(fl_plan.read_bytes()))
+        fl_plan.write_text(
+            json.dumps(dict(reversed(list(fl_document.items()))), indent=2, ensure_ascii=False)
+        )
+        check(
+            "selected endpoint formatting twin preserves semantic plan identity",
+            load_plan_facts(selected, expected_plans)["first_last_frame_to_video"][
+                "document_digest"
+            ],
+            expected_plans["first_last_frame_to_video"],
+        )
+
+        fl_plan.write_text(json.dumps(dict(fl_document, frames=fl_document["frames"] + 1)))
         refusal(
-            "selected endpoint plan drift cannot fall back to checkout-global plans",
+            "selected endpoint semantic plan drift cannot fall back to checkout-global plans",
+            lambda: load_plan_facts(selected, expected_plans),
+            "RuntimeError",
+        )
+        original = canonical_json.encode(fl_document)
+        fl_plan.write_bytes(original[:-1] + b',"task":"other"}')
+        refusal(
+            "selected endpoint duplicate plan key refuses",
+            lambda: load_plan_facts(selected, expected_plans),
+            "RuntimeError",
+        )
+        fl_plan.write_bytes(original[:-1] + b',"bad":NaN}')
+        refusal(
+            "selected endpoint non-finite plan number refuses",
             lambda: load_plan_facts(selected, expected_plans),
             "RuntimeError",
         )
@@ -1355,7 +1418,7 @@ def arm_live_probe() -> None:
         observe("read-only request identity validates after directory mode change")
 
         descriptor_bytes = (H3 / "endpoint.descriptor.json").read_bytes()
-        descriptor_identity = "sha256:" + hashlib.sha256(descriptor_bytes).hexdigest()
+        descriptor_identity = canonical_json.digest_bytes(descriptor_bytes)
         fake_runtime = root / "cozy-runtime-fake"
         responses = {
             ("describe", "--check"): {
