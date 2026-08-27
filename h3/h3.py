@@ -234,9 +234,6 @@ def _decode_references(
                     code="reference_video_duration_total",
                     fields=["references"],
                 )
-            if video.soundtrack is not None:
-                audio_duration += video.duration
-                _validate_audio_aggregate(audio_duration)
             vision_tokens += reference_video_vision_tokens(
                 video.width, video.height, video.duration
             )
@@ -323,9 +320,11 @@ def _validate_video(video: DecodedVideo, field: str) -> None:
 
 
 def _validate_audio_aggregate(duration: Fraction) -> None:
+    """The standalone-audio modality cap. A video's soundtrack belongs to that video and
+    rides the video aggregate; it never consumes this budget."""
     if duration > _MAX_REFERENCE_DURATION:
         raise InvalidRequest(
-            "embedded soundtracks and standalone audio total more than 15 seconds",
+            "standalone audio references total more than 15 seconds",
             code="reference_audio_duration_total",
             fields=["references"],
         )

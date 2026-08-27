@@ -491,24 +491,53 @@ def arm_media() -> None:
             return value
 
     class Decoder:
-        @staticmethod
-        def decode_video(asset: Any) -> Any:
-            del asset
-            return _video(10, soundtrack=_audio(10))
+        def __init__(self, videos: list[Any], audios: list[Any]) -> None:
+            self._videos = list(videos)
+            self._audios = list(audios)
 
-        @staticmethod
-        def decode_audio(asset: Any) -> Any:
+        def decode_video(self, asset: Any) -> Any:
             del asset
-            return _audio(6)
+            return self._videos.pop(0)
 
-    references = [
-        endpoint.VideoReference(VideoAsset("sha256:" + "1" * 64)),
-        endpoint.AudioReference(AudioAsset("sha256:" + "2" * 64)),
-    ]
+        def decode_audio(self, asset: Any) -> Any:
+            del asset
+            return self._audios.pop(0)
+
+    def decode(references: list[Any], videos: list[Any], audios: list[Any]) -> list[Any]:
+        return endpoint._decode_references(
+            cast(Any, references),
+            decoder=cast(Any, Decoder(videos, audios)),
+            pipe=cast(Any, Pipe()),
+        )
+
+    video_ref = endpoint.VideoReference(VideoAsset("sha256:" + "1" * 64))
+    audio_ref = endpoint.AudioReference(AudioAsset("sha256:" + "2" * 64))
+    check(
+        "14s of soundtracked video plus 2s standalone audio fit their separate caps",
+        len(
+            decode(
+                [video_ref, video_ref, audio_ref],
+                videos=[_video(7, soundtrack=_audio(7)), _video(7, soundtrack=_audio(7))],
+                audios=[_audio(2)],
+            )
+        ),
+        3,
+    )
     refusal(
-        "embedded soundtrack plus standalone audio share the 15-second audio budget",
-        lambda: endpoint._decode_references(
-            cast(Any, references), decoder=cast(Any, Decoder()), pipe=cast(Any, Pipe())
+        "soundtracks ride the video cap: 16 seconds of soundtracked video refuse as video",
+        lambda: decode(
+            [video_ref, video_ref],
+            videos=[_video(8, soundtrack=_audio(8)), _video(8, soundtrack=_audio(8))],
+            audios=[],
+        ),
+        "reference_video_duration_total",
+    )
+    refusal(
+        "16 seconds of standalone audio refuse against the audio modality cap",
+        lambda: decode(
+            [video_ref, audio_ref, audio_ref, audio_ref],
+            videos=[_video(2)],
+            audios=[_audio(6), _audio(6), _audio(4)],
         ),
         "reference_audio_duration_total",
     )
