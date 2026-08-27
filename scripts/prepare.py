@@ -263,7 +263,7 @@ def materialize(family: Family, config: dict[str, Any], out: Path) -> dict[str, 
     # disagreement, and the artifact must not be written over it.
     buffers = {name for name, _ in module.named_buffers()}
     filled = {state[key].untyped_storage().data_ptr() for key in stored if key in state}
-    baked = sorted(set(report.missing_keys) & buffers)
+    initialized = sorted(set(report.missing_keys) & buffers)
     tied = sorted(
         key
         for key in set(report.missing_keys) - buffers
@@ -279,7 +279,7 @@ def materialize(family: Family, config: dict[str, Any], out: Path) -> dict[str, 
     return {
         "constructed_seconds": round(built, 2),
         "tensors": len(dense),
-        "baked_buffers": baked,
+        "initialized_buffers": initialized,
         "tied": tied,
         "bytes": total,
         "safetensors_bytes": out.stat().st_size,
@@ -320,7 +320,10 @@ def build(family: Family) -> dict[str, Any]:
     facts = materialize(family, config, weights)
     print(f"   built in {facts['constructed_seconds']}s, {facts['tensors']} tensors, "
           f"{facts['bytes'] / GIB:.3f} GiB", flush=True)
-    print(f"   baked buffers {facts['baked_buffers']}  tied {facts['tied']}", flush=True)
+    print(
+        f"   initialized buffers {facts['initialized_buffers']}  tied {facts['tied']}",
+        flush=True,
+    )
     info = ingest(family, weights)
     print(f"   ingested {info['bytes']} B in {info['ingest_seconds']}s "
           f"({info['segments']} segments, {info.get('deduped', '0')} deduped)", flush=True)
@@ -342,7 +345,7 @@ def build(family: Family) -> dict[str, Any]:
         "pinned_bytes": 256 * MIB,
         "resident_bytes": facts["bytes"],
         "tensors": facts["tensors"],
-        "baked_buffers": facts["baked_buffers"],
+        "initialized_buffers": facts["initialized_buffers"],
         "tied": facts["tied"],
     }
     (target / "binding.json").write_text(json.dumps(record, indent=1, sort_keys=True))

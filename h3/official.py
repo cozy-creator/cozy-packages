@@ -3,7 +3,7 @@
 This module contains no media decoder and no checkpoint loader. Runtime supplies immutable
 decoded values and fills the component roots constructed here. Diffusers owns every model
 operation: presentation, conditioning, layout, schedules, solver, and decode. Artifact config
-selects the official FULL modulation modules or exact baked-table replacements before fill.
+selects the official FULL modulation modules or AdaLN-pruned table replacements before fill.
 """
 
 from __future__ import annotations
@@ -131,12 +131,12 @@ class TimestepPlan:
         return timestep_plan_digest(self.canonical_bytes())
 
     def canonical_bytes(self) -> bytes:
-        """Canonical job-010 handoff; float32 values are exact hex strings."""
+        """Canonical producer handoff; float32 values are exact hex strings."""
         return canonical_json.encode(self._document())
 
-    def baked_table_layout(self) -> tuple[tuple[float, ...], tuple[tuple[int, int], ...]]:
+    def table_layout(self) -> tuple[tuple[float, ...], tuple[tuple[int, int], ...]]:
         """The table order named by these exact canonical plan bytes."""
-        keys = self._document()["baked_table_keys"]
+        keys = self._document()["table_keys"]
         final_rows = keys["final_normalization"]
         timesteps = tuple(float.fromhex(row["timestep"]) for row in final_rows)
         timestep_rows = {value: index for index, value in enumerate(timesteps)}
@@ -209,7 +209,7 @@ class TimestepPlan:
             "row_timestep_reduction": "unique-sorted-return-inverse",
             "adaln_row_index": "timestep_index*3+modality_tag",
             "final_norm_row_index": "timestep_index",
-            "baked_table_order": "first-distinct-evaluation-class-occurrence",
+            "table_order": "first-distinct-evaluation-class-occurrence",
             "frames": FRAMES,
             "fps": FPS,
             "sigma_grid_points": SIGMA_GRID_POINTS,
@@ -217,7 +217,7 @@ class TimestepPlan:
             "video_shift": _float_hex(self.video_shift),
             "audio_shift": _float_hex(self.audio_shift),
             "evaluations": evaluations,
-            "baked_table_keys": {
+            "table_keys": {
                 "block_modulation": block_keys,
                 "final_normalization": final_keys,
             },
@@ -689,7 +689,7 @@ def _dit_spec(
                 fields=[component, "cozy_h3", name],
             )
     structure = extension["modulation"]
-    if structure not in {"full", "exact-baked"}:
+    if structure not in {"full", "adaln-pruned"}:
         raise ConformanceError(
             f"artifact config {component!r} has unknown modulation structure {structure!r}",
             code="artifact_config",
@@ -723,13 +723,13 @@ def _build_dit(config: Mapping[str, Any], structure: str, plan: TimestepPlan) ->
     if structure == "full":
         transformer = MiniMaxH3Transformer3DModel.from_config(dict(config))
     else:
-        from exact_baked import ExactBakedMiniMaxH3Transformer
+        from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
 
-        timesteps, block_keys = plan.baked_table_layout()
-        transformer = ExactBakedMiniMaxH3Transformer.from_official_config(
+        timesteps, block_keys = plan.table_layout()
+        transformer = AdaLNPrunedMiniMaxH3Transformer.from_official_config(
             config,
-            baked_timesteps=timesteps,
-            baked_block_keys=block_keys,
+            table_timesteps=timesteps,
+            table_block_keys=block_keys,
         )
     return _apply_transformer_dtype(transformer)
 

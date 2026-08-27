@@ -1,8 +1,9 @@
 """Exact-timestep AdaLN tables for the official Diffusers MiniMax-H3 DiT.
 
-The extension deliberately inherits Diffusers' forward unchanged.  It replaces only the
-time/AdaLN modules whose outputs were baked by an artifact-producing job for one canonical
-TimestepPlan.  The remaining transformer graph, including attention, feed-forward, RoPE,
+The extension deliberately inherits Diffusers' forward unchanged. It replaces only the
+time/AdaLN modules whose checkpoint-specific outputs were precomputed at one canonical
+TimestepPlan before those dynamic modules were pruned. The remaining transformer graph,
+including attention, feed-forward, RoPE,
 input/output projections, and packed-row indexing, stays upstream code.
 """
 
@@ -18,8 +19,8 @@ from diffusers import MiniMaxH3Transformer3DModel
 from torch import nn
 
 
-class _ExactTimestepLookup(nn.Module):  # type: ignore[misc]
-    """Map exact float32 timestep values to the baked plan's global rows."""
+class _AdaLNPrunedTimestepLookup(nn.Module):  # type: ignore[misc]
+    """Map exact float32 timestep values to the AdaLN-pruned plan's global rows."""
 
     def __init__(self, timesteps: Sequence[float]) -> None:
         super().__init__()
@@ -37,13 +38,13 @@ class _ExactTimestepLookup(nn.Module):  # type: ignore[misc]
         if not bool(torch.all(counts == 1)):
             unknown = timestep.detach().float().cpu().tolist()
             raise ConformanceError(
-                f"timestep rows are not covered exactly by the baked plan: {unknown}",
-                code="baked_timestep",
+                f"timestep rows are not covered exactly by the AdaLN-pruned plan: {unknown}",
+                code="adaln_pruned_timestep",
             )
         return matches.to(dtype=torch.int64).argmax(dim=1)
 
 
-class _ExactTimestepRows(nn.Module):  # type: ignore[misc]
+class _AdaLNPrunedTimestepRows(nn.Module):  # type: ignore[misc]
     """Keep inherited ``forward`` intact while replacing the removed timestep MLP."""
 
     def __init__(self) -> None:
@@ -58,7 +59,7 @@ class _ExactTimestepRows(nn.Module):  # type: ignore[misc]
         return rows
 
 
-class _ExactBakedAdaLN(nn.Module):  # type: ignore[misc]
+class _AdaLNPrunedBlockTable(nn.Module):  # type: ignore[misc]
     """Sparse exact table with the dense local shape Diffusers blocks already consume."""
 
     def __init__(
@@ -88,8 +89,8 @@ class _ExactBakedAdaLN(nn.Module):  # type: ignore[misc]
         )
 
 
-class _ExactBakedAdaLNOut(nn.Module):  # type: ignore[misc]
-    """Official final RMSNorm with exact per-timestep baked shift/scale rows."""
+class _AdaLNPrunedOutputTable(nn.Module):  # type: ignore[misc]
+    """Official final RMSNorm with exact precomputed shift/scale rows."""
 
     def __init__(self, norm: nn.Module, *, hidden_size: int, timestep_count: int) -> None:
         super().__init__()
@@ -109,7 +110,7 @@ class _ExactBakedAdaLNOut(nn.Module):  # type: ignore[misc]
         )
 
 
-class ExactBakedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ignore[misc]
+class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ignore[misc]
     """Official MiniMax-H3 transformer with only its exact modulation source replaced."""
 
     _keep_in_fp32_modules: ClassVar[list[str]] = [
@@ -120,28 +121,28 @@ class ExactBakedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: igno
     def __init__(
         self,
         *,
-        baked_timesteps: Sequence[float],
-        baked_block_keys: Sequence[tuple[int, int]],
+        table_timesteps: Sequence[float],
+        table_block_keys: Sequence[tuple[int, int]],
         **config: Any,
     ) -> None:
         super().__init__(**config)
-        self.time_proj = _ExactTimestepLookup(baked_timesteps)
-        self.time_embedder = _ExactTimestepRows()
+        self.time_proj = _AdaLNPrunedTimestepLookup(table_timesteps)
+        self.time_embedder = _AdaLNPrunedTimestepRows()
         for block in self.transformer_blocks:
-            block.adaln_proj = _ExactBakedAdaLN(
+            block.adaln_proj = _AdaLNPrunedBlockTable(
                 hidden_size=int(self.config.hidden_size),
-                timestep_count=len(baked_timesteps),
-                keys=baked_block_keys,
+                timestep_count=len(table_timesteps),
+                keys=table_block_keys,
             )
         norm_out = cast(Any, self.norm_out)  # type: ignore[has-type]
-        self.norm_out = _ExactBakedAdaLNOut(
+        self.norm_out = _AdaLNPrunedOutputTable(
             norm_out.norm,
             hidden_size=int(self.config.hidden_size),
-            timestep_count=len(baked_timesteps),
+            timestep_count=len(table_timesteps),
         )
-        self.register_forward_pre_hook(self._validate_baked_rows, with_kwargs=True)
+        self.register_forward_pre_hook(self._validate_table_rows, with_kwargs=True)
 
-    def _validate_baked_rows(
+    def _validate_table_rows(
         self,
         module: nn.Module,
         args: tuple[Any, ...],
@@ -171,7 +172,7 @@ class ExactBakedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: igno
         if bool(torch.any((token_tags < 0) | (token_tags > 2))):
             raise ConformanceError(
                 "packed rows contain a modality tag outside the canonical 0/1/2 set",
-                code="baked_timestep",
+                code="adaln_pruned_timestep",
             )
         global_rows = self.time_proj.rows(timestep)
         row_timesteps = global_rows.index_select(0, timestep_indices)
@@ -179,8 +180,8 @@ class ExactBakedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: igno
         present = table_index[row_timesteps, token_tags] >= 0
         if not bool(torch.all(present)):
             raise ConformanceError(
-                "packed rows request a timestep/modality pair absent from the baked plan",
-                code="baked_timestep",
+                "packed rows request a timestep/modality pair absent from the AdaLN-pruned plan",
+                code="adaln_pruned_timestep",
             )
 
     @classmethod
@@ -188,14 +189,14 @@ class ExactBakedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: igno
         cls,
         config: Mapping[str, Any],
         *,
-        baked_timesteps: Sequence[float],
-        baked_block_keys: Sequence[tuple[int, int]],
-    ) -> ExactBakedMiniMaxH3Transformer:
+        table_timesteps: Sequence[float],
+        table_block_keys: Sequence[tuple[int, int]],
+    ) -> AdaLNPrunedMiniMaxH3Transformer:
         """Construct from the same upstream config accepted by the official class."""
         parameters = inspect.signature(MiniMaxH3Transformer3DModel.__init__).parameters
         kwargs = {name: value for name, value in config.items() if name in parameters}
         return cls(
-            baked_timesteps=baked_timesteps,
-            baked_block_keys=baked_block_keys,
+            table_timesteps=table_timesteps,
+            table_block_keys=table_block_keys,
             **kwargs,
         )

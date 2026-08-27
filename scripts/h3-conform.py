@@ -61,8 +61,8 @@ FAIL = "  FAIL "
 _failures = 0
 
 PLAN_DIGESTS = {
-    "fl2va": "1804b505d2a6a176ecd25f069f3f759ade3594c3e08bfad12fd33dfd324b9a12",
-    "ref2va": "201a4e402b86680f07c6507c9795ce23da62c00c17087b1c35d53fa88c6b9109",
+    "fl2va": "5a99880e5442b8eeed3ed921a133f87c922c4386ee5e2d3f61431cc388202364",
+    "ref2va": "a83bac0ca1ddf31da7da55aed97d5340b5a8b657a7edff0cb671356eff670ed1",
 }
 DESCRIPTOR_DIGEST = "sha256:c8c73bb64ee4a0c4edb7cbd09624cd0687f12850b8bdac76bec6210a45680b87"
 VECTOR_DIGESTS = {
@@ -148,7 +148,7 @@ def arm_schedule() -> None:
         MiniMaxH3SetTimestepsStep,
     )
 
-    print("\n== exact schedule and baked-AdaLN handoff ==")
+    print("\n== exact schedule and AdaLN-pruned handoff ==")
     plans = {task: canonical_timestep_plan(task) for task in ("fl2va", "ref2va")}
     for task, plan in plans.items():
         check(f"{task} canonical plan digest", plan.digest, PLAN_DIGESTS[task])
@@ -190,12 +190,12 @@ def arm_schedule() -> None:
         )
         check(
             f"{task} canonical block-table rows",
-            len(document["baked_table_keys"]["block_modulation"]),
+            len(document["table_keys"]["block_modulation"]),
             89,
         )
         check(
             f"{task} canonical final-normalization rows",
-            len(document["baked_table_keys"]["final_normalization"]),
+            len(document["table_keys"]["final_normalization"]),
             59,
         )
         check(
@@ -391,10 +391,10 @@ def arm_graph_and_dtypes() -> None:
     )
     mixed = {
         **full_sections,
-        "ref2va_dit": dit_config("ref2va", "exact-baked"),
+        "ref2va_dit": dit_config("ref2va", "adaln-pruned"),
     }
     refusal(
-        "mixed FULL and baked task structures refuse",
+        "mixed FULL and AdaLN-pruned task structures refuse",
         lambda: _dit_specs(mixed),
         "artifact_config",
     )
@@ -408,7 +408,7 @@ def arm_graph_and_dtypes() -> None:
     wrong_plan = dit_config("fl2va")
     cast(dict[str, Any], wrong_plan["cozy_h3"])["timestep_plan_digest"] = "sha256:" + "0" * 64
     refusal(
-        "a baked plan digest is exact artifact config",
+        "an AdaLN-pruned plan digest is exact artifact config",
         lambda: _dit_specs({**full_sections, "fl2va_dit": wrong_plan}),
         "artifact_config",
     )
@@ -454,15 +454,15 @@ def arm_graph_and_dtypes() -> None:
     )
 
 
-def arm_exact_baked() -> None:
+def arm_adaln_pruned() -> None:
     import torch
     from diffusers import MiniMaxH3Transformer3DModel
 
-    from exact_baked import ExactBakedMiniMaxH3Transformer
+    from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
 
-    print("\n== exact baked modulation over the inherited Diffusers forward ==")
+    print("\n== AdaLN-pruned modulation over the inherited Diffusers forward ==")
     plan = canonical_timestep_plan("fl2va")
-    timesteps, block_keys = plan.baked_table_layout()
+    timesteps, block_keys = plan.table_layout()
     config = {
         "num_attention_heads": 1,
         "attention_head_dim": 8,
@@ -481,45 +481,49 @@ def arm_exact_baked() -> None:
     }
     torch.manual_seed(7)
     full = MiniMaxH3Transformer3DModel(**config).eval()
-    baked = ExactBakedMiniMaxH3Transformer.from_official_config(
+    pruned = AdaLNPrunedMiniMaxH3Transformer.from_official_config(
         config,
-        baked_timesteps=timesteps,
-        baked_block_keys=block_keys,
+        table_timesteps=timesteps,
+        table_block_keys=block_keys,
     ).eval()
-    baked_twin = ExactBakedMiniMaxH3Transformer.from_official_config(
+    pruned_twin = AdaLNPrunedMiniMaxH3Transformer.from_official_config(
         config,
-        baked_timesteps=timesteps,
-        baked_block_keys=block_keys,
+        table_timesteps=timesteps,
+        table_block_keys=block_keys,
     ).eval()
-    _validate_dual_dit_topology({"fl2va": baked, "ref2va": baked_twin})
+    _validate_dual_dit_topology({"fl2va": pruned, "ref2va": pruned_twin})
     observe("two weight instances share one exact DiT class and topology")
     refusal(
         "two task component names cannot alias one DiT instance",
-        lambda: _validate_dual_dit_topology({"fl2va": baked, "ref2va": baked}),
+        lambda: _validate_dual_dit_topology({"fl2va": pruned, "ref2va": pruned}),
         "artifact_config",
     )
     check(
-        "baked DiT inherits the official forward",
-        "forward" in ExactBakedMiniMaxH3Transformer.__dict__,
+        "AdaLN-pruned DiT inherits the official forward",
+        "forward" in AdaLNPrunedMiniMaxH3Transformer.__dict__,
         False,
     )
 
-    baked_state = baked.state_dict()
+    pruned_state = pruned.state_dict()
     full_state = full.state_dict()
     common = {
         name: value
         for name, value in full_state.items()
-        if name in baked_state and baked_state[name].shape == value.shape
+        if name in pruned_state and pruned_state[name].shape == value.shape
     }
-    loaded = baked.load_state_dict(common, strict=False)
-    check("no official destination becomes an unexpected baked key", loaded.unexpected_keys, [])
+    loaded = pruned.load_state_dict(common, strict=False)
     check(
-        "baked construction omits every dynamic modulation destination",
+        "no official destination becomes an unexpected AdaLN-pruned key",
+        loaded.unexpected_keys,
+        [],
+    )
+    check(
+        "AdaLN-pruned construction omits every dynamic modulation destination",
         any(
             name.startswith("time_embedder.")
             or ".adaln_proj.linear." in name
             or name.startswith("norm_out.linear.")
-            for name in baked_state
+            for name in pruned_state
         ),
         False,
     )
@@ -539,15 +543,15 @@ def arm_exact_baked() -> None:
         sparse_rows = torch.tensor(
             [timestep_row * 3 + modality_tag for timestep_row, modality_tag in block_keys]
         )
-        for full_block, baked_block in zip(
-            full.transformer_blocks, baked.transformer_blocks, strict=True
+        for full_block, table_block in zip(
+            full.transformer_blocks, pruned.transformer_blocks, strict=True
         ):
             dense = torch.stack(full_block.adaln_proj(full_temb), dim=1)
-            baked_block.adaln_proj.table.copy_(dense.index_select(0, sparse_rows))
+            table_block.adaln_proj.table.copy_(dense.index_select(0, sparse_rows))
         final = full.norm_out.linear(torch.nn.functional.silu(full_temb)).reshape(
             len(timesteps), 2, config["hidden_size"]
         )
-        baked.norm_out.table.copy_(final)
+        pruned.norm_out.table.copy_(final)
 
     document = json.loads(plan.canonical_bytes())
     for evaluation in document["evaluations"]:
@@ -555,17 +559,17 @@ def arm_exact_baked() -> None:
         local = sorted({float.fromhex(row["timestep"]) for row in classes})
         local_tensor = torch.tensor(local, dtype=torch.float32)
         full_local_temb = full.time_embedder(full.time_proj(local_tensor))
-        baked_rows = baked.time_embedder(baked.time_proj(local_tensor))
-        for full_block, baked_block in zip(
-            full.transformer_blocks, baked.transformer_blocks, strict=True
+        table_rows = pruned.time_embedder(pruned.time_proj(local_tensor))
+        for full_block, table_block in zip(
+            full.transformer_blocks, pruned.transformer_blocks, strict=True
         ):
             full_values = full_block.adaln_proj(full_local_temb)
-            baked_values = baked_block.adaln_proj(baked_rows)
+            table_values = table_block.adaln_proj(table_rows)
             for row in classes:
                 index = local.index(float.fromhex(row["timestep"])) * 3 + row["modality_tag"]
-                for full_value, baked_value in zip(full_values, baked_values, strict=True):
+                for full_value, table_value in zip(full_values, table_values, strict=True):
                     if not torch.allclose(
-                        full_value[index], baked_value[index], rtol=2e-6, atol=2e-7
+                        full_value[index], table_value[index], rtol=2e-6, atol=2e-7
                     ):
                         fail(
                             "all canonical block rows equal the dynamic fixture",
@@ -576,14 +580,14 @@ def arm_exact_baked() -> None:
 
     local = torch.tensor([0.0, _as_float32(0.999)], dtype=torch.float32)
     full_temb = full.time_embedder(full.time_proj(local))
-    baked_rows = baked.time_embedder(baked.time_proj(local))
+    table_rows = pruned.time_embedder(pruned.time_proj(local))
     hidden = torch.randn(1, 4, config["hidden_size"])
     indices = torch.tensor([0, 0, 1, 0])
     check(
         "final normalization table equals the dynamic fixture",
         torch.allclose(
             full.norm_out(hidden, full_temb, indices),
-            baked.norm_out(hidden, baked_rows, indices),
+            pruned.norm_out(hidden, table_rows, indices),
             rtol=2e-6,
             atol=2e-7,
         ),
@@ -606,23 +610,23 @@ def arm_exact_baked() -> None:
         "return_dict": False,
     }
     full_output = full(**forward)
-    baked_output = baked(**forward)
+    pruned_output = pruned(**forward)
     check(
-        "the inherited forward changes only the baked modulation source",
+        "the inherited forward changes only the AdaLN-pruned modulation source",
         all(
             torch.allclose(left, right, rtol=2e-5, atol=2e-6)
-            for left, right in zip(full_output, baked_output, strict=True)
+            for left, right in zip(full_output, pruned_output, strict=True)
         ),
         True,
     )
     refusal(
         "a non-plan timestep refuses rather than interpolating",
-        lambda: baked.time_proj(torch.tensor([0.123456], dtype=torch.float32)),
-        "baked_timestep",
+        lambda: pruned.time_proj(torch.tensor([0.123456], dtype=torch.float32)),
+        "adaln_pruned_timestep",
     )
     refusal(
-        "a plan timestep paired with an unbaked modality refuses",
-        lambda: baked(
+        "a plan timestep paired with an uncovered modality refuses",
+        lambda: pruned(
             hidden_states=torch.empty(1, 0, 2),
             audio_hidden_states=torch.empty(1, 0, 2),
             encoder_hidden_states=torch.empty(1, 1, 8),
@@ -635,7 +639,7 @@ def arm_exact_baked() -> None:
             text_indices=torch.tensor([0]),
             return_dict=False,
         ),
-        "baked_timestep",
+        "adaln_pruned_timestep",
     )
 
 
@@ -1138,7 +1142,7 @@ def arm_live_probe() -> None:
     )
 
     binding_ref = "cozy/minimax-h3@1.0.0"
-    binding_lane = "fp8-baked"
+    binding_lane = "fp8-adaln-pruned"
     snapshot = "sha256:" + "1" * 64
     descriptor_digest = "sha256:" + "2" * 64
     runtime_plan = "sha256:" + "5" * 64
@@ -1205,7 +1209,10 @@ def arm_live_probe() -> None:
         lambda: verify_bindings(
             {
                 "bindings": [
-                    {**binding("first_last_frame_to_video.models.model"), "lane": "mxfp8-baked"},
+                    {
+                        **binding("first_last_frame_to_video.models.model"),
+                        "lane": "mxfp8-adaln-pruned",
+                    },
                     binding("reference_media_to_video.models.model"),
                 ]
             },
@@ -1853,7 +1860,7 @@ def arm_live_probe() -> None:
 ARMS = {
     "schedule": arm_schedule,
     "graph": arm_graph_and_dtypes,
-    "exact-baked": arm_exact_baked,
+    "adaln-pruned": arm_adaln_pruned,
     "processor": arm_processor,
     "media": arm_media,
     "gates": arm_output_gates,
