@@ -1142,7 +1142,7 @@ def arm_live_probe() -> None:
     )
 
     binding_ref = "cozy/minimax-h3@1.0.0"
-    binding_lane = "fp8-adaln-pruned"
+    binding_lane = "profile=fp8-adaln-pruned"
     snapshot = "sha256:" + "1" * 64
     descriptor_digest = "sha256:" + "2" * 64
     runtime_plan = "sha256:" + "5" * 64
@@ -1211,7 +1211,7 @@ def arm_live_probe() -> None:
                 "bindings": [
                     {
                         **binding("first_last_frame_to_video.models.model"),
-                        "lane": "mxfp8-adaln-pruned",
+                        "lane": "profile=mxfp8-adaln-pruned",
                     },
                     binding("reference_media_to_video.models.model"),
                 ]
