@@ -8,7 +8,7 @@ conformance drivers, and default development bindings.
 
 | path | responsibility |
 |---|---|
-| `h3/` | MiniMax H3 dual-task endpoint; immutable deployment binding selects FULL or exact-baked weights |
+| `h3/` | MiniMax H3 dual-task endpoint; immutable deployment binding selects FULL or AdaLN-pruned weights |
 | `sdxl/` | SDXL text-to-image endpoint (se-008) |
 | `quality-judge/` | evaluation actions (ev-003) |
 | `video-assembly/` | fixed CPU-only 2-8-shot streaming assembler (se-014) |
@@ -60,14 +60,17 @@ frame-count, step-count, task-selector, graph-selector, and AdaLN-mode request f
 The artifact config fixes both DiTs to one modulation structure before construction: reference
 artifacts use the official FULL AdaLN path, while production artifacts use exact table rows for the
 two committed TimestepPlans and contain no replaced timestep/AdaLN projection destinations. The
-exact-baked extension inherits Diffusers' forward and changes only those projection modules; it
+AdaLN-pruned extension inherits Diffusers' forward and changes only those projection modules; it
 does not interpolate a curve or carry a second model port. The hub/runtime selects BF16 reference,
 FP8-rowwise Hopper, or qualified MXFP8 Blackwell artifacts before fetch. Requests and environment
 variables cannot choose a lane.
 
-The bare local binding selects `cozy/minimax-h3@1.0.0` lane `fp8-baked`. Tensorhub may bind the
-same release's `mxfp8-baked` lane for a qualified Blackwell execution; that deployment override
-does not change endpoint source or expose a request-time choice.
+The release has exactly four lanes: `bf16-full`, `bf16-adaln-pruned`, `fp8-adaln-pruned`, and
+`mxfp8-adaln-pruned`. The bare local binding selects `cozy/minimax-h3@1.0.0` lane
+`fp8-adaln-pruned`; Tensorhub may bind `mxfp8-adaln-pruned` for a qualified Blackwell execution.
+That deployment override does not change endpoint source or expose a request-time choice.
+`adaln-curve` is reserved for approximate community curve artifacts and is not a lane in this
+release.
 
 Ref2VA preserves request order and enforces the official product bounds: at most 9 images, 3 videos,
 3 standalone audio clips, and 12 entries total. Video and audio clips are 2–15 seconds, with at most
@@ -80,7 +83,8 @@ is a conservative capacity fence, not yet the required measured maximum-cell H20
 The task-stamped canonical plans live in `h3/timestep-plans/`. Each contains the exact 30 video and
 audio sigmas, 29 timesteps, all five finite modulation classes (including optional clean video and
 audio), and a deduplicated order of 89 block-modulation keys plus 59 final-normalization keys. These
-documents are job-010's input boundary; that job must not import endpoint code.
+documents are the input boundary for `h3_precompute_timestep_tables`; that job must not import
+endpoint code. Each task has one table bank for this fixed 30-point plan.
 
 Both actions return exactly one muxed MP4 and one lossless PNG continuation frame — the customer
 result carries nothing else. The continuation frame is captured from the final decoded RGB8 frame
@@ -181,14 +185,14 @@ must bind them to the request, release, placement, and generation before product
 h3/.venv/bin/python scripts/h3-live.py \
   --action reference_media_to_video \
   --expected-binding-ref 'cozy/minimax-h3@1.0.0' \
-  --expected-lane 'fp8-baked' \
+  --expected-lane 'fp8-adaln-pruned' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
   --expected-descriptor-digest \
     'sha256:c8c73bb64ee4a0c4edb7cbd09624cd0687f12850b8bdac76bec6210a45680b87' \
   --expected-fl-plan-digest \
-    'sha256:1804b505d2a6a176ecd25f069f3f759ade3594c3e08bfad12fd33dfd324b9a12' \
+    'sha256:5a99880e5442b8eeed3ed921a133f87c922c4386ee5e2d3f61431cc388202364' \
   --expected-ref-plan-digest \
-    'sha256:201a4e402b86680f07c6507c9795ce23da62c00c17087b1c35d53fa88c6b9109' \
+    'sha256:a83bac0ca1ddf31da7da55aed97d5340b5a8b657a7edff0cb671356eff670ed1' \
   --ref-input /proof/ref2va.json \
   --expected-ref-input-sha256 'sha256:EXACT_64_LOWERCASE_HEX_REQUEST' \
   --out /proof/new-output

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Structural fences for the endpoint packages. Static analysis, never a test suite.
 
-Ten properties CI must not let drift, each checked as a fact about the source rather than
+Eleven properties CI must not let drift, each checked as a fact about the source rather than
 as a convention someone remembers:
 
   1. author-surface-only  an endpoint imports `cozy_runtime.author` and nothing else from
@@ -31,8 +31,10 @@ as a convention someone remembers:
                           production.
   9. h3-binding-identity  H3 releases describe content, never tracker issue numbers; every
                           default model binding selects the same immutable release.
- 10. descriptor-minimality
+10. descriptor-minimality
                           committed descriptor/1 files carry no retired unused facts.
+ 11. h3-adaln-pruned-vocabulary
+                          H3 source and contracts carry no retired modulation spelling.
 
     nice -n 19 .venv/bin/python scripts/fence.py
 """
@@ -468,11 +470,31 @@ def fence_h3_binding_identity() -> Fence:
                 f"h3/endpoint.toml: release {release!r} contains a tracker issue, "
                 "not only content identity"
             )
-    if lanes != ["fp8-baked"]:
+    if lanes != ["fp8-adaln-pruned"]:
         bad.append(
-            f"h3/endpoint.toml: bare local binding lane is {lanes!r}, expected ['fp8-baked']"
+            f"h3/endpoint.toml: bare local binding lane is {lanes!r}, expected ['fp8-adaln-pruned']"
         )
-    return bad, "H3 binds release 1.0.0 with the Hopper/local fp8-baked default lane"
+    return bad, "H3 binds release 1.0.0 with the Hopper/local fp8-adaln-pruned default lane"
+
+
+def fence_h3_adaln_pruned_vocabulary() -> Fence:
+    """The pre-launch hardcut has one name; the retired modulation name is refused."""
+    retired = "ba" "ked"
+    paths = {
+        ROOT / "README.md",
+        ROOT / "h3" / "endpoint.descriptor.json",
+        ROOT / "h3" / "endpoint.toml",
+        *h3_owned_modules(),
+        *(ROOT / "h3" / "timestep-plans").glob("*.json"),
+    }
+    bad: list[str] = []
+    for path in sorted(paths):
+        for line_no, line in enumerate(path.read_text().splitlines(), 1):
+            if retired in line.lower():
+                bad.append(
+                    f"{rel(path)}:{line_no}: retired H3 modulation spelling: {line.strip()[:80]}"
+                )
+    return bad, f"retired H3 modulation spelling absent from {len(paths)} contract files"
 
 
 def fence_descriptor_minimality() -> Fence:
@@ -521,6 +543,7 @@ FENCES = (
     ("h3-official-hardcut", fence_h3_official_hardcut),
     ("env-free-endpoints", fence_no_env),
     ("h3-binding-identity", fence_h3_binding_identity),
+    ("h3-adaln-pruned-vocabulary", fence_h3_adaln_pruned_vocabulary),
     ("descriptor-minimality", fence_descriptor_minimality),
 )
 

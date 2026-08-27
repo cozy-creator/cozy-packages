@@ -308,8 +308,8 @@ def persist_buffers(module: Any) -> Any:
     cr-008a): the fill plane moves STORED bytes and refuses a component carrying a buffer
     no checkpoint supplies (`derived_unmaterialized`), because the alternative is serving
     uninitialized memory under a derived name. Re-executing a derived table on the target
-    device is cr-008b's staging pass and does not exist yet, so the tables are BAKED into
-    the artifact instead — the same choice `tiny_h3`'s `BakedModulationTables` makes. Here
+    device is cr-008b's staging pass and does not exist yet, so the tables are PRECOMPUTED
+    into the artifact instead — the same choice `tiny_h3`'s modulation-table fixture makes. Here
     that is three rope tables (0.5 MiB); the endpoint and the artifact writer call this one
     function, so the topology they agree on cannot drift.
     """
