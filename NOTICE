@@ -1,75 +1,37 @@
 serverless-endpoints (v2)
 Copyright (c) 2026 Cozy Creator and Paul Fidika
 
-This repository is licensed under the MIT License (see LICENSE) EXCEPT for the
-files named below, which are not ours to relicense. This file records what
-third-party code is present, under what terms, and — where the terms conflict
-with the repository's own licence — says so plainly instead of leaving the
-conflict for a reader to discover.
+Repository source is licensed under the MIT License in `LICENSE`. Third-party packages and data keep
+their own licenses. This notice records provenance; it is not legal advice.
 
-Written 2026-08-26 against decisions #532 and #593. It is an engineering record of
-provenance, not legal advice and not a legal conclusion.
+DEPENDENCIES, NOT COPIED SOURCE
 
+  diffusers and transformers — Apache License 2.0
+  torch, torchvision, torchaudio, numpy, msgspec, safetensors, PyAV and their transitive
+  dependencies — their respective upstream licenses
 
-THE REPOSITORY'S OWN CODE — MIT
+The H3 endpoint imports the released Diffusers implementation as a dependency. It contains no copy
+or adaptation of MiniMax, ComfyUI, DiffSynth-Studio, or other community serving code. The former
+`h3/h3_arch/` ComfyUI-derived GPL-3.0 port was deleted atomically with the official replacement;
+no GPL-derived H3 source remains in this repository.
 
-  sdxl/, quality-judge/, h3/h3.py, scripts/
-  Written for this repository against `cozy_runtime.author`.
+VENDORED FIRST-PARTY WHEELS
 
+  h3/vendor/cozy_runtime-0.0.1-py3-none-any.whl — Cozy Runtime, first-party
+  h3/vendor/cozy_eval-2.3.0-py3-none-any.whl — Cozy Eval, first-party
 
-APACHE LICENSE 2.0
+These are exact build inputs pending publication of the first-party packages. Their source commits,
+build commands, sizes, and SHA-256 digests are recorded in `h3/VENDORED.md`.
 
-  diffusers (huggingface/diffusers)
-    Used as a DEPENDENCY, not vendored: no file in this repository is a copy
-    or an adaptation of diffusers source. SDXL constructs its graph from the
-    dependency. H3 no longer depends on or ships a dormant Diffusers graph.
+BUNDLED MODEL INPUT DATA
 
-  transformers (huggingface/transformers)
-    Also a dependency. H3 uses its tokenizer and Qwen image processor; the
-    package is not vendored.
+H3 bundles tokenizer and processor configuration/data from the pinned official
+`MiniMaxAI/MiniMax-H3` snapshot. Those files remain governed by the upstream model repository's
+terms. No model weights are stored here.
 
-  torch, safetensors, msgspec, numpy, pillow
-    Ordinary dependencies. Not vendored.
+MODEL LICENSE
 
-
-GPL-3.0 — PRESENT, IN CONFLICT WITH THIS REPOSITORY'S LICENCE, AND SCHEDULED
-FOR DELETION
-
-  h3/h3_arch/
-    A hand port of ComfyUI v0.33.0's `comfy/ldm/minimax/` and
-    `comfy/text_encoders/{minimax,qwen3vl,qwen35,llama}.py`. ComfyUI is
-    GPL-3.0. `h3/h3_arch/text_encoder.py` states the adaptation in its own
-    module docstring; `h3/h3_arch/__init__.py` states it for the package.
-
-    These files are NOT covered by this repository's MIT LICENSE, and the two
-    terms are not compatible. The honest description of the current state is
-    that the repository carries a licence its own contents contradict.
-
-    This is known and is being resolved by REMOVAL rather than by argument.
-    Decision #593 deleted the incomplete alternate implementation: it had no
-    bound artifact and could not execute the endpoint's conditioning/decode
-    contract. The port is retained as the one graph the current release binds
-    and has output-proven. A future official transition must produce and bind
-    its exact artifact, implement and output-prove every operation, then add
-    official and delete this port in the same release. `scripts/h3-oracle.py`
-    imports a ComfyUI checkout on a rented card and is never imported by any
-    endpoint or shipped in any release artifact.
-
-    The current H3 project wheel DOES include `h3_arch`: it is the release's only graph,
-    layout, presentation, and vision implementation. Public distribution remains blocked
-    until an output-proven replacement and this directory change atomically; there is no
-    conditional packager that can make the current source something it is not.
-
-
-THE MODEL'S OWN LICENCE IS NOT A CODE LICENCE
-
-  The MiniMax H3 weights this repository's H3 endpoint serves are covered by
-  the model publisher's licence, which is separate from, and unaffected by,
-  every licence above. #532 records that its territory grant EXCLUDES the US,
-  the EU, the UK and South Korea, that the community repackaging inherits that
-  grant rather than laundering it, and that whether to halt serving from an
-  excluded territory is an OPEN OWNER RULING. Until it is ruled: internal
-  development and diagnosis continue; there is no customer-facing or public H3
-  serving from an excluded territory.
-
-  No weights are stored in this repository.
+MiniMax H3 weights are covered by the model publisher's license, separately from the code licenses
+above. Tracker issue #532 records territory restrictions that exclude the United States, European
+Union, United Kingdom, and South Korea, and an open owner ruling on public/customer serving from an
+excluded territory. Internal development does not erase that release gate.
