@@ -30,6 +30,8 @@ from cozy_runtime.author import (
     canonical_json,
 )
 
+from conditioner import build_text_conditioner
+
 Task = Literal["fl2va", "ref2va"]
 _TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
 
@@ -389,7 +391,6 @@ class OfficialH3Pipeline:
             MiniMaxH3ModularPipeline,
             MiniMaxH3Scheduler,
         )
-        from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
 
         mapping = _artifact_sections(config.mapping())
         blocks = {task: MiniMaxH3Blocks().get_workflow(task) for task in _TASKS}
@@ -403,11 +404,7 @@ class OfficialH3Pipeline:
             for task, (upstream, structure, plan) in dit_specs.items()
         }
         _validate_dual_dit_topology(dits)
-        text_encoder = (
-            Qwen3VLForConditionalGeneration(Qwen3VLConfig(**_section(mapping, "text_encoder")))
-            .to(dtype=torch.bfloat16)
-            .eval()
-        )
+        text_encoder = build_text_conditioner(_section(mapping, "text_encoder"))
         video_vae = AutoencoderKLMiniMaxH3.from_config(_section(mapping, "video_vae")).eval()
         audio_vae = AutoencoderKLMiniMaxH3Audio.from_config(_section(mapping, "audio_vae")).eval()
         for task in _TASKS:
