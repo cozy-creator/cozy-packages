@@ -796,7 +796,7 @@ name = "tensorfs"
 version = "0.0.1"
 source = { path = "vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl" }
 wheels = [
-    { filename = "tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:a28b8a8061498d088bec80dd92335e260efc99b418f020edabe6e80ca1ab0002" },
+    { filename = "tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:0dc98c4a81a7d7e5dd2b9009bb2035b838f1d60d34720d9121f69a2fc46c8ce9" },
 ]
 
 [[package]]
