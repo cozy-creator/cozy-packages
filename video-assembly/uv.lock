@@ -65,15 +65,15 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.0.2"
-source = { path = "vendor/cozy_runtime-0.0.2-py3-none-any.whl" }
+version = "0.0.3"
+source = { path = "vendor/cozy_runtime-0.0.3-py3-none-any.whl" }
 dependencies = [
     { name = "grpcio" },
     { name = "msgspec" },
     { name = "protobuf" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.2-py3-none-any.whl", hash = "sha256:edb1d4b727370f9aa9b557e4048cee21ee92d3416c52198cbddf70d2fe22e587" },
+    { filename = "cozy_runtime-0.0.3-py3-none-any.whl", hash = "sha256:5a18e2e9c84b4188943fca27b18275beed324486c7b0e81dd8fd4b10293c5d6d" },
 ]
 
 [package.optional-dependencies]
@@ -111,7 +111,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.2-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.3-py3-none-any.whl" },
     { name = "msgspec", specifier = ">=0.19" },
 ]
 

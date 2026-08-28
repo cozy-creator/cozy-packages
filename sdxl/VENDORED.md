@@ -12,7 +12,7 @@ endpoints, so the CAS stores one copy.
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.2-py3-none-any.whl` | `cozy-runtime` `54858e7ea69e7569cb892416a93ee190ae323bdd` | 656,195 | `ff29b72b6f099a207a194a95fb9ef57fcf2c08b3a59dc5f8aefdeb4f828ed2b5` |
+| `vendor/cozy_runtime-0.0.3-py3-none-any.whl` | `cozy-runtime` `740247966cae4338b99dafac62761c42b817e018` | 679,122 | `5a18e2e9c84b4188943fca27b18275beed324486c7b0e81dd8fd4b10293c5d6d` |
 | `vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl` | `tensorfs` `4f3d16dff35d195f3709f06b6dc77f95bddfe64b` | 1,070,730 | `0dc98c4a81a7d7e5dd2b9009bb2035b838f1d60d34720d9121f69a2fc46c8ce9` |
 
 TensorFS is the Runtime fill reader inside the isolated endpoint generation. Cozy-eval is

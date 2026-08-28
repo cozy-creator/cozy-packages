@@ -61,15 +61,15 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.0.2"
-source = { path = "vendor/cozy_runtime-0.0.2-py3-none-any.whl" }
+version = "0.0.3"
+source = { path = "vendor/cozy_runtime-0.0.3-py3-none-any.whl" }
 dependencies = [
     { name = "grpcio", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "msgspec", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "protobuf", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.2-py3-none-any.whl", hash = "sha256:ff29b72b6f099a207a194a95fb9ef57fcf2c08b3a59dc5f8aefdeb4f828ed2b5" },
+    { filename = "cozy_runtime-0.0.3-py3-none-any.whl", hash = "sha256:5a18e2e9c84b4188943fca27b18275beed324486c7b0e81dd8fd4b10293c5d6d" },
 ]
 
 [package.optional-dependencies]
@@ -482,7 +482,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.2-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.3-py3-none-any.whl" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=11" },

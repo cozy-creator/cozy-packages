@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Structural fences for the endpoint packages. Static analysis, never a test suite.
 
-Eleven properties CI must not let drift, each checked as a fact about the source rather than
+Twelve properties CI must not let drift, each checked as a fact about the source rather than
 as a convention someone remembers:
 
   1. author-surface-only  an endpoint imports `cozy_runtime.author` and nothing else from
@@ -9,7 +9,7 @@ as a convention someone remembers:
                           protocol, TensorFS or a hub client inside endpoint code is the
                           boundary violation the whole author surface exists to prevent.
   2. no-identifiers       code states CAPABILITY, bindings state SELECTION (§1.0/§1.1).
-                          A repo, release, checkpoint digest or model revision spelled in
+                          A model, release, checkpoint digest or model revision spelled in
                           endpoint code is a binding hard-coded into a build.
   3. torch-free-import    endpoint module scope may IMPORT nothing heavy: `describe` runs
                           in a disposable container with no GPU and no weights, and a
@@ -35,6 +35,7 @@ as a convention someone remembers:
                           committed descriptor/1 files carry no retired unused facts.
  11. h3-adaln-pruned-vocabulary
                           H3 source and contracts carry no retired modulation spelling.
+ 12. typed-model-bindings endpoint.toml names selected model resources with `model` only.
 
     nice -n 19 .venv/bin/python scripts/fence.py
 """
@@ -49,6 +50,8 @@ import re
 import sys
 import tokenize
 from collections.abc import Callable, Iterator
+
+import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 Fence = tuple[list[str], str]
@@ -478,6 +481,27 @@ def fence_h3_binding_identity() -> Fence:
     return bad, "H3 binds release 1.0.0 with the Hopper/local profile=fp8-adaln-pruned selector"
 
 
+def fence_typed_model_bindings() -> Fence:
+    """Every endpoint default uses the typed model noun; the generic key is retired."""
+
+    bad: list[str] = []
+    count = 0
+    for project in projects():
+        path = project / "endpoint.toml"
+        document = tomllib.loads(path.read_text())
+        bindings = document.get("bindings", {})
+        if not isinstance(bindings, dict):
+            bad.append(f"{rel(path)}: [bindings] is not a table")
+            continue
+        for name, value in bindings.items():
+            count += 1
+            if not isinstance(value, dict) or not isinstance(value.get("model"), str):
+                bad.append(f"{rel(path)}: binding {name!r} does not name its model")
+            if isinstance(value, dict) and "repo" in value:
+                bad.append(f"{rel(path)}: binding {name!r} uses the retired generic key")
+    return bad, f"{count} default bindings use the typed model key"
+
+
 def fence_h3_adaln_pruned_vocabulary() -> Fence:
     """The pre-launch hardcut has one name; the retired modulation name is refused."""
     retired = "ba" "ked"
@@ -544,6 +568,7 @@ FENCES = (
     ("h3-official-hardcut", fence_h3_official_hardcut),
     ("env-free-endpoints", fence_no_env),
     ("h3-binding-identity", fence_h3_binding_identity),
+    ("typed-model-bindings", fence_typed_model_bindings),
     ("h3-adaln-pruned-vocabulary", fence_h3_adaln_pruned_vocabulary),
     ("descriptor-minimality", fence_descriptor_minimality),
 )
