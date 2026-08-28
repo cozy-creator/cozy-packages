@@ -9,9 +9,9 @@
 object = "quality_judge:app"
 
 [bindings."JudgeModel"]
-repo = "cozy/quality-judge-judge"
+model = "cozy/quality-judge-judge"
 release = "ev-003"
 
 [bindings."TranscriberModel"]
-repo = "cozy/quality-judge-transcriber"
+model = "cozy/quality-judge-transcriber"
 release = "ev-003"

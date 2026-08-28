@@ -17,5 +17,5 @@
 object = "sdxl:app"
 
 [bindings."SdxlModel"]
-repo = "cozy/sdxl"
+model = "cozy/sdxl"
 release = "se-008"

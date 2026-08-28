@@ -10,7 +10,7 @@ dependency of the pinned model stack).
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.2-py3-none-any.whl` | `cozy-runtime` `54858e7ea69e7569cb892416a93ee190ae323bdd` | 656,195 | `ff29b72b6f099a207a194a95fb9ef57fcf2c08b3a59dc5f8aefdeb4f828ed2b5` |
+| `vendor/cozy_runtime-0.0.3-py3-none-any.whl` | `cozy-runtime` `13ebb22c7dfbfecef18b09806f604f1fc8eee027` | 679,123 | `6ab9228a9dbd7a10a16215576bef06385de23874dbfe797db02f8ee734e7284b` |
 | `vendor/cozy_eval-2.3.0-py3-none-any.whl` | `cozy-eval` `fe8c7d2ead882dded2595e33af73101040792bd8` | 295,046 | `87830e9461f5b98b699e1ba7e1d2fec2dd37bea63d7b8ae8403506835e427a26` |
 | `vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl` | `tensorfs` `4f3d16dff35d195f3709f06b6dc77f95bddfe64b` | 1,070,730 | `0dc98c4a81a7d7e5dd2b9009bb2035b838f1d60d34720d9121f69a2fc46c8ce9` |
 
@@ -37,7 +37,7 @@ sha256sum "$runtime_out"/*.whl "$eval_out"/*.whl "$tensorfs_out"/*.whl
 
 The source checkouts were at the commits in the table. The Runtime wheel
 metadata declares `av>=18.1,<19` only for its `media` extra; this endpoint asks
-for `cozy-runtime[media]==0.0.2`.
+for `cozy-runtime[media]==0.0.3`.
 
 ## MiniMax H3 tokenizer and processor
 

@@ -4,7 +4,7 @@ Cozy-owned libraries are exact local wheels; third-party packages are frozen by 
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.2-py3-none-any.whl` | `cozy-runtime` `e4725826df490e5446e99ed9407547c35f85d7df` | 654,578 | `edb1d4b727370f9aa9b557e4048cee21ee92d3416c52198cbddf70d2fe22e587` |
+| `vendor/cozy_runtime-0.0.3-py3-none-any.whl` | `cozy-runtime` `13ebb22c7dfbfecef18b09806f604f1fc8eee027` | 679,123 | `6ab9228a9dbd7a10a16215576bef06385de23874dbfe797db02f8ee734e7284b` |
 
 Two independent builds from that merged Runtime commit were byte-identical. The `media` extra
 admits the exact locked PyAV/FFmpeg wheel; this endpoint owns no decoder, packet, path, or muxer.
