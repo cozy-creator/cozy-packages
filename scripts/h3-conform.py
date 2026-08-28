@@ -31,7 +31,9 @@ sys.path.insert(0, str(H3))
 from cozy_runtime.author import canonical_json, describe  # noqa: E402
 
 import h3 as endpoint  # noqa: E402
+from conditioner import build_text_conditioner, text_conditioner_config  # noqa: E402
 from gates import MediaFacts, pre_encode_gate  # noqa: E402
+from h3_order import construction_order, encode_order  # noqa: E402
 from official import (  # noqa: E402
     FPS,
     FRAMES,
@@ -96,6 +98,54 @@ def dit_config(task: str, modulation: str = "full") -> dict[str, object]:
             "modulation": modulation,
             "timestep_plan_digest": f"sha256:{plan.digest}",
         }
+    }
+
+
+def tiny_text_config() -> dict[str, object]:
+    """Production key topology at tiny dimensions: 27 vision and 64 source text layers."""
+    return {
+        "architectures": ["Qwen3VLForConditionalGeneration"],
+        "model_type": "qwen3_vl",
+        "text_config": {
+            "model_type": "qwen3_vl_text",
+            "vocab_size": 64,
+            "hidden_size": 16,
+            "intermediate_size": 32,
+            "num_hidden_layers": 64,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "head_dim": 4,
+            "max_position_embeddings": 128,
+            "rms_norm_eps": 1e-6,
+            "rope_theta": 10000.0,
+            "rope_scaling": {
+                "rope_type": "default",
+                "mrope_section": [1, 1, 0],
+                "mrope_interleaved": True,
+            },
+            "attention_dropout": 0.0,
+            "use_cache": False,
+        },
+        "vision_config": {
+            "model_type": "qwen3_vl",
+            "depth": 27,
+            "hidden_size": 16,
+            "intermediate_size": 32,
+            "num_heads": 4,
+            "in_channels": 3,
+            "patch_size": 2,
+            "spatial_merge_size": 2,
+            "temporal_patch_size": 2,
+            "out_hidden_size": 16,
+            "num_position_embeddings": 16,
+            "deepstack_visual_indexes": [8, 16, 24],
+        },
+        "image_token_id": 60,
+        "video_token_id": 61,
+        "vision_start_token_id": 62,
+        "vision_end_token_id": 63,
+        "tie_word_embeddings": False,
+        "cozy_h3": text_conditioner_config(),
     }
 
 
@@ -371,7 +421,7 @@ def arm_graph_and_dtypes() -> None:
         "audio_vae": {},
         "fl2va_dit": dit_config("fl2va"),
         "ref2va_dit": dit_config("ref2va"),
-        "text_encoder": {},
+        "text_encoder": tiny_text_config(),
         "video_vae": {},
     }
     check(
@@ -451,6 +501,188 @@ def arm_graph_and_dtypes() -> None:
         "the refused write reached neither the view nor the wrapped pipe",
         (sorted(vars(inner)), "communicated" in vars(scoped)),
         (["existing"], False),
+    )
+
+
+def arm_text_conditioner() -> None:
+    import torch
+    from cozy_runtime.author import Artifact, Config
+    from cozy_runtime.internal.derive import derive
+    from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
+
+    print("\n== exact 50-layer pre-norm Qwen3-VL conditioner ==")
+    source = tiny_text_config()
+    upstream = {key: value for key, value in source.items() if key != "cozy_h3"}
+
+    torch.manual_seed(7)
+    full = (
+        Qwen3VLForConditionalGeneration(Qwen3VLConfig(**upstream))
+        .to(dtype=torch.bfloat16)
+        .eval()
+    )
+    torch.manual_seed(7)
+    truncated = build_text_conditioner(source)
+    state = truncated.state_dict()
+    check("truncated conditioner persistent census", len(state), 902)
+    check(
+        "truncated conditioner split",
+        (
+            sum(key.startswith("model.visual.") for key in state),
+            sum(key.startswith("model.language_model.") for key in state),
+        ),
+        (351, 551),
+    )
+    check(
+        "truncated conditioner keeps source config surface",
+        (
+            hasattr(truncated, "model"),
+            truncated.config.text_config.num_hidden_layers,
+            len(truncated.model.language_model.layers),
+            type(truncated.model.language_model.norm).__name__,
+            type(truncated.lm_head).__name__,
+        ),
+        (True, 64, 50, "Identity", "Identity"),
+    )
+    removed = [
+        key
+        for key in state
+        if key == "lm_head.weight"
+        or key == "model.language_model.norm.weight"
+        or (
+            key.startswith("model.language_model.layers.")
+            and int(key.split(".")[3]) >= 50
+        )
+    ]
+    check("tail, final norm, and language head are absent", removed, [])
+    check(
+        "every retained conditioner destination is BF16",
+        Counter(str(value.dtype) for value in state.values()),
+        Counter({"torch.bfloat16": 902}),
+    )
+    check(
+        "truncation preserves every retained initialized weight",
+        all(torch.equal(value, full.state_dict()[key]) for key, value in state.items()),
+        True,
+    )
+
+    imported = {
+        (
+            "visual." + key.removeprefix("model.visual.")
+            if key.startswith("model.visual.")
+            else "model." + key.removeprefix("model.language_model.")
+        ): key
+        for key in state
+    }
+    check("902-row import rekey is one-to-one", len(imported), 902)
+    check(
+        "import rekey reproduces the construction key set",
+        set(imported.values()) == set(state),
+        True,
+    )
+
+    torch.manual_seed(9)
+    inputs = torch.randn(1, 4, 16, dtype=torch.bfloat16)
+    positions = torch.arange(4).reshape(1, 1, 4).expand(4, 1, 4)
+    visual_mask = torch.tensor([[False, True, False, True]])
+    deepstack = [torch.randn(2, 16, dtype=torch.bfloat16) for _ in range(3)]
+    arguments = {
+        "inputs_embeds": inputs,
+        "position_ids": positions,
+        "attention_mask": torch.ones(1, 4, dtype=torch.long),
+        "visual_pos_masks": visual_mask,
+        "deepstack_visual_embeds": deepstack,
+        "use_cache": False,
+        "output_hidden_states": True,
+    }
+    with torch.no_grad():
+        full_output = full.model.language_model(**arguments).hidden_states[50]
+        truncated_result = truncated.model.language_model(**arguments)
+        truncated_output = truncated_result.hidden_states[50]
+    check(
+        "early exit equals full Qwen hidden_states[50] with visual injection",
+        (
+            torch.equal(truncated_output, full_output),
+            float((truncated_output - full_output).abs().max()),
+        ),
+        (True, 0.0),
+    )
+    check(
+        "parameterless final norm exposes the same pre-norm state",
+        torch.equal(truncated_result.last_hidden_state, truncated_output),
+        True,
+    )
+
+    refusal(
+        "missing text cozy_h3 extension refuses",
+        lambda: build_text_conditioner(upstream),
+        "artifact_config",
+    )
+    extra = dict(source)
+    extra["cozy_h3"] = {**text_conditioner_config(), "fallback": True}
+    refusal(
+        "extra text cozy_h3 field refuses",
+        lambda: build_text_conditioner(extra),
+        "artifact_config",
+    )
+    changed = dict(source)
+    changed["cozy_h3"] = {**text_conditioner_config(), "retained_decoder_layers": 51}
+    refusal(
+        "changed retained-layer count refuses",
+        lambda: build_text_conditioner(changed),
+        "artifact_config",
+    )
+    wrong_source = dict(source)
+    wrong_source["text_config"] = {
+        **cast(dict[str, object], source["text_config"]),
+        "num_hidden_layers": 63,
+    }
+    refusal(
+        "changed source architecture depth refuses",
+        lambda: build_text_conditioner(wrong_source),
+        "artifact_config",
+    )
+
+    model_config = {
+        "audio_vae": {},
+        "fl2va_dit": dit_config("fl2va", "adaln-pruned"),
+        "ref2va_dit": dit_config("ref2va", "adaln-pruned"),
+        "text_encoder": source,
+        "video_vae": {},
+    }
+
+    def contract_document() -> dict[str, object]:
+        result = derive(
+            endpoint.H3Model(),
+            Artifact("se-018-audit", {}, Config(model_config)),
+            release="se-018-audit",
+            application="h3:h3.app",
+            hardware_variant="sm90",
+            declared_variants=("sm90",),
+        )
+        return cast(dict[str, object], result.contract.render())
+
+    first_contract = contract_document()
+    second_contract = contract_document()
+    first_order = encode_order(construction_order(first_contract))
+    second_order = encode_order(construction_order(second_contract))
+    check(
+        "Runtime construction order reproduces byte-identically",
+        first_order == second_order,
+        True,
+    )
+    rows = construction_order(first_contract)
+    text_rows = construction_order(first_contract, ["text_encoder"])
+    check("Runtime whole-model order count", len(rows), 3858)
+    check("Runtime text-conditioner order count", len(text_rows), 902)
+    check(
+        "Runtime component order",
+        list(dict.fromkeys(component for component, _ in rows)),
+        ["fl2va_dit", "ref2va_dit", "text_encoder", "video_vae", "audio_vae"],
+    )
+    observe(
+        "Runtime order handoff",
+        f"whole sha256:{hashlib.sha256(first_order).hexdigest()}, "
+        f"text sha256:{hashlib.sha256(encode_order(text_rows)).hexdigest()}",
     )
 
 
@@ -1860,6 +2092,7 @@ def arm_live_probe() -> None:
 ARMS = {
     "schedule": arm_schedule,
     "graph": arm_graph_and_dtypes,
+    "conditioner": arm_text_conditioner,
     "adaln-pruned": arm_adaln_pruned,
     "processor": arm_processor,
     "media": arm_media,
