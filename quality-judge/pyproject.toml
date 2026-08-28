@@ -1,0 +1,39 @@
+# One dependency authority for this endpoint: this file plus `uv.lock`. Cozy-owned libraries
+# are immutable local wheels; everything else is an exact lock entry.
+#
+# The torch family is pinned to the SAME build H3 locks. Torch, torchvision and triton are
+# one ABI-coupled unit — an endpoint built against one torch fails with undefined-symbol
+# errors under another — and decision #633 gives one PlatformTarget exactly one family, so a
+# second family here would be a second substrate, never a per-endpoint choice.
+#
+# Pillow, numpy and tokenizers are DIRECT dependencies here: `quality_judge.py` imports all
+# three by name. Audio reaches this endpoint already decoded by the Runtime media extra and
+# is resampled in numpy, so there is no torchaudio and no torchvision in this closure.
+
+[project]
+name = "quality-judge-endpoint"
+version = "1.0.0"
+requires-python = "==3.12.*"
+dependencies = [
+    "cozy-runtime[media]==0.0.2",
+    "msgspec>=0.19",
+    "numpy>=1.26",
+    "pillow>=11",
+    "tensorfs==0.0.1",
+    "tokenizers>=0.22",
+    "torch==2.9.1+cu129",
+    "transformers==5.16.1",
+]
+
+[tool.uv.sources]
+cozy-runtime = { path = "vendor/cozy_runtime-0.0.2-py3-none-any.whl" }
+tensorfs = { path = "vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl" }
+torch = { index = "pytorch-cu129" }
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[tool.uv]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]

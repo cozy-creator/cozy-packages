@@ -41,6 +41,23 @@ jobs:
           uv run --no-project cozy-runtime describe --dir quality-judge --check
           uv run --no-project cozy-runtime describe --dir sdxl --check
 
+      # An endpoint with no `[project]` pyproject and no lock resolves no `ResolvedWheelSet`
+      # and cannot publish at all, so a stale or absent lock is a release-blocking fact and
+      # belongs in the cheap static job, not only in the heavy per-endpoint ones.
+      - name: Every endpoint has a current lock
+        run: |
+          for endpoint in h3 quality-judge sdxl video-assembly; do
+            uv lock --check --project "$endpoint"
+          done
+
+      # The torch family is ABI-coupled — torchvision's compiled ops link against torch's
+      # C++ ABI — and #633 gives one PlatformTarget exactly ONE family. An endpoint that
+      # drifts onto a second torch fails with undefined-symbol errors at load, so the locks
+      # are compared to each other here rather than discovered on a card.
+      - name: One torch family across every endpoint
+        run: |
+          uv run --no-project python scripts/torch_family.py
+
   h3-conformance:
     # Independent so a failure in static analysis cannot silently skip the red arms.
     name: H3 deterministic conformance
@@ -64,6 +81,32 @@ jobs:
 
       - name: Arms
         run: h3/.venv/bin/python scripts/h3-conform.py
+
+  endpoint-locks:
+    # Independent so a failure to materialize an exact environment cannot hide behind
+    # static analysis. `--no-install-project` because both are virtual projects.
+    name: SDXL and quality-judge exact locked environments
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        endpoint: [sdxl, quality-judge]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.9.18"
+      - run: uv python install 3.12
+      - name: Exact locked environment
+        run: |
+          uv lock --check --project ${{ matrix.endpoint }}
+          cd ${{ matrix.endpoint }}
+          uv sync --locked --no-cache --no-install-project
+      # The compiled extensions are the ABI proof: they raise undefined-symbol errors
+      # against the wrong torch, and nothing cheaper observes that.
+      - name: The locked stack imports
+        run: ${{ matrix.endpoint }}/.venv/bin/python scripts/endpoint_import.py ${{ matrix.endpoint }}
 
   video-assembly:
     name: Video assembly
