@@ -40,13 +40,25 @@ The H3 package exposes both official actions from one model generation:
 - `reference_media_to_video` accepts one ordered tagged list of image,
   video, and standalone-audio references.
 
-Both actions use the official Diffusers MiniMax H3 implementation and share one BF16 text encoder,
-one video VAE and one audio VAE at their official FP32 destination dtypes, and one scheduler
-contract. The same construction carries task-stamped
+Both actions use the official Diffusers MiniMax H3 implementation and share one exact BF16
+Qwen3-VL conditioner, one video VAE and one audio VAE at their official FP32 destination dtypes,
+and one scheduler contract. The conditioner retains the complete vision stack, token embedding,
+and language layers 0–49; its parameterless final norm exposes the same pre-norm
+`hidden_states[50]` as full Qwen, while layers 50–63 and the language head are absent from both
+fill and execution. The same construction carries task-stamped
 `fl2va_dit` and `ref2va_dit` components; Runtime's component leases make only the selected task DiT
 resident while its action runs. `transformer` and `transformer_ref` exist only as the explicit
 adapter names expected by the two upstream Diffusers workflows. The interim community curve
 architecture was deleted instead of retained as a second graph.
+
+Artifact production takes ordering only from Runtime's exact construction contract. The
+mechanical projection preserves `destination_sets` order and strips only each component prefix:
+
+```sh
+python scripts/h3_order.py model-construction-contract.json > construction-order.json
+```
+
+There is no source-header, lexical, or hand-maintained tensor-order fallback.
 
 The two DiT components are distinct weight instances of the same class and exact topology. They
 cannot be two names for one module: Runtime fills, fences, stages, and evicts by component name, so

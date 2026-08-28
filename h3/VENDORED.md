@@ -10,7 +10,7 @@ dependency of the pinned model stack).
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.2-py3-none-any.whl` | `cozy-runtime` `e4725826df490e5446e99ed9407547c35f85d7df` | 654,578 | `edb1d4b727370f9aa9b557e4048cee21ee92d3416c52198cbddf70d2fe22e587` |
+| `vendor/cozy_runtime-0.0.2-py3-none-any.whl` | `cozy-runtime` `54858e7ea69e7569cb892416a93ee190ae323bdd` | 656,195 | `ff29b72b6f099a207a194a95fb9ef57fcf2c08b3a59dc5f8aefdeb4f828ed2b5` |
 | `vendor/cozy_eval-2.3.0-py3-none-any.whl` | `cozy-eval` `fe8c7d2ead882dded2595e33af73101040792bd8` | 295,046 | `87830e9461f5b98b699e1ba7e1d2fec2dd37bea63d7b8ae8403506835e427a26` |
 | `vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl` | `tensorfs` `940973ff3409f049aa25044fccdf43a6f85f8ca1` | 841,454 | `a28b8a8061498d088bec80dd92335e260efc99b418f020edabe6e80ca1ab0002` |
 
@@ -46,6 +46,14 @@ owns weighted component configs and must not repeat the tokenizer vocabulary
 or processor settings. Runtime `Config` intentionally validates mapping keys;
 a raw tokenizer vocabulary contains path-like tokens and is not a legal
 component-config mapping. The endpoint does not bypass that validation.
+
+The weighted text-encoder config carries the closed
+`cozy.minimax_h3.text_conditioner/1` extension. It fixes the source architecture to
+Qwen3-VL, retains decoder layers 0–49, selects pre-norm hidden state 50, and declares
+the language-model head absent. The endpoint keeps the ordinary Transformers `.model`
+and `.config` surface while final norm/head become parameterless identities. Runtime's
+construction census therefore contains exactly 902 BF16 destinations; the removed tail
+is not a hidden fetch or execution mode.
 
 The initially supplied name `MiniMaxAI/MiniMax-Hailuo-2.3` was rejected: both
 its model API and exact-revision tree returned HTTP 401 without credentials,

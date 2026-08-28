@@ -383,7 +383,6 @@ class OfficialH3Pipeline:
     """Both official task workflows over one shared, dual-DiT construction."""
 
     def __init__(self, config: Config) -> None:
-        import torch
         from diffusers import (
             AutoencoderKLMiniMaxH3,
             AutoencoderKLMiniMaxH3Audio,
