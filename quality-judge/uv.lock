@@ -66,10 +66,11 @@ source = { path = "vendor/cozy_runtime-0.0.3-py3-none-any.whl" }
 dependencies = [
     { name = "grpcio", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "msgspec", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "packaging", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "protobuf", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.3-py3-none-any.whl", hash = "sha256:6ab9228a9dbd7a10a16215576bef06385de23874dbfe797db02f8ee734e7284b" },
+    { filename = "cozy_runtime-0.0.3-py3-none-any.whl", hash = "sha256:1816d1b73ca8b0886afd0d511cb949f83dd64d2444b2c53645a77a650e742ef4" },
 ]
 
 [package.optional-dependencies]
@@ -83,6 +84,7 @@ requires-dist = [
     { name = "diffusers", marker = "extra == 'corpus'", specifier = ">=0.36" },
     { name = "grpcio", specifier = ">=1.76" },
     { name = "msgspec", specifier = ">=0.19" },
+    { name = "packaging", specifier = ">=24" },
     { name = "protobuf", specifier = ">=6.31" },
     { name = "torch", marker = "extra == 'corpus'", specifier = ">=2.6" },
     { name = "torch", marker = "extra == 'derive'", specifier = ">=2.6" },
@@ -466,7 +468,7 @@ wheels = [
 ]
 
 [[package]]
-name = "quality-judge-endpoint"
+name = "quality-judge-package"
 version = "1.0.0"
 source = { virtual = "." }
 dependencies = [

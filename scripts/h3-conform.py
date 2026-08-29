@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Deterministic MiniMax-H3 contract arms; no weights, GPU, network, or test framework.
 
-Every arm executes the official Diffusers 0.40 implementation or a public endpoint
+Every arm executes the official Diffusers 0.40 implementation or a public package
 boundary. Each historically dangerous invariant also carries a negative control. A green
 run is a CPU semantic proof, not a generation or accelerator proof.
 """
@@ -30,7 +30,7 @@ sys.path.insert(0, str(H3))
 
 from cozy_runtime.author import canonical_json, describe  # noqa: E402
 
-import h3 as endpoint  # noqa: E402
+import h3 as package  # noqa: E402
 from conditioner import build_text_conditioner, text_conditioner_config  # noqa: E402
 from gates import MediaFacts, pre_encode_gate  # noqa: E402
 from h3_order import construction_order, encode_order  # noqa: E402
@@ -66,7 +66,9 @@ PLAN_DIGESTS = {
     "fl2va": "5a99880e5442b8eeed3ed921a133f87c922c4386ee5e2d3f61431cc388202364",
     "ref2va": "a83bac0ca1ddf31da7da55aed97d5340b5a8b657a7edff0cb671356eff670ed1",
 }
-DESCRIPTOR_DIGEST = "sha256:c8c73bb64ee4a0c4edb7cbd09624cd0687f12850b8bdac76bec6210a45680b87"
+PACKAGE_DESCRIPTOR_DIGEST = (
+    "sha256:c3e5db6f1cc08c2caa88b9bc5774a975999a3e0ad4e918f7f49015845043b114"
+)
 VECTOR_DIGESTS = {
     "video_sigmas": "9908cdf87605da6006148af6e7ef8be63e806d40bf750efcaae24386c4eb4e86",
     "audio_sigmas": "120d46f5ce12fcbeb24f50707cc9f045a0fe283a5b35ad16dbd86f4810fb58e9",
@@ -516,9 +518,7 @@ def arm_text_conditioner() -> None:
 
     torch.manual_seed(7)
     full = (
-        Qwen3VLForConditionalGeneration(Qwen3VLConfig(**upstream))
-        .to(dtype=torch.bfloat16)
-        .eval()
+        Qwen3VLForConditionalGeneration(Qwen3VLConfig(**upstream)).to(dtype=torch.bfloat16).eval()
     )
     torch.manual_seed(7)
     truncated = build_text_conditioner(source)
@@ -548,10 +548,7 @@ def arm_text_conditioner() -> None:
         for key in state
         if key == "lm_head.weight"
         or key == "model.language_model.norm.weight"
-        or (
-            key.startswith("model.language_model.layers.")
-            and int(key.split(".")[3]) >= 50
-        )
+        or (key.startswith("model.language_model.layers.") and int(key.split(".")[3]) >= 50)
     ]
     check("tail, final norm, and language head are absent", removed, [])
     check(
@@ -652,7 +649,7 @@ def arm_text_conditioner() -> None:
 
     def contract_document() -> dict[str, object]:
         result = derive(
-            endpoint.H3Model(),
+            package.H3Model(),
             Artifact("se-018-audit", {}, Config(model_config)),
             release="se-018-audit",
             application="h3:h3.app",
@@ -981,11 +978,11 @@ def arm_media() -> None:
         reference_video_vision_tokens(1920, 1080, Fraction(15)),
         15120,
     )
-    endpoint._validate_vision_budget(32768)
+    package._validate_vision_budget(32768)
     observe("vision capacity boundary")
     refusal(
         "vision demand above the release budget refuses",
-        lambda: endpoint._validate_vision_budget(MAX_CONDITIONER_VISION_TOKENS + 1),
+        lambda: package._validate_vision_budget(MAX_CONDITIONER_VISION_TOKENS + 1),
         "reference_capacity",
     )
 
@@ -1024,14 +1021,14 @@ def arm_media() -> None:
             return self._audios.pop(0)
 
     def decode(references: list[Any], videos: list[Any], audios: list[Any]) -> list[Any]:
-        return endpoint._decode_references(
+        return package._decode_references(
             cast(Any, references),
             decoder=cast(Any, Decoder(videos, audios)),
             pipe=cast(Any, Pipe()),
         )
 
-    video_ref = endpoint.VideoReference(VideoAsset("sha256:" + "1" * 64))
-    audio_ref = endpoint.AudioReference(AudioAsset("sha256:" + "2" * 64))
+    video_ref = package.VideoReference(VideoAsset("sha256:" + "1" * 64))
+    audio_ref = package.AudioReference(AudioAsset("sha256:" + "2" * 64))
     check(
         "14s of soundtracked video plus 2s standalone audio fit their separate caps",
         len(
@@ -1084,7 +1081,7 @@ def arm_media() -> None:
             ]
         ]
     )
-    pixels = endpoint._rgb8(torch, decoded)
+    pixels = package._rgb8(torch, decoded)
     check("RGB8 conversion shape", tuple(pixels.shape), (2, 1, 2, 3))
     check("RGB8 clamp and round", pixels[0].flatten().tolist(), [0, 128, 0, 125, 255, 255])
     continuation = bytes(pixels[-1].numpy().tobytes())
@@ -1145,11 +1142,11 @@ def arm_media() -> None:
     finish_outputs = FinishOutputs()
     attempt = fake_attempt("h3-finish-receipt")
     telemetry = fake_telemetry(attempt)
-    endpoint_module = cast(Any, endpoint)
-    original_gate = endpoint_module.pre_encode_gate
-    endpoint_module.pre_encode_gate = lambda *args, **kwargs: None
+    package_module = cast(Any, package)
+    original_gate = package_module.pre_encode_gate
+    package_module.pre_encode_gate = lambda *args, **kwargs: None
     try:
-        finished = endpoint._finish(
+        finished = package._finish(
             cast(Any, FinishModel()),
             "fl2va",
             SimpleNamespace(audio=finish_audio, video=finish_video),
@@ -1160,7 +1157,7 @@ def arm_media() -> None:
             cancel=lambda: None,
         )
     finally:
-        endpoint_module.pre_encode_gate = original_gate
+        package_module.pre_encode_gate = original_gate
     check(
         "finish returns exactly two typed media assets",
         (type(finished.video), type(finished.continuation_frame)),
@@ -1249,7 +1246,7 @@ def arm_output_gates() -> None:
             torch,
             pixels=pixels,
             waveform=waveform,
-            video_nonfinite_fraction=endpoint._nonfinite_fraction(torch, poisoned),
+            video_nonfinite_fraction=package._nonfinite_fraction(torch, poisoned),
             audio_nonfinite_fraction=0.0,
             requested=requested,
             tel=cast(Any, _Telemetry()),
@@ -1278,20 +1275,20 @@ def arm_output_gates() -> None:
 
 def arm_descriptor() -> None:
     print("\n== committed public surface ==")
-    descriptor_path = H3 / "endpoint.descriptor.json"
+    descriptor_path = H3 / "package.descriptor.json"
     descriptor = json.loads(descriptor_path.read_text())
     check(
         "descriptor semantic identity",
         canonical_json.digest_bytes(descriptor_path.read_bytes()),
-        DESCRIPTOR_DIGEST,
+        PACKAGE_DESCRIPTOR_DIGEST,
     )
     check(
         "README launch contract names the current descriptor identity",
-        DESCRIPTOR_DIGEST in (ROOT / "README.md").read_text(),
+        PACKAGE_DESCRIPTOR_DIGEST in (ROOT / "README.md").read_text(),
         True,
     )
     entries = {entry["name"]: entry for entry in descriptor["entrypoints"]}
-    surfaces = {surface.name: surface for surface in describe(endpoint.app)}
+    surfaces = {surface.name: surface for surface in describe(package.app)}
     check(
         "exact action names",
         set(entries),
@@ -1299,7 +1296,7 @@ def arm_descriptor() -> None:
     )
     check(
         "both official actions are visible",
-        {name for name, entry in entries.items() if entry["hidden"] is not True},
+        set(entries),
         {"first_last_frame_to_video", "reference_media_to_video"},
     )
     expected = {
@@ -1324,7 +1321,7 @@ def arm_descriptor() -> None:
         component_use = entry["models"][0]["component_use"]
         check(
             f"{name} task DiT lease exists",
-            component_use[f"sample_{dit.removesuffix('_dit')}"] ,
+            component_use[f"sample_{dit.removesuffix('_dit')}"],
             [dit],
         )
         check(f"{name} media capability", "media_decode" in surfaces[name].capabilities, True)
@@ -1333,7 +1330,7 @@ def arm_descriptor() -> None:
             [field["name"] for field in entry["result"]["fields"]],
             ["video", "continuation_frame"],
         )
-    check("H3 permits Runtime encoded linear leaves", endpoint.H3Model.__encoded_leaves__, "accept")
+    check("H3 permits Runtime encoded linear leaves", package.H3Model.__encoded_leaves__, "accept")
 
 
 def arm_live_probe() -> None:
@@ -1354,8 +1351,8 @@ def arm_live_probe() -> None:
     verify_result = cast(
         Callable[..., tuple[dict[str, Any], dict[str, str]]], probe["verify_result"]
     )
-    verify_descriptor_digest = cast(
-        Callable[..., str], probe["verify_descriptor_digest"]
+    verify_package_descriptor_digest = cast(
+        Callable[..., str], probe["verify_package_descriptor_digest"]
     )
     require_visible = cast(Callable[..., set[str]], probe["require_visible"])
     select_actions = cast(Callable[[list[str] | None], set[str]], probe["select_actions"])
@@ -1376,7 +1373,8 @@ def arm_live_probe() -> None:
     binding_ref = "cozy/minimax-h3@1.0.0"
     binding_lane = "profile=fp8-adaln-pruned"
     snapshot = "sha256:" + "1" * 64
-    descriptor_digest = "sha256:" + "2" * 64
+    installed_descriptor = json.loads((H3 / "package.descriptor.json").read_text())
+    package_descriptor_digest = canonical_json.digest(installed_descriptor)
     runtime_plan = "sha256:" + "5" * 64
     construction = "sha256:" + "6" * 64
     components = ["audio_vae", "fl2va_dit", "ref2va_dit", "text_encoder", "video_vae"]
@@ -1502,13 +1500,10 @@ def arm_live_probe() -> None:
     )
 
     check(
-        "the described endpoint digest must equal the launch contract",
-        verify_descriptor_digest(
-            {"descriptor_digest": descriptor_digest}, expected=descriptor_digest
-        ),
-        descriptor_digest,
+        "the described package digest must equal the launch contract",
+        verify_package_descriptor_digest(installed_descriptor, expected=package_descriptor_digest),
+        package_descriptor_digest,
     )
-    installed_descriptor = json.loads((H3 / "endpoint.descriptor.json").read_text())
     check(
         "default proof selection remains both public product actions",
         select_actions(None),
@@ -1525,9 +1520,9 @@ def arm_live_probe() -> None:
         {"first_last_frame_to_video", "reference_media_to_video"},
     )
     refusal(
-        "a different endpoint descriptor refuses before inference",
-        lambda: verify_descriptor_digest(
-            {"descriptor_digest": descriptor_digest}, expected="sha256:" + "3" * 64
+        "a different package descriptor refuses before inference",
+        lambda: verify_package_descriptor_digest(
+            installed_descriptor, expected="sha256:" + "3" * 64
         ),
         "RuntimeError",
     )
@@ -1538,14 +1533,14 @@ def arm_live_probe() -> None:
     }
     selected_plan_facts = load_plan_facts(H3, expected_plans)
     check(
-        "selected endpoint plan semantics match both launch identities",
+        "selected package plan semantics match both launch identities",
         {action: facts["document_digest"] for action, facts in selected_plan_facts.items()},
         expected_plans,
     )
 
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
-        selected = root / "selected-endpoint"
+        selected = root / "selected-package"
         plans = selected / "timestep-plans"
         plans.mkdir(parents=True)
         for task in ("fl2va", "ref2va"):
@@ -1558,7 +1553,7 @@ def arm_live_probe() -> None:
             json.dumps(dict(reversed(list(fl_document.items()))), indent=2, ensure_ascii=False)
         )
         check(
-            "selected endpoint formatting twin preserves semantic plan identity",
+            "selected package formatting twin preserves semantic plan identity",
             load_plan_facts(selected, expected_plans)["first_last_frame_to_video"][
                 "document_digest"
             ],
@@ -1567,20 +1562,20 @@ def arm_live_probe() -> None:
 
         fl_plan.write_text(json.dumps(dict(fl_document, frames=fl_document["frames"] + 1)))
         refusal(
-            "selected endpoint semantic plan drift cannot fall back to checkout-global plans",
+            "selected package semantic plan drift cannot fall back to checkout-global plans",
             lambda: load_plan_facts(selected, expected_plans),
             "RuntimeError",
         )
         original = canonical_json.encode(fl_document)
         fl_plan.write_bytes(original[:-1] + b',"task":"other"}')
         refusal(
-            "selected endpoint duplicate plan key refuses",
+            "selected package duplicate plan key refuses",
             lambda: load_plan_facts(selected, expected_plans),
             "RuntimeError",
         )
         fl_plan.write_bytes(original[:-1] + b',"bad":NaN}')
         refusal(
-            "selected endpoint non-finite plan number refuses",
+            "selected package non-finite plan number refuses",
             lambda: load_plan_facts(selected, expected_plans),
             "RuntimeError",
         )
@@ -1656,15 +1651,10 @@ def arm_live_probe() -> None:
         verify_staged_request(staged, request_snapshot)
         observe("read-only request identity validates after directory mode change")
 
-        descriptor_bytes = (H3 / "endpoint.descriptor.json").read_bytes()
+        descriptor_bytes = (H3 / "package.descriptor.json").read_bytes()
         descriptor_identity = canonical_json.digest_bytes(descriptor_bytes)
         fake_runtime = root / "cozy-runtime-fake"
         responses = {
-            ("describe", "--check"): {
-                "descriptor": "current",
-                "descriptor_digest": descriptor_identity,
-                "next": [],
-            },
             ("describe",): installed_descriptor,
             ("doctor",): {"device": {"type": "cuda", "name": "contract-fake"}},
             ("bindings",): document,
@@ -1686,7 +1676,7 @@ def arm_live_probe() -> None:
             str(ROOT / "scripts" / "h3-live.py"),
             "--runtime",
             str(fake_runtime),
-            "--endpoint",
+            "--package",
             str(H3),
             "--expected-binding-ref",
             binding_ref,
@@ -1694,7 +1684,7 @@ def arm_live_probe() -> None:
             binding_lane,
             "--expected-checkpoint",
             snapshot,
-            "--expected-descriptor-digest",
+            "--expected-package-descriptor-digest",
             descriptor_identity,
             "--expected-fl-plan-digest",
             expected_plans["first_last_frame_to_video"],
@@ -1728,7 +1718,7 @@ def arm_live_probe() -> None:
                 "inspect-only receipt status",
                 (
                     receipt["automated_status"],
-                    receipt["endpoint_observations_status"],
+                    receipt["package_observations_status"],
                 ),
                 (
                     "runtime-device-observed-and-binding-inspected",

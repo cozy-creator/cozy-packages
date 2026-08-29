@@ -10,7 +10,7 @@ DEPENDENCIES, NOT COPIED SOURCE
   torch, torchvision, torchaudio, numpy, msgspec, safetensors, PyAV and their transitive
   dependencies — their respective upstream licenses
 
-The H3 endpoint imports the released Diffusers implementation as a dependency. It contains no copy
+The H3 package imports the released Diffusers implementation as a dependency. It contains no copy
 or adaptation of MiniMax, ComfyUI, DiffSynth-Studio, or other community serving code. The former
 `h3/h3_arch/` ComfyUI-derived GPL-3.0 port was deleted atomically with the official replacement;
 no GPL-derived H3 source remains in this repository.

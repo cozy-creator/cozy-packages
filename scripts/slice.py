@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""The local transport: ONE endpoint request through the real cozy-runtime path.
+"""The local transport: ONE package request through the real cozy-runtime path.
 
-`cozy_runtime.internal.local.run_slice` is cr-008a's door — "a real endpoint request with
+`cozy_runtime.internal.local.run_slice` is cr-008a's door — "a real package request with
 no coordinator, no hub, no gRPC" — and this module is the thin thing that turns it into a
 `cozy_eval.wire.Transport`. Everything below the in-memory control adapter is the
 production path: the same acceptance boundary, the same durable journal, the same
@@ -11,11 +11,11 @@ Two processes, on purpose, exactly as in production:
 
     the CALLER   an eval job: numpy, PIL, ffmpeg, cozy-eval. Never imports torch.
     the WORKER   `python -m scripts.slice exec <spec>`: the supervisor, its disposable
-                 CUDA executor child, and the endpoint module.
+                 CUDA executor child, and the package module.
 
 So `SliceTransport.invoke` spawns a process, and a killed run is a real killed run. Each
 invocation is a cold one-shot: the executor is spawned, the artifact is filled, the request
-is served and the process dies. That is why the endpoint's requests are BATCH-shaped — a
+is served and the process dies. That is why the package's requests are BATCH-shaped — a
 4.9 GiB fill per question would be the whole cost of the pass.
 
 ONE binding plan is staged per invocation, never two. cr-008a's executor keeps
@@ -44,15 +44,15 @@ WORKSPACES = Path("/tmp/cozy-judge-slices")
 MEDIA = WORKSPACES / "media"
 SUFFIX = {"image/jpeg": ".jpg", "image/png": ".png", "audio/x-f32le": ".f32"}
 
-#: Which model each entrypoint binds. The endpoint declares this in its signatures; the
+#: Which model each entrypoint binds. The package declares this in its signatures; the
 #: driver needs it to stage the one right binding plan, and reading it off the committed
 #: descriptor rather than restating it keeps the two from drifting.
 BINDINGS = {"judge": "judge", "soft": "judge", "pairwise": "judge", "transcribe": "transcriber"}
 
 
 def descriptor_bindings() -> dict[str, str]:
-    """entrypoint -> model CLASS, from the committed endpoint descriptor."""
-    document = json.loads((PROJECT / "endpoint.descriptor.json").read_text())
+    """entrypoint -> model CLASS, from the committed package descriptor."""
+    document = json.loads((PROJECT / "package.descriptor.json").read_text())
     return {
         str(entry["name"]): str(entry["models"][0]["class"])
         for entry in document["entrypoints"]
@@ -124,7 +124,7 @@ class SliceTransport:
 
         THE COORDINATOR'S JOB, locally. On the network path an eval job uploads media and
         the hub grants the worker a URL for it; here the same handle is a `file://` ref the
-        kernel hydrates into the attempt spool (`author._invoke._hydrate`). The endpoint
+        kernel hydrates into the attempt spool (`author._invoke._hydrate`). The package
         cannot tell the difference and must not be able to: it receives a typed asset and
         reads verified bytes, never a path it chose.
 

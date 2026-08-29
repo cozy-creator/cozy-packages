@@ -1,4 +1,4 @@
-"""se-008 — the SDXL launch endpoint: `generate`, text to image, four components.
+"""se-008 — the SDXL launch package: `generate`, text to image, four components.
 
 The second launch family, and the ENGINELESS-PATH REFERENCE (`cozy-runtime-sdxl.md`): one
 `Model` class with author-written `load`, three public methods each declaring the
@@ -13,7 +13,7 @@ What it adds over cr-008b's corpus fixture, which it is otherwise faithful to (i
 
   * ASPECT BUCKETS. SDXL fine-tunes are trained on fixed resolutions, not free geometry, so
     the request names a bucket and `Shape(pixels=...)` is how the demand axes are derived
-    from a preset the runtime cannot otherwise measure (§1.2). A bucket this endpoint does
+    from a preset the runtime cannot otherwise measure (§1.2). A bucket this package does
     not offer is unspellable, not rounded.
   * `ModelDefault` steps/guidance, and the TWO-LAYER CLAMP. Layer 1 is the field's own
     `Meta` bound, which REJECTS what the caller actually sent. Layer 2 is a deployment's
@@ -24,10 +24,10 @@ What it adds over cr-008b's corpus fixture, which it is otherwise faithful to (i
     adapter awareness in this file. When the adapter runtime (cr-010) lands, a turbo
     recipe supplies that value as an omitted-field default and not one line here changes.
   * AN OUTPUT-INTEGRITY FLOOR. A decode that produced NaNs, or a flat field with no
-    picture in it, is a failure this endpoint reports rather than a PNG it publishes.
+    picture in it, is a failure this package reports rather than a PNG it publishes.
 
 Code states CAPABILITY; bindings state SELECTION. Nothing here names a repo, release,
-checkpoint or revision — `endpoint.toml` and the deploy binding do.
+checkpoint or revision — `package.toml` and the deploy binding do.
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ _BUCKETS: dict[AspectRatio, tuple[int, int]] = {
 _WARM_SIDE = 512
 _WARM_STEPS = 1
 
-#: The tokenizer vocabularies this endpoint BUNDLES. They are its own asset, exactly like
+#: The tokenizer vocabularies this package BUNDLES. They are its own asset, exactly like
 #: the model library it imports — not an artifact identifier, not a catalog ref, and not
 #: something a construction config may carry (a path in a construction config refuses).
 _TOKENIZERS = Path(__file__).resolve().parent
@@ -184,7 +184,7 @@ class SdxlModel(Model[SdxlPipeline]):
         going to: it follows the encoder's own weights to wherever the runtime already put
         them. The caller used to do this with a hard-coded `cuda:0`, which was an author
         naming a device — the one live instance se-001's record left open — and it made this
-        endpoint unservable on any envelope the runtime did not place at ordinal zero.
+        package unservable on any envelope the runtime did not place at ordinal zero.
         """
         import torch
 
@@ -237,7 +237,7 @@ def _tokenizer(name: str) -> Any:
     """One bundled CLIP tokenizer, built from its own two files.
 
     Deliberately NOT `from_pretrained`: that spelling takes a string it will resolve
-    against the Hub when it is not a directory, so it is a fetch this endpoint might one
+    against the Hub when it is not a directory, so it is a fetch this package might one
     day make by accident — and `fence.py::no-identifiers-in-code` refuses it for exactly
     that reason. The direct constructor takes the two files and cannot reach anywhere.
     """
@@ -298,7 +298,7 @@ def _integrity(torch: Any, image: Any, pixels: Any, tel: Telemetry) -> None:
     if nan_fraction > 0.0:
         raise OutputError(
             f"the decode produced NaN over {nan_fraction:.4%} of the image and this "
-            "endpoint does not publish it: a non-finite decode is a failed generation, "
+            "package does not publish it: a non-finite decode is a failed generation, "
             "not a picture with artefacts",
             code="output_integrity_nan",
         )

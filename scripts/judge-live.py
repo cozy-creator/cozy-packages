@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """ev-003's live verification: the real judge, real renders, real scores.
 
-Not a test suite (tracker README #160). Every section drives the `quality-judge` endpoint
+Not a test suite (tracker README #160). Every section drives the `quality-judge` package
 through `cozy_runtime.internal.local.run_slice` on the RTX 4070, with cozy-eval's own
 prompt builders and parsers on the caller's side, and PRINTS what it observed.
 
@@ -21,7 +21,7 @@ has ground truth for:
   separation  ev-005's owner-labelled populations. `h3-freesel-mn-k16` is 8 pairs of an
               owner-REJECTED sparse-attention arm against its dense reference;
               `h3-freesel-seed-control` is 4 pairs of the SAME arm at two seeds, which a
-              judge must NOT separate. A blinded pairwise read of both, with the endpoint's
+              judge must NOT separate. A blinded pairwise read of both, with the package's
               arm-order swap, is the judge's own null control.
 
 Media comes from `~/cozy/samples` (v1, READ-ONLY) through the corpus's digest-verified
@@ -48,7 +48,7 @@ from cozy_eval.errors import BackendError  # noqa: E402
 from cozy_eval.metrics import temporal  # noqa: E402
 from cozy_eval.metrics.adherence import ask_judge  # noqa: E402
 
-import quality_judge as qj  # noqa: E402  — the endpoint's OWN admission bounds
+import quality_judge as qj  # noqa: E402  — the package's OWN admission bounds
 from slice import SliceTransport  # noqa: E402
 
 EVAL = Path.home() / "cozy_v2" / "cozy-eval"
@@ -161,7 +161,7 @@ class Judges:
     asr: wire.WireTranscriber = field(init=False)
 
     def __post_init__(self) -> None:
-        # The endpoint's admission bounds come from the endpoint MODULE, not from a copy
+        # The package's admission bounds come from the package MODULE, not from a copy
         # in the client: one strip per call for the judge lanes, two for a comparison.
         single = min(qj.MAX_CALLS, qj.MAX_IMAGES // STRIP)
         paired = min(qj.MAX_CALLS, qj.MAX_IMAGES // (2 * STRIP))
@@ -377,7 +377,7 @@ def section_separation(j: Judges) -> None:
     prompt = detail._PAIRWISE_PREAMBLE.format(n=STRIP)
 
     # A = the REFERENCE arm in every call, so a position-biased judge shows up as a
-    # systematic lean rather than as a result. The endpoint swaps the arms itself.
+    # systematic lean rather than as a result. The package swaps the arms itself.
     work = [(label, ref, cand, prompt) for label, (ref, cand) in strips.items()]
     started = time.perf_counter()
     reads = j.pair.compare(work)
@@ -473,7 +473,7 @@ def section_arms(j: Judges) -> None:
         model_ref = "stub://always-fails"
 
         def ask(self, images: list[Any], prompt: str) -> str:
-            raise BackendError("the endpoint refused this call")
+            raise BackendError("the package refused this call")
 
     answers, reason = ask_judge(Failing(), strip, "1. anything?", 1)
     check("a failing judge yields a reason and no answers", not answers and bool(reason), reason)
@@ -603,7 +603,7 @@ def section_report(j: Judges) -> None:
             return reply
 
     class Replay:
-        """A LOCAL judge with no endpoint behind it, answering from the same script."""
+        """A LOCAL judge with no package behind it, answering from the same script."""
 
         def __init__(self, script: list[tuple[str, str]], model_ref: str) -> None:
             self.script = list(script)
@@ -707,7 +707,7 @@ def main() -> int:
     for name in wanted:
         SECTIONS[name](judges)
     print(f"\n{PASS} ok, {FAIL} FAIL — {time.perf_counter() - started:.1f}s, "
-          f"{len(transport.runs)} endpoint requests", flush=True)
+          f"{len(transport.runs)} package requests", flush=True)
     if args.out:
         Path(args.out).write_text(json.dumps(transport.runs, indent=1))
     return 1 if FAIL else 0

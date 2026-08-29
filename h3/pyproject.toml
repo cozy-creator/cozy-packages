@@ -1,5 +1,5 @@
 [project]
-name = "h3-endpoint"
+name = "h3-package"
 version = "1.0.0"
 requires-python = "==3.12.*"
 dependencies = [
