@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-"""Every endpoint lock that carries torch must carry the SAME torch.
+"""Every package lock that carries torch must carry the SAME torch.
 
 Torch, torchvision, torchaudio, triton and the `nvidia-*-cu12` wheels are one ABI-coupled
-unit: torchvision's compiled ops link against torch's C++ ABI, so an endpoint built against
+unit: torchvision's compiled ops link against torch's C++ ABI, so a package built against
 one torch raises undefined-symbol errors under another. Decision #633 gives one
 PlatformTarget exactly one torch family and makes a second family a second substrate
-variant, never a per-endpoint choice — so the drift that matters is BETWEEN this repo's
+variant, never a per-package choice — so the drift that matters is BETWEEN this repo's
 locks, and it is cheap to observe here instead of expensively on a card.
 
     python scripts/torch_family.py
@@ -39,24 +39,24 @@ def family(lock: pathlib.Path) -> dict[str, str]:
 def main() -> int:
     locks = sorted(ROOT.glob("*/uv.lock"))
     if not locks:
-        print("no endpoint lock found — this check would pass vacuously", file=sys.stderr)
+        print("no package lock found — this check would pass vacuously", file=sys.stderr)
         return 1
     seen: dict[str, dict[str, str]] = {}
     drift: list[str] = []
     for lock in locks:
-        endpoint = lock.parent.name
+        package = lock.parent.name
         found = family(lock)
         if not found:
-            print(f"{endpoint}: no torch family (nothing to agree with)")
+            print(f"{package}: no torch family (nothing to agree with)")
             continue
         for name, version in sorted(found.items()):
             first = seen.setdefault(name, {})
             for other, other_version in first.items():
                 if other_version != version:
-                    drift.append(f"{name}: {other} pins {other_version}, {endpoint} pins {version}")
-            first[endpoint] = version
+                    drift.append(f"{name}: {other} pins {other_version}, {package} pins {version}")
+            first[package] = version
         torch = found.get("torch", "(absent)")
-        print(f"{endpoint}: torch {torch}, {len(found)} coupled wheels")
+        print(f"{package}: torch {torch}, {len(found)} coupled wheels")
     if drift:
         print("\nREFUSED — one PlatformTarget, one torch family (#633):", file=sys.stderr)
         for line in sorted(set(drift)):

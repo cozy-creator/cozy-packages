@@ -37,24 +37,24 @@ jobs:
 
       - name: Descriptors are current
         run: |
-          uv run --no-project cozy-runtime describe --dir h3 --check
-          uv run --no-project cozy-runtime describe --dir quality-judge --check
-          uv run --no-project cozy-runtime describe --dir sdxl --check
+          test "$(uv run --no-project cozy-runtime --json --dir h3 describe)" = "$(cat h3/package.descriptor.json)"
+          test "$(uv run --no-project cozy-runtime --json --dir quality-judge describe)" = "$(cat quality-judge/package.descriptor.json)"
+          test "$(uv run --no-project cozy-runtime --json --dir sdxl describe)" = "$(cat sdxl/package.descriptor.json)"
 
-      # An endpoint with no `[project]` pyproject and no lock resolves no `ResolvedWheelSet`
+      # A package with no `[project]` pyproject and no lock resolves no `ResolvedWheelSet`
       # and cannot publish at all, so a stale or absent lock is a release-blocking fact and
-      # belongs in the cheap static job, not only in the heavy per-endpoint ones.
-      - name: Every endpoint has a current lock
+      # belongs in the cheap static job, not only in the heavy per-package ones.
+      - name: Every package has a current lock
         run: |
-          for endpoint in h3 quality-judge sdxl video-assembly; do
-            uv lock --check --project "$endpoint"
+          for package in h3 quality-judge sdxl video-assembly; do
+            uv lock --check --project "$package"
           done
 
       # The torch family is ABI-coupled — torchvision's compiled ops link against torch's
-      # C++ ABI — and #633 gives one PlatformTarget exactly ONE family. An endpoint that
+      # C++ ABI — and #633 gives one PlatformTarget exactly ONE family. A package that
       # drifts onto a second torch fails with undefined-symbol errors at load, so the locks
       # are compared to each other here rather than discovered on a card.
-      - name: One torch family across every endpoint
+      - name: One torch family across every package
         run: |
           uv run --no-project python scripts/torch_family.py
 
@@ -82,7 +82,7 @@ jobs:
       - name: Arms
         run: h3/.venv/bin/python scripts/h3-conform.py
 
-  endpoint-locks:
+  package-locks:
     # Independent so a failure to materialize an exact environment cannot hide behind
     # static analysis. `--no-install-project` because both are virtual projects.
     name: SDXL and quality-judge exact locked environments
@@ -91,7 +91,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        endpoint: [sdxl, quality-judge]
+        package: [sdxl, quality-judge]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -100,13 +100,13 @@ jobs:
       - run: uv python install 3.12
       - name: Exact locked environment
         run: |
-          uv lock --check --project ${{ matrix.endpoint }}
-          cd ${{ matrix.endpoint }}
+          uv lock --check --project ${{ matrix.package }}
+          cd ${{ matrix.package }}
           uv sync --locked --no-cache --no-install-project
       # The compiled extensions are the ABI proof: they raise undefined-symbol errors
       # against the wrong torch, and nothing cheaper observes that.
       - name: The locked stack imports
-        run: ${{ matrix.endpoint }}/.venv/bin/python scripts/endpoint_import.py ${{ matrix.endpoint }}
+        run: ${{ matrix.package }}/.venv/bin/python scripts/package_import.py ${{ matrix.package }}
 
   video-assembly:
     name: Video assembly
@@ -122,5 +122,5 @@ jobs:
       - run: uv run --project video-assembly ruff check video-assembly
       - run: uv run --project video-assembly ruff format --check video-assembly
       - run: uv run --project video-assembly mypy
-      - run: uv run --project video-assembly cozy-runtime describe --dir video-assembly --check
+      - run: test "$(uv run --project video-assembly cozy-runtime --json --dir video-assembly describe)" = "$(cat video-assembly/package.descriptor.json)"
       - run: uv run --project video-assembly python video-assembly/live.py

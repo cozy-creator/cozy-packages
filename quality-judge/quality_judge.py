@@ -1,9 +1,9 @@
-"""`quality-judge` — the evaluation judge family, as an ordinary cozy-runtime endpoint.
+"""`quality-judge` — the evaluation judge family, as an ordinary cozy-runtime package.
 
-The VLM judge is an ENDPOINT, not a job (jobs.md §7, ev-003): request/response scoring on
+The VLM judge is a PACKAGE, not a job (jobs.md §7, ev-003): request/response scoring on
 resident judge models, invoked by eval jobs as ordinary requests. cozy-eval declares five
 structural judge protocols (`Judge` / `SoftJudge` / `Transcriber` / `AudioJudge` /
-`PreferenceScorer`) and holds all the scoring math; this endpoint holds the MODELS and
+`PreferenceScorer`) and holds all the scoring math; this package holds the MODELS and
 nothing else.
 
 Four entrypoints, one per genuinely different read of a resident model:
@@ -20,12 +20,12 @@ Four entrypoints, one per genuinely different read of a resident model:
                 side of the wire.
     transcribe  Speech to text on the resident Whisper. Backs `Transcriber`.
 
-WHAT IS DELIBERATELY NOT HERE — the prompt TEXT. ev-003's checklist says "the endpoint
+WHAT IS DELIBERATELY NOT HERE — the prompt TEXT. ev-003's checklist says "the package
 constructs prompts"; the measurement says otherwise, and the divergence is recorded on the
 issue. `build_judge_prompt`, `DETAIL_AXES` and `VQASCORE_TEMPLATE` are versioned WITH
 cozy-eval's checklist format, which is locked-core library surface: a second copy here — or
 an import that pins a library version into a deployed image — is a second authority whose
-drift is invisible in every report either side stamps. What this endpoint DOES construct is
+drift is invisible in every report either side stamps. What this package DOES construct is
 the part that genuinely belongs to the model: the chat template, the image tiling, the
 answer-token positions and the decode. Metric text in, raw model reads out.
 
@@ -66,7 +66,7 @@ MAX_CALLS = 64
 MAX_IMAGES = 256
 MAX_AUDIO_SECONDS = 1800.0
 
-#: Whisper's one input rate. Resampling is the endpoint's job — a caller that had to know it
+#: Whisper's one input rate. Resampling is the package's job — a caller that had to know it
 #: would need a resampler in a library whose base install is numpy + msgspec.
 ASR_RATE = 16_000
 
@@ -98,7 +98,7 @@ class JudgeCall(msgspec.Struct, forbid_unknown_fields=True):
     """In the order the prompt refers to them. ASSETS, not inline bytes: a request document
     is CONTROL (the supervisor/executor seam caps a frame at 64 KiB and says so), so media
     arrives digest-verified through the delivery grant and is read from the attempt spool.
-    An inline-bytes schema would have made this endpoint unservable by construction."""
+    An inline-bytes schema would have made this package unservable by construction."""
 
 
 class JudgeRequest(msgspec.Struct, forbid_unknown_fields=True):
@@ -151,7 +151,7 @@ class SoftResponse(msgspec.Struct):
 
 
 class PairCall(msgspec.Struct, forbid_unknown_fields=True):
-    """One blinded comparison. The endpoint is never told which side is the candidate."""
+    """One blinded comparison. The package is never told which side is the candidate."""
 
     id: str
     prompt: str
@@ -289,7 +289,7 @@ def resample_mono(samples: Any, rate: int, target: int) -> Any:
     """Linear resample of a mono float32 track. Deliberately the cheap one: Whisper's own
     front end is a 16 kHz mel filterbank and the judge lane's inputs are already
     band-limited generator output, so a polyphase kernel would buy accuracy nothing here
-    can read — and it would need a dependency this endpoint does not otherwise have."""
+    can read — and it would need a dependency this package does not otherwise have."""
     import numpy as np
 
     if rate == target or samples.size == 0:
@@ -310,7 +310,7 @@ def persist_buffers(module: Any) -> Any:
     uninitialized memory under a derived name. Re-executing a derived table on the target
     device is cr-008b's staging pass and does not exist yet, so the tables are PRECOMPUTED
     into the artifact instead — the same choice `tiny_h3`'s modulation-table fixture makes. Here
-    that is three rope tables (0.5 MiB); the endpoint and the artifact writer call this one
+    that is three rope tables (0.5 MiB); the package and the artifact writer call this one
     function, so the topology they agree on cannot drift.
     """
     for sub in module.modules():
@@ -330,7 +330,7 @@ class JudgePipeline:
     the immutable config capability — tokenizer definition, chat template and image
     preprocessing all ride there. cr-008a's artifact carries exactly one non-tensor
     carrier (`Config`), so that is where a checkpoint's non-tensor assets live; if
-    TensorFS grows a dedicated one, this moves with no change to the endpoint's shape.
+    TensorFS grows a dedicated one, this moves with no change to the package's shape.
     """
 
     def __init__(self, config: Config) -> None:

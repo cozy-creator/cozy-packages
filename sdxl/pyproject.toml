@@ -1,13 +1,13 @@
-# One dependency authority for this endpoint: this file plus `uv.lock`. Cozy-owned libraries
+# One dependency authority for this package: this file plus `uv.lock`. Cozy-owned libraries
 # are immutable local wheels; everything else is an exact lock entry.
 #
 # The torch family is pinned to the SAME build H3 locks. Torch, torchvision and triton are
-# one ABI-coupled unit — an endpoint built against one torch fails with undefined-symbol
+# one ABI-coupled unit — a package built against one torch fails with undefined-symbol
 # errors under another — and decision #633 gives one PlatformTarget exactly one family, so a
-# second family here would be a second substrate, never a per-endpoint choice.
+# second family here would be a second substrate, never a per-package choice.
 
 [project]
-name = "sdxl-endpoint"
+name = "sdxl-package"
 version = "1.0.0"
 requires-python = "==3.12.*"
 dependencies = [

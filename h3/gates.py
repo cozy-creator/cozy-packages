@@ -37,7 +37,7 @@ def _cozy_eval() -> tuple[Any, Any, Any]:
         import cozy_eval.metrics.audio as ce_metrics_audio
     except ImportError as exc:
         raise OutputError(
-            "cozy-eval is absent, so this endpoint cannot prove its generated tensors",
+            "cozy-eval is absent, so this package cannot prove its generated tensors",
             code="output_gate_unavailable",
         ) from exc
     return ce_audio, ce_integrity, ce_metrics_audio

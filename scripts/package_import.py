@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""Import one endpoint's real stack inside its own locked environment.
+"""Import one package's real stack inside its own locked environment.
 
 The compiled extensions are the ABI proof. `torchvision.ops` and `torch` resolve C++
 symbols at import, so a lock that pins the wrong torch fails HERE with an undefined-symbol
-error — a fact no static check and no lock comparison can reach. Run it with the endpoint's
+error — a fact no static check and no lock comparison can reach. Run it with the package's
 own interpreter, never the checking venv:
 
-    sdxl/.venv/bin/python scripts/endpoint_import.py sdxl
+    sdxl/.venv/bin/python scripts/package_import.py sdxl
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-#: endpoint directory -> (module to import, compiled peers that must load beside it)
-ENDPOINTS = {
+#: package directory -> (module to import, compiled peers that must load beside it)
+PACKAGES = {
     "sdxl": ("sdxl", ("torch", "torchvision", "torchvision.ops", "triton", "transformers",
                       "diffusers", "tensorfs", "av")),
     "quality-judge": ("quality_judge", ("torch", "triton", "transformers", "tokenizers",
@@ -29,19 +29,19 @@ ENDPOINTS = {
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2 or argv[1] not in ENDPOINTS:
-        print(f"usage: {argv[0]} <{'|'.join(ENDPOINTS)}>", file=sys.stderr)
+    if len(argv) != 2 or argv[1] not in PACKAGES:
+        print(f"usage: {argv[0]} <{'|'.join(PACKAGES)}>", file=sys.stderr)
         return 2
-    endpoint = argv[1]
-    module_name, peers = ENDPOINTS[endpoint]
-    sys.path.insert(0, str(ROOT / endpoint))
+    package = argv[1]
+    module_name, peers = PACKAGES[package]
+    sys.path.insert(0, str(ROOT / package))
     for peer in peers:
         importlib.import_module(peer)
     torch = importlib.import_module("torch")
-    print(f"{endpoint}: torch {torch.__version__}, {len(peers)} peers imported")
+    print(f"{package}: torch {torch.__version__}, {len(peers)} peers imported")
     module = importlib.import_module(module_name)
     app = module.app
-    print(f"{endpoint}: {module_name}:app registers {sorted(app._registry)}")
+    print(f"{package}: {module_name}:app registers {sorted(app._registry)}")
     return 0
 
 

@@ -1,0 +1,4 @@
+owner: codex /root/kong_config
+purpose: se-018 source package manifest hardcut
+branch: se-018-package-source
+base: a3c7f91f4d1f9e764a08ec0b5674d4ade170f784

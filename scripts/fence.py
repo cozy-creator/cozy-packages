@@ -1,21 +1,21 @@
 #!/usr/bin/env python
-"""Structural fences for the endpoint packages. Static analysis, never a test suite.
+"""Structural fences for the package sources. Static analysis, never a test suite.
 
-Twelve properties CI must not let drift, each checked as a fact about the source rather than
+Thirteen properties CI must not let drift, each checked as a fact about the source rather than
 as a convention someone remembers:
 
-  1. author-surface-only  an endpoint imports `cozy_runtime.author` and nothing else from
+  1. author-surface-only  a package imports `cozy_runtime.author` and nothing else from
                           the runtime (boundaries.md). `cozy_runtime.internal`, the worker
-                          protocol, TensorFS or a hub client inside endpoint code is the
+                          protocol, TensorFS or a hub client inside package code is the
                           boundary violation the whole author surface exists to prevent.
   2. no-identifiers       code states CAPABILITY, bindings state SELECTION (§1.0/§1.1).
                           A model, release, checkpoint digest or model revision spelled in
-                          endpoint code is a binding hard-coded into a build.
-  3. torch-free-import    endpoint module scope may IMPORT nothing heavy: `describe` runs
+                          package code is a binding hard-coded into a build.
+  3. torch-free-import    package module scope may IMPORT nothing heavy: `describe` runs
                           in a disposable container with no GPU and no weights, and a
                           module-scope `import torch` makes the surface contract
                           unreadable without a CUDA image. Checked over the IMPORT CLOSURE
-                          of `[application] object`, so an endpoint may bring its own model
+                          of `[application] object`, so a package may bring its own model
                           library (H3 brings the whole MiniMax architecture) as long as
                           nothing reaches it at import time.
   4. no-memory-choreography
@@ -25,7 +25,7 @@ as a convention someone remembers:
   5. no-test-suite        tracker README #160.
   6. h3-media-boundary    H3 consumes Runtime decoded values; it does not open media itself.
   7. h3-official-hardcut  the official dual-task implementation has no legacy/community route.
-  8. env-free-endpoints   endpoint code reads no environment (se-016). Configuration is
+  8. env-free-packages   package code reads no environment (se-016). Configuration is
                           typed bindings and settings; the executor ERASES `COZY_*`/token
                           env anyway, so an env read is a channel that never works in
                           production.
@@ -35,7 +35,10 @@ as a convention someone remembers:
                           committed descriptor/1 files carry no retired unused facts.
  11. h3-adaln-pruned-vocabulary
                           H3 source and contracts carry no retired modulation spelling.
- 12. typed-model-bindings endpoint.toml names selected model resources with `model` only.
+12. typed-model-bindings package.toml names selected model resources with `model` only.
+13. package-manifest-hardcut
+                          package.toml and PackageDescriptor/1 are the only source metadata;
+                          the retired source filenames and canonical namespace are absent.
 
     nice -n 19 .venv/bin/python scripts/fence.py
 """
@@ -56,12 +59,13 @@ import tomllib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 Fence = tuple[list[str], str]
 
-#: Every endpoint project: a directory with an endpoint.toml.
+
+#: Every package project: a directory with a package.toml.
 def projects() -> list[pathlib.Path]:
-    return sorted(p.parent for p in ROOT.glob("*/endpoint.toml"))
+    return sorted(p.parent for p in ROOT.glob("*/package.toml"))
 
 
-def endpoint_modules() -> list[pathlib.Path]:
+def package_modules() -> list[pathlib.Path]:
     return sorted(f for project in projects() for f in project.rglob("*.py") if ours(f))
 
 
@@ -145,21 +149,21 @@ def module_scope_imports(tree: ast.Module, package: str = "") -> Iterator[tuple[
 
 def fence_author_surface() -> Fence:
     bad: list[str] = []
-    for path in endpoint_modules():
+    for path in package_modules():
         tree = ast.parse(path.read_text(), filename=str(path))
         for module, line in imports(tree):
             top = module.split(".")[0]
             if top == "cozy_runtime" and not module.startswith("cozy_runtime.author"):
                 bad.append(
-                    f"{rel(path)}:{line}: {module!r} — an endpoint imports "
+                    f"{rel(path)}:{line}: {module!r} — a package imports "
                     "`cozy_runtime.author` and nothing else from the runtime"
                 )
             if top in ("tensorfs", "tensorhub", "cozy_creator", "grpc", "requests", "httpx"):
                 bad.append(
-                    f"{rel(path)}:{line}: {module!r} — endpoint code speaks to no store, "
+                    f"{rel(path)}:{line}: {module!r} — package code speaks to no store, "
                     "no hub and no network; every byte it sees arrives as a typed input"
                 )
-    return bad, f"{len(endpoint_modules())} endpoint modules import author only"
+    return bad, f"{len(package_modules())} package modules import author only"
 
 
 #: Things that identify an ARTIFACT rather than a capability. Deliberately literal: this
@@ -174,7 +178,7 @@ IDENTIFIERS = (
 
 def fence_identifiers() -> Fence:
     bad: list[str] = []
-    for path in endpoint_modules():
+    for path in package_modules():
         source = path.read_text()
         # DOCSTRINGS AND COMMENTS ONLY are blanked, and the distinction is load-bearing:
         # prose names the runtime's own docs and the pinned upstream revision this port
@@ -186,10 +190,10 @@ def fence_identifiers() -> Fence:
             for pattern, what in IDENTIFIERS:
                 if pattern.search(line):
                     bad.append(
-                        f"{rel(path)}:{line_no}: {what} in endpoint code — code states "
+                        f"{rel(path)}:{line_no}: {what} in package code — code states "
                         f"capability, bindings state selection: {line.strip()[:80]}"
                     )
-    return bad, f"{len(IDENTIFIERS)} identifier shapes over {len(endpoint_modules())} modules"
+    return bad, f"{len(IDENTIFIERS)} identifier shapes over {len(package_modules())} modules"
 
 
 def _doc_spans(source: str) -> set[tuple[int, int]]:
@@ -214,8 +218,10 @@ def _strip_docs(source: str) -> str:
     docs = _doc_spans(source)
     return _blank(
         source,
-        lambda token: token.type == tokenize.COMMENT
-        or (token.type == tokenize.STRING and token.start in docs),
+        lambda token: (
+            token.type == tokenize.COMMENT
+            or (token.type == tokenize.STRING and token.start in docs)
+        ),
     )
 
 
@@ -238,25 +244,37 @@ def _blank(source: str, select: Callable[[tokenize.TokenInfo], bool]) -> str:
     return "\n".join("".join(row) for row in out)
 
 
-HEAVY = {"torch", "transformers", "diffusers", "PIL", "numpy", "cv2", "safetensors",
-         "tokenizers", "accelerate", "scipy"}
+HEAVY = {
+    "torch",
+    "transformers",
+    "diffusers",
+    "PIL",
+    "numpy",
+    "cv2",
+    "safetensors",
+    "tokenizers",
+    "accelerate",
+    "scipy",
+}
 
 
 def entry_module(project: pathlib.Path) -> str:
     """The module `describe` imports, from the project's own `[application] object`."""
-    for line in (project / "endpoint.toml").read_text().splitlines():
+    for line in (project / "package.toml").read_text().splitlines():
         match = re.match(r"""\s*object\s*=\s*["']([^"':]+):""", line)
         if match:
             return match.group(1)
-    raise SystemExit(f"{rel(project)}/endpoint.toml declares no [application] object")
+    raise SystemExit(f"{rel(project)}/package.toml declares no [application] object")
 
 
 def resolve(project: pathlib.Path, module: str) -> pathlib.Path | None:
     """An in-project module name to its file. Out-of-project names resolve to None — a
     third-party package's own module scope is its business, not this fence's."""
     parts = module.split(".")
-    for candidate in (project.joinpath(*parts).with_suffix(".py"),
-                      project.joinpath(*parts) / "__init__.py"):
+    for candidate in (
+        project.joinpath(*parts).with_suffix(".py"),
+        project.joinpath(*parts) / "__init__.py",
+    ):
         if candidate.is_file():
             return candidate
     return None
@@ -265,10 +283,10 @@ def resolve(project: pathlib.Path, module: str) -> pathlib.Path | None:
 def fence_light_import() -> Fence:
     """THE IMPORT CLOSURE, not the file.
 
-    An endpoint that brings its own model library (H3 brings the whole MiniMax
+    A package that brings its own model library (H3 brings the whole MiniMax
     architecture) has files that import torch at module scope and are imported only inside
     `load`. The per-file version of this rule refuses those and admits the failure it
-    exists to prevent — a light-looking endpoint module importing a heavy one indirectly.
+    exists to prevent — a light-looking package module importing a heavy one indirectly.
     So the rule is: nothing reachable from `[application] object` BY MODULE-SCOPE IMPORTS
     may pull a heavy package. `describe` runs in a container with no GPU, no weights and
     no CUDA image, and this is the property that keeps it running there.
@@ -310,46 +328,60 @@ def fence_light_import() -> Fence:
 #: `.to(x.device)`. Copying a decoded result to the host for the output tail, and following
 #: a weight to wherever the runtime already put it, are DATA FLOW across the one boundary
 #: an author still owns — not memory management. A blunter pattern reads as a stronger
-#: proof and is a worse one: it turns red on every shipped endpoint's output tail, and a
+#: proof and is a worse one: it turns red on every shipped package's output tail, and a
 #: fence that must be suppressed is a fence nobody reads. What is NOT covered here is
 #: therefore reviewed rather than proven. se-001's record named ONE live instance —
 #: `sdxl.py` constructing `torch.device("cuda", 0)`, an author naming a device — and #534c
 #: closed it: the handler reads the envelope off the conditioning the placed encoders
-#: returned. No endpoint here names a device now, and this fence still does not prove that.
+#: returned. No package here names a device now, and this fence still does not prove that.
 CHOREOGRAPHY = (
     (re.compile(r"\.pin_memory\(|\.share_memory\(|\bpinned_memory\b"), "host pinning"),
-    (re.compile(r"\btorch\.cuda\.(empty_cache|synchronize|set_device|memory_|Stream|Event)"),
-     "an allocator or stream command"),
-    (re.compile(r"\bdevice_map\b|\benable_model_cpu_offload\b|\benable_sequential_cpu_offload\b"
-                r"|\baccelerate\.dispatch_model\b|\boffload_state_dict\b"),
-     "an offload directive"),
-    (re.compile(r"\btorch\.compile\b|\bmark_dynamic\b|\btorch\.export\b|\baot_compile\b"),
-     "a compile marker"),
-    (re.compile(r"\bquantize_\b|\bbitsandbytes\b|\btorchao\b|\bGPTQ\b|\bAwqConfig\b"
-                r"|\bquantization_config\b"),
-     "runtime quantization"),
-    (re.compile(r"\bsafe_open\b|\bsafetensors\.torch\b|\btorch\.load\b|\bload_state_dict\b"),
-     "a checkpoint read or source-format parse"),
+    (
+        re.compile(r"\btorch\.cuda\.(empty_cache|synchronize|set_device|memory_|Stream|Event)"),
+        "an allocator or stream command",
+    ),
+    (
+        re.compile(
+            r"\bdevice_map\b|\benable_model_cpu_offload\b|\benable_sequential_cpu_offload\b"
+            r"|\baccelerate\.dispatch_model\b|\boffload_state_dict\b"
+        ),
+        "an offload directive",
+    ),
+    (
+        re.compile(r"\btorch\.compile\b|\bmark_dynamic\b|\btorch\.export\b|\baot_compile\b"),
+        "a compile marker",
+    ),
+    (
+        re.compile(
+            r"\bquantize_\b|\bbitsandbytes\b|\btorchao\b|\bGPTQ\b|\bAwqConfig\b"
+            r"|\bquantization_config\b"
+        ),
+        "runtime quantization",
+    ),
+    (
+        re.compile(r"\bsafe_open\b|\bsafetensors\.torch\b|\btorch\.load\b|\bload_state_dict\b"),
+        "a checkpoint read or source-format parse",
+    ),
 )
 
 
 def fence_no_choreography() -> Fence:
     """se-001's structural deletion proof: the replaced mechanisms are gone from the
-    SOURCE, not from a reviewer's memory. Applies to every file in an endpoint project,
+    SOURCE, not from a reviewer's memory. Applies to every file in a package project,
     model library included — a vendored architecture that stages or re-quantizes its own
     weights is exactly the thing the port was supposed to remove."""
     bad: list[str] = []
-    for path in endpoint_modules():
+    for path in package_modules():
         code = _strip_literals(path.read_text())
         for line_no, line in enumerate(code.splitlines(), 1):
             for pattern, what in CHOREOGRAPHY:
                 if pattern.search(line):
                     bad.append(
-                        f"{rel(path)}:{line_no}: {what} in endpoint code — device "
+                        f"{rel(path)}:{line_no}: {what} in package code — device "
                         f"placement, offload and encoding are the runtime's, not the "
                         f"author's: {line.strip()[:80]}"
                     )
-    modules = len(endpoint_modules())
+    modules = len(package_modules())
     return bad, f"{len(CHOREOGRAPHY)} deleted-mechanism shapes over {modules} modules"
 
 
@@ -375,9 +407,7 @@ def fence_h3_media_boundary() -> Fence:
         tree = ast.parse(path.read_text(), filename=str(path))
         for module, line in imports(tree):
             if module.split(".")[0] in forbidden_imports:
-                bad.append(
-                    f"{rel(path)}:{line}: imports {module!r} — Runtime owns media decode"
-                )
+                bad.append(f"{rel(path)}:{line}: imports {module!r} — Runtime owns media decode")
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Attribute)
@@ -410,9 +440,7 @@ def fence_h3_official_hardcut() -> Fence:
         tree = ast.parse(path.read_text(), filename=str(path))
         for module, line in imports(tree):
             if module.split(".")[0] in forbidden_import_roots:
-                bad.append(
-                    f"{rel(path)}:{line}: imports community implementation {module!r}"
-                )
+                bad.append(f"{rel(path)}:{line}: imports community implementation {module!r}")
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
@@ -428,10 +456,10 @@ _ENV_ATTRS = {"environ", "environb", "getenv", "getenvb", "putenv", "unsetenv"}
 
 
 def fence_no_env() -> Fence:
-    """se-016: any `os.environ`/`os.getenv` spelling in endpoint code is red — whether
+    """se-016: any `os.environ`/`os.getenv` spelling in package code is red — whether
     dotted, imported by name, or aliased at import."""
     bad: list[str] = []
-    for path in endpoint_modules():
+    for path in package_modules():
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
             if (
@@ -441,7 +469,7 @@ def fence_no_env() -> Fence:
                 and node.attr in _ENV_ATTRS
             ):
                 bad.append(
-                    f"{rel(path)}:{node.lineno}: os.{node.attr} — endpoint code reads no "
+                    f"{rel(path)}:{node.lineno}: os.{node.attr} — package code reads no "
                     "environment; configuration arrives as typed bindings and settings"
                 )
             if isinstance(node, ast.ImportFrom) and node.module == "os":
@@ -449,45 +477,45 @@ def fence_no_env() -> Fence:
                     if alias.name in _ENV_ATTRS:
                         bad.append(
                             f"{rel(path)}:{node.lineno}: from os import {alias.name} — "
-                            "endpoint code reads no environment"
+                            "package code reads no environment"
                         )
-    modules = len(endpoint_modules())
+    modules = len(package_modules())
     return bad, f"{len(_ENV_ATTRS)} env-read spellings absent from {modules} modules"
 
 
 def fence_h3_binding_identity() -> Fence:
     """A release name is product identity, not the issue that happened to cut it."""
-    binding = (ROOT / "h3" / "endpoint.toml").read_text()
+    binding = (ROOT / "h3" / "package.toml").read_text()
     releases = re.findall(r'^release\s*=\s*"([^"]+)"\s*$', binding, flags=re.MULTILINE)
     lanes = re.findall(r'^lane\s*=\s*"([^"]+)"\s*$', binding, flags=re.MULTILINE)
     bad: list[str] = []
     if not releases:
-        bad.append("h3/endpoint.toml: no default model release is bound")
+        bad.append("h3/package.toml: no default model release is bound")
     if len(set(releases)) > 1:
-        bad.append(f"h3/endpoint.toml: default model bindings disagree: {sorted(set(releases))}")
+        bad.append(f"h3/package.toml: default model bindings disagree: {sorted(set(releases))}")
     if releases != ["1.0.0"]:
-        bad.append(f"h3/endpoint.toml: default release is {releases!r}, expected ['1.0.0']")
+        bad.append(f"h3/package.toml: default release is {releases!r}, expected ['1.0.0']")
     for release in releases:
         if re.search(r"(?:^|[-_.])se-\d+(?:$|[-_.])", release):
             bad.append(
-                f"h3/endpoint.toml: release {release!r} contains a tracker issue, "
+                f"h3/package.toml: release {release!r} contains a tracker issue, "
                 "not only content identity"
             )
     if lanes != ["profile=fp8-adaln-pruned"]:
         bad.append(
-            "h3/endpoint.toml: bare local binding must use the exact "
+            "h3/package.toml: bare local binding must use the exact "
             f"profile selector, got {lanes!r}"
         )
     return bad, "H3 binds release 1.0.0 with the Hopper/local profile=fp8-adaln-pruned selector"
 
 
 def fence_typed_model_bindings() -> Fence:
-    """Every endpoint default uses the typed model noun; the generic key is retired."""
+    """Every package default uses the typed model noun; the generic key is retired."""
 
     bad: list[str] = []
     count = 0
     for project in projects():
-        path = project / "endpoint.toml"
+        path = project / "package.toml"
         document = tomllib.loads(path.read_text())
         bindings = document.get("bindings", {})
         if not isinstance(bindings, dict):
@@ -504,11 +532,11 @@ def fence_typed_model_bindings() -> Fence:
 
 def fence_h3_adaln_pruned_vocabulary() -> Fence:
     """The pre-launch hardcut has one name; the retired modulation name is refused."""
-    retired = "ba" "ked"
+    retired = "baked"
     paths = {
         ROOT / "README.md",
-        ROOT / "h3" / "endpoint.descriptor.json",
-        ROOT / "h3" / "endpoint.toml",
+        ROOT / "h3" / "package.descriptor.json",
+        ROOT / "h3" / "package.toml",
         *h3_owned_modules(),
         *(ROOT / "h3" / "timestep-plans").glob("*.json"),
     }
@@ -524,13 +552,38 @@ def fence_h3_adaln_pruned_vocabulary() -> Fence:
 
 def fence_descriptor_minimality() -> Fence:
     forbidden = {
-        "attribute", "capabilities", "config_schema", "context_facts", "default",
-        "default_sources", "demand", "discriminator", "emits_media", "error_model",
-        "frozen", "gpu", "kind", "max_audio_channels", "max_audio_samples",
-        "max_decoded_bytes", "max_pixels_per_frame", "max_video_frames", "placement",
-        "preflight", "protocol", "request_features", "requires", "schema",
-        "secret_schema", "secrets", "services", "settings", "shape_axes", "struct",
-        "surface_digest", "values",
+        "attribute",
+        "capabilities",
+        "config_schema",
+        "context_facts",
+        "default",
+        "default_sources",
+        "demand",
+        "discriminator",
+        "emits_media",
+        "error_model",
+        "frozen",
+        "gpu",
+        "kind",
+        "max_audio_channels",
+        "max_audio_samples",
+        "max_decoded_bytes",
+        "max_pixels_per_frame",
+        "max_video_frames",
+        "placement",
+        "preflight",
+        "protocol",
+        "request_features",
+        "requires",
+        "schema",
+        "secret_schema",
+        "secrets",
+        "services",
+        "settings",
+        "shape_axes",
+        "struct",
+        "surface_digest",
+        "values",
     }
     bad: list[str] = []
 
@@ -546,16 +599,34 @@ def fence_descriptor_minimality() -> Fence:
 
     expected = {"application", "entrypoints", "format", "jobs"}
     for project in projects():
-        path = project / "endpoint.descriptor.json"
+        path = project / "package.descriptor.json"
         try:
             document = json.loads(path.read_bytes())
         except (OSError, json.JSONDecodeError) as exc:
             bad.append(f"{rel(path)}: unreadable: {exc}")
             continue
-        if set(document) != expected or document.get("format") != "cozy.endpoint.descriptor/1":
+        if set(document) != expected or document.get("format") != "cozy.package.descriptor/1":
             bad.append(f"{rel(path)}: root fields/format are not exact descriptor/1")
         visit(document, rel(path))
     return bad, f"{len(projects())} descriptor/1 files carry only consumed facts"
+
+
+def fence_package_manifest_hardcut() -> Fence:
+    bad: list[str] = []
+    retired_noun = "end" + "point"
+    retired_namespace = f"cozy.{retired_noun}."
+    for retired in (f"{retired_noun}.toml", f"{retired_noun}.descriptor.json"):
+        bad.extend(rel(path) for path in ROOT.glob(f"*/{retired}"))
+    checked = [
+        ROOT / "README.md",
+        *ROOT.glob("scripts/*.py"),
+        *(project / "package.toml" for project in projects()),
+        *(project / "package.descriptor.json" for project in projects()),
+    ]
+    for path in checked:
+        if retired_namespace in path.read_text():
+            bad.append(f"{rel(path)}: retired Cozy package canonical namespace")
+    return bad, f"{len(projects())} package manifests and descriptors use one package namespace"
 
 
 FENCES = (
@@ -566,11 +637,12 @@ FENCES = (
     ("no-test-suite", fence_no_tests),
     ("h3-media-boundary", fence_h3_media_boundary),
     ("h3-official-hardcut", fence_h3_official_hardcut),
-    ("env-free-endpoints", fence_no_env),
+    ("env-free-packages", fence_no_env),
     ("h3-binding-identity", fence_h3_binding_identity),
     ("typed-model-bindings", fence_typed_model_bindings),
     ("h3-adaln-pruned-vocabulary", fence_h3_adaln_pruned_vocabulary),
     ("descriptor-minimality", fence_descriptor_minimality),
+    ("package-manifest-hardcut", fence_package_manifest_hardcut),
 )
 
 

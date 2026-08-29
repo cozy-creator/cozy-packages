@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 """Build the `quality-judge` artifacts: HF checkpoint -> TensorFS store + artifact config.
 
-Not part of the endpoint and not a test. This is the ARTIFACT WRITER's stand-in: on the
+Not part of the package and not a test. This is the ARTIFACT WRITER's stand-in: on the
 product path a judge checkpoint is an ordinary catalog release that `tfs-003`'s converter
 ingested and the hub binds; here the same bytes are written into a local TensorFS store so
-the endpoint can be run through `run_slice` on this box with no hub and no coordinator.
+the package can be run through `run_slice` on this box with no hub and no coordinator.
 
-It builds the model through the ENDPOINT'S OWN factory (`quality_judge.build_*`) rather
+It builds the model through the PACKAGE'S OWN factory (`quality_judge.build_*`) rather
 than through a second construction path, so the topology the artifact carries and the
-topology the endpoint demands are the same topology by construction — including the rope
+topology the package demands are the same topology by construction — including the rope
 tables `persist_buffers` bakes in, which a separate writer would silently omit and the fill
 plane would then refuse at serve time.
 
@@ -93,7 +93,7 @@ FAMILIES: tuple[Family, ...] = (
 #: `pixels / 1024` visual tokens per image, so 401 408 px is 392 tokens — three frames of a
 #: pairwise comparison then cost ~2 400 tokens of context on an 8 GiB card. The upstream
 #: default is 16 777 216 px (16 384 tokens for ONE image), which is a fine default for a
-#: 80 GiB server and an OOM here. Recorded in the artifact, not in the endpoint: it is a
+#: 80 GiB server and an OOM here. Recorded in the artifact, not in the package: it is a
 #: property of THIS deployment's card, and a bigger card rebinds rather than re-codes.
 JUDGE_MAX_PIXELS = 401_408
 
@@ -103,7 +103,7 @@ def read_json(path: Path) -> dict[str, Any]:
 
 
 #: `Config`'s carrier rule, restated here because the artifact writer must not WRITE what
-#: the endpoint would then be refused for reading. An upstream config carries provenance
+#: the package would then be refused for reading. An upstream config carries provenance
 #: keys (`_name_or_path`) naming the directory it was exported from, which is exactly the
 #: source carrier no factory may see; dropping them is the writer's job, and saying which
 #: ones were dropped is how that stays visible instead of silent.
@@ -226,7 +226,7 @@ def st_header(path: Path) -> list[tuple[str, str, list[int], int, int]]:
 
 
 def materialize(family: Family, config: dict[str, Any], out: Path) -> dict[str, Any]:
-    """Build through the endpoint's factory, load the real weights, write safetensors."""
+    """Build through the package's factory, load the real weights, write safetensors."""
     import torch
     from cozy_runtime.author import Config
     from safetensors.torch import load_file, save_file
@@ -247,7 +247,7 @@ def materialize(family: Family, config: dict[str, Any], out: Path) -> dict[str, 
     if report.unexpected_keys:
         raise SystemExit(
             f"{family.name}: the checkpoint carries {len(report.unexpected_keys)} keys the "
-            f"endpoint's construction has no destination for: {report.unexpected_keys[:6]}"
+            f"package's construction has no destination for: {report.unexpected_keys[:6]}"
         )
     # `assign=True` REBINDS every loaded parameter, which severs a weight tie the config
     # declares (`tie_word_embeddings`). Re-tying is not cosmetic here: the artifact is

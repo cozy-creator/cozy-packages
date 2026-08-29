@@ -7,7 +7,7 @@
 #
 # THE RUNG IS A RELEASE OF THE SAME MODEL REPO. `cozy/sdxl@fp8` is cr-006's encoded UNet
 # over the same three other components, byte-identical and deduped in the CAS; releasing
-# this endpoint against it changes one line here and nothing in the source. Selecting a
+# this package against it changes one line here and nothing in the source. Selecting a
 # rung WITHOUT a second release wants `--lane` (cl-005) and, for both rungs offered under
 # ONE binding with the delivery ladder choosing between them, the `variants`/`objective`
 # record shape cr-008c built — neither of which the local coordinator writes yet. Both are

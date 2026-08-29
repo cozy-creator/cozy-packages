@@ -3,19 +3,19 @@
 This directory has one Python dependency authority: `pyproject.toml` plus
 `uv.lock`. Cozy-owned libraries are immutable local wheels; third-party
 packages are exact lock entries. TensorFS is the Runtime fill reader inside the isolated
-endpoint generation, and Pillow is not a direct endpoint dependency (it remains a transitive
+package generation, and Pillow is not a direct package dependency (it remains a transitive
 dependency of the pinned model stack).
 
 ## Cozy-owned wheels
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.3-py3-none-any.whl` | `cozy-runtime` `13ebb22c7dfbfecef18b09806f604f1fc8eee027` | 679,123 | `6ab9228a9dbd7a10a16215576bef06385de23874dbfe797db02f8ee734e7284b` |
+| `vendor/cozy_runtime-0.0.3-py3-none-any.whl` | `cozy-runtime` `a675e1085300d3b21e56f4787be630853c2e8393` | 710,824 | `1816d1b73ca8b0886afd0d511cb949f83dd64d2444b2c53645a77a650e742ef4` |
 | `vendor/cozy_eval-2.3.0-py3-none-any.whl` | `cozy-eval` `fe8c7d2ead882dded2595e33af73101040792bd8` | 295,046 | `87830e9461f5b98b699e1ba7e1d2fec2dd37bea63d7b8ae8403506835e427a26` |
 | `vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl` | `tensorfs` `4f3d16dff35d195f3709f06b6dc77f95bddfe64b` | 1,070,730 | `0dc98c4a81a7d7e5dd2b9009bb2035b838f1d60d34720d9121f69a2fc46c8ce9` |
 
-The checked-in Runtime wheel reproduced byte-for-byte on 2026-08-27, the Eval wheel on
-2026-08-26, and the TensorFS wheel on 2026-08-28. Runtime and Eval used uv 0.9.18;
+The checked-in Runtime wheel was built from the exact package-domain commit on 2026-08-29,
+the Eval wheel on 2026-08-26, and the TensorFS wheel on 2026-08-28. Runtime and Eval used uv 0.9.18;
 TensorFS used maturin 1.14.1 and Rust 1.91.1:
 
 ```sh
@@ -36,7 +36,7 @@ sha256sum "$runtime_out"/*.whl "$eval_out"/*.whl "$tensorfs_out"/*.whl
 ```
 
 The source checkouts were at the commits in the table. The Runtime wheel
-metadata declares `av>=18.1,<19` only for its `media` extra; this endpoint asks
+metadata declares `av>=18.1,<19` only for its `media` extra; this package asks
 for `cozy-runtime[media]==0.0.3`.
 
 ## MiniMax H3 tokenizer and processor
@@ -53,12 +53,12 @@ These package assets are the one unweighted authority. The bound artifact
 owns weighted component configs and must not repeat the tokenizer vocabulary
 or processor settings. Runtime `Config` intentionally validates mapping keys;
 a raw tokenizer vocabulary contains path-like tokens and is not a legal
-component-config mapping. The endpoint does not bypass that validation.
+component-config mapping. The package does not bypass that validation.
 
 The weighted text-encoder config carries the closed
 `cozy.minimax_h3.text_conditioner/1` extension. It fixes the source architecture to
 Qwen3-VL, retains decoder layers 0–49, selects pre-norm hidden state 50, and declares
-the language-model head absent. The endpoint keeps the ordinary Transformers `.model`
+the language-model head absent. The package keeps the ordinary Transformers `.model`
 and `.config` surface while final norm/head become parameterless identities. Runtime's
 construction census therefore contains exactly 902 BF16 destinations; the removed tail
 is not a hidden fetch or execution mode.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Installed-endpoint MiniMax-H3 local proof stage.
+"""Installed-package MiniMax-H3 local proof stage.
 
 Run this inside the fixed RunPod worker only after external provider and release receipts exist.
 It executes the selected public actions through the installed Runtime, probes their stored
@@ -104,28 +104,28 @@ def _schedule_digests(document: dict[str, Any]) -> dict[str, str]:
             "audio_timestep_digest": _float_digest(timesteps("target_audio")),
         }
     except (KeyError, StopIteration, TypeError, ValueError) as exc:
-        raise RuntimeError("selected endpoint timestep plan is malformed") from exc
+        raise RuntimeError("selected package timestep plan is malformed") from exc
 
 
-def load_plan_facts(endpoint: Path, expected: dict[str, str]) -> dict[str, dict[str, str]]:
+def load_plan_facts(package: Path, expected: dict[str, str]) -> dict[str, dict[str, str]]:
     observed: dict[str, dict[str, str]] = {}
     for action, filename in PLAN_FILES.items():
         expected_digest = exact_sha256(expected[action], option=f"expected {action} plan digest")
-        path = endpoint / "timestep-plans" / filename
+        path = package / "timestep-plans" / filename
         try:
             raw = path.read_bytes()
         except OSError as exc:
-            raise RuntimeError(f"cannot read selected endpoint plan {path}: {exc}") from exc
+            raise RuntimeError(f"cannot read selected package plan {path}: {exc}") from exc
         try:
             document = canonical_json.decode(raw)
         except ValueError as exc:
-            raise RuntimeError(f"selected endpoint plan {path} is not strict JSON") from exc
+            raise RuntimeError(f"selected package plan {path} is not strict JSON") from exc
         if not isinstance(document, dict):
-            raise RuntimeError(f"selected endpoint plan {path} is not a JSON object")
+            raise RuntimeError(f"selected package plan {path} is not a JSON object")
         digest = canonical_json.digest(document)
         if digest != expected_digest:
             raise RuntimeError(
-                f"selected endpoint {action} plan is {digest}, expected {expected_digest}"
+                f"selected package {action} plan is {digest}, expected {expected_digest}"
             )
         observed[action] = {
             "document_digest": digest,
@@ -134,11 +134,11 @@ def load_plan_facts(endpoint: Path, expected: dict[str, str]) -> dict[str, dict[
     return observed
 
 
-def verify_descriptor_digest(document: dict[str, Any], *, expected: str) -> str:
-    expected = exact_sha256(expected, option="--expected-descriptor-digest")
-    actual = document.get("descriptor_digest")
+def verify_package_descriptor_digest(document: dict[str, Any], *, expected: str) -> str:
+    expected = exact_sha256(expected, option="--expected-package-descriptor-digest")
+    actual = canonical_json.digest(document)
     if actual != expected:
-        raise RuntimeError(f"endpoint descriptor is {actual!r}, expected {expected}")
+        raise RuntimeError(f"package descriptor is {actual!r}, expected {expected}")
     return expected
 
 
@@ -532,11 +532,11 @@ def probe_media(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime", default="cozy-runtime")
-    parser.add_argument("--endpoint", type=Path, default=H3)
+    parser.add_argument("--package", type=Path, default=H3)
     parser.add_argument("--expected-binding-ref", required=True)
     parser.add_argument("--expected-lane", required=True)
     parser.add_argument("--expected-checkpoint", required=True)
-    parser.add_argument("--expected-descriptor-digest", required=True)
+    parser.add_argument("--expected-package-descriptor-digest", required=True)
     parser.add_argument("--expected-fl-plan-digest", required=True)
     parser.add_argument("--expected-ref-plan-digest", required=True)
     parser.add_argument(
@@ -569,7 +569,7 @@ def main() -> int:
     selected_actions = select_actions(args.action)
     expected_checkpoint = exact_sha256(args.expected_checkpoint, option="--expected-checkpoint")
     expected_descriptor = exact_sha256(
-        args.expected_descriptor_digest, option="--expected-descriptor-digest"
+        args.expected_package_descriptor_digest, option="--expected-package-descriptor-digest"
     )
     expected_plans = {
         "first_last_frame_to_video": exact_sha256(
@@ -579,10 +579,10 @@ def main() -> int:
             args.expected_ref_plan_digest, option="--expected-ref-plan-digest"
         ),
     }
-    endpoint_path = args.endpoint.expanduser().resolve()
-    if not endpoint_path.is_dir():
-        raise RuntimeError(f"selected endpoint is not a directory: {endpoint_path}")
-    plan_facts = load_plan_facts(endpoint_path, expected_plans)
+    package_path = args.package.expanduser().resolve()
+    if not package_path.is_dir():
+        raise RuntimeError(f"selected package is not a directory: {package_path}")
+    plan_facts = load_plan_facts(package_path, expected_plans)
 
     snapshots: dict[str, RequestSnapshot] = {}
     if not args.inspect_only:
@@ -606,12 +606,11 @@ def main() -> int:
         }
         make_requests_read_only(requests_root, list(staged_requests.values()))
 
-    base = [args.runtime, "--dir", str(endpoint_path), "--json"]
-    descriptor_check = command_json([*base, "describe", "--check"])
-    descriptor_digest = verify_descriptor_digest(
-        descriptor_check, expected=expected_descriptor
-    )
+    base = [args.runtime, "--dir", str(package_path), "--json"]
     description = command_json([*base, "describe"])
+    package_descriptor_digest = verify_package_descriptor_digest(
+        description, expected=expected_descriptor
+    )
     require_visible(selected_actions, description)
     doctor = command_json([*base, "doctor"])
     bindings = command_json([*base, "bindings"])
@@ -623,9 +622,9 @@ def main() -> int:
     )
     receipt: dict[str, Any] = {
         "schema": RECEIPT_SCHEMA,
-        "endpoint": {
-            "resolved_path": str(endpoint_path),
-            "descriptor_digest": descriptor_digest,
+        "package": {
+            "resolved_path": str(package_path),
+            "package_descriptor_digest": package_descriptor_digest,
             "plans": plan_facts,
         },
         "doctor": doctor,
@@ -633,7 +632,7 @@ def main() -> int:
         "expected_binding_ref": args.expected_binding_ref,
         "expected_checkpoint": expected_checkpoint,
         "selected_actions": sorted(selected_actions),
-        "endpoint_observations_status": "pending-runtime-triage-join",
+        "package_observations_status": "pending-runtime-triage-join",
         "automated_status": "runtime-device-observed-and-binding-inspected",
         "human_viewed_listened_status": "pending",
     }

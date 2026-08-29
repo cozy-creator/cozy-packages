@@ -1,5 +1,5 @@
-# Not a distributed package: endpoints are installed from this repo by `cozy install`, and
-# nothing here is published to an index. This file exists to hold the STATIC ANALYSIS
+# Not a distributed package: this repository contains first-party package source trees,
+# while each child project owns its own lock and publication. This file holds STATIC ANALYSIS
 # configuration, which is required (tracker README, owner directive 2026-08-25) — the
 # no-tests rule bans test suites, not type checking.
 
@@ -21,7 +21,7 @@ module = [
 ]
 ignore_missing_imports = true
 
-# These two older endpoints subclass optional Torch surfaces that are intentionally absent
+# These two older packages subclass optional Torch surfaces that are intentionally absent
 # from the light checking environment. H3's Runtime author surface remains fully typed.
 [[tool.mypy.overrides]]
 module = ["quality_judge", "sdxl"]
