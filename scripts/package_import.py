@@ -19,12 +19,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 #: package directory -> (module to import, compiled peers that must load beside it)
 PACKAGES = {
-    "sdxl": ("sdxl", ("torch", "torchvision", "torchvision.ops", "triton", "transformers",
-                      "diffusers", "tensorfs", "av")),
+    "sdxl": ("sdxl", ("torch", "triton", "transformers", "diffusers", "av")),
     "quality-judge": ("quality_judge", ("torch", "triton", "transformers", "tokenizers",
                                         "numpy", "PIL.Image", "tensorfs", "av")),
-    "h3": ("h3", ("torch", "torchvision", "torchvision.ops", "triton", "transformers",
-                  "diffusers", "tensorfs", "av")),
+    "h3": ("h3", ("torch", "triton", "transformers", "diffusers", "tensorfs", "av")),
 }
 
 
