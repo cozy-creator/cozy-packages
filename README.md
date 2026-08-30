@@ -1,4 +1,4 @@
-# serverless-endpoints (v2)
+# Cozy serverless packages (v2)
 
 First-party package sources authored against `cozy_runtime.author`. The tracker is the design
 authority; this repository contains package schemas, model-specific computation, deterministic
