@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Structural fences for the package sources. Static analysis, never a test suite.
 
-Thirteen properties CI must not let drift, each checked as a fact about the source rather than
+Fourteen properties CI must not let drift, each checked as a fact about the source rather than
 as a convention someone remembers:
 
   1. author-surface-only  a package imports `cozy_runtime.author` and nothing else from
@@ -39,6 +39,8 @@ as a convention someone remembers:
 13. package-manifest-hardcut
                           package.toml and PackageDescriptor/1 are the only source metadata;
                           the retired source filenames and canonical namespace are absent.
+14. private-h3-shapes    H3 config, plan, and probe files are identified by their package
+                          member and strict shape, not another globally versioned schema tag.
 
     nice -n 19 .venv/bin/python scripts/fence.py
 """
@@ -629,6 +631,22 @@ def fence_package_manifest_hardcut() -> Fence:
     return bad, f"{len(projects())} package manifests and descriptors use one package namespace"
 
 
+def fence_private_h3_shapes() -> Fence:
+    retired = {
+        "cozy.minimax_h3.dit/1",
+        "cozy.minimax_h3.production_probe/3",
+        "cozy.minimax_h3.text_conditioner/1",
+        "cozy.minimax_h3.timestep_plan/1",
+    }
+    bad: list[str] = []
+    for path in [*h3_owned_modules(), *(ROOT / "h3" / "timestep-plans").glob("*.json")]:
+        source = path.read_text()
+        for value in retired:
+            if value in source:
+                bad.append(f"{rel(path)}: private H3 member carries retired schema {value!r}")
+    return bad, "four private H3 schemas replaced by member-specific closed shapes"
+
+
 FENCES = (
     ("author-surface-only", fence_author_surface),
     ("no-identifiers-in-code", fence_identifiers),
@@ -643,6 +661,7 @@ FENCES = (
     ("h3-adaln-pruned-vocabulary", fence_h3_adaln_pruned_vocabulary),
     ("descriptor-minimality", fence_descriptor_minimality),
     ("package-manifest-hardcut", fence_package_manifest_hardcut),
+    ("private-h3-shapes", fence_private_h3_shapes),
 )
 
 

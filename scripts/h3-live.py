@@ -33,7 +33,7 @@ BINDING_PATHS = {
     "first_last_frame_to_video": "first_last_frame_to_video.models.model",
     "reference_media_to_video": "reference_media_to_video.models.model",
 }
-RECEIPT_SCHEMA = "cozy.minimax_h3.production_probe/3"
+PROBE_KIND = "h3-production-probe"
 
 
 @dataclass(frozen=True)
@@ -621,7 +621,7 @@ def main() -> int:
         expected_lane=args.expected_lane,
     )
     receipt: dict[str, Any] = {
-        "schema": RECEIPT_SCHEMA,
+        "kind": PROBE_KIND,
         "package": {
             "resolved_path": str(package_path),
             "package_descriptor_digest": package_descriptor_digest,

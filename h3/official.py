@@ -53,7 +53,6 @@ _WEIGHTED_CONFIG_SECTIONS = {
 }
 _DIT_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
 _DIFFUSERS_DIT = {"fl2va": "transformer", "ref2va": "transformer_ref"}
-_DIT_CONFIG_SCHEMA = "cozy.minimax_h3.dit/1"
 _ASSETS = Path(__file__).resolve().parent
 
 
@@ -204,7 +203,6 @@ class TimestepPlan:
                     seen_final.add(timestep)
                     final_keys.append({"index": len(final_keys), "timestep": timestep})
         document = {
-            "schema": "cozy.minimax_h3.timestep_plan/1",
             "task": self.task,
             "scalar_encoding": "ieee754-binary32-hex",
             "scheduler_semantics": "minimax-h3-data-ward-rf-euler/1",
@@ -304,10 +302,7 @@ def canonical_timestep_plan(task: Task) -> TimestepPlan:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"committed MiniMax-H3 {task} TimestepPlan is malformed") from exc
-    if (
-        document.get("schema") != "cozy.minimax_h3.timestep_plan/1"
-        or plan.canonical_bytes() != canonical_json.encode(document)
-    ):
+    if plan.canonical_bytes() != canonical_json.encode(document):
         raise ValueError(f"committed MiniMax-H3 {task} TimestepPlan has unexpected semantics")
     return plan
 
@@ -660,7 +655,6 @@ def _dit_spec(
     upstream = _section(mapping, component)
     extension = upstream.pop("cozy_h3", None)
     if not isinstance(extension, Mapping) or set(extension) != {
-        "schema",
         "task",
         "modulation",
         "timestep_plan_digest",
@@ -673,7 +667,6 @@ def _dit_spec(
     plan = canonical_timestep_plan(task)
     expected_digest = f"sha256:{plan.digest}"
     expected = {
-        "schema": _DIT_CONFIG_SCHEMA,
         "task": task,
         "timestep_plan_digest": expected_digest,
     }

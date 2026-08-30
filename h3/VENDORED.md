@@ -55,9 +55,9 @@ or processor settings. Runtime `Config` intentionally validates mapping keys;
 a raw tokenizer vocabulary contains path-like tokens and is not a legal
 component-config mapping. The package does not bypass that validation.
 
-The weighted text-encoder config carries the closed
-`cozy.minimax_h3.text_conditioner/1` extension. It fixes the source architecture to
-Qwen3-VL, retains decoder layers 0–49, selects pre-norm hidden state 50, and declares
+The weighted text-encoder config carries the closed `cozy_h3` extension. Its member and
+exact field set supply the type. It fixes the source architecture to Qwen3-VL, retains
+decoder layers 0–49, selects pre-norm hidden state 50, and declares
 the language-model head absent. The package keeps the ordinary Transformers `.model`
 and `.config` surface while final norm/head become parameterless identities. Runtime's
 construction census therefore contains exactly 902 BF16 destinations; the removed tail
