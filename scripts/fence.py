@@ -532,6 +532,48 @@ def fence_typed_model_bindings() -> Fence:
     return bad, f"{count} default bindings use the typed model key"
 
 
+def fence_sdxl_defaults() -> Fence:
+    """The release selection and quality defaults move together as one package release."""
+
+    manifest = tomllib.loads((ROOT / "sdxl" / "package.toml").read_text())
+    binding = manifest.get("bindings", {}).get("generate.models.model", {})
+    expected = {
+        "model": "paul/nova-anime-xl",
+        "release": "19.0.0",
+        "lane": "bf16",
+    }
+    bad = (
+        []
+        if binding == expected
+        else [f"sdxl/package.toml: got {binding!r}, expected {expected!r}"]
+    )
+
+    tree = ast.parse((ROOT / "sdxl" / "sdxl" / "__init__.py").read_text())
+    guidance = None
+    square_only = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "Txt2ImgInput":
+            for item in node.body:
+                if (
+                    isinstance(item, ast.AnnAssign)
+                    and isinstance(item.target, ast.Name)
+                    and item.target.id == "guidance"
+                    and isinstance(item.value, ast.Constant)
+                ):
+                    guidance = item.value.value
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "denoise"
+        ):
+            square_only = any(ast.unparse(arg) == "width == height" for arg in node.args)
+    if guidance != 7.0:
+        bad.append(f"sdxl: default guidance is {guidance!r}, expected 7.0")
+    if not square_only:
+        bad.append("sdxl: HiDiffusion selection is not derived from square output geometry")
+    return bad, "Nova Anime XL 19.0.0 bf16, CFG 7, square-only HiDiffusion"
+
+
 def fence_h3_adaln_pruned_vocabulary() -> Fence:
     """The pre-launch hardcut has one name; the retired modulation name is refused."""
     retired = "baked"
@@ -658,6 +700,7 @@ FENCES = (
     ("env-free-packages", fence_no_env),
     ("h3-binding-identity", fence_h3_binding_identity),
     ("typed-model-bindings", fence_typed_model_bindings),
+    ("sdxl-defaults", fence_sdxl_defaults),
     ("h3-adaln-pruned-vocabulary", fence_h3_adaln_pruned_vocabulary),
     ("descriptor-minimality", fence_descriptor_minimality),
     ("package-manifest-hardcut", fence_package_manifest_hardcut),

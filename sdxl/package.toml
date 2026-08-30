@@ -17,6 +17,6 @@
 object = "sdxl:app"
 
 [bindings."generate.models.model"]
-model = "paul/wai-illustrious"
-release = "17.0.0"
+model = "paul/nova-anime-xl"
+release = "19.0.0"
 lane = "bf16"
