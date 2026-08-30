@@ -6,11 +6,12 @@
 
 [project]
 name = "sdxl-package"
-version = "1.1.8"
+version = "1.1.11"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cozy-runtime[media]==0.0.5",
     "diffusers==0.40.0",
+    "hidiffusion==0.1.10",
     "msgspec>=0.19",
     "numpy>=2.0",
     "torch==2.13.0",
@@ -32,3 +33,6 @@ organization = "paul"
 
 [tool.uv]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[dependency-groups]
+dev = ["mypy==2.3.1", "ruff==0.16.4"]
