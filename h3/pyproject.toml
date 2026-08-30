@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=1.26",
     "tensorfs==0.0.1",
     "torch==2.13.0",
+    "torchvision==0.28.0",
     "transformers==5.16.1",
 ]
 

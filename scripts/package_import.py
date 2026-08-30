@@ -22,7 +22,8 @@ PACKAGES = {
     "sdxl": ("sdxl", ("torch", "triton", "transformers", "diffusers", "av")),
     "quality-judge": ("quality_judge", ("torch", "triton", "transformers", "tokenizers",
                                         "numpy", "PIL.Image", "tensorfs", "av")),
-    "h3": ("h3", ("torch", "triton", "transformers", "diffusers", "tensorfs", "av")),
+    "h3": ("h3", ("torch", "torchvision", "torchvision.ops", "triton", "transformers",
+                  "diffusers", "tensorfs", "av")),
 }
 
 
