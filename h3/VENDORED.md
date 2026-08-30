@@ -86,16 +86,14 @@ matched the full snapshot construction.
 
 ## Third-party binary closure
 
-The model stack is pinned to:
+The package declares this compatible model stack:
 
 - `diffusers==0.40.0`
 - `transformers==5.16.1`
-- `torch==2.9.1+cu129`
-- `torchvision==0.24.1+cu129`
-- `torchaudio==2.9.1+cu129`
+- `torch>=2.13,<3`
+- `torchvision==0.28.0`
 
-Torchvision uses its compatible 0.24.1 release number; there is no
-`torchvision==2.9.1+cu129` artifact in the selected CUDA index. `uv lock`
+The lock freezes that compatible range to Torch 2.13.0 and its CUDA 13 peers. `uv lock`
 resolves the Linux x86-64 closure. A new Python 3.14 environment installed
 all 65 non-project packages from the populated uv cache with this command and
 no network access:

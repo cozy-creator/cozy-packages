@@ -12,7 +12,7 @@ image and never installs a second copy in the package overlay.
 
 ## Generation stack
 
-- `torch==2.13.0` (satisfied by an exact CPU/CUDA base build)
+- `torch>=2.13,<3` (the selected base supplies one exact compatible build)
 - `diffusers==0.40.0`
 - `transformers==5.16.1`
 - `hidiffusion==0.1.10`

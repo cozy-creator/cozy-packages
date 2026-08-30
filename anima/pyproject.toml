@@ -8,7 +8,7 @@ dependencies = [
     "diffusers==0.40.0",
     "msgspec>=0.19",
     "numpy>=2.0",
-    "torch==2.13.0",
+    "torch>=2.13,<3",
     "transformers==5.16.1",
 ]
 

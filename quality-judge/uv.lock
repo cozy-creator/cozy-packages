@@ -619,7 +619,7 @@ requires-dist = [
     { name = "pillow", specifier = ">=11" },
     { name = "tensorfs", path = "vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl" },
     { name = "tokenizers", specifier = ">=0.22" },
-    { name = "torch", specifier = "==2.13.0" },
+    { name = "torch", specifier = ">=2.13,<3" },
     { name = "transformers", specifier = "==5.16.1" },
 ]
 

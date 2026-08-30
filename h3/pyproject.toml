@@ -9,7 +9,7 @@ dependencies = [
     "msgspec>=0.19",
     "numpy>=1.26",
     "tensorfs==0.0.1",
-    "torch==2.13.0",
+    "torch>=2.13,<3",
     "torchvision==0.28.0",
     "transformers==5.16.1",
 ]

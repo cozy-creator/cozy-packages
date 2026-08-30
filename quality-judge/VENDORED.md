@@ -22,17 +22,15 @@ environment.
 
 ## Third-party binary closure
 
-The model stack is pinned to:
+The package declares this compatible model stack:
 
 - `transformers==5.16.1`
-- `torch==2.9.1+cu129`
+- `torch>=2.13,<3`
 
-**The torch family is exact, not a range.** These pins are H3's, to the patch and to the
-local version: `torch 2.9.1+cu129`, `triton 3.5.1` and the fifteen `nvidia-*-cu12` wheels
-resolve to byte-identical versions in both locks. Torch's compiled extensions link against
-one C++ ABI, so a package built against one torch raises undefined-symbol errors under
-another; decision #633 gives one PlatformTarget exactly one torch family, which makes a
-second family a second substrate variant rather than a per-package choice.
+The lock freezes that range to Torch 2.13.0 and its CUDA 13 peers. H3 and the judge resolve
+the same exact family. Torch's compiled extensions link against one C++ ABI, so the
+platform supplies one internally consistent family even though package placement accepts
+compatible Torch releases in the declared range.
 
 Neither torchvision nor torchaudio is in this closure. The judge's image path receives
 frames already decoded by the Runtime media extra and hands Pillow images to the
@@ -53,8 +51,8 @@ UV_PROJECT_ENVIRONMENT="$offline_env" \
   uv sync --locked --offline --no-install-project
 ```
 
-That 7.5 GiB environment then imported the real stack and the package module:
-`torch 2.9.1+cu129`, `triton 3.5.1`, `transformers 5.16.1`, and `quality_judge:app` with
+That environment then imported the real stack and the package module:
+`torch 2.13.0`, `transformers 5.16.1`, and `quality_judge:app` with
 its four entrypoints (`judge`, `soft`, `pairwise`, `transcribe`). A fresh builder must
 still populate its third-party wheel cache or mirror before entering offline mode.
 

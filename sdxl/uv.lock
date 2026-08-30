@@ -807,7 +807,7 @@ requires-dist = [
     { name = "hidiffusion", specifier = "==0.1.10" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=2.0" },
-    { name = "torch", specifier = "==2.13.0" },
+    { name = "torch", specifier = ">=2.13,<3" },
     { name = "transformers", specifier = "==5.16.1" },
 ]
 
