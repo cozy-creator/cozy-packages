@@ -10,6 +10,7 @@ conformance drivers, and default development bindings.
 |---|---|
 | `h3/` | MiniMax H3 dual-task package; immutable deployment binding selects FULL or AdaLN-pruned weights |
 | `sdxl/` | SDXL text-to-image package (se-008) |
+| `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
 | `quality-judge/` | evaluation actions (ev-003) |
 | `video-assembly/` | fixed CPU-only 2-8-shot streaming assembler (se-014) |
 | `*/package.toml` | default model selection; deployment bindings remain authoritative |
