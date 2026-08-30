@@ -63,9 +63,9 @@ class ImageOutput(msgspec.Struct):
 
 
 def _tokenizer(path: Path) -> Any:
-    from transformers import PreTrainedTokenizerFast
+    from transformers import AutoTokenizer
 
-    return PreTrainedTokenizerFast(tokenizer_file=str(path / "tokenizer.json"))
+    return AutoTokenizer.from_pretrained(path, local_files_only=True)
 
 
 class AnimaPipeline:
@@ -90,6 +90,9 @@ class AnimaPipeline:
                 mapping["text_conditioner"]
             ).to(torch.bfloat16)
             vae = AutoencoderKLQwenImage.from_config(mapping["vae"]).to(torch.bfloat16)
+
+        for component in (transformer, text_encoder, text_conditioner, vae):
+            component.eval()
         vae.enable_tiling()
         self.scheduler_config = mapping["scheduler"]
         self.tokenizer = _tokenizer(_ROOT / "tokenizer")
@@ -135,6 +138,7 @@ class AnimaModel(Model[AnimaPipeline]):
             tokenizer=self.pipe.tokenizer,
             t5_tokenizer=self.pipe.t5_tokenizer,
         )
+        pipeline.guider.guidance_scale = guidance
         pipeline.set_progress_bar_config(disable=True)
         return pipeline(
             prompt=prompt,
@@ -142,7 +146,6 @@ class AnimaModel(Model[AnimaPipeline]):
             width=width,
             height=height,
             num_inference_steps=steps,
-            guidance_scale=guidance,
             generator=generator,
             output="images",
             output_type="pt",
