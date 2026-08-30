@@ -1,23 +1,39 @@
 [project]
 name = "h3-package"
-version = "1.0.1"
+version = "1.0.2"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "cozy-runtime[media]==0.0.6",
+    "cozy-runtime[media]==0.0.7",
     "cozy-eval==2.3.0",
     "diffusers==0.40.0",
     "msgspec>=0.19",
     "numpy>=1.26",
-    "tensorfs==0.0.1",
+    "tensorfs==0.0.2",
     "torch>=2.13,<3",
     "torchvision==0.28.0",
     "transformers==5.16.1",
 ]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+only-include = [
+    "adaln_pruned.py",
+    "conditioner.py",
+    "gates.py",
+    "h3.py",
+    "official.py",
+    "processor",
+    "timestep-plans",
+    "tokenizer",
+]
+
 [tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.0.6-py3-none-any.whl" }
+cozy-runtime = { path = "vendor/cozy_runtime-0.0.7-py3-none-any.whl" }
 cozy-eval = { path = "vendor/cozy_eval-2.3.0-py3-none-any.whl" }
-tensorfs = { path = "vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl" }
+tensorfs = { path = "vendor/tensorfs-0.0.2-cp314-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 
 [tool.uv]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]

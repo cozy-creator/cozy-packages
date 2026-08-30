@@ -10,34 +10,18 @@ dependency of the pinned model stack).
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.6-py3-none-any.whl` | `cozy-runtime` `793286c2f09c7207990fae581f1fb6d26f4abe50` | 703,000 | `d24214c8215b9d30c48a4f52f0acf564e8b426e8b16ce48fb96a9f9126b6af64` |
+| `vendor/cozy_runtime-0.0.7-py3-none-any.whl` | `cozy-runtime` `a665b65c4a5c461c6e484d8b50fe736925af1d72` | 709,917 | `a73a61a85a6ce43da8f6288e14a12ce91672672a156b990a0ecf987e810bc37f` |
 | `vendor/cozy_eval-2.3.0-py3-none-any.whl` | `cozy-eval` `fe8c7d2ead882dded2595e33af73101040792bd8` | 295,046 | `87830e9461f5b98b699e1ba7e1d2fec2dd37bea63d7b8ae8403506835e427a26` |
-| `vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl` | `tensorfs` `4f3d16dff35d195f3709f06b6dc77f95bddfe64b` | 1,070,730 | `0dc98c4a81a7d7e5dd2b9009bb2035b838f1d60d34720d9121f69a2fc46c8ce9` |
+| `vendor/tensorfs-0.0.2-cp314-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | `tensorfs` `1e6f5e6d1d9846836161939e0e687dea12ad8d4a` | 2,085,526 | `5d5420f9571778ae884daf6fe31bc649318014cd644d94b17a7c465929be5d93` |
 
-The checked-in Runtime wheel was built from the exact package-domain commit on 2026-08-29,
-the Eval wheel on 2026-08-26, and the TensorFS wheel on 2026-08-28. Runtime and Eval used uv;
-TensorFS used maturin 1.14.1 and Rust 1.91.1:
-
-```sh
-runtime_src=/absolute/path/to/cozy-runtime
-eval_src=/absolute/path/to/cozy-eval
-tensorfs_src=/absolute/path/to/tensorfs
-runtime_out=$(mktemp -d /tmp/cozy-runtime-wheel.XXXXXX)
-eval_out=$(mktemp -d /tmp/cozy-eval-wheel.XXXXXX)
-tensorfs_out=$(mktemp -d /tmp/tensorfs-wheel.XXXXXX)
-uv build --wheel --out-dir "$runtime_out" "$runtime_src"
-uv build --wheel --out-dir "$eval_out" "$eval_src"
-(
-  cd "$tensorfs_src"
-  SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD) \
-    uvx --from maturin==1.14.1 maturin build --release --out "$tensorfs_out"
-)
-sha256sum "$runtime_out"/*.whl "$eval_out"/*.whl "$tensorfs_out"/*.whl
-```
+Tensorhub's canonical first-party wheel materializer produced both artifacts from Git archives
+of the exact commits in the table. It uses digest-pinned build containers, fixed in-container
+paths, the platform epoch `946684800`, and normal CPython 3.14. Package repositories consume
+those bytes; they do not maintain a competing wheel build command.
 
 The source checkouts were at the commits in the table. The Runtime wheel
 metadata declares `av>=18.1,<19` only for its `media` extra; this package asks
-for `cozy-runtime[media]==0.0.6`.
+for `cozy-runtime[media]==0.0.7`.
 
 ## MiniMax H3 tokenizer and processor
 

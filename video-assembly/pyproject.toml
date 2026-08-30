@@ -1,14 +1,21 @@
 [project]
 name = "cozy-video-assembly"
-version = "1.0.1"
+version = "1.0.2"
 requires-python = ">=3.14,<3.15"
-dependencies = ["cozy-runtime[media]==0.0.6", "msgspec>=0.19"]
+dependencies = ["cozy-runtime[media]==0.0.7", "msgspec>=0.19"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["video_assembly.py"]
 
 [dependency-groups]
 dev = ["mypy==2.3.1", "ruff==0.16.4"]
 
 [tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.0.6-py3-none-any.whl" }
+cozy-runtime = { path = "vendor/cozy_runtime-0.0.7-py3-none-any.whl" }
 
 [tool.mypy]
 python_version = "3.14"
