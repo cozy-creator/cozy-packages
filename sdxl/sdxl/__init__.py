@@ -264,8 +264,8 @@ def _tokenizer(name: str) -> Any:
     root = _TOKENIZERS / name
     settings = json.loads((root / "tokenizer_config.json").read_text())
     return CLIPTokenizer(
-        vocab_file=str(root / "vocab.json"),
-        merges_file=str(root / "merges.txt"),
+        vocab=str(root / "vocab.json"),
+        merges=str(root / "merges.txt"),
         errors=settings["errors"],
         pad_token=settings["pad_token"],
         model_max_length=settings["model_max_length"],
