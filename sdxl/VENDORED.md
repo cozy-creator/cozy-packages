@@ -17,6 +17,9 @@ image and never installs a second copy in the package overlay.
 - `transformers==5.16.1`
 - `hidiffusion==0.1.10`
 
+The default development binding selects `paul/nova-anime-xl@19.0.0`, lane `bf16`,
+and requests default to CFG 7.
+
 Full HiDiffusion is the default for the square 1024x1024 bucket. Native non-square buckets use
 ordinary SDXL after live 1344x768 HiDiffusion duplicated a singular subject and window-attention-only
 produced a duplicated head at 1024x1024; future high-resolution lanes remain a separate experiment.

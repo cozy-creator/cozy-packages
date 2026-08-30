@@ -9,7 +9,7 @@ conformance drivers, and default development bindings.
 | path | responsibility |
 |---|---|
 | `h3/` | MiniMax H3 dual-task package; immutable deployment binding selects FULL or AdaLN-pruned weights |
-| `sdxl/` | SDXL text-to-image package (se-008) |
+| `sdxl/` | SDXL text-to-image package; default binding is Nova Anime XL (se-008) |
 | `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
 | `quality-judge/` | evaluation actions (ev-003) |
 | `video-assembly/` | fixed CPU-only 2-8-shot streaming assembler (se-014) |
