@@ -1,0 +1,6 @@
+[application]
+object = "anima:app"
+
+[bindings."generate.models.model"]
+model = "paul/anima"
+release = "1.0.0"

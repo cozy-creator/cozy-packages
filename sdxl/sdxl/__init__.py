@@ -139,18 +139,24 @@ class SdxlPipeline:
         import torch
         from diffusers import AutoencoderKL, UNet2DConditionModel
         from transformers import CLIPTextConfig, CLIPTextModel, CLIPTextModelWithProjection
+        from transformers import initialization as transformer_init
 
         mapping = config.mapping()
-        self.components: dict[str, Any] = {
-            "text_encoder": CLIPTextModel(CLIPTextConfig(**mapping["text_encoder"])).to(
-                torch.float16
-            ),
-            "text_encoder_2": CLIPTextModelWithProjection(
-                CLIPTextConfig(**mapping["text_encoder_2"])
-            ).to(torch.float16),
-            "unet": UNet2DConditionModel.from_config(mapping["unet"]).to(torch.float16),
-            "vae": AutoencoderKL.from_config(mapping["vae"]).to(torch.float16),
-        }
+        text_encoder = dict(mapping["text_encoder"])
+        text_encoder_2 = dict(mapping["text_encoder_2"])
+        for clip_config in (text_encoder, text_encoder_2):
+            clip_config["initializer_factor"] = float(clip_config["initializer_factor"])
+        with transformer_init.no_init_weights():
+            self.components: dict[str, Any] = {
+                "text_encoder": CLIPTextModel(CLIPTextConfig(**text_encoder)).to(
+                    torch.float16
+                ),
+                "text_encoder_2": CLIPTextModelWithProjection(
+                    CLIPTextConfig(**text_encoder_2)
+                ).to(torch.float16),
+                "unet": UNet2DConditionModel.from_config(mapping["unet"]).to(torch.float16),
+                "vae": AutoencoderKL.from_config(mapping["vae"]).to(torch.float16),
+            }
         self.scheduler_config: dict[str, Any] = dict(mapping["scheduler"])
         self.vae_scale: float = float(mapping["vae"]["scaling_factor"])
 
@@ -216,8 +222,18 @@ class SdxlModel(Model[SdxlPipeline]):
     def decode(self, latents: Any) -> Any:
         import torch
 
-        with torch.inference_mode():
-            return self.pipe.components["vae"].decode(latents / self.pipe.vae_scale).sample
+        vae = self.pipe.components["vae"]
+        original_dtype = next(vae.parameters()).dtype
+        upcast = bool(getattr(vae.config, "force_upcast", False))
+        if upcast:
+            vae.to(dtype=torch.float32)
+            latents = latents.to(dtype=torch.float32)
+        try:
+            with torch.inference_mode():
+                return vae.decode(latents / self.pipe.vae_scale).sample
+        finally:
+            if upcast:
+                vae.to(dtype=original_dtype)
 
 
 # ------------------------------------------------------------------ the handler
@@ -248,8 +264,8 @@ def _tokenizer(name: str) -> Any:
     root = _TOKENIZERS / name
     settings = json.loads((root / "tokenizer_config.json").read_text())
     return CLIPTokenizer(
-        vocab_file=str(root / "vocab.json"),
-        merges_file=str(root / "merges.txt"),
+        vocab=str(root / "vocab.json"),
+        merges=str(root / "merges.txt"),
         errors=settings["errors"],
         pad_token=settings["pad_token"],
         model_max_length=settings["model_max_length"],

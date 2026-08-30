@@ -1,12 +1,7 @@
-# One dependency authority for this package: this file plus `uv.lock`. Cozy-owned libraries
-# are immutable local wheels; everything else is an exact lock entry.
-#
-# Torch and Runtime are base-owned requirements. The lock records compatibility; package
-# publication never overlays another copy over the selected base worker image.
-
 [project]
-name = "sdxl-package"
-version = "1.1.8"
+name = "anima-package"
+version = "0.1.6"
+description = "Anima anime text-to-image package for Cozy"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cozy-runtime[media]==0.0.5",
@@ -22,7 +17,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["sdxl"]
+packages = ["anima"]
 
 [tool.uv.sources]
 cozy-runtime = { path = "vendor/cozy_runtime-0.0.5-py3-none-any.whl" }
@@ -32,3 +27,13 @@ organization = "paul"
 
 [tool.uv]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[dependency-groups]
+dev = ["mypy==2.3.1", "ruff==0.16.4"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["anima"]
+strict = true
+ignore_missing_imports = true
+disallow_untyped_calls = false
