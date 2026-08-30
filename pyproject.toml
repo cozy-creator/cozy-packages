@@ -4,8 +4,8 @@
 # no-tests rule bans test suites, not type checking.
 
 [tool.mypy]
-python_version = "3.13"
-files = ["h3", "quality-judge", "sdxl", "scripts"]
+python_version = "3.14"
+files = ["anima", "h3", "quality-judge", "sdxl", "scripts"]
 strict = true
 warn_unreachable = true
 disallow_any_generics = true
@@ -24,14 +24,14 @@ ignore_missing_imports = true
 # These two older packages subclass optional Torch surfaces that are intentionally absent
 # from the light checking environment. H3's Runtime author surface remains fully typed.
 [[tool.mypy.overrides]]
-module = ["quality_judge", "sdxl"]
+module = ["anima", "quality_judge", "sdxl"]
 disallow_subclassing_any = false
 disallow_untyped_decorators = false
 warn_unused_ignores = false
 
 [tool.ruff]
 line-length = 100
-src = ["h3", "quality-judge", "sdxl", "scripts"]
+src = ["anima", "h3", "quality-judge", "sdxl", "scripts"]
 exclude = [".venv"]
 
 [tool.ruff.lint]

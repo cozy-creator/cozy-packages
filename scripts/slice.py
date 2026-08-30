@@ -318,7 +318,7 @@ def run_one(spec: dict[str, Any], out: Path) -> int:
         request,
         [spec["binding"]],
         workspace=workspace,
-        release_id=spec["release_id"],
+        package_revision_digest=spec["release_id"],
         options=WorkerOptions(root=workspace / "worker"),
     )
     document = {

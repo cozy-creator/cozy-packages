@@ -24,7 +24,7 @@ The package owns the denoising loop,
 so it sets the UNet's total timestep count and resets every patched module's request-local timestep
 state before step zero. A later request cannot inherit a partial or canceled request's counters.
 
-`uv lock` resolves 76 packages for Linux x86-64 on Python 3.12. Verify the lock and static package
+`uv lock` resolves the Linux x86-64 closure for Python 3.14. Verify the lock and static package
 surface with:
 
 ```sh

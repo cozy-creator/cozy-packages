@@ -7,7 +7,7 @@
 [project]
 name = "sdxl-package"
 version = "1.1.12"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "cozy-runtime[media]==0.0.6",
     "diffusers==0.40.0",

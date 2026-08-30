@@ -13,24 +13,24 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
-          version: "0.9.18"
-      - run: uv python install 3.13
+          version: "0.12.7"
+      - run: uv python install 3.14
 
       # The exact Runtime wheel is a committed first-party build input. CI therefore sees
       # the real author types and media capability on every run; there is no secret-gated
       # skipped-green path.
       - name: Environment
         run: |
-          uv venv --python 3.13
+          uv venv --python 3.14
           uv pip install \
-            h3/vendor/cozy_runtime-0.0.4-py3-none-any.whl \
+            h3/vendor/cozy_runtime-0.0.6-py3-none-any.whl \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4"
 
       - name: Fences
         run: uv run --no-project python scripts/fence.py
 
       - name: Lint
-        run: uv run --no-project ruff check h3/ quality-judge/ scripts/ sdxl/
+        run: uv run --no-project ruff check anima/ h3/ quality-judge/ scripts/ sdxl/
 
       - name: Types
         run: uv run --no-project mypy
@@ -38,6 +38,7 @@ jobs:
       - name: Descriptors are current
         run: |
           test "$(uv run --no-project cozy-runtime --json --dir h3 describe)" = "$(cat h3/package.descriptor.json)"
+          test "$(uv run --no-project cozy-runtime --json --dir anima describe)" = "$(cat anima/package.descriptor.json)"
           test "$(uv run --no-project cozy-runtime --json --dir quality-judge describe)" = "$(cat quality-judge/package.descriptor.json)"
           test "$(uv run --no-project cozy-runtime --json --dir sdxl describe)" = "$(cat sdxl/package.descriptor.json)"
 
@@ -46,7 +47,7 @@ jobs:
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          for package in h3 quality-judge sdxl video-assembly; do
+          for package in anima h3 quality-judge sdxl video-assembly; do
             uv lock --check --project "$package"
           done
 
@@ -67,8 +68,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
-          version: "0.9.18"
-      - run: uv python install 3.12
+          version: "0.12.7"
+      - run: uv python install 3.14
 
       # This is the exact locked source environment and a CPU semantic proof. It is not the
       # separately required clean installed-wheel or GPU generation proof. --no-cache avoids
@@ -91,13 +92,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [sdxl, quality-judge]
+        package: [anima, sdxl, quality-judge]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
-          version: "0.9.18"
-      - run: uv python install 3.12
+          version: "0.12.7"
+      - run: uv python install 3.14
       - name: Exact locked environment
         run: |
           uv lock --check --project ${{ matrix.package }}
@@ -116,8 +117,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
-          version: "0.9.18"
-      - run: uv python install 3.12
+          version: "0.12.7"
+      - run: uv python install 3.14
       - run: uv sync --project video-assembly --locked --group dev
       - run: uv run --project video-assembly ruff check video-assembly
       - run: uv run --project video-assembly ruff format --check video-assembly
