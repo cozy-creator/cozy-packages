@@ -17,5 +17,5 @@
 object = "sdxl:app"
 
 [bindings."SdxlModel"]
-model = "cozy/sdxl"
-release = "se-008"
+model = "paul/sdxl"
+release = "1.0.0"
