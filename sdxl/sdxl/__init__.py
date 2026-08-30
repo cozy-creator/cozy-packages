@@ -223,11 +223,17 @@ class SdxlModel(Model[SdxlPipeline]):
         import torch
 
         vae = self.pipe.components["vae"]
-        if bool(getattr(vae.config, "force_upcast", False)):
+        original_dtype = next(vae.parameters()).dtype
+        upcast = bool(getattr(vae.config, "force_upcast", False))
+        if upcast:
             vae.to(dtype=torch.float32)
             latents = latents.to(dtype=torch.float32)
-        with torch.inference_mode():
-            return vae.decode(latents / self.pipe.vae_scale).sample
+        try:
+            with torch.inference_mode():
+                return vae.decode(latents / self.pipe.vae_scale).sample
+        finally:
+            if upcast:
+                vae.to(dtype=original_dtype)
 
 
 # ------------------------------------------------------------------ the handler
