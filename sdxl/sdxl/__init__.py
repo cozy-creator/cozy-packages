@@ -135,7 +135,7 @@ def _hidiffusion_unet_type() -> type[Any]:
                 raise ValueError("HiDiffusion requires a positive timestep count")
             active = bool(getattr(self, "_cozy_hidiffusion_active", False))
             if hidiffusion != active:
-                from hidiffusion import (  # type: ignore[import-not-found]
+                from hidiffusion import (  # type: ignore[import-not-found,import-untyped]
                     apply_hidiffusion,
                     remove_hidiffusion,
                 )
