@@ -99,7 +99,7 @@ class Txt2ImgInput(msgspec.Struct, forbid_unknown_fields=True):
     #: `ModelDefault` marker is what makes the field omittable on the wire and concrete
     #: before the handler runs — the handler sees `int`, never `int | None`.
     steps: Annotated[ModelDefault[int], msgspec.Meta(ge=1, le=50)] = 20
-    guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=0.0, le=20.0)] = 5.0
+    guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=0.0, le=20.0)] = 7.0
     seed: int = 1005
 
 

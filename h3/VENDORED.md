@@ -10,12 +10,12 @@ dependency of the pinned model stack).
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.3-py3-none-any.whl` | `cozy-runtime` `a675e1085300d3b21e56f4787be630853c2e8393` | 710,824 | `1816d1b73ca8b0886afd0d511cb949f83dd64d2444b2c53645a77a650e742ef4` |
+| `vendor/cozy_runtime-0.0.6-py3-none-any.whl` | `cozy-runtime` `793286c2f09c7207990fae581f1fb6d26f4abe50` | 703,000 | `d24214c8215b9d30c48a4f52f0acf564e8b426e8b16ce48fb96a9f9126b6af64` |
 | `vendor/cozy_eval-2.3.0-py3-none-any.whl` | `cozy-eval` `fe8c7d2ead882dded2595e33af73101040792bd8` | 295,046 | `87830e9461f5b98b699e1ba7e1d2fec2dd37bea63d7b8ae8403506835e427a26` |
 | `vendor/tensorfs-0.0.1-cp311-abi3-manylinux_2_34_x86_64.whl` | `tensorfs` `4f3d16dff35d195f3709f06b6dc77f95bddfe64b` | 1,070,730 | `0dc98c4a81a7d7e5dd2b9009bb2035b838f1d60d34720d9121f69a2fc46c8ce9` |
 
 The checked-in Runtime wheel was built from the exact package-domain commit on 2026-08-29,
-the Eval wheel on 2026-08-26, and the TensorFS wheel on 2026-08-28. Runtime and Eval used uv 0.9.18;
+the Eval wheel on 2026-08-26, and the TensorFS wheel on 2026-08-28. Runtime and Eval used uv;
 TensorFS used maturin 1.14.1 and Rust 1.91.1:
 
 ```sh
@@ -37,7 +37,7 @@ sha256sum "$runtime_out"/*.whl "$eval_out"/*.whl "$tensorfs_out"/*.whl
 
 The source checkouts were at the commits in the table. The Runtime wheel
 metadata declares `av>=18.1,<19` only for its `media` extra; this package asks
-for `cozy-runtime[media]==0.0.3`.
+for `cozy-runtime[media]==0.0.6`.
 
 ## MiniMax H3 tokenizer and processor
 
@@ -86,17 +86,15 @@ matched the full snapshot construction.
 
 ## Third-party binary closure
 
-The model stack is pinned to:
+The package declares this compatible model stack:
 
 - `diffusers==0.40.0`
 - `transformers==5.16.1`
-- `torch==2.9.1+cu129`
-- `torchvision==0.24.1+cu129`
-- `torchaudio==2.9.1+cu129`
+- `torch>=2.13,<3`
+- `torchvision==0.28.0`
 
-Torchvision uses its compatible 0.24.1 release number; there is no
-`torchvision==2.9.1+cu129` artifact in the selected CUDA index. `uv lock`
-resolves 66 packages for Linux x86-64. A new Python 3.12 environment installed
+The lock freezes that compatible range to Torch 2.13.0 and its CUDA 13 peers. `uv lock`
+resolves the Linux x86-64 closure. A new Python 3.14 environment installed
 all 65 non-project packages from the populated uv cache with this command and
 no network access:
 
@@ -120,7 +118,7 @@ The Runtime media extra resolves to this exact PyAV wheel:
 | --- | --- | --- |
 | `av==18.1.0` | `av-18.1.0-cp311-abi3-manylinux_2_28_x86_64.whl` | `8a032e8d8ebc73dec079364b9b4a6837638a2d106e8472314e685ffbf163e700` |
 
-An isolated Python 3.12 environment installed the Runtime media closure from a
+An isolated Python 3.14 environment installed the Runtime media closure from a
 local wheelhouse using `--offline --no-index`. Importing the installed Runtime
 and PyAV succeeded. The wheel reports these embedded library versions:
 

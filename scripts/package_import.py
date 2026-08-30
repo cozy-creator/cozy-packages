@@ -19,6 +19,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 #: package directory -> (module to import, compiled peers that must load beside it)
 PACKAGES = {
+    "anima": ("anima", ("torch", "triton", "transformers", "diffusers", "av")),
     "sdxl": ("sdxl", ("torch", "triton", "transformers", "diffusers", "av")),
     "quality-judge": ("quality_judge", ("torch", "triton", "transformers", "tokenizers",
                                         "numpy", "PIL.Image", "tensorfs", "av")),
