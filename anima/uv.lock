@@ -10,7 +10,7 @@ supported-markers = [
 
 [[package]]
 name = "anima-package"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -30,7 +30,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.4-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.5-py3-none-any.whl" },
     { name = "diffusers", specifier = "==0.40.0" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=2.0" },
@@ -135,8 +135,8 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.0.4"
-source = { path = "vendor/cozy_runtime-0.0.4-py3-none-any.whl" }
+version = "0.0.5"
+source = { path = "vendor/cozy_runtime-0.0.5-py3-none-any.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
@@ -145,7 +145,7 @@ dependencies = [
     { name = "protobuf" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.4-py3-none-any.whl", hash = "sha256:db5ee65830cde2c21e0fe30865b356eecc45d947cdce21b179dad617b4f70e5e" },
+    { filename = "cozy_runtime-0.0.5-py3-none-any.whl", hash = "sha256:b1f4237cb840fbdd4e1083e660b3b0cc656ba8f6fcaf53c46b2b793c4fbefc51" },
 ]
 
 [package.optional-dependencies]
