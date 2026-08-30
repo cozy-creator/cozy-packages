@@ -131,7 +131,13 @@ class AnimaModel(Model[AnimaPipeline]):
 
         device = next(self.pipe.components["transformer"].parameters()).device
         generator = torch.Generator(device=device).manual_seed(seed)
-        pipeline: Any = AnimaModularPipeline(workflow="text2image")
+
+        class RuntimeAnimaPipeline(AnimaModularPipeline):
+            @property
+            def _execution_device(self) -> Any:
+                return device
+
+        pipeline: Any = RuntimeAnimaPipeline(workflow="text2image")
         pipeline.register_components(
             **self.pipe.components,
             scheduler=FlowMatchEulerDiscreteScheduler.from_config(self.pipe.scheduler_config),
