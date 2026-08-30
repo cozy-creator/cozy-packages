@@ -139,22 +139,24 @@ class SdxlPipeline:
         import torch
         from diffusers import AutoencoderKL, UNet2DConditionModel
         from transformers import CLIPTextConfig, CLIPTextModel, CLIPTextModelWithProjection
+        from transformers import initialization as transformer_init
 
         mapping = config.mapping()
         text_encoder = dict(mapping["text_encoder"])
         text_encoder_2 = dict(mapping["text_encoder_2"])
         for clip_config in (text_encoder, text_encoder_2):
             clip_config["initializer_factor"] = float(clip_config["initializer_factor"])
-        self.components: dict[str, Any] = {
-            "text_encoder": CLIPTextModel(CLIPTextConfig(**text_encoder)).to(
-                torch.float16
-            ),
-            "text_encoder_2": CLIPTextModelWithProjection(
-                CLIPTextConfig(**text_encoder_2)
-            ).to(torch.float16),
-            "unet": UNet2DConditionModel.from_config(mapping["unet"]).to(torch.float16),
-            "vae": AutoencoderKL.from_config(mapping["vae"]).to(torch.float16),
-        }
+        with transformer_init.no_init_weights():
+            self.components: dict[str, Any] = {
+                "text_encoder": CLIPTextModel(CLIPTextConfig(**text_encoder)).to(
+                    torch.float16
+                ),
+                "text_encoder_2": CLIPTextModelWithProjection(
+                    CLIPTextConfig(**text_encoder_2)
+                ).to(torch.float16),
+                "unet": UNet2DConditionModel.from_config(mapping["unet"]).to(torch.float16),
+                "vae": AutoencoderKL.from_config(mapping["vae"]).to(torch.float16),
+            }
         self.scheduler_config: dict[str, Any] = dict(mapping["scheduler"])
         self.vae_scale: float = float(mapping["vae"]["scaling_factor"])
 
