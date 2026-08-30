@@ -17,9 +17,10 @@ image and never installs a second copy in the package overlay.
 - `transformers==5.16.1`
 - `hidiffusion==0.1.10`
 
-HiDiffusion's window attention is applied directly to the constructed SDXL UNet. RAU-Net is
-disabled for native-resolution buckets after a live 1344x768 singular-subject prompt duplicated
-the subject; it remains a future high-resolution-lane experiment. The package owns the denoising loop,
+Full HiDiffusion is the default for the square 1024x1024 bucket. Native non-square buckets use
+ordinary SDXL after live 1344x768 HiDiffusion duplicated a singular subject and window-attention-only
+produced a duplicated head at 1024x1024; future high-resolution lanes remain a separate experiment.
+The package owns the denoising loop,
 so it sets the UNet's total timestep count and resets every patched module's request-local timestep
 state before step zero. A later request cannot inherit a partial or canceled request's counters.
 

@@ -125,11 +125,30 @@ def _hidiffusion_unet_type() -> type[Any]:
     from diffusers import UNet2DConditionModel
 
     class HiDiffusionUNet(UNet2DConditionModel):
-        """Reset HiDiffusion's request-local counters before denoising step zero."""
+        """Select and reset the request's denoising implementation before step zero."""
 
-        def begin_hidiffusion_request(self, steps: int) -> None:
+        _cozy_base_num_upsamplers: int
+        _cozy_hidiffusion_active: bool
+
+        def begin_denoise_request(self, steps: int, hidiffusion: bool) -> None:
             if steps <= 0:
                 raise ValueError("HiDiffusion requires a positive timestep count")
+            active = bool(getattr(self, "_cozy_hidiffusion_active", False))
+            if hidiffusion != active:
+                from hidiffusion import (  # type: ignore[import-untyped]
+                    apply_hidiffusion,
+                    remove_hidiffusion,
+                )
+
+                if hidiffusion:
+                    self.num_upsamplers = self._cozy_base_num_upsamplers
+                    apply_hidiffusion(self)
+                else:
+                    remove_hidiffusion(self)
+                    self.num_upsamplers = self._cozy_base_num_upsamplers
+                self._cozy_hidiffusion_active = hidiffusion
+            if not hidiffusion:
+                return
             self._num_timesteps = steps
             info = getattr(self, "info", None)
             if isinstance(info, dict):
@@ -162,7 +181,6 @@ class SdxlPipeline:
     def __init__(self, config: Any) -> None:
         import torch
         from diffusers import AutoencoderKL
-        from hidiffusion import apply_hidiffusion  # type: ignore[import-untyped]
         from transformers import CLIPTextConfig, CLIPTextModel, CLIPTextModelWithProjection
         from transformers import initialization as transformer_init
 
@@ -189,10 +207,8 @@ class SdxlPipeline:
         # HiDiffusion recognizes this constructed SDXL UNet by its module keys. Keep the
         # package free of a catalog/model identifier and let that structural check decide.
         unet.name_or_path = ""
-        # Native SDXL buckets are already at the model's training resolution. Keep
-        # HiDiffusion's window-attention acceleration, but leave RAU-Net for a future
-        # high-resolution lane: at 1344x768 it duplicated a singular subject in live proof.
-        apply_hidiffusion(unet, apply_raunet=False)
+        unet._cozy_base_num_upsamplers = unet.num_upsamplers
+        unet._cozy_hidiffusion_active = False
         self.scheduler_config: dict[str, Any] = dict(mapping["scheduler"])
         self.vae_scale: float = float(mapping["vae"]["scaling_factor"])
 
@@ -250,12 +266,13 @@ class SdxlModel(Model[SdxlPipeline]):
         time_ids: Any,
         step: int,
         total_steps: int,
+        hidiffusion: bool,
     ) -> Any:
         import torch
 
         unet = self.pipe.components["unet"]
         if step == 0:
-            unet.begin_hidiffusion_request(total_steps)
+            unet.begin_denoise_request(total_steps, hidiffusion)
         with torch.inference_mode():
             return unet(
                 latents,
@@ -474,6 +491,7 @@ def generate(
                     batch_ids,
                     index,
                     steps,
+                    width == height,
                 )
                 if classifier_free:
                     uncond, cond = noise.chunk(2)
