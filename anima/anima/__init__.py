@@ -77,17 +77,19 @@ class AnimaPipeline:
             CosmosTransformer3DModel,
         )
         from transformers import Qwen3Config, Qwen3Model
+        from transformers import initialization as transformer_init
 
         mapping = config.mapping()
-        transformer = CosmosTransformer3DModel.from_config(mapping["transformer"]).to(
-            torch.bfloat16
-        )
-        text_encoder: Any = Qwen3Model(Qwen3Config(**mapping["text_encoder"]))
-        text_encoder.to(dtype=torch.bfloat16)
-        text_conditioner = AnimaTextConditioner.from_config(mapping["text_conditioner"]).to(
-            torch.bfloat16
-        )
-        vae = AutoencoderKLQwenImage.from_config(mapping["vae"]).to(torch.bfloat16)
+        with transformer_init.no_init_weights():
+            transformer = CosmosTransformer3DModel.from_config(mapping["transformer"]).to(
+                torch.bfloat16
+            )
+            text_encoder: Any = Qwen3Model(Qwen3Config(**mapping["text_encoder"]))
+            text_encoder.to(dtype=torch.bfloat16)
+            text_conditioner = AnimaTextConditioner.from_config(
+                mapping["text_conditioner"]
+            ).to(torch.bfloat16)
+            vae = AutoencoderKLQwenImage.from_config(mapping["vae"]).to(torch.bfloat16)
         vae.enable_tiling()
         self.scheduler_config = mapping["scheduler"]
         self.tokenizer = _tokenizer(_ROOT / "tokenizer")
