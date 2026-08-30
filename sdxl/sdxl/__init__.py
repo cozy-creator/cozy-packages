@@ -120,6 +120,30 @@ class ImageOutput(msgspec.Struct):
 # ------------------------------------------------------------------ the model
 
 
+def _hidiffusion_unet_type() -> type[Any]:
+    """The patched UNet owner, imported only when Runtime constructs the model."""
+    from diffusers import UNet2DConditionModel
+
+    class HiDiffusionUNet(UNet2DConditionModel):
+        """Reset HiDiffusion's request-local counters before denoising step zero."""
+
+        def begin_hidiffusion_request(self, steps: int) -> None:
+            if steps <= 0:
+                raise ValueError("HiDiffusion requires a positive timestep count")
+            self._num_timesteps = steps
+            info = getattr(self, "info", None)
+            if isinstance(info, dict):
+                info["size"] = None
+                info["upsample_size"] = None
+            for module in self.modules():  # type: ignore[attr-defined]
+                if hasattr(module, "timestep"):
+                    module.timestep = 0
+                if hasattr(module, "max_timestep"):
+                    module.max_timestep = steps
+
+    return HiDiffusionUNet
+
+
 class SdxlPipeline:
     """The four constructed component roots, built from the artifact's immutable config.
 
@@ -137,7 +161,8 @@ class SdxlPipeline:
 
     def __init__(self, config: Any) -> None:
         import torch
-        from diffusers import AutoencoderKL, UNet2DConditionModel
+        from diffusers import AutoencoderKL
+        from hidiffusion import apply_hidiffusion  # type: ignore[import-untyped]
         from transformers import CLIPTextConfig, CLIPTextModel, CLIPTextModelWithProjection
         from transformers import initialization as transformer_init
 
@@ -146,17 +171,25 @@ class SdxlPipeline:
         text_encoder_2 = dict(mapping["text_encoder_2"])
         for clip_config in (text_encoder, text_encoder_2):
             clip_config["initializer_factor"] = float(clip_config["initializer_factor"])
+        unet_type = _hidiffusion_unet_type()
         with transformer_init.no_init_weights():
             self.components: dict[str, Any] = {
                 "text_encoder": CLIPTextModel(CLIPTextConfig(**text_encoder)).to(
-                    torch.float16
+                    torch.float16  # type: ignore[arg-type]
                 ),
                 "text_encoder_2": CLIPTextModelWithProjection(
                     CLIPTextConfig(**text_encoder_2)
-                ).to(torch.float16),
-                "unet": UNet2DConditionModel.from_config(mapping["unet"]).to(torch.float16),
-                "vae": AutoencoderKL.from_config(mapping["vae"]).to(torch.float16),
+                ).to(torch.float16),  # type: ignore[arg-type]
+                "unet": unet_type.from_config(mapping["unet"]).to(torch.float16),
+                "vae": AutoencoderKL.from_config(mapping["vae"]).to(  # type: ignore[no-untyped-call]
+                    torch.float16
+                ),
             }
+        unet = self.components["unet"]
+        # HiDiffusion recognizes this constructed SDXL UNet by its module keys. Keep the
+        # package free of a catalog/model identifier and let that structural check decide.
+        unet.name_or_path = ""
+        apply_hidiffusion(unet)
         self.scheduler_config: dict[str, Any] = dict(mapping["scheduler"])
         self.vae_scale: float = float(mapping["vae"]["scaling_factor"])
 
@@ -206,12 +239,22 @@ class SdxlModel(Model[SdxlPipeline]):
 
     @uses_components("unet")
     def denoise(
-        self, latents: Any, timestep: Any, prompt: Any, text_embeds: Any, time_ids: Any
+        self,
+        latents: Any,
+        timestep: Any,
+        prompt: Any,
+        text_embeds: Any,
+        time_ids: Any,
+        step: int,
+        total_steps: int,
     ) -> Any:
         import torch
 
+        unet = self.pipe.components["unet"]
+        if step == 0:
+            unet.begin_hidiffusion_request(total_steps)
         with torch.inference_mode():
-            return self.pipe.components["unet"](
+            return unet(
                 latents,
                 timestep,
                 encoder_hidden_states=prompt,
@@ -386,7 +429,9 @@ def generate(
     tel.metric("prompt_absmax", _finite(torch, prompt))
     tel.metric("pooled_absmax", _finite(torch, pooled))
 
-    scheduler = EulerDiscreteScheduler.from_config(model.pipe.scheduler_config)
+    scheduler = EulerDiscreteScheduler.from_config(  # type: ignore[no-untyped-call]
+        model.pipe.scheduler_config
+    )
     scheduler.set_timesteps(steps, device=device)
     generator = _request_generator(torch, view.generator, device=device)
     latents = (
@@ -409,19 +454,31 @@ def generate(
         batch_prompt, batch_pooled, batch_ids = prompt, pooled, time_ids
 
     on_step = tel.step_callback(steps, stage="denoise")
-    with tel.stage("denoise"):
-        for index, timestep in enumerate(scheduler.timesteps):
-            ctx.raise_if_cancelled()
-            batch = torch.cat([latents] * 2) if classifier_free else latents
-            model_input = scheduler.scale_model_input(batch, timestep)
-            noise = model.denoise(model_input, timestep, batch_prompt, batch_pooled, batch_ids)
-            if classifier_free:
-                uncond, cond = noise.chunk(2)
-                noise = uncond + payload.guidance * (cond - uncond)
-            if index == 0:
-                tel.metric("noise_absmax_step0", _finite(torch, noise))
-            latents = scheduler.step(noise, timestep, latents).prev_sample
-            on_step(index)
+    # HiDiffusion's window-attention shift uses torch's CPU RNG. Isolate and seed it from
+    # the request so a canceled or concurrent history cannot change this request's output.
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(payload.seed)
+        with tel.stage("denoise"):
+            for index, timestep in enumerate(scheduler.timesteps):
+                ctx.raise_if_cancelled()
+                batch = torch.cat([latents] * 2) if classifier_free else latents
+                model_input = scheduler.scale_model_input(batch, timestep)
+                noise = model.denoise(
+                    model_input,
+                    timestep,
+                    batch_prompt,
+                    batch_pooled,
+                    batch_ids,
+                    index,
+                    steps,
+                )
+                if classifier_free:
+                    uncond, cond = noise.chunk(2)
+                    noise = uncond + payload.guidance * (cond - uncond)
+                if index == 0:
+                    tel.metric("noise_absmax_step0", _finite(torch, noise))
+                latents = scheduler.step(noise, timestep, latents).prev_sample
+                on_step(index)
     tel.metric("latent_absmax", _finite(torch, latents))
 
     with tel.stage("decode"):
