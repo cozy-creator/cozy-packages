@@ -538,8 +538,8 @@ def fence_sdxl_defaults() -> Fence:
     manifest = tomllib.loads((ROOT / "sdxl" / "package.toml").read_text())
     binding = manifest.get("bindings", {}).get("generate.models.model", {})
     expected = {
-        "model": "paul/nova-anime-xl",
-        "release": "19.0.0",
+        "model": "paul/wai-illustrious",
+        "release": "17.0.0",
         "lane": "bf16",
     }
     bad = (
@@ -571,7 +571,7 @@ def fence_sdxl_defaults() -> Fence:
         bad.append(f"sdxl: default guidance is {guidance!r}, expected 7.0")
     if not square_only:
         bad.append("sdxl: HiDiffusion selection is not derived from square output geometry")
-    return bad, "Nova Anime XL 19.0.0 bf16, CFG 7, square-only HiDiffusion"
+    return bad, "WAI Illustrious 17.0.0 bf16, CFG 7, square-only HiDiffusion"
 
 
 def fence_h3_adaln_pruned_vocabulary() -> Fence:
