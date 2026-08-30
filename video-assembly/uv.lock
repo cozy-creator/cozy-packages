@@ -128,8 +128,8 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.0.6"
-source = { path = "vendor/cozy_runtime-0.0.6-py3-none-any.whl" }
+version = "0.0.7"
+source = { path = "vendor/cozy_runtime-0.0.7-py3-none-any.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
@@ -138,7 +138,7 @@ dependencies = [
     { name = "protobuf" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.6-py3-none-any.whl", hash = "sha256:d24214c8215b9d30c48a4f52f0acf564e8b426e8b16ce48fb96a9f9126b6af64" },
+    { filename = "cozy_runtime-0.0.7-py3-none-any.whl", hash = "sha256:a73a61a85a6ce43da8f6288e14a12ce91672672a156b990a0ecf987e810bc37f" },
 ]
 
 [package.optional-dependencies]
@@ -163,8 +163,8 @@ provides-extras = ["corpus", "derive", "media"]
 
 [[package]]
 name = "cozy-video-assembly"
-version = "1.0.1"
-source = { virtual = "." }
+version = "1.0.2"
+source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
     { name = "msgspec" },
@@ -178,7 +178,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.6-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.7-py3-none-any.whl" },
     { name = "msgspec", specifier = ">=0.19" },
 ]
 

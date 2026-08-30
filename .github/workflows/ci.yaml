@@ -23,7 +23,7 @@ jobs:
         run: |
           uv venv --python 3.14
           uv pip install \
-            h3/vendor/cozy_runtime-0.0.6-py3-none-any.whl \
+            h3/vendor/cozy_runtime-0.0.7-py3-none-any.whl \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4"
 
       - name: Fences
@@ -50,6 +50,27 @@ jobs:
           for package in anima h3 quality-judge sdxl video-assembly; do
             uv lock --check --project "$package"
           done
+
+      - name: Every package builds and imports from its wheel
+        run: |
+          mkdir -p dist/packages
+          for package in anima h3 quality-judge sdxl video-assembly; do
+            mkdir "dist/packages/$package"
+            uv build --project "$package" --wheel --out-dir "dist/packages/$package"
+          done
+          uv pip install --python .venv/bin/python --no-deps dist/packages/*/*.whl
+          .venv/bin/python -P - <<'PY'
+          from pathlib import Path
+
+          import anima, h3, quality_judge, sdxl, video_assembly
+
+          for module in (anima, h3, quality_judge, sdxl, video_assembly):
+              assert "site-packages" in str(module.__file__)
+              assert module.app._registry
+          h3_root = Path(h3.__file__).parent
+          for asset in ("processor", "timestep-plans", "tokenizer"):
+              assert (h3_root / asset).is_dir()
+          PY
 
       # The torch family is ABI-coupled — torchvision's compiled ops link against torch's
       # C++ ABI — and #633 gives one PlatformTarget exactly ONE family. A package that
@@ -84,8 +105,8 @@ jobs:
         run: h3/.venv/bin/python scripts/h3-conform.py
 
   package-locks:
-    # Independent so a failure to materialize an exact environment cannot hide behind
-    # static analysis. `--no-install-project` because both are virtual projects.
+    # Independent so a failure to materialize an exact dependency environment cannot hide
+    # behind static analysis. The checks job separately builds and imports every project wheel.
     name: SDXL and quality-judge exact locked environments
     runs-on: ubuntu-latest
     timeout-minutes: 30
