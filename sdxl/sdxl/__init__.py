@@ -189,7 +189,10 @@ class SdxlPipeline:
         # HiDiffusion recognizes this constructed SDXL UNet by its module keys. Keep the
         # package free of a catalog/model identifier and let that structural check decide.
         unet.name_or_path = ""
-        apply_hidiffusion(unet)
+        # Native SDXL buckets are already at the model's training resolution. Keep
+        # HiDiffusion's window-attention acceleration, but leave RAU-Net for a future
+        # high-resolution lane: at 1344x768 it duplicated a singular subject in live proof.
+        apply_hidiffusion(unet, apply_raunet=False)
         self.scheduler_config: dict[str, Any] = dict(mapping["scheduler"])
         self.vae_scale: float = float(mapping["vae"]["scaling_factor"])
 
