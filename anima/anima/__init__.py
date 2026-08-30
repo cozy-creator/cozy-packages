@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any
@@ -63,9 +64,13 @@ class ImageOutput(msgspec.Struct):
 
 
 def _tokenizer(path: Path) -> Any:
-    from transformers import AutoTokenizer
+    from transformers import PreTrainedTokenizerFast
 
-    return AutoTokenizer.from_pretrained(path, local_files_only=True)
+    config = json.loads((path / "tokenizer_config.json").read_text())
+    config.pop("tokenizer_class", None)
+    return PreTrainedTokenizerFast(
+        tokenizer_file=str(path / "tokenizer.json"), **config
+    )
 
 
 class AnimaPipeline:
