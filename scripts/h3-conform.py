@@ -63,8 +63,8 @@ FAIL = "  FAIL "
 _failures = 0
 
 PLAN_DIGESTS = {
-    "fl2va": "5a99880e5442b8eeed3ed921a133f87c922c4386ee5e2d3f61431cc388202364",
-    "ref2va": "a83bac0ca1ddf31da7da55aed97d5340b5a8b657a7edff0cb671356eff670ed1",
+    "fl2va": "8da103b9b09629f9f4bcc7c3311929a83c4bc76d5ac2a49fa8ad6c08a140d99b",
+    "ref2va": "f99dec0b673105a6b7cabdc57a62df9653afd943a9092eef6018aa48095a9487",
 }
 PACKAGE_DESCRIPTOR_DIGEST = (
     "sha256:c3e5db6f1cc08c2caa88b9bc5774a975999a3e0ad4e918f7f49015845043b114"
@@ -95,7 +95,6 @@ def dit_config(task: str, modulation: str = "full") -> dict[str, object]:
     plan = canonical_timestep_plan(cast(Any, task))
     return {
         "cozy_h3": {
-            "schema": "cozy.minimax_h3.dit/1",
             "task": task,
             "modulation": modulation,
             "timestep_plan_digest": f"sha256:{plan.digest}",
@@ -1356,7 +1355,7 @@ def arm_live_probe() -> None:
     )
     require_visible = cast(Callable[..., set[str]], probe["require_visible"])
     select_actions = cast(Callable[[list[str] | None], set[str]], probe["select_actions"])
-    receipt_schema = cast(str, probe["RECEIPT_SCHEMA"])
+    probe_kind = cast(str, probe["PROBE_KIND"])
 
     check(
         "Runtime multiline JSON is one document",
@@ -1708,7 +1707,7 @@ def arm_live_probe() -> None:
         if ref_main.returncode == 0:
             receipt_path = Path(ref_main.stdout.strip().splitlines()[-1])
             receipt = json.loads(receipt_path.read_text())
-            check("selected-action receipt schema", receipt["schema"], receipt_schema)
+            check("selected-action receipt kind", receipt["kind"], probe_kind)
             check(
                 "selected-action receipt identity",
                 receipt["selected_actions"],

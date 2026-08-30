@@ -7,7 +7,6 @@ from typing import Any, cast
 
 from cozy_runtime.author import ConformanceError
 
-_SCHEMA = "cozy.minimax_h3.text_conditioner/1"
 _SOURCE_ARCHITECTURE = "Qwen3VLForConditionalGeneration"
 _SOURCE_LAYERS = 64
 _RETAINED_LAYERS = 50
@@ -17,7 +16,6 @@ _PERSISTENT_TENSORS = 902
 def text_conditioner_config() -> dict[str, object]:
     """The closed artifact extension, shared by fixtures and production publishers."""
     return {
-        "schema": _SCHEMA,
         "source_architecture": _SOURCE_ARCHITECTURE,
         "retained_decoder_layers": _RETAINED_LAYERS,
         "conditioning_hidden_state": _RETAINED_LAYERS,

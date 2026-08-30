@@ -27,6 +27,8 @@ conformance drivers, and default development bindings.
   packet. The model package does read its own five immutable tokenizer/processor data files.
 - Model code owns model-specific normalization, conditioning, schedules, inference, and output
   semantics. It does not own storage, networking, device placement, offload, or quantization.
+- Private H3 configs, plans, and proof receipts are identified by their package member and closed
+  field shape; they do not add globally versioned schema tags beside the PackageDescriptor.
 - Module scope stays light. `cozy-runtime describe` must work without Torch, model libraries, a
   GPU, or weights.
 - Community implementations are research evidence only. No community node, graph, prompt parser,
@@ -205,9 +207,9 @@ h3/.venv/bin/python scripts/h3-live.py \
   --expected-package-descriptor-digest \
     'sha256:c3e5db6f1cc08c2caa88b9bc5774a975999a3e0ad4e918f7f49015845043b114' \
   --expected-fl-plan-digest \
-    'sha256:5a99880e5442b8eeed3ed921a133f87c922c4386ee5e2d3f61431cc388202364' \
+    'sha256:8da103b9b09629f9f4bcc7c3311929a83c4bc76d5ac2a49fa8ad6c08a140d99b' \
   --expected-ref-plan-digest \
-    'sha256:a83bac0ca1ddf31da7da55aed97d5340b5a8b657a7edff0cb671356eff670ed1' \
+    'sha256:f99dec0b673105a6b7cabdc57a62df9653afd943a9092eef6018aa48095a9487' \
   --ref-input /proof/ref2va.json \
   --expected-ref-input-sha256 'sha256:EXACT_64_LOWERCASE_HEX_REQUEST' \
   --out /proof/new-output
