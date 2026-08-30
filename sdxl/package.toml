@@ -16,6 +16,6 @@
 [application]
 object = "sdxl:app"
 
-[bindings."SdxlModel"]
+[bindings."generate.models.model"]
 model = "paul/sdxl"
 release = "1.0.0"
