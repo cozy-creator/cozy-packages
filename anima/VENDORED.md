@@ -6,7 +6,7 @@ the platform-owned `SOURCE_DATE_EPOCH=946684800`; the two outputs were byte-iden
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.18-py3-none-any.whl` | `cozy-runtime` `c7582e635a01e44a18c8487d0eb66992b70f7602` | 738,741 | `6fcbaa51d94f5809e925225ddc89a440c922bead13c0bba9277db5b01c8f9228` |
+| `vendor/cozy_runtime-0.0.20-py3-none-any.whl` | `cozy-runtime` `ebdcb4a319dd1d6d2afa352d9dfe824c2bca2b57` | 751,483 | `ad0b814958ea738c454958eec4ebcefdff5b269979908bdf0a6ab1942ad6432a` |
 
 The wheel requires CPython `>=3.12,<3.13`; its optional `media` extra requires
 `av>=18.1,<19`. Production placement resolves both dependencies against the exact base worker
