@@ -1,4 +1,4 @@
 owner: codex /root/package_runtime014_restamp
-purpose: restamp first-party packages for Runtime 0.0.15 and TensorFS 0.0.5 on CPython 3.12
-branch: codex/runtime-015-restamp
-base: 9918620950c8cdca816de8ad07cc37a27f5af5e9
+purpose: vendor exact native package dependencies blocked by Creator registry mirroring
+branch: codex/native-dependency-wheels
+base: 886da291b3a1d7ab8243a5c9dc7dd966da341316
