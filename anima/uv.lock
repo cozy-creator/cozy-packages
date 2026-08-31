@@ -10,7 +10,7 @@ supported-markers = [
 
 [[package]]
 name = "anima"
-version = "0.1.14"
+version = "0.1.15"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
