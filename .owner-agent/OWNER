@@ -1,4 +1,4 @@
 owner: codex /root/anima_runtime_optimization
-purpose: restamp Anima and SDXL against final Runtime 0.0.20
+purpose: restamp Anima and SDXL against final Runtime 0.0.22
 branch: codex/runtime020-package-restamp
 base: 84bf402d7555628eaedb583d968afc8ababc41e0

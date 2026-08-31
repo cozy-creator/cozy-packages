@@ -80,6 +80,7 @@ PLATFORM_OWNED_ROOTS = frozenset(
         "cffi",
         "click",
         "cozy-runtime",
+        "cozy-runtime-cuda-kernels",
         "cryptography",
         "filelock",
         "fsspec",
@@ -952,6 +953,15 @@ def fence_native_publication_wheels() -> Fence:
                 bad.append(f"{rel(lock_path)}: malformed package row")
                 continue
             rows.setdefault(_distribution_name(value["name"]), []).append(value)
+
+        # CUDA kernels belong to the exact Torch/CUDA base profile. A package may see the
+        # optional requirement in Runtime's wheel metadata, but activating it here would resolve
+        # and publish a second copy in the overlay instead of using the qualified base capability.
+        if "cozy-runtime-cuda-kernels" in rows:
+            bad.append(
+                f"{rel(lock_path)}: base-owned cozy-runtime-cuda-kernels resolved into the "
+                "package overlay"
+            )
 
         reachable: set[str] = set()
         queue = list(direct)
