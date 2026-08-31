@@ -12,7 +12,7 @@
 
 [project]
 name = "quality-judge"
-version = "1.0.7"
+version = "1.0.8"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cozy-runtime[media]==0.0.15",
@@ -29,6 +29,9 @@ dependencies = [
     "torch>=2.13,<3",
     "transformers==5.16.1",
 ]
+
+[project.entry-points."cozy.application"]
+default = "quality_judge:app"
 
 [build-system]
 requires = ["hatchling"]

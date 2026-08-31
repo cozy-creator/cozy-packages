@@ -1,6 +1,6 @@
 [project]
 name = "h3"
-version = "1.0.7"
+version = "1.0.8"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cozy-runtime[media]==0.0.15",
@@ -20,6 +20,9 @@ dependencies = [
     "torchvision==0.28.0",
     "transformers==5.16.1",
 ]
+
+[project.entry-points."cozy.application"]
+default = "h3:app"
 
 [build-system]
 requires = ["hatchling"]
