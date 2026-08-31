@@ -689,6 +689,39 @@ def fence_anima_defaults() -> Fence:
     return bad, "Anima binds the exact paul/anima@1.0.0/bf16 lane"
 
 
+def fence_anima_progress() -> Fence:
+    """Anima projects the maintained Diffusers loop onto Runtime's measured lane."""
+
+    path = ROOT / "anima" / "anima" / "__init__.py"
+    tree = ast.parse(path.read_text())
+    stages: set[str] = set()
+    measured_steps = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        stage = next(
+            (
+                keyword.value.value
+                for keyword in node.keywords
+                if keyword.arg == "stage"
+                and isinstance(keyword.value, ast.Constant)
+                and isinstance(keyword.value.value, str)
+            ),
+            "",
+        )
+        if node.func.attr == "progress" and stage:
+            stages.add(stage)
+        if node.func.attr == "step_callback" and stage == "denoise":
+            measured_steps = True
+    bad: list[str] = []
+    missing = {"conditioning", "decoding"} - stages
+    if missing:
+        bad.append(f"anima: missing progress stages {sorted(missing)}")
+    if not measured_steps:
+        bad.append("anima: denoise loop does not use Runtime's measured step_callback")
+    return bad, "Anima reports conditioning, measured denoising steps, and decoding"
+
+
 def fence_h3_adaln_pruned_vocabulary() -> Fence:
     """The pre-launch hardcut has one name; the retired modulation name is refused."""
     retired = "baked"
@@ -1085,6 +1118,7 @@ FENCES = (
     ("typed-model-bindings", fence_typed_model_bindings),
     ("sdxl-defaults", fence_sdxl_defaults),
     ("anima-defaults", fence_anima_defaults),
+    ("anima-progress", fence_anima_progress),
     ("h3-adaln-pruned-vocabulary", fence_h3_adaln_pruned_vocabulary),
     ("descriptor-minimality", fence_descriptor_minimality),
     ("package-manifest-hardcut", fence_package_manifest_hardcut),
