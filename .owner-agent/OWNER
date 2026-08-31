@@ -1,4 +1,4 @@
 owner: codex /root
 purpose: profile Anima stages and add an explicit 1536 square output option
 branch: codex/anima-highres-profiling
-base: 98a8d66c29aac7cfe1b721865b0730a2f7d96d12
+base: 52b7b982789d3257a57c571f78db47cf468003c7
