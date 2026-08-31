@@ -10,6 +10,16 @@ image and never installs a second copy in the package overlay.
 | --- | ---: | --- |
 | `vendor/cozy_runtime-0.0.15-py3-none-any.whl` | 733,494 | `3bf8fc0832553a90dd0c08207cc6f8c634ddf63724bb0fdebd4ae1a930d65352` |
 
+## Locked publication wheels
+
+Creator's registry mirror admits only filenames ending exactly in `-py3-none-any.whl`. SDXL's
+pruned non-base closure also contains locked native `hf-xet`, PyYAML, regex, safetensors, and
+tokenizers wheels plus Shellingham's compatible `py2.py3-none-any` wheel. Those six exact PyPI
+objects are local direct dependencies under `vendor/`; `native-provenance.json` records their
+source URLs, versions, lengths, and SHA-256 digests. `scripts/fence.py` joins those facts to
+`pyproject.toml`, `uv.lock`, and the stored bytes so a future native transitive cannot fall back
+into Creator's pure-wheel registry lane.
+
 ## Generation stack
 
 - `torch>=2.13,<3` (the selected base supplies one exact compatible build)

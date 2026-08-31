@@ -119,6 +119,13 @@ official MiniMax snapshot and are the sole unweighted authority; the bound artif
 weighted component configs. See `h3/VENDORED.md` for source SHAs, stored-byte hashes, and
 reproduction commands.
 
+Creator automatically mirrors only ordinary registry wheels ending in `-py3-none-any.whl` after
+pruning the base-owned closure. Each model package therefore carries its exact remaining native
+Linux x86-64 CPython 3.12/abi3 wheels as explicit local direct dependencies. Their package-local
+`vendor/native-provenance.json` files bind the locked URL, filename, length, and SHA-256; the
+repository fence rejects missing bytes, path/requirement drift, or a newly reachable native-only
+registry dependency. Video assembly has no such closure and remains unchanged.
+
 The lock is necessary but not sufficient for a production claim. Promotion also requires a
 platform-specific verified wheel set, an offline empty-environment install receipt, codec census,
 the uniform dual FULL model snapshot, and output proof on the admitted provider GPU.

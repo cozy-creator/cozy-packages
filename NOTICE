@@ -26,6 +26,16 @@ VENDORED FIRST-PARTY WHEELS
   sdxl/vendor/cozy_runtime-0.0.15-py3-none-any.whl — Cozy Runtime, first-party
   video-assembly/vendor/cozy_runtime-0.0.15-py3-none-any.whl — Cozy Runtime, first-party
 
+VENDORED LOCKED THIRD-PARTY WHEELS
+
+  anima/vendor/native-provenance.json — hf-xet, PyYAML, regex, safetensors, Shellingham, tokenizers
+  h3/vendor/native-provenance.json — hf-xet, pydantic-core, PyYAML, regex, safetensors, Shellingham, tokenizers
+  quality-judge/vendor/native-provenance.json — hf-xet, PyYAML, regex, safetensors, Shellingham, tokenizers
+  sdxl/vendor/native-provenance.json — hf-xet, PyYAML, regex, safetensors, Shellingham, tokenizers
+
+Each manifest records the exact vendored PyPI wheel path, public source URL, length, and SHA-256.
+The wheel archives retain their upstream metadata and license files.
+
 These are exact build inputs pending publication of the first-party packages. Their source commits,
 sizes, and SHA-256 digests are recorded in the package closure documents; Tensorhub owns their one
 digest-pinned canonical build command.
