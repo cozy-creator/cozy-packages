@@ -76,8 +76,8 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.0.7"
-source = { path = "vendor/cozy_runtime-0.0.7-py3-none-any.whl" }
+version = "0.0.8"
+source = { path = "vendor/cozy_runtime-0.0.8-py3-none-any.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
@@ -86,7 +86,7 @@ dependencies = [
     { name = "protobuf" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.7-py3-none-any.whl", hash = "sha256:a73a61a85a6ce43da8f6288e14a12ce91672672a156b990a0ecf987e810bc37f" },
+    { filename = "cozy_runtime-0.0.8-py3-none-any.whl", hash = "sha256:cfa8ceafb7a3026f674ba7bf8e7b0d0a6f7740f2e4ec54de71bd2c34f2339708" },
 ]
 
 [package.optional-dependencies]
@@ -103,8 +103,8 @@ requires-dist = [
     { name = "msgspec", specifier = ">=0.19" },
     { name = "packaging", specifier = ">=24" },
     { name = "protobuf", specifier = ">=6.31" },
-    { name = "torch", marker = "extra == 'corpus'", specifier = ">=2.6" },
-    { name = "torch", marker = "extra == 'derive'", specifier = ">=2.6" },
+    { name = "torch", marker = "extra == 'corpus'", specifier = ">=2.13,<3" },
+    { name = "torch", marker = "extra == 'derive'", specifier = ">=2.13,<3" },
     { name = "transformers", marker = "extra == 'corpus'", specifier = ">=4.40,<5" },
 ]
 provides-extras = ["corpus", "derive", "media"]
@@ -598,7 +598,7 @@ wheels = [
 
 [[package]]
 name = "quality-judge-package"
-version = "1.0.2"
+version = "1.0.3"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -613,7 +613,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.7-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.8-py3-none-any.whl" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=11" },
