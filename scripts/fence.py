@@ -41,9 +41,8 @@ as a convention someone remembers:
                           the retired source filenames and canonical namespace are absent.
 14. private-h3-shapes    H3 config, plan, and probe files are identified by their package
                           member and strict shape, not another globally versioned schema tag.
-15. publication-organization
-                          every publishable package declares the catalog organization that owns
-                          its bare `cozy package publish` destination.
+15. publication-metadata every publishable package declares its catalog organization and its
+                          distribution name carries no redundant `-package` suffix.
 
     nice -n 19 .venv/bin/python scripts/fence.py
 """
@@ -726,7 +725,7 @@ def fence_package_manifest_hardcut() -> Fence:
     return bad, f"{len(projects())} package manifests and descriptors use one package namespace"
 
 
-def fence_publication_organization() -> Fence:
+def fence_publication_metadata() -> Fence:
     bad: list[str] = []
     for project in projects():
         path = project / "pyproject.toml"
@@ -744,7 +743,11 @@ def fence_publication_organization() -> Fence:
             or organization != organization.strip()
         ):
             bad.append(f"{rel(path)}: [tool.cozy].organization is not one non-empty string")
-    return bad, f"{len(projects())} publishable packages declare their catalog organization"
+        project_table = document.get("project")
+        name = project_table.get("name") if isinstance(project_table, dict) else None
+        if not isinstance(name, str) or not name or name.endswith("-package"):
+            bad.append(f"{rel(path)}: [project].name has an absent or redundant package name")
+    return bad, f"{len(projects())} publishable packages declare concise catalog identities"
 
 
 def fence_private_h3_shapes() -> Fence:
@@ -778,7 +781,7 @@ FENCES = (
     ("h3-adaln-pruned-vocabulary", fence_h3_adaln_pruned_vocabulary),
     ("descriptor-minimality", fence_descriptor_minimality),
     ("package-manifest-hardcut", fence_package_manifest_hardcut),
-    ("publication-organization", fence_publication_organization),
+    ("publication-metadata", fence_publication_metadata),
     ("private-h3-shapes", fence_private_h3_shapes),
 )
 
