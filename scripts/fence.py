@@ -550,7 +550,11 @@ def fence_sdxl_defaults() -> Fence:
 
     tree = ast.parse((ROOT / "sdxl" / "sdxl" / "__init__.py").read_text())
     guidance = None
-    square_only = False
+    hidiffusion_default = None
+    output_reports_hidiffusion = False
+    effective_selection = None
+    denoise_uses_effective_selection = False
+    result_uses_effective_selection = False
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == "Txt2ImgInput":
             for item in node.body:
@@ -561,17 +565,63 @@ def fence_sdxl_defaults() -> Fence:
                     and isinstance(item.value, ast.Constant)
                 ):
                     guidance = item.value.value
+                if (
+                    isinstance(item, ast.AnnAssign)
+                    and isinstance(item.target, ast.Name)
+                    and item.target.id == "hidiffusion"
+                    and isinstance(item.value, ast.Constant)
+                ):
+                    hidiffusion_default = item.value.value
+        if isinstance(node, ast.ClassDef) and node.name == "ImageOutput":
+            output_reports_hidiffusion = any(
+                isinstance(item, ast.AnnAssign)
+                and isinstance(item.target, ast.Name)
+                and item.target.id == "hidiffusion_applied"
+                and isinstance(item.annotation, ast.Name)
+                and item.annotation.id == "bool"
+                for item in node.body
+            )
+        if (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "hidiffusion_applied"
+                for target in node.targets
+            )
+        ):
+            effective_selection = ast.unparse(node.value)
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "denoise"
         ):
-            square_only = any(ast.unparse(arg) == "width == height" for arg in node.args)
+            denoise_uses_effective_selection = any(
+                isinstance(arg, ast.Name) and arg.id == "hidiffusion_applied"
+                for arg in node.args
+            )
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "ImageOutput"
+        ):
+            result_uses_effective_selection = any(
+                keyword.arg == "hidiffusion_applied"
+                and isinstance(keyword.value, ast.Name)
+                and keyword.value.id == "hidiffusion_applied"
+                for keyword in node.keywords
+            )
     if guidance != 7.0:
         bad.append(f"sdxl: default guidance is {guidance!r}, expected 7.0")
-    if not square_only:
-        bad.append("sdxl: HiDiffusion selection is not derived from square output geometry")
-    return bad, "WAI Illustrious 17.0.0 bf16, CFG 7, square-only HiDiffusion"
+    if hidiffusion_default is not True:
+        bad.append(f"sdxl: default HiDiffusion request is {hidiffusion_default!r}, expected True")
+    if effective_selection != "payload.hidiffusion and width == height":
+        bad.append(
+            "sdxl: effective HiDiffusion selection is not request opt-in AND square geometry"
+        )
+    if not denoise_uses_effective_selection:
+        bad.append("sdxl: denoise does not use the effective HiDiffusion selection")
+    if not output_reports_hidiffusion or not result_uses_effective_selection:
+        bad.append("sdxl: result does not report the effective HiDiffusion selection")
+    return bad, "WAI 17 bf16, CFG 7, request-controlled square-only HiDiffusion"
 
 
 def fence_h3_adaln_pruned_vocabulary() -> Fence:

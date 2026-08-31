@@ -95,6 +95,9 @@ class Txt2ImgInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: str = "a photograph of an astronaut riding a horse"
     negative_prompt: str = ""
     aspect_ratio: Annotated[AspectRatio, Shape(pixels=_BUCKETS)] = AspectRatio.SQUARE
+    #: A caller may opt out of HiDiffusion without changing the selected model or package.
+    #: Non-square buckets always use baseline SDXL because those live comparisons regressed.
+    hidiffusion: bool = True
     #: LAYER 1 of the two-layer clamp. These bounds REJECT; they never quietly clip. The
     #: `ModelDefault` marker is what makes the field omittable on the wire and concrete
     #: before the handler runs — the handler sees `int`, never `int | None`.
@@ -112,6 +115,8 @@ class ImageOutput(msgspec.Struct):
     classifier_free: bool
     """Whether the negative branch ran. Value-plane gating, made observable: a caller can
     see that `guidance <= 1.0` bought it a one-pass step rather than having to trust it."""
+    hidiffusion_applied: bool
+    """Whether this request actually used HiDiffusion after applying the geometry gate."""
     digest: str
     """sha256 of the decoded RGB pixel bytes — the determinism fence over the WHOLE loop,
     not over one step."""
@@ -427,6 +432,7 @@ def generate(
     if ctx.boot_warmup:
         width = height = _WARM_SIDE
         steps = _WARM_STEPS
+    hidiffusion_applied = payload.hidiffusion and width == height
     # The value plane, and the only branch in this file that reads a request number: above
     # 1.0 the negative branch is worth its second forward pass, at or below it is not.
     classifier_free = payload.guidance > 1.0
@@ -491,7 +497,7 @@ def generate(
                     batch_ids,
                     index,
                     steps,
-                    width == height,
+                    hidiffusion_applied,
                 )
                 if classifier_free:
                     uncond, cond = noise.chunk(2)
@@ -520,5 +526,6 @@ def generate(
         steps=steps,
         guidance=payload.guidance,
         classifier_free=classifier_free,
+        hidiffusion_applied=hidiffusion_applied,
         digest=hashlib.sha256(rgb).hexdigest(),
     )
