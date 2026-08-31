@@ -6,10 +6,10 @@
 
 [project]
 name = "sdxl"
-version = "2.0.4"
+version = "2.0.5"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "cozy-runtime[media]==0.0.11",
+    "cozy-runtime[media]==0.0.15",
     "diffusers==0.40.0",
     "hidiffusion==0.1.10",
     "msgspec>=0.19",
@@ -26,7 +26,7 @@ build-backend = "hatchling.build"
 packages = ["sdxl"]
 
 [tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.0.11-py3-none-any.whl" }
+cozy-runtime = { path = "vendor/cozy_runtime-0.0.15-py3-none-any.whl" }
 
 [tool.cozy]
 organization = "paul"

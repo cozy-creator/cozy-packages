@@ -1,5 +1,5 @@
 *
 !.gitignore
 !cozy_eval-2.3.2-py3-none-any.whl
-!cozy_runtime-0.0.11-py3-none-any.whl
-!tensorfs-0.0.3-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+!cozy_runtime-0.0.15-py3-none-any.whl
+!tensorfs-0.0.5-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl

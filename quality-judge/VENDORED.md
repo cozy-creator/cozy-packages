@@ -12,8 +12,8 @@ packages, so the CAS stores one copy.
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.11-py3-none-any.whl` | `cozy-runtime` `7e71e1e560352af0c23b1118cc9c6bc7f2e0ddc6` | 705,603 | `9ad5642698d4879d4982152c5f88d0599a2b2c2f418f20c38bbb7d7fc5760334` |
-| `vendor/tensorfs-0.0.3-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | `tensorfs` `7cdb63378c9358561f9e6c51e525231c32804fb2` | 2,092,918 | `55db3ee75eda51e77ef9c821d5a7b62294036b67c893bccb1bab910b783f9269` |
+| `vendor/cozy_runtime-0.0.15-py3-none-any.whl` | `cozy-runtime` `0811500875b6850d21ffc66b106098fdd655a70c` | 733,494 | `3bf8fc0832553a90dd0c08207cc6f8c634ddf63724bb0fdebd4ae1a930d65352` |
+| `vendor/tensorfs-0.0.5-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | `tensorfs` `0f49a4bf3fbe6fc8d41713b7ce9041c80161b7e6` | 2,337,278 | `a131c4688188dacd1518fbe93c417e64d6af575f65b52edac48bcb60f88d43a5` |
 
 TensorFS is the Runtime fill reader inside the isolated package generation. Cozy-eval is
 NOT here: `quality_judge.py` imports nothing from it — `scripts/judge-live.py` is a driver

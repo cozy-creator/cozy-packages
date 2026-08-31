@@ -98,8 +98,8 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.0.11"
-source = { path = "vendor/cozy_runtime-0.0.11-py3-none-any.whl" }
+version = "0.0.15"
+source = { path = "vendor/cozy_runtime-0.0.15-py3-none-any.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
@@ -108,7 +108,7 @@ dependencies = [
     { name = "protobuf" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.11-py3-none-any.whl", hash = "sha256:9ad5642698d4879d4982152c5f88d0599a2b2c2f418f20c38bbb7d7fc5760334" },
+    { filename = "cozy_runtime-0.0.15-py3-none-any.whl", hash = "sha256:3bf8fc0832553a90dd0c08207cc6f8c634ddf63724bb0fdebd4ae1a930d65352" },
 ]
 
 [package.optional-dependencies]
@@ -747,7 +747,7 @@ wheels = [
 
 [[package]]
 name = "sdxl"
-version = "2.0.4"
+version = "2.0.5"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -767,7 +767,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.11-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.15-py3-none-any.whl" },
     { name = "diffusers", specifier = "==0.40.0" },
     { name = "hidiffusion", specifier = "==0.1.10" },
     { name = "msgspec", specifier = ">=0.19" },
