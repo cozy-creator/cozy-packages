@@ -111,7 +111,8 @@ Telemetry, never result fields.
 
 ### Release closure
 
-The package lock pins released Diffusers, Transformers, and the CUDA 12.9 Torch family. Until the
+The package lock targets CPython 3.14 and pins released Diffusers, Transformers, and the
+PyTorch 2.13/CUDA 13.0 family. Until the
 first-party packages are published, exact Cozy Runtime and Cozy Eval wheels are committed as
 vendored build inputs. The five minimal tokenizer/processor data files are bundled from the pinned
 official MiniMax snapshot and are the sole unweighted authority; the bound artifact owns only
