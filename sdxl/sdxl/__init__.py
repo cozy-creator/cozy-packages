@@ -40,6 +40,7 @@ from typing import Annotated, Any
 import msgspec
 from cozy_runtime.author import (
     App,
+    AssetBound,
     ConformanceError,
     Context,
     ImageAsset,
@@ -76,6 +77,7 @@ _BUCKETS: dict[AspectRatio, tuple[int, int]] = {
     AspectRatio.PORTRAIT: (896, 1152),
     AspectRatio.TALL: (768, 1344),
 }
+_WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
 
 #: The boot warm pass's geometry and step count. `ctx.boot_warmup` is honoured because the
 #: alternative was measured (cl-003, decisions #392): a warm pass that decodes 1024px with
@@ -107,7 +109,7 @@ class Txt2ImgInput(msgspec.Struct, forbid_unknown_fields=True):
 
 
 class ImageOutput(msgspec.Struct):
-    image: ImageAsset
+    image: Annotated[ImageAsset, _WEBP_OUTPUT]
     width: int
     height: int
     steps: int
@@ -517,8 +519,8 @@ def generate(
     rgb = bytes(pixels.cpu().numpy().tobytes())
     decoded_h, decoded_w = int(pixels.shape[0]), int(pixels.shape[1])
     tel.metric("decoded_pixels", float(decoded_w * decoded_h))
-    with tel.stage("encode_png"):
-        asset = out.save_image(ImageFrame(decoded_w, decoded_h, rgb), format="png")
+    with tel.stage("encode_webp"):
+        asset = out.save_image(ImageFrame(decoded_w, decoded_h, rgb), format="webp")
     return ImageOutput(
         image=asset,
         width=decoded_w,
