@@ -1,4 +1,4 @@
-owner: codex /root
-purpose: restamp all packages for CPython 3.12 and the released Runtime, TensorFS, and Eval
-branch: codex/cp312-platform
-base: 057590896ab6f4d5455a72f0516e105744dc8f18
+owner: codex /root/package_runtime014_restamp
+purpose: restamp first-party packages for Runtime 0.0.14 and TensorFS 0.0.5 on CPython 3.12
+branch: codex/runtime-014-restamp
+base: 9918620950c8cdca816de8ad07cc37a27f5af5e9
