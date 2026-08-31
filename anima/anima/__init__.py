@@ -11,6 +11,7 @@ from typing import Annotated, Any
 import msgspec
 from cozy_runtime.author import (
     App,
+    AssetBound,
     Context,
     ImageAsset,
     ImageFrame,
@@ -43,6 +44,7 @@ _BUCKETS: dict[AspectRatio, tuple[int, int]] = {
     AspectRatio.PORTRAIT: (896, 1152),
     AspectRatio.TALL: (768, 1344),
 }
+_WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
 
 
 class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -55,7 +57,7 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
 
 
 class ImageOutput(msgspec.Struct):
-    image: ImageAsset
+    image: Annotated[ImageAsset, _WEBP_OUTPUT]
     width: int
     height: int
     steps: int
@@ -195,7 +197,8 @@ def generate(
         pixels = pixels.permute(1, 2, 0)
     pixels = pixels.contiguous()
     rgb = bytes(pixels.numpy().tobytes())
-    asset = out.save_image(ImageFrame(width, height, rgb), format="png")
+    with tel.stage("encode_webp"):
+        asset = out.save_image(ImageFrame(width, height, rgb), format="webp")
     return ImageOutput(
         asset, width, height, steps, payload.guidance, hashlib.sha256(rgb).hexdigest()
     )

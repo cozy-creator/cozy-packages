@@ -6,10 +6,10 @@
 
 [project]
 name = "sdxl"
-version = "2.0.6"
+version = "2.0.7"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "cozy-runtime[media]==0.0.15",
+    "cozy-runtime[media]==0.0.18",
     "diffusers==0.40.0",
     "hf-xet==1.6.0",
     "hidiffusion==0.1.10",
@@ -35,7 +35,7 @@ build-backend = "hatchling.build"
 packages = ["sdxl"]
 
 [tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.0.15-py3-none-any.whl" }
+cozy-runtime = { path = "vendor/cozy_runtime-0.0.18-py3-none-any.whl" }
 hf-xet = { path = "vendor/hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" }
 pyyaml = { path = "vendor/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl" }
 regex = { path = "vendor/regex-2026.7.19-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl" }
