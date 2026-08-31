@@ -10,18 +10,18 @@ dependency of the pinned model stack).
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.10-py3-none-any.whl` | `cozy-runtime` `66c73a8738163e2e54105c10ee30f3b303b2d64e` | 698,262 | `94460296a7c6ad745d25693f8c67faa6543579ffb0779ee1f9b8056ef9a30ba8` |
-| `vendor/cozy_eval-2.3.0-py3-none-any.whl` | `cozy-eval` `fe8c7d2ead882dded2595e33af73101040792bd8` | 295,046 | `87830e9461f5b98b699e1ba7e1d2fec2dd37bea63d7b8ae8403506835e427a26` |
-| `vendor/tensorfs-0.0.2-cp314-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | `tensorfs` `1e6f5e6d1d9846836161939e0e687dea12ad8d4a` | 2,085,526 | `5d5420f9571778ae884daf6fe31bc649318014cd644d94b17a7c465929be5d93` |
+| `vendor/cozy_runtime-0.0.11-py3-none-any.whl` | `cozy-runtime` `7e71e1e560352af0c23b1118cc9c6bc7f2e0ddc6` | 705,603 | `9ad5642698d4879d4982152c5f88d0599a2b2c2f418f20c38bbb7d7fc5760334` |
+| `vendor/cozy_eval-2.3.2-py3-none-any.whl` | `cozy-eval` `ed15717fed7ec9111446d1f8f2af3db646233da2` | 295,080 | `1f3ce3ae81adbf027c25f3e5e1ac362c66c70d8d551b950d08e4c9b8523543d9` |
+| `vendor/tensorfs-0.0.3-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | `tensorfs` `7cdb63378c9358561f9e6c51e525231c32804fb2` | 2,092,918 | `55db3ee75eda51e77ef9c821d5a7b62294036b67c893bccb1bab910b783f9269` |
 
 Tensorhub's canonical first-party wheel materializer produced both artifacts from Git archives
 of the exact commits in the table. It uses digest-pinned build containers, fixed in-container
-paths, the platform epoch `946684800`, and normal CPython 3.14. Package repositories consume
+paths, the platform epoch `946684800`, and CPython 3.12. Package repositories consume
 those bytes; they do not maintain a competing wheel build command.
 
 The source checkouts were at the commits in the table. The Runtime wheel
 metadata declares `av>=18.1,<19` only for its `media` extra; this package asks
-for `cozy-runtime[media]==0.0.10`.
+for `cozy-runtime[media]==0.0.11`.
 
 ## MiniMax H3 tokenizer and processor
 
@@ -78,7 +78,7 @@ The package declares this compatible model stack:
 - `torchvision==0.28.0`
 
 The lock freezes that compatible range to Torch 2.13.0 and its CUDA 13 peers. `uv lock`
-resolves the Linux x86-64 closure. A new Python 3.14 environment installed
+resolves the Linux x86-64 closure. A new Python 3.12 environment installed
 all 65 non-project packages from the populated uv cache with this command and
 no network access:
 
@@ -102,7 +102,7 @@ The Runtime media extra resolves to this exact PyAV wheel:
 | --- | --- | --- |
 | `av==18.1.0` | `av-18.1.0-cp311-abi3-manylinux_2_28_x86_64.whl` | `8a032e8d8ebc73dec079364b9b4a6837638a2d106e8472314e685ffbf163e700` |
 
-An isolated Python 3.14 environment installed the Runtime media closure from a
+An isolated Python 3.12 environment installed the Runtime media closure from a
 local wheelhouse using `--offline --no-index`. Importing the installed Runtime
 and PyAV succeeded. The wheel reports these embedded library versions:
 

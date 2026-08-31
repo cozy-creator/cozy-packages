@@ -333,7 +333,7 @@ def run_one(spec: dict[str, Any], out: Path) -> int:
         "timings": outcome.timings,
         "progress": outcome.progress,
         "faults": outcome.faults,
-        "journal_deleted": outcome.journal_deleted,
+        "workspace_deleted": outcome.workspace_deleted,
         # `TerminalCause` — the typed reason a refusal happened, which is the whole point
         # of a refusal being typed. The transport prints it, so a red arm reads as its own
         # code rather than as "the attempt did not succeed".

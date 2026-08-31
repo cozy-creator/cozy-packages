@@ -1,10 +1,10 @@
 [project]
 name = "anima"
-version = "0.1.11"
+version = "0.1.12"
 description = "Anima anime text-to-image package for Cozy"
-requires-python = ">=3.14,<3.15"
+requires-python = ">=3.12,<3.13"
 dependencies = [
-    "cozy-runtime[media]==0.0.10",
+    "cozy-runtime[media]==0.0.11",
     "diffusers==0.40.0",
     "msgspec>=0.19",
     "numpy>=2.0",
@@ -20,7 +20,7 @@ build-backend = "hatchling.build"
 packages = ["anima"]
 
 [tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.0.10-py3-none-any.whl" }
+cozy-runtime = { path = "vendor/cozy_runtime-0.0.11-py3-none-any.whl" }
 
 [tool.cozy]
 organization = "paul"
@@ -32,7 +32,7 @@ environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 dev = ["mypy==2.3.1", "ruff==0.16.4"]
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.12"
 files = ["anima"]
 strict = true
 ignore_missing_imports = true
