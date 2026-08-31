@@ -31,6 +31,7 @@ _ROOT = _MODULE_ROOT / "anima_assets" if (_MODULE_ROOT / "anima_assets").is_dir(
 
 class AspectRatio(Enum):
     SQUARE = "1:1"
+    SQUARE_1536 = "1:1@1536"
     LANDSCAPE = "4:3"
     WIDE = "16:9"
     PORTRAIT = "3:4"
@@ -39,6 +40,7 @@ class AspectRatio(Enum):
 
 _BUCKETS: dict[AspectRatio, tuple[int, int]] = {
     AspectRatio.SQUARE: (1024, 1024),
+    AspectRatio.SQUARE_1536: (1536, 1536),
     AspectRatio.LANDSCAPE: (1152, 896),
     AspectRatio.WIDE: (1344, 768),
     AspectRatio.PORTRAIT: (896, 1152),
