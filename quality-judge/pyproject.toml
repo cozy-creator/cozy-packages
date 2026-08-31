@@ -12,10 +12,10 @@
 
 [project]
 name = "quality-judge-package"
-version = "1.0.4"
+version = "1.0.5"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "cozy-runtime[media]==0.0.9",
+    "cozy-runtime[media]==0.0.10",
     "msgspec>=0.19",
     "numpy>=1.26",
     "pillow>=11",
@@ -33,7 +33,7 @@ build-backend = "hatchling.build"
 only-include = ["quality_judge.py"]
 
 [tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.0.9-py3-none-any.whl" }
+cozy-runtime = { path = "vendor/cozy_runtime-0.0.10-py3-none-any.whl" }
 tensorfs = { path = "vendor/tensorfs-0.0.2-cp314-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 
 [tool.cozy]

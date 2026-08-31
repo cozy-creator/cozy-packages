@@ -76,8 +76,8 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.0.9"
-source = { path = "vendor/cozy_runtime-0.0.9-py3-none-any.whl" }
+version = "0.0.10"
+source = { path = "vendor/cozy_runtime-0.0.10-py3-none-any.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
@@ -86,7 +86,7 @@ dependencies = [
     { name = "protobuf" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.9-py3-none-any.whl", hash = "sha256:511ead4219f41e876c9308a77d83e09b744522624fb3893db3c5a80a21a3cddb" },
+    { filename = "cozy_runtime-0.0.10-py3-none-any.whl", hash = "sha256:94460296a7c6ad745d25693f8c67faa6543579ffb0779ee1f9b8056ef9a30ba8" },
 ]
 
 [package.optional-dependencies]
@@ -598,7 +598,7 @@ wheels = [
 
 [[package]]
 name = "quality-judge-package"
-version = "1.0.4"
+version = "1.0.5"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -613,7 +613,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.9-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.10-py3-none-any.whl" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=11" },
