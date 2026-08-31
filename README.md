@@ -207,7 +207,7 @@ h3/.venv/bin/python scripts/h3-live.py \
   --expected-lane 'profile=fp8-adaln-pruned' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
   --expected-package-descriptor-digest \
-    'sha256:c3e5db6f1cc08c2caa88b9bc5774a975999a3e0ad4e918f7f49015845043b114' \
+    'sha256:8564b7f7ebe6d829a7553b4ba5247987d373ea265e25e544007e1a58e4d412c7' \
   --expected-fl-plan-digest \
     'sha256:8da103b9b09629f9f4bcc7c3311929a83c4bc76d5ac2a49fa8ad6c08a140d99b' \
   --expected-ref-plan-digest \
