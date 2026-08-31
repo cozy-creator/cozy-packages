@@ -17,6 +17,9 @@ dev = ["mypy==2.3.1", "ruff==0.16.4"]
 [tool.uv.sources]
 cozy-runtime = { path = "vendor/cozy_runtime-0.0.8-py3-none-any.whl" }
 
+[tool.cozy]
+organization = "paul"
+
 [tool.mypy]
 python_version = "3.14"
 files = ["video_assembly.py", "live.py"]

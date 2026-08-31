@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Structural fences for the package sources. Static analysis, never a test suite.
 
-Fourteen properties CI must not let drift, each checked as a fact about the source rather than
+Fifteen properties CI must not let drift, each checked as a fact about the source rather than
 as a convention someone remembers:
 
   1. author-surface-only  a package imports `cozy_runtime.author` and nothing else from
@@ -41,6 +41,9 @@ as a convention someone remembers:
                           the retired source filenames and canonical namespace are absent.
 14. private-h3-shapes    H3 config, plan, and probe files are identified by their package
                           member and strict shape, not another globally versioned schema tag.
+15. publication-organization
+                          every publishable package declares the catalog organization that owns
+                          its bare `cozy package publish` destination.
 
     nice -n 19 .venv/bin/python scripts/fence.py
 """
@@ -723,6 +726,27 @@ def fence_package_manifest_hardcut() -> Fence:
     return bad, f"{len(projects())} package manifests and descriptors use one package namespace"
 
 
+def fence_publication_organization() -> Fence:
+    bad: list[str] = []
+    for project in projects():
+        path = project / "pyproject.toml"
+        try:
+            document = tomllib.loads(path.read_text())
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            bad.append(f"{rel(path)}: unreadable: {exc}")
+            continue
+        tool = document.get("tool")
+        cozy = tool.get("cozy") if isinstance(tool, dict) else None
+        organization = cozy.get("organization") if isinstance(cozy, dict) else None
+        if (
+            not isinstance(organization, str)
+            or not organization
+            or organization != organization.strip()
+        ):
+            bad.append(f"{rel(path)}: [tool.cozy].organization is not one non-empty string")
+    return bad, f"{len(projects())} publishable packages declare their catalog organization"
+
+
 def fence_private_h3_shapes() -> Fence:
     retired = {
         "cozy.minimax_h3.dit/1",
@@ -754,6 +778,7 @@ FENCES = (
     ("h3-adaln-pruned-vocabulary", fence_h3_adaln_pruned_vocabulary),
     ("descriptor-minimality", fence_descriptor_minimality),
     ("package-manifest-hardcut", fence_package_manifest_hardcut),
+    ("publication-organization", fence_publication_organization),
     ("private-h3-shapes", fence_private_h3_shapes),
 )
 
