@@ -20,6 +20,9 @@ image and never installs a second copy in the package overlay.
 The default development binding selects `paul/wai-illustrious@17.0.0`, lane `bf16`,
 and requests default to CFG 7 and `hidiffusion: true`.
 
+Package release `2.0.0` intentionally marks the pre-launch result-schema break that added
+`hidiffusion_applied`; a published 1.x result schema cannot gain a field under the same major.
+
 Full HiDiffusion is applied only when the request enables it and the effective output geometry is
 square. The result reports that decision as `hidiffusion_applied`. Native non-square buckets use
 ordinary SDXL after live 1344x768 HiDiffusion duplicated a singular subject and
