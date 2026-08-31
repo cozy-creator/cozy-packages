@@ -17,14 +17,14 @@ no GPL-derived H3 source remains in this repository.
 
 VENDORED FIRST-PARTY WHEELS
 
-  h3/vendor/cozy_runtime-0.0.8-py3-none-any.whl — Cozy Runtime, first-party
+  h3/vendor/cozy_runtime-0.0.9-py3-none-any.whl — Cozy Runtime, first-party
   h3/vendor/cozy_eval-2.3.0-py3-none-any.whl — Cozy Eval, first-party
   h3/vendor/tensorfs-0.0.2-cp314-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl — TensorFS, first-party
-  anima/vendor/cozy_runtime-0.0.8-py3-none-any.whl — Cozy Runtime, first-party
-  quality-judge/vendor/cozy_runtime-0.0.8-py3-none-any.whl — Cozy Runtime, first-party
+  anima/vendor/cozy_runtime-0.0.9-py3-none-any.whl — Cozy Runtime, first-party
+  quality-judge/vendor/cozy_runtime-0.0.9-py3-none-any.whl — Cozy Runtime, first-party
   quality-judge/vendor/tensorfs-0.0.2-cp314-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl — TensorFS, first-party
-  sdxl/vendor/cozy_runtime-0.0.8-py3-none-any.whl — Cozy Runtime, first-party
-  video-assembly/vendor/cozy_runtime-0.0.8-py3-none-any.whl — Cozy Runtime, first-party
+  sdxl/vendor/cozy_runtime-0.0.9-py3-none-any.whl — Cozy Runtime, first-party
+  video-assembly/vendor/cozy_runtime-0.0.9-py3-none-any.whl — Cozy Runtime, first-party
 
 These are exact build inputs pending publication of the first-party packages. Their source commits,
 sizes, and SHA-256 digests are recorded in the package closure documents; Tensorhub owns their one

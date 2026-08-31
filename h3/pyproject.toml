@@ -1,9 +1,9 @@
 [project]
 name = "h3-package"
-version = "1.0.3"
+version = "1.0.4"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "cozy-runtime[media]==0.0.8",
+    "cozy-runtime[media]==0.0.9",
     "cozy-eval==2.3.0",
     "diffusers==0.40.0",
     "msgspec>=0.19",
@@ -31,7 +31,7 @@ only-include = [
 ]
 
 [tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.0.8-py3-none-any.whl" }
+cozy-runtime = { path = "vendor/cozy_runtime-0.0.9-py3-none-any.whl" }
 cozy-eval = { path = "vendor/cozy_eval-2.3.0-py3-none-any.whl" }
 tensorfs = { path = "vendor/tensorfs-0.0.2-cp314-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 

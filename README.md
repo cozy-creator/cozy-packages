@@ -150,7 +150,7 @@ The cheap gates require no weights or GPU:
 ```bash
 uv venv --python 3.14 .venv-check
 uv pip install --python .venv-check/bin/python \
-  h3/vendor/cozy_runtime-0.0.8-py3-none-any.whl \
+  h3/vendor/cozy_runtime-0.0.9-py3-none-any.whl \
   msgspec protobuf grpcio av mypy ruff
 
 .venv-check/bin/python scripts/fence.py
