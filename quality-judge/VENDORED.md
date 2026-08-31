@@ -20,6 +20,16 @@ NOT here: `quality_judge.py` imports nothing from it — `scripts/judge-live.py`
 that runs cozy-eval's prompt builders and parsers on the CALLER's side, outside this
 environment.
 
+## Locked publication wheels
+
+Creator's registry mirror admits only filenames ending exactly in `-py3-none-any.whl`. The
+judge's pruned non-base closure also contains locked native `hf-xet`, PyYAML, regex, safetensors,
+and tokenizers wheels plus Shellingham's compatible `py2.py3-none-any` wheel. Those six exact
+PyPI objects are local direct dependencies under `vendor/`; `native-provenance.json` records their
+source URLs, versions, lengths, and SHA-256 digests. `scripts/fence.py` joins those facts to
+`pyproject.toml`, `uv.lock`, and the stored bytes so a future native transitive cannot fall back
+into Creator's pure-wheel registry lane.
+
 ## Third-party binary closure
 
 The package declares this compatible model stack:

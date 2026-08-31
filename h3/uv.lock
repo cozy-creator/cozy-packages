@@ -362,9 +362,16 @@ dependencies = [
     { name = "cozy-eval" },
     { name = "cozy-runtime", extra = ["media"] },
     { name = "diffusers" },
+    { name = "hf-xet" },
     { name = "msgspec" },
     { name = "numpy" },
+    { name = "pydantic-core" },
+    { name = "pyyaml" },
+    { name = "regex" },
+    { name = "safetensors" },
+    { name = "shellingham" },
     { name = "tensorfs" },
+    { name = "tokenizers" },
     { name = "torch" },
     { name = "torchvision" },
     { name = "transformers" },
@@ -375,9 +382,16 @@ requires-dist = [
     { name = "cozy-eval", path = "vendor/cozy_eval-2.3.2-py3-none-any.whl" },
     { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.15-py3-none-any.whl" },
     { name = "diffusers", specifier = "==0.40.0" },
+    { name = "hf-xet", path = "vendor/hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "pydantic-core", path = "vendor/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
+    { name = "pyyaml", path = "vendor/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl" },
+    { name = "regex", path = "vendor/regex-2026.7.19-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl" },
+    { name = "safetensors", path = "vendor/safetensors-0.8.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
+    { name = "shellingham", path = "vendor/shellingham-1.5.4-py2.py3-none-any.whl" },
     { name = "tensorfs", path = "vendor/tensorfs-0.0.5-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
+    { name = "tokenizers", path = "vendor/tokenizers-0.23.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
     { name = "torch", specifier = ">=2.13,<3" },
     { name = "torchvision", specifier = "==0.28.0" },
     { name = "transformers", specifier = "==5.16.1" },
@@ -386,12 +400,14 @@ requires-dist = [
 [[package]]
 name = "hf-xet"
 version = "1.6.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/1b/ab/522a2ab67f27971a9d48ca666d4fca85ef7d5282d142e31fd087e27b1bbe/hf_xet-1.6.0.tar.gz", hash = "sha256:2e58454a340b3556dfa4972d5451aff4fba8dd42a236600ba1a1d2b1514f0fef", size = 920527, upload-time = "2026-08-03T22:33:13.243Z" }
+source = { path = "vendor/hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/4e/a28359bf1c1ecf11eba22123168c138698f7cb576ac678f5a2e16cd5da08/hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:d62671bb130879cef0ee4c9ebe47a14af6c66ec53e6d84dc15936e5ffdfac82f", size = 4464663, upload-time = "2026-08-03T22:33:03.802Z" },
-    { url = "https://files.pythonhosted.org/packages/ab/5f/311725e2a905534dfee2dcb5b08414f249147f1f12252bfc2bd24caa075c/hf_xet-1.6.0-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:8fb4f71cba6129110c3374a33f919001ff130488fc23553698e34cc1c2a1198c", size = 4675937, upload-time = "2026-08-03T22:33:08.616Z" },
+    { filename = "hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:d62671bb130879cef0ee4c9ebe47a14af6c66ec53e6d84dc15936e5ffdfac82f" },
 ]
+
+[package.metadata]
+requires-dist = [{ name = "pytest", marker = "extra == 'tests'" }]
+provides-extras = ["tests"]
 
 [[package]]
 name = "httpcore"
@@ -736,16 +752,16 @@ wheels = [
 [[package]]
 name = "pydantic-core"
 version = "2.46.4"
-source = { registry = "https://pypi.org/simple" }
+source = { path = "vendor/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 dependencies = [
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9d/56/921726b776ace8d8f5db44c4ef961006580d91dc52b803c489fafd1aa249/pydantic_core-2.46.4.tar.gz", hash = "sha256:62f875393d7f270851f20523dd2e29f082bcc82292d66db2b64ea71f64b6e1c1", size = 471464, upload-time = "2026-05-06T13:37:06.98Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5f/97/2aab507d3d00ca626e8e57c1eac6a79e4e5fbcc63eb99733ff55d1717f65/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:926c9541b14b12b1681dca8a0b75feb510b06c6341b70a8e500c2fdcff837cce", size = 2094516, upload-time = "2026-05-06T13:39:10.577Z" },
-    { url = "https://files.pythonhosted.org/packages/d0/cf/c873d91679f3a30bcf5e7ac280ce5573483e72295307685120d0d5ad3416/pydantic_core-2.46.4-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:fbdb89b3e1c94a30cc5edfce477c6e6a5dc4d8f84665b455c27582f211a1c72c", size = 2374464, upload-time = "2026-05-06T13:38:06.976Z" },
-    { url = "https://files.pythonhosted.org/packages/fa/c3/7c8b240552251faf6b3a957db200fcfbbcec36763c050428b601e0c9b83b/pydantic_core-2.46.4-graalpy312-graalpy250_312_native-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:00c603d540afdd6b80eb39f078f33ebd46211f02f33e34a32d9f053bba711de0", size = 2147590, upload-time = "2026-05-06T13:39:29.883Z" },
+    { filename = "pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:926c9541b14b12b1681dca8a0b75feb510b06c6341b70a8e500c2fdcff837cce" },
 ]
+
+[package.metadata]
+requires-dist = [{ name = "typing-extensions", specifier = ">=4.14.1" }]
 
 [[package]]
 name = "pydantic-settings"
@@ -782,21 +798,17 @@ wheels = [
 [[package]]
 name = "pyyaml"
 version = "6.0.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/05/8e/961c0007c59b8dd7729d542c61a4d537767a59645b82a0b521206e1e25c2/pyyaml-6.0.3.tar.gz", hash = "sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f", size = 130960, upload-time = "2025-09-25T21:33:16.546Z" }
+source = { path = "vendor/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8b/9d/b3589d3877982d4f2329302ef98a8026e7f4443c765c46cfecc8858c6b4b/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc", size = 807870, upload-time = "2025-09-25T21:32:16.431Z" },
-    { url = "https://files.pythonhosted.org/packages/be/8e/98435a21d1d4b46590d5459a22d88128103f8da4c2d4cb8f14f2a96504e1/pyyaml-6.0.3-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:41715c910c881bc081f1e8872880d3c650acf13dfa8214bad49ed4cede7c34ea", size = 790181, upload-time = "2025-09-25T21:32:18.834Z" },
+    { filename = "pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc" },
 ]
 
 [[package]]
 name = "regex"
 version = "2026.7.19"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/20/98/04b13f1ddfb63158025291c02e03eb42fbb7acb51d091d541050eb4e35e8/regex-2026.7.19.tar.gz", hash = "sha256:7e77b324909c1617cbb4c668677e2c6ae13f44d7c1de0d4f15f2e3c10f3315b5", size = 416440, upload-time = "2026-07-19T00:19:48.923Z" }
+source = { path = "vendor/regex-2026.7.19-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/8e/096d00c7c480ef2ff4265349b14e2261d4ab787ba1f74e2e80d1c58079c3/regex-2026.7.19-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9dce8ec9695f531a1b8a6f314fd4b393adcccf2ea861db480cdf97a301d01a68", size = 801798, upload-time = "2026-07-19T00:17:17.208Z" },
-    { url = "https://files.pythonhosted.org/packages/2a/20/a2ca43edade0595cccfdc98636739f536d9e26898e7dbddc2b9e98898953/regex-2026.7.19-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:dbe6493fbd27321b1d1f2dd4f5c7e5bd4d8b1d7cab7f32fd67db3d0b2ed8248a", size = 789714, upload-time = "2026-07-19T00:17:28.699Z" },
+    { filename = "regex-2026.7.19-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9dce8ec9695f531a1b8a6f314fd4b393adcccf2ea861db480cdf97a301d01a68" },
 ]
 
 [[package]]
@@ -830,12 +842,51 @@ wheels = [
 [[package]]
 name = "safetensors"
 version = "0.8.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/45/06/f955dbbb1859e3bd23c8ac6141af5106e7ad5fedec4a3a6e3d60f94b7001/safetensors-0.8.0.tar.gz", hash = "sha256:fabaf3e0f18a6618d9b36560682562157f77c2b71fcffc7b432be2baed9d753d", size = 325846, upload-time = "2026-06-09T07:52:25.563Z" }
+source = { path = "vendor/safetensors-0.8.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/28/50/f203ff3a3ddfe19308efc83c5a3a29ed02bf786732ec35e68bf9162f3365/safetensors-0.8.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fd6f3f93c9a0a7cc2788ee63fb763353d4bd2e89b0751bc78fcf7dda00bea774", size = 516040, upload-time = "2026-06-09T07:52:16.29Z" },
-    { url = "https://files.pythonhosted.org/packages/27/43/41c1621732edd934d868a00d1b891584c892a7b62a9aab82ea5a0a5623ee/safetensors-0.8.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:8e080062fcde23be189565e1c3305d16751a218ecf9412c8601e64204eb6f846", size = 722361, upload-time = "2026-06-09T07:52:23.924Z" },
+    { filename = "safetensors-0.8.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fd6f3f93c9a0a7cc2788ee63fb763353d4bd2e89b0751bc78fcf7dda00bea774" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "flax", marker = "extra == 'jax'", specifier = ">=0.6.3" },
+    { name = "fsspec", marker = "extra == 'testing'", specifier = ">=2024.6.0" },
+    { name = "h5py", marker = "extra == 'testing'", specifier = ">=3.7.0" },
+    { name = "huggingface-hub", marker = "extra == 'convert'", specifier = ">=1.4" },
+    { name = "hypothesis", marker = "extra == 'testing'", specifier = ">=6.70.2" },
+    { name = "jax", marker = "extra == 'jax'", specifier = ">=0.3.25" },
+    { name = "jaxlib", marker = "extra == 'jax'", specifier = ">=0.3.25" },
+    { name = "mlx", marker = "extra == 'mlx'", specifier = ">=0.0.9" },
+    { name = "numpy", marker = "extra == 'numpy'", specifier = ">=1.24.6" },
+    { name = "paddlepaddle", marker = "extra == 'paddlepaddle'", specifier = ">=2.4.1" },
+    { name = "pytest", marker = "extra == 'testing'", specifier = ">=9.0" },
+    { name = "pytest-benchmark", marker = "extra == 'testing'", specifier = ">=5.2" },
+    { name = "ruff", marker = "extra == 'quality'" },
+    { name = "s3fs", marker = "extra == 'testing'", specifier = ">=2024.6.0" },
+    { name = "safetensors", extras = ["all"], marker = "extra == 'dev'" },
+    { name = "safetensors", extras = ["convert"], marker = "extra == 'all'" },
+    { name = "safetensors", extras = ["jax"], marker = "extra == 'all'" },
+    { name = "safetensors", extras = ["numpy"], marker = "extra == 'all'" },
+    { name = "safetensors", extras = ["numpy"], marker = "extra == 'jax'" },
+    { name = "safetensors", extras = ["numpy"], marker = "extra == 'paddlepaddle'" },
+    { name = "safetensors", extras = ["numpy"], marker = "extra == 'pinned-tf'" },
+    { name = "safetensors", extras = ["numpy"], marker = "extra == 'tensorflow'" },
+    { name = "safetensors", extras = ["numpy"], marker = "extra == 'testing'" },
+    { name = "safetensors", extras = ["numpy"], marker = "extra == 'tf-nightly'" },
+    { name = "safetensors", extras = ["numpy"], marker = "extra == 'torch'" },
+    { name = "safetensors", extras = ["paddlepaddle"], marker = "extra == 'all'" },
+    { name = "safetensors", extras = ["pinned-tf"], marker = "extra == 'dev'" },
+    { name = "safetensors", extras = ["quality"], marker = "extra == 'all'" },
+    { name = "safetensors", extras = ["testing"], marker = "extra == 'all'" },
+    { name = "safetensors", extras = ["torch"], marker = "extra == 'all'" },
+    { name = "safetensors", extras = ["torch"], marker = "extra == 'convert'" },
+    { name = "setuptools-rust", marker = "extra == 'testing'", specifier = ">=1.12.0" },
+    { name = "tensorflow", marker = "extra == 'pinned-tf'", specifier = "==2.18.0" },
+    { name = "tensorflow", marker = "extra == 'tensorflow'", specifier = ">=2.11.0" },
+    { name = "tf-nightly", marker = "extra == 'tf-nightly'" },
+    { name = "torch", marker = "extra == 'torch'", specifier = ">=2.4" },
+]
+provides-extras = ["all", "convert", "dev", "jax", "mlx", "numpy", "paddlepaddle", "pinned-tf", "quality", "tensorflow", "testing", "tf-nightly", "torch"]
 
 [[package]]
 name = "setuptools"
@@ -849,10 +900,9 @@ wheels = [
 [[package]]
 name = "shellingham"
 version = "1.5.4"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/58/15/8b3609fd3830ef7b27b655beb4b4e9c62313a4e8da8c676e142cc210d58e/shellingham-1.5.4.tar.gz", hash = "sha256:8dbca0739d487e5bd35ab3ca4b36e11c4078f3a234bfce294b0a0291363404de", size = 10310, upload-time = "2023-10-24T04:13:40.426Z" }
+source = { path = "vendor/shellingham-1.5.4-py2.py3-none-any.whl" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/f9/0595336914c5619e5f28a1fb793285925a8cd4b432c9da0a987836c7f822/shellingham-1.5.4-py2.py3-none-any.whl", hash = "sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686", size = 9755, upload-time = "2023-10-24T04:13:38.866Z" },
+    { filename = "shellingham-1.5.4-py2.py3-none-any.whl", hash = "sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686" },
 ]
 
 [[package]]
@@ -878,15 +928,30 @@ wheels = [
 [[package]]
 name = "tokenizers"
 version = "0.23.1"
-source = { registry = "https://pypi.org/simple" }
+source = { path = "vendor/tokenizers-0.23.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 dependencies = [
     { name = "huggingface-hub" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c1/60/21f715d9faba5f5407ff759472ade058ec4a507ad62bcea47cb847239a73/tokenizers-0.23.1.tar.gz", hash = "sha256:1feeeadf865a7915adc25445dea30e9933e593c31bb96c277cee36de227c8bfa", size = 365748, upload-time = "2026-04-27T14:43:25.606Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0d/d5/1353e5f677ec27c2494fb6a6725e82d56c985f53e90ec511369e7e4f02c6/tokenizers-0.23.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5075b405006415ea148a992d093699c66eb01952bf59f4d5727089a98bda45a4", size = 3346235, upload-time = "2026-04-27T14:43:12.377Z" },
-    { url = "https://files.pythonhosted.org/packages/79/94/3ac1432bda31626071e9b6a12709b97ae05131c804b94c8f3ac622c5da32/tokenizers-0.23.1-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:e3d8f40ea6268047de7046906326abed5134f27d4e8447b23763afe5808c8a96", size = 10113853, upload-time = "2026-04-27T14:43:23.617Z" },
+    { filename = "tokenizers-0.23.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5075b405006415ea148a992d093699c66eb01952bf59f4d5727089a98bda45a4" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "datasets", marker = "extra == 'testing'" },
+    { name = "huggingface-hub", specifier = ">=0.16.4,<2.0" },
+    { name = "numpy", marker = "extra == 'testing'" },
+    { name = "pytest", marker = "extra == 'testing'" },
+    { name = "pytest-asyncio", marker = "extra == 'testing'" },
+    { name = "requests", marker = "extra == 'testing'" },
+    { name = "ruff", marker = "extra == 'testing'" },
+    { name = "setuptools-rust", marker = "extra == 'docs'" },
+    { name = "sphinx", marker = "extra == 'docs'" },
+    { name = "sphinx-rtd-theme", marker = "extra == 'docs'" },
+    { name = "tokenizers", extras = ["testing"], marker = "extra == 'dev'" },
+    { name = "ty", marker = "extra == 'testing'" },
+]
+provides-extras = ["dev", "docs", "testing"]
 
 [[package]]
 name = "torch"

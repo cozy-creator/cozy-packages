@@ -23,6 +23,16 @@ The source checkouts were at the commits in the table. The Runtime wheel
 metadata declares `av>=18.1,<19` only for its `media` extra; this package asks
 for `cozy-runtime[media]==0.0.15`.
 
+## Locked publication wheels
+
+Creator's registry mirror admits only filenames ending exactly in `-py3-none-any.whl`. H3's
+pruned non-base closure also contains locked native `hf-xet`, `pydantic-core`, PyYAML, regex,
+safetensors, and tokenizers wheels plus Shellingham's compatible `py2.py3-none-any` wheel. Those
+seven exact PyPI objects are local direct dependencies under `vendor/`; `native-provenance.json`
+records their source URLs, versions, lengths, and SHA-256 digests. `scripts/fence.py` joins those
+facts to `pyproject.toml`, `uv.lock`, and the stored bytes so a future native transitive cannot
+fall back into Creator's pure-wheel registry lane.
+
 ## MiniMax H3 tokenizer and processor
 
 The only accepted source is

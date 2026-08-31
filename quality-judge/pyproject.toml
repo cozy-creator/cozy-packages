@@ -16,9 +16,14 @@ version = "1.0.7"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cozy-runtime[media]==0.0.15",
+    "hf-xet==1.6.0",
     "msgspec>=0.19",
     "numpy>=1.26",
     "pillow>=11",
+    "pyyaml==6.0.3",
+    "regex==2026.7.19",
+    "safetensors==0.8.0",
+    "shellingham==1.5.4",
     "tensorfs==0.0.5",
     "tokenizers>=0.22",
     "torch>=2.13,<3",
@@ -34,7 +39,13 @@ only-include = ["quality_judge.py"]
 
 [tool.uv.sources]
 cozy-runtime = { path = "vendor/cozy_runtime-0.0.15-py3-none-any.whl" }
+hf-xet = { path = "vendor/hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" }
+pyyaml = { path = "vendor/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl" }
+regex = { path = "vendor/regex-2026.7.19-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl" }
+safetensors = { path = "vendor/safetensors-0.8.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
+shellingham = { path = "vendor/shellingham-1.5.4-py2.py3-none-any.whl" }
 tensorfs = { path = "vendor/tensorfs-0.0.5-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
+tokenizers = { path = "vendor/tokenizers-0.23.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 
 [tool.cozy]
 organization = "paul"
