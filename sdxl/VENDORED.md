@@ -8,7 +8,7 @@ image and never installs a second copy in the package overlay.
 
 | file | bytes | SHA256 |
 | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.8-py3-none-any.whl` | 709,911 | `cfa8ceafb7a3026f674ba7bf8e7b0d0a6f7740f2e4ec54de71bd2c34f2339708` |
+| `vendor/cozy_runtime-0.0.9-py3-none-any.whl` | 693,563 | `511ead4219f41e876c9308a77d83e09b744522624fb3893db3c5a80a21a3cddb` |
 
 ## Generation stack
 
