@@ -1,4 +1,4 @@
-owner: codex /root/package_entrypoints_restamp
-purpose: add standard cozy.application wheel entry points and restamp affected package releases
-branch: codex/application-entrypoints
-base: c8a87f95b6b7f75b94e65db8f363ba37768e781b
+owner: codex /root
+purpose: profile Anima stages and add an explicit 1536 square output option
+branch: codex/anima-highres-profiling
+base: 98a8d66c29aac7cfe1b721865b0730a2f7d96d12
