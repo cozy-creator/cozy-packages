@@ -123,7 +123,7 @@ provides-extras = ["corpus", "derive", "media"]
 
 [[package]]
 name = "cozy-video-assembly"
-version = "1.0.7"
+version = "1.0.8"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },

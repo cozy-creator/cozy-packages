@@ -1,4 +1,4 @@
-owner: codex /root/package_runtime014_restamp
-purpose: vendor exact native package dependencies blocked by Creator registry mirroring
-branch: codex/native-dependency-wheels
-base: 886da291b3a1d7ab8243a5c9dc7dd966da341316
+owner: codex /root/package_entrypoints_restamp
+purpose: add standard cozy.application wheel entry points and restamp affected package releases
+branch: codex/application-entrypoints
+base: c8a87f95b6b7f75b94e65db8f363ba37768e781b

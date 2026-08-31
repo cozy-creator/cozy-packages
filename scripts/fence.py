@@ -42,7 +42,8 @@ as a convention someone remembers:
 14. private-h3-shapes    H3 config, plan, and probe files are identified by their package
                           member and strict shape, not another globally versioned schema tag.
 15. publication-metadata every publishable package declares its catalog organization and its
-                          distribution name carries no redundant `-package` suffix.
+                          distribution name carries no redundant `-package` suffix; its wheel
+                          exposes exactly one `cozy.application` entry matching package.toml.
 16. native-publication-wheels
                           every reachable non-base dependency that Creator cannot mirror as an
                           exact `py3-none-any` registry wheel is one explicit local wheel whose
@@ -791,7 +792,21 @@ def fence_publication_metadata() -> Fence:
         name = project_table.get("name") if isinstance(project_table, dict) else None
         if not isinstance(name, str) or not name or name.endswith("-package"):
             bad.append(f"{rel(path)}: [project].name has an absent or redundant package name")
-    return bad, f"{len(projects())} publishable packages declare concise catalog identities"
+        entry_points = (
+            project_table.get("entry-points") if isinstance(project_table, dict) else None
+        )
+        applications = (
+            entry_points.get("cozy.application") if isinstance(entry_points, dict) else None
+        )
+        package_manifest = tomllib.loads((project / "package.toml").read_text())
+        application = package_manifest.get("application")
+        expected = application.get("object") if isinstance(application, dict) else None
+        if not isinstance(applications, dict) or list(applications.values()) != [expected]:
+            bad.append(
+                f"{rel(path)}: [project.entry-points.\"cozy.application\"] must expose "
+                f"exactly the package.toml application {expected!r}"
+            )
+    return bad, f"{len(projects())} packages declare one catalog and installed identity"
 
 
 def fence_private_h3_shapes() -> Fence:
