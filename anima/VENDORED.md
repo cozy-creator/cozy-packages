@@ -6,7 +6,7 @@ repository. The wheel was built twice from the pinned merged Git commit at the p
 
 | file | source commit | source tree | bytes | SHA256 |
 | --- | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.22-py3-none-any.whl` | `cozy-runtime` `a54254ae6fd98798cc92dcf6ed8cf7df011434da` | `f3638e370ea87779f24941171c81ccb49ce3cf5b` | 752,030 | `926ffb7d7d6529b641ddde5c6b1cb13463d980b4f4d0084fa79fa55b2308f7ea` |
+| `vendor/cozy_runtime-0.0.22-py3-none-any.whl` | `cozy-runtime` `c1193159a5f729e6a63f20c634c139b732ffb3af` | `53e6fb37bba7f6cb0f6c1f68672880b4451dd711` | 757,436 | `47cbd0f3c55e3201648ecd12d4c82c3bb17299a305968d95f3350d1207f3316f` |
 
 The wheel requires CPython `>=3.12,<3.13`; its optional `media` extra requires
 `av>=18.1,<19`. Production placement resolves both dependencies against the exact base worker
