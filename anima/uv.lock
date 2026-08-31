@@ -9,7 +9,7 @@ supported-markers = [
 ]
 
 [[package]]
-name = "anima-package"
+name = "anima"
 version = "0.1.11"
 source = { editable = "." }
 dependencies = [

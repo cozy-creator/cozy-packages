@@ -5,7 +5,7 @@
 # publication never overlays another copy over the selected base worker image.
 
 [project]
-name = "sdxl-package"
+name = "sdxl"
 version = "2.0.3"
 requires-python = ">=3.14,<3.15"
 dependencies = [

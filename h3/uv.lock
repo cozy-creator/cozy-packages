@@ -366,7 +366,7 @@ wheels = [
 ]
 
 [[package]]
-name = "h3-package"
+name = "h3"
 version = "1.0.5"
 source = { editable = "." }
 dependencies = [

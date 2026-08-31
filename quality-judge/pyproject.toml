@@ -11,7 +11,7 @@
 # is resampled in numpy, so there is no torchaudio and no torchvision in this closure.
 
 [project]
-name = "quality-judge-package"
+name = "quality-judge"
 version = "1.0.5"
 requires-python = ">=3.14,<3.15"
 dependencies = [
