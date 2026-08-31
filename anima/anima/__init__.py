@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any
@@ -134,6 +135,7 @@ class AnimaModel(Model[AnimaPipeline]):
         steps: int,
         guidance: float,
         seed: int,
+        tel: Telemetry,
     ) -> Any:
         import torch
         from diffusers import AnimaModularPipeline, FlowMatchEulerDiscreteScheduler
@@ -154,7 +156,11 @@ class AnimaModel(Model[AnimaPipeline]):
             t5_tokenizer=self.pipe.t5_tokenizer,
         )
         pipeline.guider.guidance_scale = guidance
-        pipeline.set_progress_bar_config(disable=True)
+        denoise = pipeline.blocks.sub_blocks.get("denoise.denoise")
+        if denoise is None:
+            raise RuntimeError("Diffusers Anima workflow has no denoise.denoise block")
+        denoise.progress_bar = _progress_bar(tel)
+        tel.progress(0, stage="conditioning")
         return pipeline(
             prompt=prompt,
             negative_prompt=negative_prompt,
@@ -165,6 +171,40 @@ class AnimaModel(Model[AnimaPipeline]):
             output="images",
             output_type="pt",
         )
+
+
+class _DenoiseProgress:
+    """Diffusers' denoise-loop progress bar projected onto Runtime telemetry."""
+
+    def __init__(self, total: int, tel: Telemetry) -> None:
+        self.total = total
+        self.tel = tel
+        self.position = 0
+        self.step: Callable[[int], None] | None = None
+
+    def __enter__(self) -> _DenoiseProgress:
+        self.step = self.tel.step_callback(self.total, stage="denoise")
+        return self
+
+    def update(self, count: int = 1) -> None:
+        if self.step is None:
+            raise RuntimeError("Anima denoise progress updated outside its loop")
+        for _ in range(count):
+            self.step(self.position)
+            self.position += 1
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        if exc_type is None:
+            self.tel.progress(0, stage="decoding")
+
+
+def _progress_bar(tel: Telemetry) -> Callable[..., _DenoiseProgress]:
+    def progress_bar(iterable: object = None, total: int | None = None) -> _DenoiseProgress:
+        if iterable is not None or total is None or total < 1:
+            raise RuntimeError("Anima denoise progress requires one positive total")
+        return _DenoiseProgress(total, tel)
+
+    return progress_bar
 
 
 @app.entrypoint
@@ -192,6 +232,7 @@ def generate(
             steps,
             payload.guidance,
             payload.seed,
+            tel,
         )
     image = images[0]
     pixels = (image.clamp(0, 1) * 255).to("cpu", dtype=torch.uint8)
