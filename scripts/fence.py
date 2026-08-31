@@ -693,7 +693,7 @@ def fence_descriptor_minimality() -> Fence:
             for index, item in enumerate(value):
                 visit(item, f"{where}[{index}]")
 
-    expected = {"application", "entrypoints", "format", "jobs"}
+    expected = {"application", "entrypoints", "format", "jobs", "model_productions"}
     for project in projects():
         path = project / "package.descriptor.json"
         try:

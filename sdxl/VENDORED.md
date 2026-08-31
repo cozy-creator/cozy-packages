@@ -8,7 +8,7 @@ image and never installs a second copy in the package overlay.
 
 | file | bytes | SHA256 |
 | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.10-py3-none-any.whl` | 698,262 | `94460296a7c6ad745d25693f8c67faa6543579ffb0779ee1f9b8056ef9a30ba8` |
+| `vendor/cozy_runtime-0.0.11-py3-none-any.whl` | 705,603 | `9ad5642698d4879d4982152c5f88d0599a2b2c2f418f20c38bbb7d7fc5760334` |
 
 ## Generation stack
 
@@ -32,7 +32,7 @@ The package owns the denoising loop,
 so it sets the UNet's total timestep count and resets every patched module's request-local timestep
 state before step zero. A later request cannot inherit a partial or canceled request's counters.
 
-`uv lock` resolves the Linux x86-64 closure for Python 3.14. Verify the lock and static package
+`uv lock` resolves the Linux x86-64 closure for Python 3.12. Verify the lock and static package
 surface with:
 
 ```sh

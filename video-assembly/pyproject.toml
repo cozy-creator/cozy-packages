@@ -1,8 +1,8 @@
 [project]
 name = "cozy-video-assembly"
-version = "1.0.5"
-requires-python = ">=3.14,<3.15"
-dependencies = ["cozy-runtime[media]==0.0.10", "msgspec>=0.19"]
+version = "1.0.6"
+requires-python = ">=3.12,<3.13"
+dependencies = ["cozy-runtime[media]==0.0.11", "msgspec>=0.19"]
 
 [build-system]
 requires = ["hatchling"]
@@ -15,13 +15,13 @@ only-include = ["video_assembly.py"]
 dev = ["mypy==2.3.1", "ruff==0.16.4"]
 
 [tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.0.10-py3-none-any.whl" }
+cozy-runtime = { path = "vendor/cozy_runtime-0.0.11-py3-none-any.whl" }
 
 [tool.cozy]
 organization = "paul"
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.12"
 files = ["video_assembly.py", "live.py"]
 strict = true
 warn_unreachable = true

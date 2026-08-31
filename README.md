@@ -111,7 +111,7 @@ Telemetry, never result fields.
 
 ### Release closure
 
-The package lock targets CPython 3.14 and pins released Diffusers, Transformers, and the
+The package lock targets CPython 3.12 and pins released Diffusers, Transformers, and the
 PyTorch 2.13/CUDA 13.0 family. Until the
 first-party packages are published, exact Cozy Runtime and Cozy Eval wheels are committed as
 vendored build inputs. The five minimal tokenizer/processor data files are bundled from the pinned
@@ -148,9 +148,9 @@ workflow ledger in this repository.
 The cheap gates require no weights or GPU:
 
 ```bash
-uv venv --python 3.14 .venv-check
+uv venv --python 3.12 .venv-check
 uv pip install --python .venv-check/bin/python \
-  h3/vendor/cozy_runtime-0.0.10-py3-none-any.whl \
+  h3/vendor/cozy_runtime-0.0.11-py3-none-any.whl \
   msgspec protobuf grpcio av mypy ruff
 
 .venv-check/bin/python scripts/fence.py
@@ -207,7 +207,7 @@ h3/.venv/bin/python scripts/h3-live.py \
   --expected-lane 'profile=fp8-adaln-pruned' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
   --expected-package-descriptor-digest \
-    'sha256:c3e5db6f1cc08c2caa88b9bc5774a975999a3e0ad4e918f7f49015845043b114' \
+    'sha256:8564b7f7ebe6d829a7553b4ba5247987d373ea265e25e544007e1a58e4d412c7' \
   --expected-fl-plan-digest \
     'sha256:8da103b9b09629f9f4bcc7c3311929a83c4bc76d5ac2a49fa8ad6c08a140d99b' \
   --expected-ref-plan-digest \
