@@ -671,6 +671,24 @@ def fence_sdxl_defaults() -> Fence:
     return bad, "WAI 17 bf16, CFG 7, request-controlled square-only HiDiffusion"
 
 
+def fence_anima_defaults() -> Fence:
+    """The bare local install selects one exact immutable model lane."""
+
+    manifest = tomllib.loads((ROOT / "anima" / "package.toml").read_text())
+    binding = manifest.get("bindings", {}).get("generate.models.model", {})
+    expected = {
+        "model": "paul/anima",
+        "release": "1.0.0",
+        "lane": "bf16",
+    }
+    bad = (
+        []
+        if binding == expected
+        else [f"anima/package.toml: got {binding!r}, expected {expected!r}"]
+    )
+    return bad, "Anima binds the exact paul/anima@1.0.0/bf16 lane"
+
+
 def fence_h3_adaln_pruned_vocabulary() -> Fence:
     """The pre-launch hardcut has one name; the retired modulation name is refused."""
     retired = "baked"
@@ -1066,6 +1084,7 @@ FENCES = (
     ("h3-binding-identity", fence_h3_binding_identity),
     ("typed-model-bindings", fence_typed_model_bindings),
     ("sdxl-defaults", fence_sdxl_defaults),
+    ("anima-defaults", fence_anima_defaults),
     ("h3-adaln-pruned-vocabulary", fence_h3_adaln_pruned_vocabulary),
     ("descriptor-minimality", fence_descriptor_minimality),
     ("package-manifest-hardcut", fence_package_manifest_hardcut),
