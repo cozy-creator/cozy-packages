@@ -10,7 +10,7 @@ supported-markers = [
 
 [[package]]
 name = "anima"
-version = "0.1.18"
+version = "0.1.19"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -35,7 +35,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.18-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.22-py3-none-any.whl" },
     { name = "diffusers", specifier = "==0.40.0" },
     { name = "hf-xet", path = "vendor/hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" },
     { name = "msgspec", specifier = ">=0.19" },
@@ -145,8 +145,8 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.0.18"
-source = { path = "vendor/cozy_runtime-0.0.18-py3-none-any.whl" }
+version = "0.0.22"
+source = { path = "vendor/cozy_runtime-0.0.22-py3-none-any.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
@@ -156,7 +156,7 @@ dependencies = [
     { name = "protobuf" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.18-py3-none-any.whl", hash = "sha256:6fcbaa51d94f5809e925225ddc89a440c922bead13c0bba9277db5b01c8f9228" },
+    { filename = "cozy_runtime-0.0.22-py3-none-any.whl", hash = "sha256:926ffb7d7d6529b641ddde5c6b1cb13463d980b4f4d0084fa79fa55b2308f7ea" },
 ]
 
 [package.optional-dependencies]
@@ -167,6 +167,7 @@ media = [
 [package.metadata]
 requires-dist = [
     { name = "av", marker = "extra == 'media'", specifier = ">=18.1,<19" },
+    { name = "cozy-runtime-cuda-kernels", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda-kernels'", specifier = "==0.1.0+torch2.13cu130" },
     { name = "cryptography", specifier = ">=45" },
     { name = "diffusers", marker = "extra == 'corpus'", specifier = ">=0.36" },
     { name = "grpcio", specifier = ">=1.76" },
@@ -178,7 +179,7 @@ requires-dist = [
     { name = "torch", marker = "extra == 'derive'", specifier = ">=2.13,<3" },
     { name = "transformers", marker = "extra == 'corpus'", specifier = ">=4.40,<5" },
 ]
-provides-extras = ["corpus", "derive", "media"]
+provides-extras = ["corpus", "cuda-kernels", "derive", "media"]
 
 [[package]]
 name = "cryptography"

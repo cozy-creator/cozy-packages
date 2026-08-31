@@ -1,4 +1,4 @@
-owner: codex /root
-purpose: profile Anima stages and add an explicit 1536 square output option
-branch: codex/anima-highres-profiling
-base: 52b7b982789d3257a57c571f78db47cf468003c7
+owner: codex /root/anima_runtime_optimization
+purpose: restamp Anima and SDXL against final Runtime 0.0.22
+branch: codex/runtime020-package-restamp
+base: 84bf402d7555628eaedb583d968afc8ababc41e0
