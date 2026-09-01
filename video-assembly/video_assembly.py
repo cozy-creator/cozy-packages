@@ -162,15 +162,20 @@ def _nearest(value: Fraction) -> int:
 
 
 def _rms(channels: tuple[bytes, ...], *, start: int = 0, samples: int | None = None) -> float:
+    """Window RMS over f32 PCM, summed in C by `math.sumprod` rather than per sample.
+
+    The gain ride calls this over 48 kHz windows; a Python-level loop over individual
+    floats was the assembly path's largest CPU cost and bought nothing.
+    """
     total = 0.0
     count = 0
     for raw in channels:
         values = array("f")
         values.frombytes(raw)
         stop = len(values) if samples is None else min(len(values), start + samples)
-        for value in values[start:stop]:
-            total += float(value) * float(value)
-            count += 1
+        window = values[start:stop]
+        total += math.sumprod(window, window)
+        count += len(window)
     return math.sqrt(total / count) if count else 0.0
 
 
