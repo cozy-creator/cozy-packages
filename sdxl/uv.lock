@@ -98,8 +98,8 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.0.22"
-source = { path = "vendor/cozy_runtime-0.0.22-py3-none-any.whl" }
+version = "0.0.23"
+source = { path = "vendor/cozy_runtime-0.0.23-py3-none-any.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
@@ -109,7 +109,7 @@ dependencies = [
     { name = "protobuf" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.22-py3-none-any.whl", hash = "sha256:47cbd0f3c55e3201648ecd12d4c82c3bb17299a305968d95f3350d1207f3316f" },
+    { filename = "cozy_runtime-0.0.23-py3-none-any.whl", hash = "sha256:eabb44ebb99d30627b41d37549f3774f770834505d37c46cd03fc53f63d7826d" },
 ]
 
 [package.optional-dependencies]
@@ -787,7 +787,7 @@ provides-extras = ["all", "convert", "dev", "jax", "mlx", "numpy", "paddlepaddle
 
 [[package]]
 name = "sdxl"
-version = "2.0.8"
+version = "2.0.9"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -813,7 +813,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.22-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.23-py3-none-any.whl" },
     { name = "diffusers", specifier = "==0.40.0" },
     { name = "hf-xet", path = "vendor/hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" },
     { name = "hidiffusion", specifier = "==0.1.10" },
