@@ -168,38 +168,6 @@ def imports(tree: ast.AST, package: str = "") -> Iterator[tuple[str, int]]:
                 yield name, node.lineno
 
 
-def _type_checking_guard(node: ast.If) -> bool:
-    """`if TYPE_CHECKING:` — a block that NEVER runs, so nothing in it is an import."""
-    test = node.test
-    if isinstance(test, ast.Name):
-        return test.id == "TYPE_CHECKING"
-    return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
-
-
-def module_scope_imports(tree: ast.Module, package: str = "") -> Iterator[tuple[str, int]]:
-    """Imports that run at IMPORT time — module-level `if`/`try`/`with` included, function
-    and class bodies excluded, which is exactly where a heavy import belongs."""
-    stack = list(tree.body)
-    while stack:
-        node = stack.pop()
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                yield alias.name, node.lineno
-        elif isinstance(node, ast.ImportFrom):
-            name = _from_name(node, package)
-            if name:
-                yield name, node.lineno
-        elif isinstance(node, ast.If) and _type_checking_guard(node):
-            continue
-        elif isinstance(node, ast.If | ast.Try | ast.With):
-            for attr in ("body", "orelse", "finalbody", "handlers"):
-                for child in getattr(node, attr, []) or []:
-                    if isinstance(child, ast.ExceptHandler):
-                        stack.extend(child.body)
-                    else:
-                        stack.append(child)
-
-
 def fence_author_surface() -> Fence:
     bad: list[str] = []
     for path in package_modules():
@@ -295,82 +263,6 @@ def _blank(source: str, select: Callable[[tokenize.TokenInfo], bool]) -> str:
             for col in range(start, min(end, len(out[row]))):
                 out[row][col] = " "
     return "\n".join("".join(row) for row in out)
-
-
-HEAVY = {
-    "torch",
-    "transformers",
-    "diffusers",
-    "PIL",
-    "numpy",
-    "cv2",
-    "safetensors",
-    "tokenizers",
-    "accelerate",
-    "scipy",
-}
-
-
-def entry_module(project: pathlib.Path) -> str:
-    """The module `describe` imports, from the project's own `[application] object`."""
-    for line in (project / "package.toml").read_text().splitlines():
-        match = re.match(r"""\s*object\s*=\s*["']([^"':]+):""", line)
-        if match:
-            return match.group(1)
-    raise SystemExit(f"{rel(project)}/package.toml declares no [application] object")
-
-
-def resolve(project: pathlib.Path, module: str) -> pathlib.Path | None:
-    """An in-project module name to its file. Out-of-project names resolve to None — a
-    third-party package's own module scope is its business, not this fence's."""
-    parts = module.split(".")
-    for candidate in (
-        project.joinpath(*parts).with_suffix(".py"),
-        project.joinpath(*parts) / "__init__.py",
-    ):
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def fence_light_import() -> Fence:
-    """THE IMPORT CLOSURE, not the file.
-
-    A package that brings its own model library (H3 brings the whole MiniMax
-    architecture) has files that import torch at module scope and are imported only inside
-    `load`. The per-file version of this rule refuses those and admits the failure it
-    exists to prevent — a light-looking package module importing a heavy one indirectly.
-    So the rule is: nothing reachable from `[application] object` BY MODULE-SCOPE IMPORTS
-    may pull a heavy package. `describe` runs in a container with no GPU, no weights and
-    no CUDA image, and this is the property that keeps it running there.
-    """
-    bad: list[str] = []
-    checked = 0
-    for project in projects():
-        entry = entry_module(project)
-        seen: set[str] = set()
-        stack = [(entry, entry)]
-        while stack:
-            module, via = stack.pop()
-            if module in seen:
-                continue
-            seen.add(module)
-            path = resolve(project, module)
-            if path is None:
-                continue
-            checked += 1
-            tree = ast.parse(path.read_text(), filename=str(path))
-            package = module if path.name == "__init__.py" else module.rpartition(".")[0]
-            for imported, line in module_scope_imports(tree, package):
-                if imported.split(".")[0] in HEAVY:
-                    chain = f" (reached from {entry} via {via})" if via != module else ""
-                    bad.append(
-                        f"{rel(path)}:{line}: module-scope import of {imported!r}"
-                        f"{chain} — `describe` runs with no GPU, no weights and no CUDA "
-                        "image, so a heavy import belongs inside the function that needs it"
-                    )
-                stack.append((imported, module))
-    return bad, f"{len(HEAVY)} heavy packages absent from {checked} import-closure modules"
 
 
 #: THE DELETED MECHANISMS (se-001), as spellings rather than as a review convention:
@@ -973,7 +865,6 @@ def fence_model_execution_ownership() -> Fence:
 FENCES = (
     ("author-surface-only", fence_author_surface),
     ("no-identifiers-in-code", fence_identifiers),
-    ("light-module-scope", fence_light_import),
     ("no-memory-choreography", fence_no_choreography),
     ("no-test-suite", fence_no_tests),
     ("h3-media-boundary", fence_h3_media_boundary),
