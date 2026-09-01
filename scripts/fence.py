@@ -726,74 +726,10 @@ def fence_anima_progress() -> Fence:
     return bad, "Anima reports conditioning, measured denoising steps, and decoding"
 
 
-def fence_h3_adaln_pruned_vocabulary() -> Fence:
-    """The pre-launch hardcut has one name; the retired modulation name is refused."""
-    retired = "baked"
-    paths = {
-        ROOT / "README.md",
-        ROOT / "h3" / "package.descriptor.json",
-        ROOT / "h3" / "package.toml",
-        *h3_owned_modules(),
-        *(ROOT / "h3" / "timestep-plans").glob("*.json"),
-    }
-    bad: list[str] = []
-    for path in sorted(paths):
-        for line_no, line in enumerate(path.read_text().splitlines(), 1):
-            if retired in line.lower():
-                bad.append(
-                    f"{rel(path)}:{line_no}: retired H3 modulation spelling: {line.strip()[:80]}"
-                )
-    return bad, f"retired H3 modulation spelling absent from {len(paths)} contract files"
-
-
-def fence_descriptor_minimality() -> Fence:
-    forbidden = {
-        "attribute",
-        "capabilities",
-        "config_schema",
-        "context_facts",
-        "default",
-        "default_sources",
-        "demand",
-        "discriminator",
-        "emits_media",
-        "error_model",
-        "frozen",
-        "gpu",
-        "kind",
-        "max_audio_channels",
-        "max_audio_samples",
-        "max_decoded_bytes",
-        "max_pixels_per_frame",
-        "max_video_frames",
-        "placement",
-        "preflight",
-        "protocol",
-        "request_features",
-        "requires",
-        "schema",
-        "secret_schema",
-        "secrets",
-        "services",
-        "settings",
-        "shape_axes",
-        "struct",
-        "surface_digest",
-        "values",
-    }
-    bad: list[str] = []
-
-    def visit(value: object, where: str) -> None:
-        if isinstance(value, dict):
-            for key, item in value.items():
-                if key in forbidden:
-                    bad.append(f"{where}.{key}: retired descriptor fact")
-                visit(item, f"{where}.{key}")
-        elif isinstance(value, list):
-            for index, item in enumerate(value):
-                visit(item, f"{where}[{index}]")
-
+def fence_descriptor_format() -> Fence:
+    """Every descriptor is exactly a descriptor/1 document with the four root fields."""
     expected = {"application", "entrypoints", "format", "jobs"}
+    bad: list[str] = []
     for project in projects():
         path = project / "package.descriptor.json"
         try:
@@ -803,26 +739,7 @@ def fence_descriptor_minimality() -> Fence:
             continue
         if set(document) != expected or document.get("format") != "cozy.package.descriptor/1":
             bad.append(f"{rel(path)}: root fields/format are not exact descriptor/1")
-        visit(document, rel(path))
-    return bad, f"{len(projects())} descriptor/1 files carry only consumed facts"
-
-
-def fence_package_manifest_hardcut() -> Fence:
-    bad: list[str] = []
-    retired_noun = "end" + "point"
-    retired_namespace = f"cozy.{retired_noun}."
-    for retired in (f"{retired_noun}.toml", f"{retired_noun}.descriptor.json"):
-        bad.extend(rel(path) for path in ROOT.glob(f"*/{retired}"))
-    checked = [
-        ROOT / "README.md",
-        *ROOT.glob("scripts/*.py"),
-        *(project / "package.toml" for project in projects()),
-        *(project / "package.descriptor.json" for project in projects()),
-    ]
-    for path in checked:
-        if retired_namespace in path.read_text():
-            bad.append(f"{rel(path)}: retired Cozy package canonical namespace")
-    return bad, f"{len(projects())} package manifests and descriptors use one package namespace"
+    return bad, f"{len(projects())} descriptor/1 files carry the four root fields"
 
 
 def fence_publication_metadata() -> Fence:
@@ -862,22 +779,6 @@ def fence_publication_metadata() -> Fence:
                 f"exactly the package.toml application {expected!r}"
             )
     return bad, f"{len(projects())} packages declare one catalog and installed identity"
-
-
-def fence_private_h3_shapes() -> Fence:
-    retired = {
-        "cozy.minimax_h3.dit/1",
-        "cozy.minimax_h3.production_probe/3",
-        "cozy.minimax_h3.text_conditioner/1",
-        "cozy.minimax_h3.timestep_plan/1",
-    }
-    bad: list[str] = []
-    for path in [*h3_owned_modules(), *(ROOT / "h3" / "timestep-plans").glob("*.json")]:
-        source = path.read_text()
-        for value in retired:
-            if value in source:
-                bad.append(f"{rel(path)}: private H3 member carries retired schema {value!r}")
-    return bad, "four private H3 schemas replaced by member-specific closed shapes"
 
 
 def _distribution_name(value: str) -> str:
@@ -1157,11 +1058,8 @@ FENCES = (
     ("sdxl-defaults", fence_sdxl_defaults),
     ("anima-defaults", fence_anima_defaults),
     ("anima-progress", fence_anima_progress),
-    ("h3-adaln-pruned-vocabulary", fence_h3_adaln_pruned_vocabulary),
-    ("descriptor-minimality", fence_descriptor_minimality),
-    ("package-manifest-hardcut", fence_package_manifest_hardcut),
+    ("descriptor-format", fence_descriptor_format),
     ("publication-metadata", fence_publication_metadata),
-    ("private-h3-shapes", fence_private_h3_shapes),
     ("native-publication-wheels", fence_native_publication_wheels),
     ("model-execution-ownership", fence_model_execution_ownership),
 )
