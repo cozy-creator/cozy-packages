@@ -21,6 +21,7 @@ from typing import cast
 import msgspec
 from cozy_runtime.author import (
     AudioAsset,
+    AuthorError,
     Context,
     DecodedMediaEvent,
     DecodedMediaHeader,
@@ -29,11 +30,15 @@ from cozy_runtime.author import (
     DecodedVideoFormat,
     DecodedVideoFrame,
     MediaDecoder,
+    Outputs,
     VideoAsset,
 )
+
+# `Attempt`, `bind` and `asset_dec_hook` have no public spelling: constructing an attempt
+# and hydrating a bound asset is what the executor does for a real request, and this proof
+# has to stand where the executor stands. Everything else comes from the public surface.
 from cozy_runtime.author._assets import asset_dec_hook, bind
-from cozy_runtime.author._errors import AuthorError
-from cozy_runtime.author._services import Attempt, Outputs
+from cozy_runtime.author._services import Attempt
 
 from video_assembly import (
     AssembleVideoRequest,
