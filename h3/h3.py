@@ -193,7 +193,7 @@ def _decode_references(
             if video_duration > _MAX_REFERENCE_DURATION:
                 raise InvalidRequest(
                     "reference videos total more than 15 seconds",
-                    code="reference_video_duration_total",
+                    code="reference_policy",
                     fields=["references"],
                 )
             vision_tokens += reference_video_vision_tokens(
@@ -215,7 +215,7 @@ def _validate_vision_budget(tokens: int) -> None:
         raise UnsupportedInput(
             f"reference vision presentation needs {tokens} tokens; this release admits at most "
             f"{MAX_CONDITIONER_VISION_TOKENS}",
-            code="reference_capacity",
+            code="reference_policy",
             fields=["references"],
         )
 
@@ -224,7 +224,7 @@ def _validate_ratio(width: int, height: int, field: str) -> None:
     if width > 4 * height or height > 4 * width:
         raise UnsupportedInput(
             f"{field} must have an aspect ratio between 1:4 and 4:1, got {width}x{height}",
-            code="reference_aspect_ratio",
+            code="reference_policy",
             fields=[field],
         )
 
@@ -240,14 +240,14 @@ def _validate_video(video: DecodedVideo, field: str) -> None:
     if video.pixel_aspect_ratio != 1:
         raise UnsupportedInput(
             f"{field} must use square pixels, got {video.pixel_aspect_ratio}",
-            code="reference_pixel_aspect_ratio",
+            code="reference_policy",
             fields=[field],
         )
     for index, duration in enumerate(video.frame_durations):
         if duration <= 0:
             raise InvalidRequest(
                 f"{field} frame {index} has a non-positive presentation duration",
-                code="reference_clock",
+                code="reference_policy",
                 fields=[field],
             )
         if (
@@ -257,7 +257,7 @@ def _validate_video(video: DecodedVideo, field: str) -> None:
         ):
             raise InvalidRequest(
                 f"{field} has a presentation-clock gap or overlap before frame {index}",
-                code="reference_clock",
+                code="reference_policy",
                 fields=[field],
             )
     if video.soundtrack is not None:
@@ -269,14 +269,14 @@ def _validate_video(video: DecodedVideo, field: str) -> None:
         if offset_samples.denominator != 1 or target_samples.denominator != 1:
             raise InvalidRequest(
                 f"{field} video and soundtrack clocks do not meet on exact samples",
-                code="reference_av_clock",
+                code="reference_policy",
                 fields=[field],
             )
         offset = video.soundtrack.start_time - video.start_time
         if offset >= video.duration or offset + video.soundtrack.duration <= 0:
             raise InvalidRequest(
                 f"{field} soundtrack does not overlap its video timeline",
-                code="reference_av_clock",
+                code="reference_policy",
                 fields=[field],
             )
 
@@ -287,7 +287,7 @@ def _validate_audio_aggregate(duration: Fraction) -> None:
     if duration > _MAX_REFERENCE_DURATION:
         raise InvalidRequest(
             "standalone audio references total more than 15 seconds",
-            code="reference_audio_duration_total",
+            code="reference_policy",
             fields=["references"],
         )
 
@@ -296,7 +296,7 @@ def _validate_audio_channels(audio: DecodedAudio, field: str) -> None:
     if audio.channels not in (1, 2):
         raise UnsupportedInput(
             f"{field} audio must be mono or stereo, got {audio.channels} channels",
-            code="reference_audio_channels",
+            code="reference_policy",
             fields=[field],
         )
 
@@ -305,7 +305,7 @@ def _validate_duration(duration: Fraction, field: str) -> None:
     if not _MIN_REFERENCE_DURATION <= duration <= _MAX_REFERENCE_DURATION:
         raise InvalidRequest(
             f"{field} must be between 2 and 15 seconds, got {float(duration):.3f}",
-            code="reference_duration",
+            code="reference_policy",
             fields=[field],
         )
 
@@ -331,7 +331,7 @@ def _finish(
             raise OutputError(
                 f"official H3 audio decode returned shape {tuple(audio.shape)} at {sample_rate}Hz; "
                 f"the release clock is {release_rate}Hz",
-                code="output_audio_shape",
+                code="output_integrity",
             )
         waveform = audio[0].to(torch.float32).contiguous().cpu()
     cancel()
@@ -340,7 +340,7 @@ def _finish(
         if decoded.ndim != 5 or int(decoded.shape[0]) != 1 or int(decoded.shape[2]) != 3:
             raise OutputError(
                 f"official H3 video decode returned shape {tuple(decoded.shape)}",
-                code="output_geometry",
+                code="output_integrity",
             )
 
     cancel()
@@ -360,7 +360,7 @@ def _finish(
     if frames != FRAMES or channels != 3:
         raise OutputError(
             f"official H3 decode returned {frames} frames and {channels} channels",
-            code="output_geometry",
+            code="output_integrity",
         )
 
     with tel.stage("gate_pre_encode"):

@@ -39,7 +39,7 @@ class _AdaLNPrunedTimestepLookup(nn.Module):  # type: ignore[misc]
             unknown = timestep.detach().float().cpu().tolist()
             raise ConformanceError(
                 f"timestep rows are not covered exactly by the AdaLN-pruned plan: {unknown}",
-                code="adaln_pruned_timestep",
+                code="artifact_config",
             )
         return matches.to(dtype=torch.int64).argmax(dim=1)
 
@@ -172,7 +172,7 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
         if bool(torch.any((token_tags < 0) | (token_tags > 2))):
             raise ConformanceError(
                 "packed rows contain a modality tag outside the canonical 0/1/2 set",
-                code="adaln_pruned_timestep",
+                code="artifact_config",
             )
         global_rows = self.time_proj.rows(timestep)
         row_timesteps = global_rows.index_select(0, timestep_indices)
@@ -181,7 +181,7 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
         if not bool(torch.all(present)):
             raise ConformanceError(
                 "packed rows request a timestep/modality pair absent from the AdaLN-pruned plan",
-                code="adaln_pruned_timestep",
+                code="artifact_config",
             )
 
     @classmethod

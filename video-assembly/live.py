@@ -559,7 +559,7 @@ def main() -> int:
         except AuthorError as exc:
             check(
                 "segment mode refuses a missing soundtrack",
-                exc.code == "assembly_audio_format",
+                exc.code == "invalid_request",
                 f"code={exc.code}",
             )
         else:
@@ -576,7 +576,7 @@ def main() -> int:
         except AuthorError as exc:
             check(
                 "segment mode refuses overlong audio before output commit",
-                exc.code == "assembly_audio_clock" and no_output(root, "segment-clock-refusal"),
+                exc.code == "invalid_request" and no_output(root, "segment-clock-refusal"),
                 f"code={exc.code}",
             )
         else:
@@ -588,7 +588,7 @@ def main() -> int:
         except AuthorError as exc:
             check(
                 "master mode refuses overlong audio before output commit",
-                exc.code == "assembly_audio_clock" and no_output(root, "master-clock-refusal"),
+                exc.code == "invalid_request" and no_output(root, "master-clock-refusal"),
                 f"code={exc.code}",
             )
         else:
@@ -600,7 +600,7 @@ def main() -> int:
         except AuthorError as exc:
             check(
                 "geometry mismatch refuses before output commit",
-                exc.code == "assembly_video_format" and no_output(root, "geometry-refusal"),
+                exc.code == "invalid_request" and no_output(root, "geometry-refusal"),
                 f"code={exc.code}",
             )
         else:
@@ -612,7 +612,7 @@ def main() -> int:
         except AuthorError as exc:
             check(
                 "frame-rate mismatch refuses before output commit",
-                exc.code == "assembly_video_format" and no_output(root, "rate-refusal"),
+                exc.code == "invalid_request" and no_output(root, "rate-refusal"),
                 f"code={exc.code}",
             )
         else:
@@ -625,7 +625,7 @@ def main() -> int:
                     cast(MediaDecoder, EventDecoder(events)), VideoAsset("clock"), lambda: None
                 )
             except AuthorError as exc:
-                clock_refusals.append(exc.code == "assembly_video_clock")
+                clock_refusals.append(exc.code == "invalid_request")
             else:
                 clock_refusals.append(False)
         check(

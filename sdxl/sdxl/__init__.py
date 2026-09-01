@@ -374,7 +374,7 @@ def _integrity(torch: Any, image: Any, pixels: Any, tel: Telemetry) -> None:
             f"the decode produced NaN over {nan_fraction:.4%} of the image and this "
             "package does not publish it: a non-finite decode is a failed generation, "
             "not a picture with artefacts",
-            code="output_integrity_nan",
+            code="output_integrity",
         )
     tel.metric("image_spread", round(float(pixels.to(torch.float32).std()), 4))
 
@@ -392,7 +392,7 @@ def _request_generator(torch: Any, source: object, *, device: Any) -> Any:
     if not isinstance(source, random.Random):
         raise ConformanceError(
             f"request generator has unsupported type {type(source).__name__}",
-            code="generator_type",
+            code="artifact_config",
         )
     return torch.Generator(device=device).manual_seed(source.getrandbits(63))
 

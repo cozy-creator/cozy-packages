@@ -38,7 +38,7 @@ def _cozy_eval() -> tuple[Any, Any, Any]:
     except ImportError as exc:
         raise OutputError(
             "cozy-eval is absent, so this package cannot prove its generated tensors",
-            code="output_gate_unavailable",
+            code="output_integrity",
         ) from exc
     return ce_audio, ce_integrity, ce_metrics_audio
 
@@ -62,14 +62,14 @@ def pre_encode_gate(
     if waveform.ndim != 2:
         raise OutputError(
             f"the audio decode has shape {tuple(waveform.shape)}, expected (channels, samples)",
-            code="output_audio_shape",
+            code="output_integrity",
         )
     tel.metric("video_nonfinite_fraction", round(video_nonfinite_fraction, 6))
     tel.metric("audio_nonfinite_fraction", round(audio_nonfinite_fraction, 6))
     if video_nonfinite_fraction or audio_nonfinite_fraction:
         raise OutputError(
             "the official H3 decode produced non-finite video or audio values",
-            code="output_integrity_nan",
+            code="output_integrity",
         )
 
     shape = tuple(int(value) for value in pixels.shape)
@@ -77,13 +77,13 @@ def pre_encode_gate(
     if shape != expected:
         raise OutputError(
             f"the generated pixel tensor is {shape}, expected {expected}",
-            code="output_shape_mismatch",
+            code="output_integrity",
         )
     channels, samples = (int(value) for value in waveform.shape)
     if channels not in (1, 2):
         raise OutputError(
             f"the generated soundtrack has {channels} channels, expected mono or stereo",
-            code="output_audio_channels",
+            code="output_integrity",
         )
     audio_duration = Fraction(samples, requested.sample_rate)
     tel.metric("audio_seconds", round(float(audio_duration), 4))
@@ -91,7 +91,7 @@ def pre_encode_gate(
         raise OutputError(
             f"the generated soundtrack is {float(audio_duration):.3f}s against "
             f"{float(requested.duration):.3f}s of video",
-            code="output_av_duration_mismatch",
+            code="output_integrity",
         )
 
     integrity = ce_integrity.output_integrity(pixels.cpu().numpy())
@@ -102,7 +102,7 @@ def pre_encode_gate(
     if not integrity.ok:
         raise OutputError(
             f"the generated video fails cozy-eval's integrity floor: {integrity.summary()}",
-            code="output_integrity_video",
+            code="output_integrity",
         )
 
     stats = ce_metrics_audio.signal_stats(

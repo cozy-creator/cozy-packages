@@ -353,7 +353,7 @@ def arm_schedule() -> None:
         lambda: _validate_row_timestep_plan(
             SimpleNamespace(**{**vars(state), "token_tags": wrong_tags}), plans["fl2va"]
         ),
-        "canonical_schedule",
+        "artifact_config",
     )
 
     scheduler = MiniMaxH3Scheduler(shift=12.0)
@@ -490,7 +490,7 @@ def arm_graph_and_dtypes() -> None:
     refusal(
         "a block attribute write on the scoped view refuses instead of evaporating",
         lambda: setattr(scoped, "communicated", 3),
-        "scoped_pipeline_write",
+        "artifact_config",
     )
     check(
         "the refused write reached neither the view nor the wrapped pipe",
@@ -844,7 +844,7 @@ def arm_adaln_pruned() -> None:
     refusal(
         "a non-plan timestep refuses rather than interpolating",
         lambda: pruned.time_proj(torch.tensor([0.123456], dtype=torch.float32)),
-        "adaln_pruned_timestep",
+        "artifact_config",
     )
     refusal(
         "a plan timestep paired with an uncovered modality refuses",
@@ -861,7 +861,7 @@ def arm_adaln_pruned() -> None:
             text_indices=torch.tensor([0]),
             return_dict=False,
         ),
-        "adaln_pruned_timestep",
+        "artifact_config",
     )
 
 
@@ -976,7 +976,7 @@ def arm_media() -> None:
     refusal(
         "vision demand above the release budget refuses",
         lambda: package._validate_vision_budget(MAX_CONDITIONER_VISION_TOKENS + 1),
-        "reference_capacity",
+        "reference_policy",
     )
 
     video = _video(2, soundtrack=_audio(1, start=Fraction(1, 2)))
@@ -1054,7 +1054,7 @@ def arm_media() -> None:
             videos=[_video(8, soundtrack=_audio(8)), _video(8, soundtrack=_audio(8))],
             audios=[],
         ),
-        "reference_video_duration_total",
+        "reference_policy",
     )
     refusal(
         "16 seconds of standalone audio refuse against the audio modality cap",
@@ -1063,7 +1063,7 @@ def arm_media() -> None:
             videos=[_video(2)],
             audios=[_audio(6), _audio(6), _audio(4)],
         ),
-        "reference_audio_duration_total",
+        "reference_policy",
     )
 
     decoded = torch.tensor(
@@ -1244,7 +1244,7 @@ def arm_output_gates() -> None:
             requested=requested,
             tel=cast(Any, _Telemetry()),
         ),
-        "output_integrity_nan",
+        "output_integrity",
     )
     check(
         "the uint8 control contains no NaN evidence",
@@ -1262,7 +1262,7 @@ def arm_output_gates() -> None:
             requested=requested,
             tel=cast(Any, _Telemetry()),
         ),
-        "output_av_duration_mismatch",
+        "output_integrity",
     )
 
 
