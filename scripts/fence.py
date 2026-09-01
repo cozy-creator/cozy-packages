@@ -848,7 +848,7 @@ def fence_model_execution_ownership() -> Fence:
         document = tomllib.loads(path.read_text())
         project = document.get("project", {})
         dependencies = project.get("dependencies", [])
-        expected = "cozy-runtime[media,model-execution]==0.0.29"
+        expected = "cozy-runtime[media,model-execution]>=0.0.29,<1.0.0"
         if expected not in dependencies:
             bad.append(f"{rel(path)}: modeled package does not select {expected}")
         if any(_requirement_distribution(value) == "tensorfs" for value in dependencies):

@@ -791,7 +791,7 @@ provides-extras = ["all", "convert", "dev", "jax", "mlx", "numpy", "paddlepaddle
 
 [[package]]
 name = "sdxl"
-version = "2.0.12"
+version = "2.0.13"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media", "model-execution"] },
