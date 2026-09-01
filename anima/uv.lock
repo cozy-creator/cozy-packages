@@ -10,7 +10,7 @@ supported-markers = [
 
 [[package]]
 name = "anima"
-version = "0.1.23"
+version = "0.1.24"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media", "model-execution"] },
@@ -24,6 +24,7 @@ dependencies = [
     { name = "shellingham" },
     { name = "tokenizers" },
     { name = "torch" },
+    { name = "torchvision" },
     { name = "transformers" },
 ]
 
@@ -47,6 +48,7 @@ requires-dist = [
     { name = "shellingham", path = "vendor/shellingham-1.5.4-py2.py3-none-any.whl" },
     { name = "tokenizers", path = "vendor/tokenizers-0.23.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
     { name = "torch", specifier = ">=2.13,<3" },
+    { name = "torchvision", specifier = ">=0.28,<1" },
     { name = "transformers", specifier = "==5.16.1" },
 ]
 
@@ -916,6 +918,19 @@ dependencies = [
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f3/82/fea946351658e6534db52d2cc12bc53087cbf87f9440c5f180f367c1950b/torch-2.13.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:796633c4cdf0fe2cdced72d8f88f22e73dbcfce83132763162f6d4bff13b820b", size = 526605292, upload-time = "2026-07-08T16:04:22.81Z" },
+]
+
+[[package]]
+name = "torchvision"
+version = "0.28.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "torch" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/93/e4/e9b2495d0d57b9f60d63c57d0a910410a81b4b073bf70917bef815291119/torchvision-0.28.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:028a3d481b37d785605620d7cdad897064c5a55bae2aa1f2658766333e291940", size = 7675040, upload-time = "2026-07-08T16:07:58.017Z" },
 ]
 
 [[package]]
