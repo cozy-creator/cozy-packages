@@ -30,8 +30,8 @@ build-backend = "hatchling.build"
 packages = ["anima"]
 
 [tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.0.29-py3-none-any.whl" }
-tensorfs = { path = "vendor/tensorfs-0.0.7-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
+cozy-runtime = { path = "vendor/cozy_runtime-0.0.32-py3-none-any.whl" }
+tensorfs = { path = "vendor/tensorfs-0.0.8-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 hf-xet = { path = "vendor/hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" }
 pyyaml = { path = "vendor/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl" }
 regex = { path = "vendor/regex-2026.7.19-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl" }
@@ -48,7 +48,7 @@ environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 [dependency-groups]
 # Temporary resolver source anchor until TensorFS is on PyPI. Runtime's model-execution extra,
 # not package metadata or package code, owns the execution dependency.
-dev = ["mypy==2.3.1", "ruff==0.16.4", "tensorfs==0.0.7"]
+dev = ["mypy==2.3.1", "ruff==0.16.4", "tensorfs==0.0.8"]
 
 [tool.mypy]
 python_version = "3.12"
