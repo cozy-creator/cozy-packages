@@ -21,6 +21,7 @@ from typing import cast
 import msgspec
 from cozy_runtime.author import (
     AudioAsset,
+    AuthorError,
     Context,
     DecodedMediaEvent,
     DecodedMediaHeader,
@@ -29,11 +30,15 @@ from cozy_runtime.author import (
     DecodedVideoFormat,
     DecodedVideoFrame,
     MediaDecoder,
+    Outputs,
     VideoAsset,
 )
+
+# `Attempt`, `bind` and `asset_dec_hook` have no public spelling: constructing an attempt
+# and hydrating a bound asset is what the executor does for a real request, and this proof
+# has to stand where the executor stands. Everything else comes from the public surface.
 from cozy_runtime.author._assets import asset_dec_hook, bind
-from cozy_runtime.author._errors import AuthorError
-from cozy_runtime.author._services import Attempt, Outputs
+from cozy_runtime.author._services import Attempt
 
 from video_assembly import (
     AssembleVideoRequest,
@@ -559,7 +564,7 @@ def main() -> int:
         except AuthorError as exc:
             check(
                 "segment mode refuses a missing soundtrack",
-                exc.code == "assembly_audio_format",
+                exc.code == "invalid_request",
                 f"code={exc.code}",
             )
         else:
@@ -576,7 +581,7 @@ def main() -> int:
         except AuthorError as exc:
             check(
                 "segment mode refuses overlong audio before output commit",
-                exc.code == "assembly_audio_clock" and no_output(root, "segment-clock-refusal"),
+                exc.code == "invalid_request" and no_output(root, "segment-clock-refusal"),
                 f"code={exc.code}",
             )
         else:
@@ -588,7 +593,7 @@ def main() -> int:
         except AuthorError as exc:
             check(
                 "master mode refuses overlong audio before output commit",
-                exc.code == "assembly_audio_clock" and no_output(root, "master-clock-refusal"),
+                exc.code == "invalid_request" and no_output(root, "master-clock-refusal"),
                 f"code={exc.code}",
             )
         else:
@@ -600,7 +605,7 @@ def main() -> int:
         except AuthorError as exc:
             check(
                 "geometry mismatch refuses before output commit",
-                exc.code == "assembly_video_format" and no_output(root, "geometry-refusal"),
+                exc.code == "invalid_request" and no_output(root, "geometry-refusal"),
                 f"code={exc.code}",
             )
         else:
@@ -612,7 +617,7 @@ def main() -> int:
         except AuthorError as exc:
             check(
                 "frame-rate mismatch refuses before output commit",
-                exc.code == "assembly_video_format" and no_output(root, "rate-refusal"),
+                exc.code == "invalid_request" and no_output(root, "rate-refusal"),
                 f"code={exc.code}",
             )
         else:
@@ -625,7 +630,7 @@ def main() -> int:
                     cast(MediaDecoder, EventDecoder(events)), VideoAsset("clock"), lambda: None
                 )
             except AuthorError as exc:
-                clock_refusals.append(exc.code == "assembly_video_clock")
+                clock_refusals.append(exc.code == "invalid_request")
             else:
                 clock_refusals.append(False)
         check(

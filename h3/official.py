@@ -370,7 +370,7 @@ class _ScopedPipeline:
             return
         raise ConformanceError(
             f"a wrapped Diffusers block set {name!r} on the request-local pipeline view",
-            code="scoped_pipeline_write",
+            code="artifact_config",
         )
 
 
@@ -445,7 +445,7 @@ class OfficialH3Pipeline:
         if not isinstance(source, random.Random):
             raise ConformanceError(
                 f"request generator has unsupported type {type(source).__name__}",
-                code="generator_type",
+                code="artifact_config",
             )
         return torch.Generator().manual_seed(source.getrandbits(63))
 
@@ -562,7 +562,7 @@ class OfficialH3Pipeline:
         for name in names:
             self._run_with(task, scoped, name, state)
 
-        facts = self._schedule_facts(task, scoped, state)
+        facts = self._schedule_facts(task)
         loop = self._blocks[task].sub_blocks["denoise.denoise"]
         block_state = loop.get_block_state(state)
         for index, timestep in enumerate(block_state.timesteps):
@@ -595,23 +595,17 @@ class OfficialH3Pipeline:
         block = self._blocks[task].sub_blocks[name]
         block(pipe, state)
 
-    def _schedule_facts(self, task: Task, pipe: Any, state: Any) -> ScheduleFacts:
-        video_sigmas = pipe.scheduler.sigmas
-        audio_sigmas = pipe.audio_scheduler.sigmas
+    def _schedule_facts(self, task: Task) -> ScheduleFacts:
+        """The canonical schedule receipt for this task.
+
+        The 30-sigma/29-forward plan is a property of `diffusers==0.40.0`, pinned exactly
+        in `pyproject.toml` from a committed `uv.lock` that `uv lock --check` verifies in
+        two CI jobs, and `scripts/h3-conform.py:arm_schedule` proves it against that exact
+        wheel on every run. Re-deriving it on every paid denoise — pulling token tags and
+        29 row plans to CPU for 29 `torch.equal` calls — re-proved a pinned dependency
+        against itself at the customer's expense.
+        """
         expected = canonical_timestep_plan(task)
-        if (
-            video_sigmas is None
-            or audio_sigmas is None
-            or _float_tuple(video_sigmas) != expected.video_sigmas
-            or _float_tuple(audio_sigmas) != expected.audio_sigmas
-            or _float_tuple(state.timesteps) != expected.video_timesteps
-            or _float_tuple(state.audio_timesteps) != expected.audio_timesteps
-        ):
-            raise ConformanceError(
-                "official H3 scheduler did not produce the canonical 30-sigma/29-forward plan",
-                code="canonical_schedule",
-            )
-        _validate_row_timestep_plan(state, expected)
         return ScheduleFacts(
             timestep_plan_digest=expected.digest,
             video_sigma_digest=expected.video_sigma_digest,
@@ -770,7 +764,7 @@ def _validate_row_timestep_plan(state: Any, expected: TimestepPlan) -> None:
     plans = state.row_timestep_plan
     if len(plans) != TRANSFORMER_EVALUATIONS:
         raise ConformanceError(
-            "official H3 row plan has the wrong length", code="canonical_schedule"
+            "official H3 row plan has the wrong length", code="artifact_config"
         )
     tags = state.token_tags.detach().long().cpu()
     video_indices = state.video_indices.detach().long().cpu()
@@ -783,13 +777,13 @@ def _validate_row_timestep_plan(state: Any, expected: TimestepPlan) -> None:
     if text_tags.shape != text_indices.shape or bool(((text_tags != 0) & (text_tags != 1)).any()):
         raise ConformanceError(
             "official H3 presentation tags are not the canonical vision/text 0/1 convention",
-            code="canonical_schedule",
+            code="artifact_config",
         )
     expected_tags[text_indices] = text_tags
     if not torch.equal(tags, expected_tags):
         raise ConformanceError(
             "official H3 packed-row modality tags differ from the canonical 0/1/2 convention",
-            code="canonical_schedule",
+            code="artifact_config",
         )
     for index, (unique, inverse) in enumerate(plans):
         row_timesteps = unique.detach().float().cpu().index_select(0, inverse.detach().long().cpu())
@@ -802,7 +796,7 @@ def _validate_row_timestep_plan(state: Any, expected: TimestepPlan) -> None:
         if not torch.equal(row_timesteps, want):
             raise ConformanceError(
                 f"official H3 packed-row timestep assignment differs at evaluation {index}",
-                code="canonical_schedule",
+                code="artifact_config",
             )
 
 
@@ -906,7 +900,7 @@ def _processor() -> tuple[Any, Any]:
     ):
         raise ConformanceError(
             "bundled tokenizer added-token table is missing or malformed",
-            code="asset_config",
+            code="artifact_config",
         )
     try:
         config["added_tokens_decoder"] = {
@@ -914,13 +908,13 @@ def _processor() -> tuple[Any, Any]:
         }
     except (TypeError, ValueError) as exc:
         raise ConformanceError(
-            "bundled tokenizer added-token table is malformed", code="asset_config"
+            "bundled tokenizer added-token table is malformed", code="artifact_config"
         ) from exc
     merge_lines = (_ASSETS / "tokenizer" / "merges.txt").read_text().splitlines()
     merges = [tuple(line.split(" ")) for line in merge_lines]
     if not merges or any(len(pair) != 2 for pair in merges):
         raise ConformanceError(
-            "bundled tokenizer merges are empty or malformed", code="asset_config"
+            "bundled tokenizer merges are empty or malformed", code="artifact_config"
         )
     tokenizer = Qwen2Tokenizer(vocab=vocab, merges=merges, **config)
 
@@ -945,12 +939,12 @@ def _json_mapping(path: Path) -> dict[str, Any]:
     except (OSError, ValueError) as exc:
         raise ConformanceError(
             f"bundled processor asset {path.name!r} is unreadable",
-            code="asset_config",
+            code="artifact_config",
         ) from exc
     if not isinstance(value, dict):
         raise ConformanceError(
             f"bundled processor asset {path.name!r} is not a JSON object",
-            code="asset_config",
+            code="artifact_config",
         )
     return value
 
@@ -976,12 +970,12 @@ def _aligned_soundtrack(video: DecodedVideo) -> Any | None:
     if exact_offset.denominator != 1:
         raise ConformanceError(
             "reference soundtrack offset is not aligned to its sample clock",
-            code="reference_av_clock",
+            code="reference_policy",
         )
     if exact_samples.denominator != 1:
         raise ConformanceError(
             "reference video duration is not aligned to its soundtrack sample clock",
-            code="reference_av_clock",
+            code="reference_policy",
         )
     offset = exact_offset.numerator
     target_samples = exact_samples.numerator
@@ -991,7 +985,7 @@ def _aligned_soundtrack(video: DecodedVideo) -> Any | None:
     if start >= end:
         raise ConformanceError(
             "reference soundtrack has no samples on its video's timeline",
-            code="reference_av_clock",
+            code="reference_policy",
         )
     aligned = torch.zeros((audio.channels, target_samples), dtype=torch.float32)
     source_start = start - offset
@@ -1009,7 +1003,7 @@ def _video_at_24fps(video: DecodedVideo) -> Any:
         if starts[index] + durations[index] != starts[index + 1]:
             raise ConformanceError(
                 f"reference video clock has a gap or overlap before frame {index + 1}",
-                code="reference_clock",
+                code="reference_policy",
             )
 
     origin = starts[0]
@@ -1021,7 +1015,7 @@ def _video_at_24fps(video: DecodedVideo) -> Any:
         selected.extend([index] * (slots[index + 1] - slots[index]))
     if not selected:
         raise ConformanceError(
-            "reference video has no frame on the 24-fps clock", code="reference_clock"
+            "reference video has no frame on the 24-fps clock", code="reference_policy"
         )
 
     frames = []

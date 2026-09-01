@@ -233,7 +233,7 @@ def _preflight_media(count: int, *, field: str) -> BatchFacts:
             f"{count} images in one request exceeds the {MAX_IMAGES}-image attempt bound: "
             "a batch amortizes a resident model over many samples, it does not buy an "
             "unbounded attempt — split the batch",
-            code="batch_too_large",
+            code="capacity",
             fields=[field],
         )
     return BatchFacts(media_count=count)
@@ -278,7 +278,7 @@ def decode_images(blobs: list[Frame], *, where: str) -> list[Any]:
             raise InvalidRequest(
                 f"{where}: image {i} is not decodable ({type(exc).__name__}): "
                 f"{str(exc)[:120]}",
-                code="undecodable_image",
+                code="unsupported_input",
                 fields=[where],
             ) from exc
         out.append(image.convert("RGB"))
@@ -386,7 +386,7 @@ def _named(mapping: dict[str, object], key: str) -> Any:
         raise UnsupportedInput(
             f"the artifact names {name!r}, which this release's transformers does not "
             "provide — the image and the artifact disagree about the model family",
-            code="unknown_processor_class",
+            code="artifact_config",
         )
     return cls
 
@@ -464,7 +464,7 @@ def _answer_tokens(tokenizer: Any) -> tuple[tuple[int, ...], tuple[int, ...]]:
         raise UnsupportedInput(
             "this tokenizer encodes no single-token yes/no variant, so p(yes) cannot be "
             "read at one position — the soft lane needs a different judge checkpoint",
-            code="no_answer_tokens",
+            code="output_integrity",
         )
     return yes, no
 
@@ -530,7 +530,7 @@ class JudgeModel(Model[JudgePipeline]):
             # position. The caller is told, and records the item unmeasured.
             raise UnsupportedInput(
                 "the model put no probability mass on yes or no at the answer position",
-                code="no_answer_mass",
+                code="output_integrity",
             )
         return yes / (yes + no)
 
@@ -730,14 +730,14 @@ def transcribe(
                 raise InvalidRequest(
                     f"calls.{i}.samples is {len(raw)} B, which is not a whole number of "
                     "float32 samples",
-                    code="malformed_audio",
+                    code="unsupported_input",
                     fields=[f"calls.{i}.samples"],
                 )
             if seconds > MAX_AUDIO_SECONDS:
                 raise UnsupportedInput(
                     f"calls.{i}: {seconds:.0f} s exceeds the "
                     f"{MAX_AUDIO_SECONDS:.0f} s per-call bound",
-                    code="audio_too_long",
+                    code="capacity",
                     fields=[f"calls.{i}.samples"],
                 )
             mono = np.frombuffer(raw, dtype="<f4")

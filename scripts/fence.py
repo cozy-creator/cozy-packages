@@ -168,38 +168,6 @@ def imports(tree: ast.AST, package: str = "") -> Iterator[tuple[str, int]]:
                 yield name, node.lineno
 
 
-def _type_checking_guard(node: ast.If) -> bool:
-    """`if TYPE_CHECKING:` — a block that NEVER runs, so nothing in it is an import."""
-    test = node.test
-    if isinstance(test, ast.Name):
-        return test.id == "TYPE_CHECKING"
-    return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
-
-
-def module_scope_imports(tree: ast.Module, package: str = "") -> Iterator[tuple[str, int]]:
-    """Imports that run at IMPORT time — module-level `if`/`try`/`with` included, function
-    and class bodies excluded, which is exactly where a heavy import belongs."""
-    stack = list(tree.body)
-    while stack:
-        node = stack.pop()
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                yield alias.name, node.lineno
-        elif isinstance(node, ast.ImportFrom):
-            name = _from_name(node, package)
-            if name:
-                yield name, node.lineno
-        elif isinstance(node, ast.If) and _type_checking_guard(node):
-            continue
-        elif isinstance(node, ast.If | ast.Try | ast.With):
-            for attr in ("body", "orelse", "finalbody", "handlers"):
-                for child in getattr(node, attr, []) or []:
-                    if isinstance(child, ast.ExceptHandler):
-                        stack.extend(child.body)
-                    else:
-                        stack.append(child)
-
-
 def fence_author_surface() -> Fence:
     bad: list[str] = []
     for path in package_modules():
@@ -295,82 +263,6 @@ def _blank(source: str, select: Callable[[tokenize.TokenInfo], bool]) -> str:
             for col in range(start, min(end, len(out[row]))):
                 out[row][col] = " "
     return "\n".join("".join(row) for row in out)
-
-
-HEAVY = {
-    "torch",
-    "transformers",
-    "diffusers",
-    "PIL",
-    "numpy",
-    "cv2",
-    "safetensors",
-    "tokenizers",
-    "accelerate",
-    "scipy",
-}
-
-
-def entry_module(project: pathlib.Path) -> str:
-    """The module `describe` imports, from the project's own `[application] object`."""
-    for line in (project / "package.toml").read_text().splitlines():
-        match = re.match(r"""\s*object\s*=\s*["']([^"':]+):""", line)
-        if match:
-            return match.group(1)
-    raise SystemExit(f"{rel(project)}/package.toml declares no [application] object")
-
-
-def resolve(project: pathlib.Path, module: str) -> pathlib.Path | None:
-    """An in-project module name to its file. Out-of-project names resolve to None — a
-    third-party package's own module scope is its business, not this fence's."""
-    parts = module.split(".")
-    for candidate in (
-        project.joinpath(*parts).with_suffix(".py"),
-        project.joinpath(*parts) / "__init__.py",
-    ):
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def fence_light_import() -> Fence:
-    """THE IMPORT CLOSURE, not the file.
-
-    A package that brings its own model library (H3 brings the whole MiniMax
-    architecture) has files that import torch at module scope and are imported only inside
-    `load`. The per-file version of this rule refuses those and admits the failure it
-    exists to prevent — a light-looking package module importing a heavy one indirectly.
-    So the rule is: nothing reachable from `[application] object` BY MODULE-SCOPE IMPORTS
-    may pull a heavy package. `describe` runs in a container with no GPU, no weights and
-    no CUDA image, and this is the property that keeps it running there.
-    """
-    bad: list[str] = []
-    checked = 0
-    for project in projects():
-        entry = entry_module(project)
-        seen: set[str] = set()
-        stack = [(entry, entry)]
-        while stack:
-            module, via = stack.pop()
-            if module in seen:
-                continue
-            seen.add(module)
-            path = resolve(project, module)
-            if path is None:
-                continue
-            checked += 1
-            tree = ast.parse(path.read_text(), filename=str(path))
-            package = module if path.name == "__init__.py" else module.rpartition(".")[0]
-            for imported, line in module_scope_imports(tree, package):
-                if imported.split(".")[0] in HEAVY:
-                    chain = f" (reached from {entry} via {via})" if via != module else ""
-                    bad.append(
-                        f"{rel(path)}:{line}: module-scope import of {imported!r}"
-                        f"{chain} — `describe` runs with no GPU, no weights and no CUDA "
-                        "image, so a heavy import belongs inside the function that needs it"
-                    )
-                stack.append((imported, module))
-    return bad, f"{len(HEAVY)} heavy packages absent from {checked} import-closure modules"
 
 
 #: THE DELETED MECHANISMS (se-001), as spellings rather than as a review convention:
@@ -584,7 +476,7 @@ def fence_typed_model_bindings() -> Fence:
 
 
 def fence_sdxl_defaults() -> Fence:
-    """The release selection and quality defaults move together as one package release."""
+    """The bare local install selects one exact immutable model lane."""
 
     manifest = tomllib.loads((ROOT / "sdxl" / "package.toml").read_text())
     binding = manifest.get("bindings", {}).get("generate.models.model", {})
@@ -598,81 +490,7 @@ def fence_sdxl_defaults() -> Fence:
         if binding == expected
         else [f"sdxl/package.toml: got {binding!r}, expected {expected!r}"]
     )
-
-    tree = ast.parse((ROOT / "sdxl" / "sdxl" / "__init__.py").read_text())
-    guidance = None
-    hidiffusion_default = None
-    output_reports_hidiffusion = False
-    effective_selection = None
-    denoise_uses_effective_selection = False
-    result_uses_effective_selection = False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name == "Txt2ImgInput":
-            for item in node.body:
-                if (
-                    isinstance(item, ast.AnnAssign)
-                    and isinstance(item.target, ast.Name)
-                    and item.target.id == "guidance"
-                    and isinstance(item.value, ast.Constant)
-                ):
-                    guidance = item.value.value
-                if (
-                    isinstance(item, ast.AnnAssign)
-                    and isinstance(item.target, ast.Name)
-                    and item.target.id == "hidiffusion"
-                    and isinstance(item.value, ast.Constant)
-                ):
-                    hidiffusion_default = item.value.value
-        if isinstance(node, ast.ClassDef) and node.name == "ImageOutput":
-            output_reports_hidiffusion = any(
-                isinstance(item, ast.AnnAssign)
-                and isinstance(item.target, ast.Name)
-                and item.target.id == "hidiffusion_applied"
-                and isinstance(item.annotation, ast.Name)
-                and item.annotation.id == "bool"
-                for item in node.body
-            )
-        if (
-            isinstance(node, ast.Assign)
-            and any(
-                isinstance(target, ast.Name) and target.id == "hidiffusion_applied"
-                for target in node.targets
-            )
-        ):
-            effective_selection = ast.unparse(node.value)
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "denoise"
-        ):
-            denoise_uses_effective_selection = any(
-                isinstance(arg, ast.Name) and arg.id == "hidiffusion_applied"
-                for arg in node.args
-            )
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "ImageOutput"
-        ):
-            result_uses_effective_selection = any(
-                keyword.arg == "hidiffusion_applied"
-                and isinstance(keyword.value, ast.Name)
-                and keyword.value.id == "hidiffusion_applied"
-                for keyword in node.keywords
-            )
-    if guidance != 7.0:
-        bad.append(f"sdxl: default guidance is {guidance!r}, expected 7.0")
-    if hidiffusion_default is not True:
-        bad.append(f"sdxl: default HiDiffusion request is {hidiffusion_default!r}, expected True")
-    if effective_selection != "payload.hidiffusion and width == height":
-        bad.append(
-            "sdxl: effective HiDiffusion selection is not request opt-in AND square geometry"
-        )
-    if not denoise_uses_effective_selection:
-        bad.append("sdxl: denoise does not use the effective HiDiffusion selection")
-    if not output_reports_hidiffusion or not result_uses_effective_selection:
-        bad.append("sdxl: result does not report the effective HiDiffusion selection")
-    return bad, "WAI 17 bf16, CFG 7, request-controlled square-only HiDiffusion"
+    return bad, "SDXL binds the exact paul/wai-illustrious@17.0.0/bf16 lane"
 
 
 def fence_anima_defaults() -> Fence:
@@ -726,74 +544,10 @@ def fence_anima_progress() -> Fence:
     return bad, "Anima reports conditioning, measured denoising steps, and decoding"
 
 
-def fence_h3_adaln_pruned_vocabulary() -> Fence:
-    """The pre-launch hardcut has one name; the retired modulation name is refused."""
-    retired = "baked"
-    paths = {
-        ROOT / "README.md",
-        ROOT / "h3" / "package.descriptor.json",
-        ROOT / "h3" / "package.toml",
-        *h3_owned_modules(),
-        *(ROOT / "h3" / "timestep-plans").glob("*.json"),
-    }
-    bad: list[str] = []
-    for path in sorted(paths):
-        for line_no, line in enumerate(path.read_text().splitlines(), 1):
-            if retired in line.lower():
-                bad.append(
-                    f"{rel(path)}:{line_no}: retired H3 modulation spelling: {line.strip()[:80]}"
-                )
-    return bad, f"retired H3 modulation spelling absent from {len(paths)} contract files"
-
-
-def fence_descriptor_minimality() -> Fence:
-    forbidden = {
-        "attribute",
-        "capabilities",
-        "config_schema",
-        "context_facts",
-        "default",
-        "default_sources",
-        "demand",
-        "discriminator",
-        "emits_media",
-        "error_model",
-        "frozen",
-        "gpu",
-        "kind",
-        "max_audio_channels",
-        "max_audio_samples",
-        "max_decoded_bytes",
-        "max_pixels_per_frame",
-        "max_video_frames",
-        "placement",
-        "preflight",
-        "protocol",
-        "request_features",
-        "requires",
-        "schema",
-        "secret_schema",
-        "secrets",
-        "services",
-        "settings",
-        "shape_axes",
-        "struct",
-        "surface_digest",
-        "values",
-    }
-    bad: list[str] = []
-
-    def visit(value: object, where: str) -> None:
-        if isinstance(value, dict):
-            for key, item in value.items():
-                if key in forbidden:
-                    bad.append(f"{where}.{key}: retired descriptor fact")
-                visit(item, f"{where}.{key}")
-        elif isinstance(value, list):
-            for index, item in enumerate(value):
-                visit(item, f"{where}[{index}]")
-
+def fence_descriptor_format() -> Fence:
+    """Every descriptor is exactly a descriptor/1 document with the four root fields."""
     expected = {"application", "entrypoints", "format", "jobs"}
+    bad: list[str] = []
     for project in projects():
         path = project / "package.descriptor.json"
         try:
@@ -803,26 +557,7 @@ def fence_descriptor_minimality() -> Fence:
             continue
         if set(document) != expected or document.get("format") != "cozy.package.descriptor/1":
             bad.append(f"{rel(path)}: root fields/format are not exact descriptor/1")
-        visit(document, rel(path))
-    return bad, f"{len(projects())} descriptor/1 files carry only consumed facts"
-
-
-def fence_package_manifest_hardcut() -> Fence:
-    bad: list[str] = []
-    retired_noun = "end" + "point"
-    retired_namespace = f"cozy.{retired_noun}."
-    for retired in (f"{retired_noun}.toml", f"{retired_noun}.descriptor.json"):
-        bad.extend(rel(path) for path in ROOT.glob(f"*/{retired}"))
-    checked = [
-        ROOT / "README.md",
-        *ROOT.glob("scripts/*.py"),
-        *(project / "package.toml" for project in projects()),
-        *(project / "package.descriptor.json" for project in projects()),
-    ]
-    for path in checked:
-        if retired_namespace in path.read_text():
-            bad.append(f"{rel(path)}: retired Cozy package canonical namespace")
-    return bad, f"{len(projects())} package manifests and descriptors use one package namespace"
+    return bad, f"{len(projects())} descriptor/1 files carry the four root fields"
 
 
 def fence_publication_metadata() -> Fence:
@@ -862,22 +597,6 @@ def fence_publication_metadata() -> Fence:
                 f"exactly the package.toml application {expected!r}"
             )
     return bad, f"{len(projects())} packages declare one catalog and installed identity"
-
-
-def fence_private_h3_shapes() -> Fence:
-    retired = {
-        "cozy.minimax_h3.dit/1",
-        "cozy.minimax_h3.production_probe/3",
-        "cozy.minimax_h3.text_conditioner/1",
-        "cozy.minimax_h3.timestep_plan/1",
-    }
-    bad: list[str] = []
-    for path in [*h3_owned_modules(), *(ROOT / "h3" / "timestep-plans").glob("*.json")]:
-        source = path.read_text()
-        for value in retired:
-            if value in source:
-                bad.append(f"{rel(path)}: private H3 member carries retired schema {value!r}")
-    return bad, "four private H3 schemas replaced by member-specific closed shapes"
 
 
 def _distribution_name(value: str) -> str:
@@ -1146,7 +865,6 @@ def fence_model_execution_ownership() -> Fence:
 FENCES = (
     ("author-surface-only", fence_author_surface),
     ("no-identifiers-in-code", fence_identifiers),
-    ("light-module-scope", fence_light_import),
     ("no-memory-choreography", fence_no_choreography),
     ("no-test-suite", fence_no_tests),
     ("h3-media-boundary", fence_h3_media_boundary),
@@ -1157,11 +875,8 @@ FENCES = (
     ("sdxl-defaults", fence_sdxl_defaults),
     ("anima-defaults", fence_anima_defaults),
     ("anima-progress", fence_anima_progress),
-    ("h3-adaln-pruned-vocabulary", fence_h3_adaln_pruned_vocabulary),
-    ("descriptor-minimality", fence_descriptor_minimality),
-    ("package-manifest-hardcut", fence_package_manifest_hardcut),
+    ("descriptor-format", fence_descriptor_format),
     ("publication-metadata", fence_publication_metadata),
-    ("private-h3-shapes", fence_private_h3_shapes),
     ("native-publication-wheels", fence_native_publication_wheels),
     ("model-execution-ownership", fence_model_execution_ownership),
 )

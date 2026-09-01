@@ -162,15 +162,20 @@ def _nearest(value: Fraction) -> int:
 
 
 def _rms(channels: tuple[bytes, ...], *, start: int = 0, samples: int | None = None) -> float:
+    """Window RMS over f32 PCM, summed in C by `math.sumprod` rather than per sample.
+
+    The gain ride calls this over 48 kHz windows; a Python-level loop over individual
+    floats was the assembly path's largest CPU cost and bought nothing.
+    """
     total = 0.0
     count = 0
     for raw in channels:
         values = array("f")
         values.frombytes(raw)
         stop = len(values) if samples is None else min(len(values), start + samples)
-        for value in values[start:stop]:
-            total += float(value) * float(value)
-            count += 1
+        window = values[start:stop]
+        total += math.sumprod(window, window)
+        count += len(window)
     return math.sqrt(total / count) if count else 0.0
 
 
@@ -191,7 +196,7 @@ def _scan_video(decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], No
             if isinstance(event, DecodedMediaHeader):
                 if event.video is None or event.video.nominal_frame_rate is None:
                     raise InvalidRequest(
-                        "video has no fixed nominal frame rate", code="assembly_video_clock"
+                        "video has no fixed nominal frame rate", code="invalid_request"
                     )
                 header = event
                 if event.audio is not None:
@@ -216,7 +221,7 @@ def _scan_video(decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], No
                 ):
                     raise InvalidRequest(
                         "video is not on the fixed zero-based frame clock",
-                        code="assembly_video_clock",
+                        code="invalid_request",
                     )
                 if not first_frame_digest:
                     first_frame_digest = "sha256:" + hashlib.sha256(event.rgb).hexdigest()
@@ -226,7 +231,7 @@ def _scan_video(decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], No
             if event.start_time != Fraction(audio_samples, header.audio.sample_rate):
                 raise InvalidRequest(
                     "soundtrack is not on the fixed zero-based sample clock",
-                    code="assembly_audio_clock",
+                    code="invalid_request",
                 )
             peak = 0.0
             values_by_channel: list[array[float]] = []
@@ -245,7 +250,7 @@ def _scan_video(decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], No
                     head[channel] += raw[: head_limit * 4 - len(head[channel])]
                 tail[channel].extend(float(value) for value in values_by_channel[channel])
     if header is None or header.video is None or frames == 0:
-        raise InvalidRequest("video decoded no usable stream", code="assembly_video")
+        raise InvalidRequest("video decoded no usable stream", code="invalid_request")
     return _Scan(
         asset=asset,
         header=header,
@@ -268,7 +273,7 @@ def _scan_audio(decoder: MediaDecoder, asset: AudioAsset, check: Callable[[], No
             if isinstance(event, DecodedMediaHeader):
                 if event.audio is None or event.video is not None:
                     raise InvalidRequest(
-                        "master audio has no audio-only header", code="master_audio"
+                        "master audio has no audio-only header", code="invalid_request"
                     )
                 header = event.audio
             else:
@@ -277,11 +282,11 @@ def _scan_audio(decoder: MediaDecoder, asset: AudioAsset, check: Callable[[], No
                 if event.start_time != Fraction(samples, header.sample_rate):
                     raise InvalidRequest(
                         "master audio is not on a zero-based sample clock",
-                        code="master_audio_clock",
+                        code="invalid_request",
                     )
                 samples += event.sample_count
     if header is None or samples == 0:
-        raise InvalidRequest("master audio decoded no samples", code="master_audio")
+        raise InvalidRequest("master audio decoded no samples", code="invalid_request")
     return _AudioScan(header, samples)
 
 
@@ -341,13 +346,13 @@ def _segment_selections(
         if abs(drift) > tolerance:
             raise InvalidRequest(
                 f"segment {index + 1} soundtrack differs from its frame clock by {drift} samples",
-                code="assembly_audio_clock",
+                code="invalid_request",
             )
         selected_frames = scan.frames - int(index > 0)
         if selected_frames <= 0:
             raise InvalidRequest(
                 f"segment {index + 1} has no frame after the fixed replay trim",
-                code="assembly_video_clock",
+                code="invalid_request",
             )
         cumulative = _nearest(
             Fraction((output_frames + selected_frames) * audio.sample_rate, 1)
@@ -565,9 +570,9 @@ def _segment_events(
                 output_audio += count
                 emitted_audio += count
         if seen_frames != scan.frames or source_audio != scan.audio_samples:
-            raise InvalidRequest("media changed between scan and assembly", code="assembly_changed")
+            raise InvalidRequest("media changed between scan and assembly", code="invalid_request")
         if emitted_audio != selection.from_source:
-            raise InvalidRequest("media changed between scan and assembly", code="assembly_changed")
+            raise InvalidRequest("media changed between scan and assembly", code="invalid_request")
         if selection.padded:
             silence = tuple(bytes(selection.padded * 4) for _ in range(audio.channels))
             yield DecodedAudioChunk(
@@ -653,7 +658,7 @@ def _master_events(
                     seen_frames += 1
             if seen_frames != scan.frames:
                 raise InvalidRequest(
-                    "media changed between scan and assembly", code="assembly_changed"
+                    "media changed between scan and assembly", code="invalid_request"
                 )
         while isinstance(next_audio, DecodedAudioChunk):
             check()
@@ -673,10 +678,10 @@ def _master_events(
                 output_audio += count
             next_audio = next(audio_iter, None)
     if source_audio != master_scan.samples:
-        raise InvalidRequest("master audio changed between scans", code="assembly_changed")
+        raise InvalidRequest("master audio changed between scans", code="invalid_request")
     missing = target_audio - output_audio
     if missing != padding:
-        raise InvalidRequest("master audio changed between scans", code="assembly_changed")
+        raise InvalidRequest("master audio changed between scans", code="invalid_request")
     if missing:
         yield DecodedAudioChunk(
             channels=master_scan.header.channels,
@@ -702,13 +707,13 @@ def assemble_video(
     if video_format.nominal_frame_rate != 24:
         raise InvalidRequest(
             f"video frame rate is {video_format.nominal_frame_rate}, expected 24",
-            code="assembly_video_format",
+            code="invalid_request",
         )
     if any(
         scan.header.video is None or not _same_video(video_format, scan.header.video)
         for scan in scans
     ):
-        raise InvalidRequest("video formats differ between segments", code="assembly_video_format")
+        raise InvalidRequest("video formats differ between segments", code="invalid_request")
 
     source_frames = sum(scan.frames for scan in scans)
     output_frames = source_frames - (len(scans) - 1)
@@ -722,7 +727,7 @@ def assemble_video(
         ):
             raise InvalidRequest(
                 "segment-audio assembly requires one common soundtrack on every video",
-                code="assembly_audio_format",
+                code="invalid_request",
             )
         selections = _segment_selections(scans, video_format, audio_format, tolerance)
         gains = _seam_gains(scans, selections, audio_format)
@@ -752,7 +757,7 @@ def assemble_video(
         if abs(master_drift) > tolerance:
             raise InvalidRequest(
                 f"master audio differs from the final frame clock by {master_drift} samples",
-                code="assembly_audio_clock",
+                code="invalid_request",
             )
         gains = [_Gains() for _ in scans]
         global_gain = 1.0
@@ -781,7 +786,7 @@ def assemble_video(
     )
     audio_facts = saved.audio
     if audio_facts is None:
-        raise InvalidRequest("encoded output has no soundtrack", code="assembly_output_probe")
+        raise InvalidRequest("encoded output has no soundtrack", code="output_integrity")
     if (
         saved.width != video_format.width
         or saved.height != video_format.height
@@ -799,7 +804,7 @@ def assemble_video(
     ):
         raise InvalidRequest(
             "encoded output probe disagrees with the selected frame/sample clock",
-            code="assembly_output_probe",
+            code="output_integrity",
         )
 
     segments: list[SegmentReceipt] = []
