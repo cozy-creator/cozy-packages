@@ -357,27 +357,15 @@ def _ids(tok: Any, prompt: str) -> Any:
     ).input_ids
 
 
-#: THE OUTPUT-INTEGRITY FLOOR. Two properties of a decoded image, each with a failure this
-#: family actually produces:
+#: THE NaN CHECK reads the FLOAT decode, before quantization, and that is the whole of
+#: what a red arm taught here: `torch.isnan` on a `clamp(0,1).to(uint8)` tensor is
+#: constant False, because a uint8 cannot be NaN — the very quantization that makes an
+#: image encodable is what erases the evidence of a diverged decode.
 #:
-#:   * a NaN anywhere means the denoise diverged or a component filled wrong, and the PNG
-#:     encoder would happily turn it into a grey rectangle;
-#:   * a SPREAD at or below the floor means a flat field — the black image a wrong VAE
-#:     scaling factor or an unfilled decoder produces, which encodes and looks like a
-#:     result until someone opens it.
-#:
-#: The floor is deliberately far below any real render and far above a flat field, so it
-#: fires on the failure and never on a legitimately dark picture.
-#:
-#: THE TWO CHECKS READ DIFFERENT TENSORS, and that is the whole of what a red arm taught
-#: here: the NaN check ran on the QUANTIZED pixels in the first cut, where `torch.isnan`
-#: is constant False because a uint8 cannot be NaN — the `clamp(0,1).to(uint8)` that makes
-#: an image encodable is exactly what erases the evidence of a diverged decode. So NaN is
-#: read off the float decode BEFORE quantization, and spread off the pixels a caller will
-#: actually open.
-_MIN_SPREAD = 4.0
-
-
+#: Pixel SPREAD is reported as telemetry, not refused. A flat field is a real failure
+#: mode (a wrong VAE scaling factor, an unfilled decoder) but it is also a real REQUEST:
+#: "solid white background", "minimalist pure black poster", "flat pastel swatch". A
+#: refusal here destroyed a correct, completed, billed generation.
 def _integrity(torch: Any, image: Any, pixels: Any, tel: Telemetry) -> None:
     nan_fraction = float(torch.isnan(image).float().mean())
     tel.metric("image_nan_fraction", round(nan_fraction, 6))
@@ -388,14 +376,7 @@ def _integrity(torch: Any, image: Any, pixels: Any, tel: Telemetry) -> None:
             "not a picture with artefacts",
             code="output_integrity_nan",
         )
-    spread = float(pixels.to(torch.float32).std())
-    tel.metric("image_spread", round(spread, 4))
-    if spread <= _MIN_SPREAD:
-        raise OutputError(
-            f"the decoded image is a flat field (std {spread:.3f} <= {_MIN_SPREAD}): the "
-            "generation produced no picture, and an encodable rectangle is not a result",
-            code="output_integrity_flat",
-        )
+    tel.metric("image_spread", round(float(pixels.to(torch.float32).std()), 4))
 
 
 def _request_generator(torch: Any, source: object, *, device: Any) -> Any:

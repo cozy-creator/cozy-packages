@@ -53,7 +53,10 @@ def pre_encode_gate(
     requested: MediaFacts,
     tel: Telemetry,
 ) -> None:
-    """Refuse malformed, non-finite, blank/noisy, or audio-defective generated tensors."""
+    """Refuse malformed, non-finite or blank/noisy generated tensors.
+
+    Audio defect metrics are emitted as telemetry and never refused.
+    """
     ce_audio, ce_integrity, ce_metrics_audio = _cozy_eval()
 
     if waveform.ndim != 2:
@@ -115,16 +118,14 @@ def pre_encode_gate(
         if name in stats:
             tel.metric(name, round(stats[name], 6))
 
-    breaches = []
+    # Cozy-eval's AUDIO_DEFECTS budget is REPORTED, never refused. cozy-eval itself
+    # demoted it to report-only after it falsely rejected real content, and a prompt like
+    # "an empty room, silence, then a distant door slam" legitimately exceeds
+    # `audio_max_silence_run high=0.25`. Refusing here destroyed a complete, billed
+    # 345-frame generation over a soundtrack the request asked for.
     for defect in ce_audio.AUDIO_DEFECTS:
         if defect.metric == "audio_stereo_separation_db" and channels < 2:
             continue
         value = stats.get(defect.metric)
         if value is not None and defect.breached(value):
-            breaches.append(f"{defect.metric} {value:g} breaches {defect.describe()}")
-    if breaches:
-        raise OutputError(
-            "the generated soundtrack breaches cozy-eval's audio defect budget: "
-            + "; ".join(breaches),
-            code="output_integrity_audio",
-        )
+            tel.metric(f"{defect.metric}_breached", 1)
