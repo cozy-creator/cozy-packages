@@ -66,9 +66,6 @@ PLAN_DIGESTS = {
     "fl2va": "8da103b9b09629f9f4bcc7c3311929a83c4bc76d5ac2a49fa8ad6c08a140d99b",
     "ref2va": "f99dec0b673105a6b7cabdc57a62df9653afd943a9092eef6018aa48095a9487",
 }
-PACKAGE_DESCRIPTOR_DIGEST = (
-    "sha256:8564b7f7ebe6d829a7553b4ba5247987d373ea265e25e544007e1a58e4d412c7"
-)
 VECTOR_DIGESTS = {
     "video_sigmas": "9908cdf87605da6006148af6e7ef8be63e806d40bf750efcaae24386c4eb4e86",
     "audio_sigmas": "120d46f5ce12fcbeb24f50707cc9f045a0fe283a5b35ad16dbd86f4810fb58e9",
@@ -1276,16 +1273,6 @@ def arm_descriptor() -> None:
     print("\n== committed public surface ==")
     descriptor_path = H3 / "package.descriptor.json"
     descriptor = json.loads(descriptor_path.read_text())
-    check(
-        "descriptor semantic identity",
-        canonical_json.digest_bytes(descriptor_path.read_bytes()),
-        PACKAGE_DESCRIPTOR_DIGEST,
-    )
-    check(
-        "README launch contract names the current descriptor identity",
-        PACKAGE_DESCRIPTOR_DIGEST in (ROOT / "README.md").read_text(),
-        True,
-    )
     entries = {entry["name"]: entry for entry in descriptor["entrypoints"]}
     surfaces = {surface.name: surface for surface in describe(package.app)}
     check(

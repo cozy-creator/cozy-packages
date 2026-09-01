@@ -10,9 +10,9 @@ dependency of the pinned model stack).
 
 | file | source commit | bytes | SHA256 |
 | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.15-py3-none-any.whl` | `cozy-runtime` `0811500875b6850d21ffc66b106098fdd655a70c` | 733,494 | `3bf8fc0832553a90dd0c08207cc6f8c634ddf63724bb0fdebd4ae1a930d65352` |
+| `vendor/cozy_runtime-0.0.29-py3-none-any.whl` | `cozy-runtime` `d0884f452859898f4aca44c43413884a40892284` | 745,253 | `d4f5c2afee924422cb6e974af9674be0ca63c7436113cde48b4aad73c1413b97` |
 | `vendor/cozy_eval-2.3.2-py3-none-any.whl` | `cozy-eval` `ed15717fed7ec9111446d1f8f2af3db646233da2` | 295,080 | `1f3ce3ae81adbf027c25f3e5e1ac362c66c70d8d551b950d08e4c9b8523543d9` |
-| `vendor/tensorfs-0.0.5-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | `tensorfs` `0f49a4bf3fbe6fc8d41713b7ce9041c80161b7e6` | 2,337,278 | `a131c4688188dacd1518fbe93c417e64d6af575f65b52edac48bcb60f88d43a5` |
+| `vendor/tensorfs-0.0.7-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | `tensorfs` `a9cfd601f3f8c0841907e2c2625021b463f0ef36` | 2,360,087 | `a3296ef604061ce2984fdb74e329cf5e2daa69d7b45b924d5806b53ab9dc2521` |
 
 Tensorhub's canonical first-party wheel materializer produced the Runtime and TensorFS artifacts from Git archives
 of the exact commits in the table. It uses digest-pinned build containers, fixed in-container
@@ -21,7 +21,7 @@ those bytes; they do not maintain a competing wheel build command.
 
 The source checkouts were at the commits in the table. The Runtime wheel
 metadata declares `av>=18.1,<19` only for its `media` extra; this package asks
-for `cozy-runtime[media]==0.0.15`.
+for `cozy-runtime[media]==0.0.29`.
 
 ## Locked publication wheels
 

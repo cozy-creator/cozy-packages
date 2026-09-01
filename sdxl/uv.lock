@@ -98,8 +98,8 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.0.26"
-source = { path = "vendor/cozy_runtime-0.0.26-py3-none-any.whl" }
+version = "0.0.29"
+source = { path = "vendor/cozy_runtime-0.0.29-py3-none-any.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
@@ -109,7 +109,7 @@ dependencies = [
     { name = "protobuf" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.26-py3-none-any.whl", hash = "sha256:9422821362cdba58c9b7dc1d9aeb881d140f28ab4caedba0cbed6c39c6fca7c0" },
+    { filename = "cozy_runtime-0.0.29-py3-none-any.whl", hash = "sha256:d4f5c2afee924422cb6e974af9674be0ca63c7436113cde48b4aad73c1413b97" },
 ]
 
 [package.optional-dependencies]
@@ -131,7 +131,7 @@ requires-dist = [
     { name = "packaging", specifier = ">=24" },
     { name = "pillow", specifier = ">=12,<13" },
     { name = "protobuf", specifier = ">=6.31" },
-    { name = "tensorfs", marker = "extra == 'model-execution'", specifier = "==0.0.6" },
+    { name = "tensorfs", marker = "extra == 'model-execution'", specifier = "==0.0.7" },
     { name = "torch", marker = "extra == 'corpus'", specifier = ">=2.13,<3" },
     { name = "torch", marker = "extra == 'derive'", specifier = ">=2.13,<3" },
     { name = "transformers", marker = "extra == 'corpus'", specifier = ">=4.40,<5" },
@@ -818,7 +818,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media", "model-execution"], path = "vendor/cozy_runtime-0.0.26-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media", "model-execution"], path = "vendor/cozy_runtime-0.0.29-py3-none-any.whl" },
     { name = "diffusers", specifier = "==0.40.0" },
     { name = "hf-xet", path = "vendor/hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" },
     { name = "hidiffusion", specifier = "==0.1.10" },
@@ -837,7 +837,7 @@ requires-dist = [
 dev = [
     { name = "mypy", specifier = "==2.3.1" },
     { name = "ruff", specifier = "==0.16.4" },
-    { name = "tensorfs", path = "vendor/tensorfs-0.0.6-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
+    { name = "tensorfs", path = "vendor/tensorfs-0.0.7-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
 ]
 
 [[package]]
@@ -871,10 +871,10 @@ wheels = [
 
 [[package]]
 name = "tensorfs"
-version = "0.0.6"
-source = { path = "vendor/tensorfs-0.0.6-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
+version = "0.0.7"
+source = { path = "vendor/tensorfs-0.0.7-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 wheels = [
-    { filename = "tensorfs-0.0.6-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:83bbf80e3279d1f5ced912731a2a259ad557c483b8cb0123fc4795c2383d8b1f" },
+    { filename = "tensorfs-0.0.7-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a3296ef604061ce2984fdb74e329cf5e2daa69d7b45b924d5806b53ab9dc2521" },
 ]
 
 [[package]]

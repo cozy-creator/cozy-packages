@@ -6,11 +6,11 @@ repository. The wheel was built twice from the pinned merged Git commit at the p
 
 | file | source commit | source tree | bytes | SHA256 |
 | --- | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.26-py3-none-any.whl` | `cozy-runtime` `b6c65d75dc1fbb09af27e137b430f26bb21cedac` | `a72ceccc4d09f50a62e68487181373812b5ceb21` | 749,670 | `9422821362cdba58c9b7dc1d9aeb881d140f28ab4caedba0cbed6c39c6fca7c0` |
-| `vendor/tensorfs-0.0.6-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | `tensorfs` `ba40d92bc68e33f10c92848733d407ab887d11c7` | `00e762f61c2e0bc01339b53b0d3ee17d8cae2567` | 2,347,973 | `83bbf80e3279d1f5ced912731a2a259ad557c483b8cb0123fc4795c2383d8b1f` |
+| `vendor/cozy_runtime-0.0.29-py3-none-any.whl` | `cozy-runtime` `d0884f452859898f4aca44c43413884a40892284` | `876ad7b0799a4d2e1ee32419af97563c611a599d` | 745,253 | `d4f5c2afee924422cb6e974af9674be0ca63c7436113cde48b4aad73c1413b97` |
+| `vendor/tensorfs-0.0.7-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | `tensorfs` `a9cfd601f3f8c0841907e2c2625021b463f0ef36` | `3c04d60b20f478d91801ca37278b5d23d1cd7237` | 2,360,087 | `a3296ef604061ce2984fdb74e329cf5e2daa69d7b45b924d5806b53ab9dc2521` |
 
 The Runtime wheel requires CPython `>=3.12,<3.13`; its `media` extra requires `av>=18.1,<19` and
-its `model-execution` extra owns exact TensorFS 0.0.6. The package declares the Runtime capability,
+its `model-execution` extra owns exact TensorFS 0.0.7. The package declares the Runtime capability,
 not a false direct TensorFS dependency. A full local venv installs both exact wheels. Production
 placement resolves them against the exact base worker image inventory and prunes both base-owned
 distributions from the package overlay.
