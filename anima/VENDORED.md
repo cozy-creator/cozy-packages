@@ -6,13 +6,17 @@ repository. The wheel was built twice from the pinned merged Git commit at the p
 
 | file | source commit | source tree | bytes | SHA256 |
 | --- | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.23-py3-none-any.whl` | `cozy-runtime` `b286b18404a56d87ef89f141019e7bb7e4f3f9c1` | `11a9478141aeb034d8caa5b8a59782a518377223` | 750,585 | `eabb44ebb99d30627b41d37549f3774f770834505d37c46cd03fc53f63d7826d` |
+| `vendor/cozy_runtime-0.0.24-py3-none-any.whl` | `cozy-runtime` `a81f49c340788c2bc842bb3ced2ba4215c303fd1` | `f5e08b29efd4b00ac50fe5ec19d805659c7f8a0a` | 750,611 | `3a166d45ad28a59a54f7963628b275477c61e8edd5d37814658fedaf14327b81` |
+| `vendor/tensorfs-0.0.6-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | `tensorfs` `ba40d92bc68e33f10c92848733d407ab887d11c7` | `00e762f61c2e0bc01339b53b0d3ee17d8cae2567` | 2,347,973 | `83bbf80e3279d1f5ced912731a2a259ad557c483b8cb0123fc4795c2383d8b1f` |
 
-The wheel requires CPython `>=3.12,<3.13`; its optional `media` extra requires
-`av>=18.1,<19`. Production placement resolves both dependencies against the exact base worker
-image inventory and never installs a second Runtime copy into the package overlay.
+The Runtime wheel requires CPython `>=3.12,<3.13`; its `media` extra requires `av>=18.1,<19` and
+its `model-execution` extra owns exact TensorFS 0.0.6. The package declares the Runtime capability,
+not a false direct TensorFS dependency. A full local venv installs both exact wheels. Production
+placement resolves them against the exact base worker image inventory and prunes both base-owned
+distributions from the package overlay.
 Runtime's optional `cozy-runtime-cuda-kernels` wheel is likewise selected by the CUDA base image;
-this package activates only `media` and neither resolves nor stores the kernel wheel.
+this package activates `media` and `model-execution` and neither resolves nor stores the kernel
+wheel.
 
 ## Locked publication wheels
 

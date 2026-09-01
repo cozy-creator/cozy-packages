@@ -98,8 +98,8 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.0.23"
-source = { path = "vendor/cozy_runtime-0.0.23-py3-none-any.whl" }
+version = "0.0.24"
+source = { path = "vendor/cozy_runtime-0.0.24-py3-none-any.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
@@ -109,12 +109,15 @@ dependencies = [
     { name = "protobuf" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.23-py3-none-any.whl", hash = "sha256:eabb44ebb99d30627b41d37549f3774f770834505d37c46cd03fc53f63d7826d" },
+    { filename = "cozy_runtime-0.0.24-py3-none-any.whl", hash = "sha256:3a166d45ad28a59a54f7963628b275477c61e8edd5d37814658fedaf14327b81" },
 ]
 
 [package.optional-dependencies]
 media = [
     { name = "av" },
+]
+model-execution = [
+    { name = "tensorfs" },
 ]
 
 [package.metadata]
@@ -128,11 +131,12 @@ requires-dist = [
     { name = "packaging", specifier = ">=24" },
     { name = "pillow", specifier = ">=12,<13" },
     { name = "protobuf", specifier = ">=6.31" },
+    { name = "tensorfs", marker = "extra == 'model-execution'", specifier = "==0.0.6" },
     { name = "torch", marker = "extra == 'corpus'", specifier = ">=2.13,<3" },
     { name = "torch", marker = "extra == 'derive'", specifier = ">=2.13,<3" },
     { name = "transformers", marker = "extra == 'corpus'", specifier = ">=4.40,<5" },
 ]
-provides-extras = ["corpus", "cuda-kernels", "derive", "media"]
+provides-extras = ["corpus", "cuda-kernels", "derive", "media", "model-execution"]
 
 [[package]]
 name = "cryptography"
@@ -787,10 +791,10 @@ provides-extras = ["all", "convert", "dev", "jax", "mlx", "numpy", "paddlepaddle
 
 [[package]]
 name = "sdxl"
-version = "2.0.9"
+version = "2.0.10"
 source = { editable = "." }
 dependencies = [
-    { name = "cozy-runtime", extra = ["media"] },
+    { name = "cozy-runtime", extra = ["media", "model-execution"] },
     { name = "diffusers" },
     { name = "hf-xet" },
     { name = "hidiffusion" },
@@ -809,11 +813,12 @@ dependencies = [
 dev = [
     { name = "mypy" },
     { name = "ruff" },
+    { name = "tensorfs" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.23-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media", "model-execution"], path = "vendor/cozy_runtime-0.0.24-py3-none-any.whl" },
     { name = "diffusers", specifier = "==0.40.0" },
     { name = "hf-xet", path = "vendor/hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" },
     { name = "hidiffusion", specifier = "==0.1.10" },
@@ -832,6 +837,7 @@ requires-dist = [
 dev = [
     { name = "mypy", specifier = "==2.3.1" },
     { name = "ruff", specifier = "==0.16.4" },
+    { name = "tensorfs", path = "vendor/tensorfs-0.0.6-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
 ]
 
 [[package]]
@@ -861,6 +867,14 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921, upload-time = "2025-04-27T18:05:01.611Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5", size = 6299353, upload-time = "2025-04-27T18:04:59.103Z" },
+]
+
+[[package]]
+name = "tensorfs"
+version = "0.0.6"
+source = { path = "vendor/tensorfs-0.0.6-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
+wheels = [
+    { filename = "tensorfs-0.0.6-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:83bbf80e3279d1f5ced912731a2a259ad557c483b8cb0123fc4795c2383d8b1f" },
 ]
 
 [[package]]
