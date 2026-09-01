@@ -16,9 +16,8 @@ packages, so the CAS stores one copy.
 | `vendor/tensorfs-0.0.7-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | `tensorfs` `a9cfd601f3f8c0841907e2c2625021b463f0ef36` | 2,360,087 | `a3296ef604061ce2984fdb74e329cf5e2daa69d7b45b924d5806b53ab9dc2521` |
 
 TensorFS is the Runtime fill reader inside the isolated package generation. Cozy-eval is
-NOT here: `quality_judge.py` imports nothing from it — `scripts/judge-live.py` is a driver
-that runs cozy-eval's prompt builders and parsers on the CALLER's side, outside this
-environment.
+NOT here: `quality_judge.py` imports nothing from it. Prompt building, parsing and scoring
+run on the CALLER's side, in cozy-eval, outside this environment.
 
 ## Locked publication wheels
 
