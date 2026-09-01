@@ -1,10 +1,10 @@
 [project]
 name = "anima"
-version = "0.1.22"
+version = "0.1.23"
 description = "Anima anime text-to-image package for Cozy"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "cozy-runtime[media,model-execution]==0.0.25",
+    "cozy-runtime[media,model-execution]==0.0.26",
     "diffusers==0.40.0",
     "hf-xet==1.6.0",
     "msgspec>=0.19",
@@ -29,7 +29,7 @@ build-backend = "hatchling.build"
 packages = ["anima"]
 
 [tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.0.25-py3-none-any.whl" }
+cozy-runtime = { path = "vendor/cozy_runtime-0.0.26-py3-none-any.whl" }
 tensorfs = { path = "vendor/tensorfs-0.0.6-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 hf-xet = { path = "vendor/hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" }
 pyyaml = { path = "vendor/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl" }

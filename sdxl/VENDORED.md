@@ -14,7 +14,7 @@ The wheel was built twice from the pinned merged Git commit with
 
 | file | source commit | source tree | bytes | SHA256 |
 | --- | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.25-py3-none-any.whl` | `cozy-runtime` `52df036b030f1306e86efbc1c07e270f7548b674` | `ccc75324e2849d04b161885e02d5b8e11a58561d` | 748,973 | `c7c1b91ff82b0cc79750765718e218273dd011944b26e4391fc3c635a344561d` |
+| `vendor/cozy_runtime-0.0.26-py3-none-any.whl` | `cozy-runtime` `b6c65d75dc1fbb09af27e137b430f26bb21cedac` | `a72ceccc4d09f50a62e68487181373812b5ceb21` | 749,670 | `9422821362cdba58c9b7dc1d9aeb881d140f28ab4caedba0cbed6c39c6fca7c0` |
 | `vendor/tensorfs-0.0.6-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | `tensorfs` `ba40d92bc68e33f10c92848733d407ab887d11c7` | `00e762f61c2e0bc01339b53b0d3ee17d8cae2567` | 2,347,973 | `83bbf80e3279d1f5ced912731a2a259ad557c483b8cb0123fc4795c2383d8b1f` |
 
 ## Locked publication wheels
