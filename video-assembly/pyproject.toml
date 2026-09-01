@@ -1,8 +1,8 @@
 [project]
 name = "cozy-video-assembly"
-version = "1.0.8"
+version = "1.0.9"
 requires-python = ">=3.12,<3.13"
-dependencies = ["cozy-runtime[media]==0.0.29", "msgspec>=0.19"]
+dependencies = ["cozy-runtime[media]==0.0.37", "msgspec>=0.19"]
 
 [project.entry-points."cozy.application"]
 default = "video_assembly:app"
@@ -18,7 +18,7 @@ only-include = ["video_assembly.py"]
 dev = ["mypy==2.3.1", "ruff==0.16.4"]
 
 [tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.0.29-py3-none-any.whl" }
+cozy-runtime = { path = "vendor/cozy_runtime-0.0.37-py3-none-any.whl" }
 
 [tool.cozy]
 organization = "paul"

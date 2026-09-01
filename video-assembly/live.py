@@ -20,6 +20,7 @@ from typing import cast
 
 import msgspec
 from cozy_runtime.author import (
+    Asset,
     AudioAsset,
     AuthorError,
     Context,
@@ -29,16 +30,13 @@ from cozy_runtime.author import (
     DecodedVideo,
     DecodedVideoFormat,
     DecodedVideoFrame,
+    InvalidRequest,
     MediaDecoder,
     Outputs,
     VideoAsset,
+    decode_request,
 )
-
-# `Attempt`, `bind` and `asset_dec_hook` have no public spelling: constructing an attempt
-# and hydrating a bound asset is what the executor does for a real request, and this proof
-# has to stand where the executor stands. Everything else comes from the public surface.
-from cozy_runtime.author._assets import asset_dec_hook, bind
-from cozy_runtime.author._services import Attempt
+from cozy_runtime.author.fakes import fake_attempt, fake_input
 
 from video_assembly import (
     AssembleVideoRequest,
@@ -98,7 +96,7 @@ class EventDecoder:
 
 
 class CorruptingDecoder:
-    def __init__(self, decoder: MediaDecoder, target: VideoAsset, open_number: int) -> None:
+    def __init__(self, decoder: MediaDecoder, target: Path, open_number: int) -> None:
         self.decoder = decoder
         self.target = target
         self.open_number = open_number
@@ -107,8 +105,7 @@ class CorruptingDecoder:
     def stream_video(self, asset: VideoAsset) -> DecodedMediaStream:
         self.opens += 1
         if self.opens == self.open_number:
-            assert self.target._local is not None
-            self.target._local.write_bytes(b"corrupted after the complete scan")
+            self.target.write_bytes(b"corrupted after the complete scan")
         return self.decoder.stream_video(asset)
 
 
@@ -171,9 +168,7 @@ def shot(
     impulse_sample: int | None = None,
 ) -> VideoAsset:
     source_id = f"source-{index}{('-' + key) if key else ''}"
-    attempt = Attempt(source_id, root / source_id)
-    attempt.spool.mkdir()
-    out = Outputs(attempt)
+    out = Outputs(fake_attempt(source_id, spool=root / source_id))
     frames = bytearray()
     for frame_index in range(frame_count):
         pixel_shot = index - 1 if index > 0 and frame_index == 0 else index
@@ -208,8 +203,7 @@ def shot(
 
 def master_audio(root: Path, samples: int) -> AudioAsset:
     source_id = f"master-source-{samples}"
-    attempt = Attempt(source_id, root / source_id)
-    attempt.spool.mkdir()
+    attempt = fake_attempt(source_id, spool=root / source_id)
     pcm = array(
         "f",
         (0.2 * math.sin(2 * math.pi * 330 * sample / SAMPLE_RATE) for sample in range(samples)),
@@ -217,6 +211,13 @@ def master_audio(root: Path, samples: int) -> AudioAsset:
     return Outputs(attempt).save_audio(
         NdLike(pcm.tobytes(), (samples,), "float32"), sample_rate=SAMPLE_RATE
     )
+
+
+def stored(root: Path, index: int, key: str = "") -> Path:
+    """The file a stored shot left in its spool. The driver wrote it, so it can name it
+    without reading an asset's local path — a path never leaves the runtime."""
+    source_id = f"source-{index}{('-' + key) if key else ''}"
+    return next(path for path in sorted((root / source_id).iterdir()) if path.is_file())
 
 
 def corrupt_video(root: Path) -> VideoAsset:
@@ -236,36 +237,9 @@ def corrupt_video(root: Path) -> VideoAsset:
     )
 
 
-def bind_video(source: VideoAsset, attempt_id: str, field: str) -> VideoAsset:
-    assert source._local is not None
-    asset = VideoAsset(source.ref)
-    bind(
-        asset,
-        local=source._local,
-        attempt=attempt_id,
-        media_type=source.media_type,
-        digest=source.digest,
-        length=source.size_bytes,
-        max_decoded_bytes=32 << 20,
-        input_id=field,
-    )
-    return asset
-
-
-def bind_audio(source: AudioAsset, attempt_id: str) -> AudioAsset:
-    assert source._local is not None
-    asset = AudioAsset(source.ref)
-    bind(
-        asset,
-        local=source._local,
-        attempt=attempt_id,
-        media_type=source.media_type,
-        digest=source.digest,
-        length=source.size_bytes,
-        max_decoded_bytes=32 << 20,
-        input_id="master_audio",
-    )
-    return asset
+def granted[AssetT: Asset](source: AssetT, attempt_id: str, field: str) -> AssetT:
+    """A stored shot as the granted input the executor would hand the handler."""
+    return fake_input(source, attempt=attempt_id, input_id=field, max_decoded_bytes=32 << 20)
 
 
 def run(
@@ -275,16 +249,15 @@ def run(
     run_id: str,
     master: AudioAsset | None = None,
     cancel_after_checks: int | None = None,
-    corrupt_on_video_open: int | None = None,
+    corrupt_on_video_open: tuple[int, Path] | None = None,
     decode_output: bool = True,
 ) -> tuple[AssembleVideoResponse, DecodedVideo | None]:
-    attempt = Attempt(run_id, root / run_id, max_output_bytes=256 << 20)
-    attempt.spool.mkdir()
-    videos = [bind_video(source, run_id, f"videos.{index}") for index, source in enumerate(sources)]
-    audio = bind_audio(master, run_id) if master is not None else None
+    attempt = fake_attempt(run_id, spool=root / run_id, max_output_bytes=256 << 20)
+    videos = [granted(source, run_id, f"videos.{index}") for index, source in enumerate(sources)]
+    audio = granted(master, run_id, "master_audio") if master is not None else None
     base_decoder = MediaDecoder(attempt, active=lambda: False)
     decoder = (
-        cast(MediaDecoder, CorruptingDecoder(base_decoder, videos[-1], corrupt_on_video_open))
+        cast(MediaDecoder, CorruptingDecoder(base_decoder, *reversed(corrupt_on_video_open)))
         if corrupt_on_video_open is not None
         else base_decoder
     )
@@ -303,18 +276,7 @@ def run(
     )
     if not decode_output:
         return response, None
-    assert response.video._local is not None
-    bind(
-        response.video,
-        local=response.video._local,
-        attempt=run_id,
-        media_type=response.video.media_type,
-        digest=response.video.digest,
-        length=response.video.size_bytes,
-        max_decoded_bytes=32 << 20,
-        input_id="result.video",
-    )
-    decoded = decoder.decode_video(response.video)
+    decoded = decoder.decode_video(granted(response.video, run_id, "result.video"))
     return response, decoded
 
 
@@ -326,10 +288,10 @@ def no_output(root: Path, run_id: str) -> bool:
 
 def selected_rgb_digest(root: Path, source: VideoAsset, index: int) -> str:
     run_id = f"rgb-oracle-{index}"
-    attempt = Attempt(run_id, root / run_id)
-    attempt.spool.mkdir()
-    asset = bind_video(source, run_id, "video")
-    decoded = MediaDecoder(attempt, active=lambda: False).decode_video(asset)
+    attempt = fake_attempt(run_id, spool=root / run_id)
+    decoded = MediaDecoder(attempt, active=lambda: False).decode_video(
+        granted(source, run_id, "video")
+    )
     digest = hashlib.sha256()
     for frame in decoded.frames_rgb[int(index > 0) :]:
         digest.update(frame)
@@ -358,10 +320,12 @@ def rss_child(shots: int, *, poison: bool) -> int:
             retained: list[DecodedVideo] = []
             for index, source in enumerate(sources):
                 run_id = f"rss-poison-{index}"
-                attempt = Attempt(run_id, root / run_id)
-                attempt.spool.mkdir()
-                asset = bind_video(source, run_id, "video")
-                retained.append(MediaDecoder(attempt, active=lambda: False).decode_video(asset))
+                attempt = fake_attempt(run_id, spool=root / run_id)
+                retained.append(
+                    MediaDecoder(attempt, active=lambda: False).decode_video(
+                        granted(source, run_id, "video")
+                    )
+                )
             assert len(retained) == shots
         else:
             run(root, sources, run_id=f"rss-stream-{shots}", decode_output=False)
@@ -381,7 +345,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="cozy-video-assembly-") as directory:
         root = Path(directory)
         codec_frame_samples = Outputs(
-            Attempt("codec-policy", root / "codec-policy")
+            fake_attempt("codec-policy", spool=root / "codec-policy")
         ).video_audio_frame_samples
         sources = [shot(root, index, 0.08 if index % 2 == 0 else 0.32) for index in range(8)]
 
@@ -548,12 +512,8 @@ def main() -> int:
 
         print("section: refusals")
         try:
-            msgspec.json.decode(
-                b'{"videos":["only-one"]}',
-                type=AssembleVideoRequest,
-                dec_hook=asset_dec_hook,
-            )
-        except msgspec.ValidationError:
+            decode_request(AssembleVideoRequest, msgspec.json.decode(b'{"videos":["only-one"]}'))
+        except InvalidRequest:
             check("the wire schema refuses fewer than two videos", True)
         else:
             check("the wire schema refuses fewer than two videos", False)
@@ -655,7 +615,7 @@ def main() -> int:
                 root,
                 late_sources,
                 run_id="corrupt-after-scan",
-                corrupt_on_video_open=4,
+                corrupt_on_video_open=(4, stored(root, 1, "late-corruption")),
             )
         except AuthorError as exc:
             check(
