@@ -18,6 +18,11 @@ Runtime's optional `cozy-runtime-cuda-kernels` wheel is likewise selected by the
 this package activates `media` and `model-execution` and neither resolves nor stores the kernel
 wheel.
 
+Anima also declares base-owned `torchvision>=0.28,<1`: Diffusers' Cosmos transformer guards its
+`torchvision.transforms` import behind dependency availability, then requires it for the padding
+mask on every Anima denoise step. The lock records the exact ABI-compatible member of the Torch
+family while publication prunes it from the package overlay with the other base-owned wheels.
+
 ## Locked publication wheels
 
 Creator's registry mirror admits only filenames ending exactly in `-py3-none-any.whl`. Anima's

@@ -14,18 +14,57 @@ from __future__ import annotations
 import importlib
 import pathlib
 import sys
+from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 #: package directory -> (module to import, compiled peers that must load beside it)
 PACKAGES = {
-    "anima": ("anima", ("torch", "triton", "transformers", "diffusers", "av")),
+    "anima": (
+        "anima",
+        (
+            "torch",
+            "torchvision",
+            "torchvision.transforms",
+            "triton",
+            "transformers",
+            "diffusers",
+            "av",
+        ),
+    ),
     "sdxl": ("sdxl", ("torch", "triton", "transformers", "diffusers", "av")),
     "quality-judge": ("quality_judge", ("torch", "triton", "transformers", "tokenizers",
                                         "numpy", "PIL.Image", "tensorfs", "av")),
     "h3": ("h3", ("torch", "torchvision", "torchvision.ops", "triton", "transformers",
                   "diffusers", "tensorfs", "av")),
 }
+
+
+def check_anima_cosmos_padding_mask(torch: Any) -> None:
+    """Exercise the exact Diffusers branch used by Anima's first denoise step on CPU."""
+    cosmos = importlib.import_module("diffusers.models.transformers.transformer_cosmos")
+    model = cosmos.CosmosTransformer3DModel(
+        in_channels=1,
+        out_channels=1,
+        num_attention_heads=1,
+        attention_head_dim=12,
+        num_layers=0,
+        mlp_ratio=1.0,
+        text_embed_dim=12,
+        adaln_lora_dim=12,
+        max_size=(1, 2, 2),
+        patch_size=(1, 1, 1),
+        rope_scale=(1.0, 1.0, 1.0),
+        concat_padding_mask=True,
+        extra_pos_embed_type=None,
+    )
+    result = model(
+        hidden_states=torch.zeros((1, 1, 1, 2, 2)),
+        timestep=torch.zeros((1,)),
+        encoder_hidden_states=torch.zeros((1, 1, 12)),
+        padding_mask=torch.zeros((1, 1, 1, 1)),
+    )
+    assert result.sample.shape == (1, 1, 1, 2, 2)
 
 
 def main(argv: list[str]) -> int:
@@ -39,6 +78,9 @@ def main(argv: list[str]) -> int:
         importlib.import_module(peer)
     torch = importlib.import_module("torch")
     print(f"{package}: torch {torch.__version__}, {len(peers)} peers imported")
+    if package == "anima":
+        check_anima_cosmos_padding_mask(torch)
+        print("anima: Cosmos padding-mask forward passed on CPU")
     module = importlib.import_module(module_name)
     app = module.app
     print(f"{package}: {module_name}:app registers {sorted(app._registry)}")
