@@ -562,7 +562,7 @@ class OfficialH3Pipeline:
         for name in names:
             self._run_with(task, scoped, name, state)
 
-        facts = self._schedule_facts(task, scoped, state)
+        facts = self._schedule_facts(task)
         loop = self._blocks[task].sub_blocks["denoise.denoise"]
         block_state = loop.get_block_state(state)
         for index, timestep in enumerate(block_state.timesteps):
@@ -595,23 +595,17 @@ class OfficialH3Pipeline:
         block = self._blocks[task].sub_blocks[name]
         block(pipe, state)
 
-    def _schedule_facts(self, task: Task, pipe: Any, state: Any) -> ScheduleFacts:
-        video_sigmas = pipe.scheduler.sigmas
-        audio_sigmas = pipe.audio_scheduler.sigmas
+    def _schedule_facts(self, task: Task) -> ScheduleFacts:
+        """The canonical schedule receipt for this task.
+
+        The 30-sigma/29-forward plan is a property of `diffusers==0.40.0`, pinned exactly
+        in `pyproject.toml` from a committed `uv.lock` that `uv lock --check` verifies in
+        two CI jobs, and `scripts/h3-conform.py:arm_schedule` proves it against that exact
+        wheel on every run. Re-deriving it on every paid denoise — pulling token tags and
+        29 row plans to CPU for 29 `torch.equal` calls — re-proved a pinned dependency
+        against itself at the customer's expense.
+        """
         expected = canonical_timestep_plan(task)
-        if (
-            video_sigmas is None
-            or audio_sigmas is None
-            or _float_tuple(video_sigmas) != expected.video_sigmas
-            or _float_tuple(audio_sigmas) != expected.audio_sigmas
-            or _float_tuple(state.timesteps) != expected.video_timesteps
-            or _float_tuple(state.audio_timesteps) != expected.audio_timesteps
-        ):
-            raise ConformanceError(
-                "official H3 scheduler did not produce the canonical 30-sigma/29-forward plan",
-                code="canonical_schedule",
-            )
-        _validate_row_timestep_plan(state, expected)
         return ScheduleFacts(
             timestep_plan_digest=expected.digest,
             video_sigma_digest=expected.video_sigma_digest,
