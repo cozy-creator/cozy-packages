@@ -10,7 +10,6 @@ from cozy_runtime.author import ConformanceError
 _SOURCE_ARCHITECTURE = "Qwen3VLForConditionalGeneration"
 _SOURCE_LAYERS = 64
 _RETAINED_LAYERS = 50
-_PERSISTENT_TENSORS = 902
 
 
 def text_conditioner_config() -> dict[str, object]:
@@ -64,41 +63,32 @@ def build_text_conditioner(config: Mapping[str, object]) -> Any:
     language.norm = torch.nn.Identity()
     model.lm_head = torch.nn.Identity()
     model.to(dtype=torch.bfloat16).eval()
-    _validate_census(model, torch)
+    _validate_census(model, language, torch)
     return model
 
 
-def _validate_census(model: Any, torch: Any) -> None:
-    state = model.state_dict()
-    visual = [key for key in state if key.startswith("model.visual.")]
-    language = [key for key in state if key.startswith("model.language_model.")]
-    removed = [
-        key
-        for key in state
-        if key == "lm_head.weight"
-        or key == "model.language_model.norm.weight"
-        or _removed_layer(key)
-    ]
-    if (
-        len(state) != _PERSISTENT_TENSORS
-        or len(visual) != 351
-        or len(language) != 551
-        or removed
-        or any(value.dtype != torch.bfloat16 for value in state.values())
-    ):
-        raise ConformanceError(
-            "H3 text conditioner is not exactly 351 vision plus 551 retained BF16 "
-            "language destinations",
-            code="artifact_config",
-            fields=removed[:6] or ["text_encoder"],
+def _validate_census(model: Any, language: Any, torch: Any) -> None:
+    """The three structural facts the truncation is FOR.
+
+    Not a tensor census. Counting state_dict entries (902 total, 351 vision, 551
+    language) and sweeping every dtype pinned a number that a transformers patch bump can
+    change without changing behaviour — one rotary buffer becoming persistent would make
+    every H3 worker refuse to load. `scripts/h3-conform.py:arm_text_conditioner` already
+    checks the exact census against the exact locked wheel, in CI, where a count change is
+    a red build rather than an outage.
+    """
+    bad = [
+        name
+        for name, ok in (
+            ("retained_decoder_layers", len(language.layers) == _RETAINED_LAYERS),
+            ("output", isinstance(language.norm, torch.nn.Identity)),
+            ("language_model_head", isinstance(model.lm_head, torch.nn.Identity)),
         )
-
-
-def _removed_layer(key: str) -> bool:
-    prefix = "model.language_model.layers."
-    if not key.startswith(prefix):
-        return False
-    try:
-        return int(key[len(prefix) :].split(".", 1)[0]) >= _RETAINED_LAYERS
-    except ValueError:
-        return True
+        if not ok
+    ]
+    if bad:
+        raise ConformanceError(
+            "H3 text conditioner is not the truncated 50-layer pre-norm headless stack",
+            code="artifact_config",
+            fields=["text_encoder", *bad],
+        )
