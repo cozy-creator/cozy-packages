@@ -48,6 +48,9 @@ as a convention someone remembers:
                           every reachable non-base dependency that Creator cannot mirror as an
                           exact `py3-none-any` registry wheel is one explicit local wheel whose
                           stored bytes match package-local provenance and the current lock.
+17. model-execution-ownership
+                          modeled packages select Runtime's complete execution capability; package
+                          metadata never falsely claims TensorFS as a direct dependency.
 
     nice -n 19 .venv/bin/python scripts/fence.py
 """
@@ -1115,6 +1118,31 @@ def fence_native_publication_wheels() -> Fence:
     return bad, f"{verified} exact local wheels close every non-base native publication edge"
 
 
+def fence_model_execution_ownership() -> Fence:
+    bad: list[str] = []
+    tensorfs_wheel = (
+        "vendor/tensorfs-0.0.6-cp312-abi3-manylinux_2_17_x86_64."
+        "manylinux2014_x86_64.whl"
+    )
+    for name in ("anima", "sdxl"):
+        path = ROOT / name / "pyproject.toml"
+        document = tomllib.loads(path.read_text())
+        project = document.get("project", {})
+        dependencies = project.get("dependencies", [])
+        expected = "cozy-runtime[media,model-execution]==0.0.24"
+        if expected not in dependencies:
+            bad.append(f"{rel(path)}: modeled package does not select {expected}")
+        if any(_requirement_distribution(value) == "tensorfs" for value in dependencies):
+            bad.append(f"{rel(path)}: package falsely declares TensorFS directly")
+        dev = document.get("dependency-groups", {}).get("dev", [])
+        if "tensorfs==0.0.6" not in dev:
+            bad.append(f"{rel(path)}: temporary local TensorFS source anchor is absent")
+        source = document.get("tool", {}).get("uv", {}).get("sources", {}).get("tensorfs")
+        if source != {"path": tensorfs_wheel}:
+            bad.append(f"{rel(path)}: local source does not bind exact TensorFS 0.0.6 wheel")
+    return bad, "modeled packages select Runtime-owned TensorFS with no direct package dependency"
+
+
 FENCES = (
     ("author-surface-only", fence_author_surface),
     ("no-identifiers-in-code", fence_identifiers),
@@ -1135,6 +1163,7 @@ FENCES = (
     ("publication-metadata", fence_publication_metadata),
     ("private-h3-shapes", fence_private_h3_shapes),
     ("native-publication-wheels", fence_native_publication_wheels),
+    ("model-execution-ownership", fence_model_execution_ownership),
 )
 
 

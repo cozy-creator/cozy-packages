@@ -1,10 +1,11 @@
 # SDXL dependency closure
 
-`pyproject.toml` and `uv.lock` are this package's dependency authority. Runtime and Torch are
+`pyproject.toml` and `uv.lock` are this package's dependency authority. Runtime, TensorFS, and Torch are
 base-owned requirements: qualification matches their declared versions to the selected base worker
 image and never installs a second copy in the package overlay. Runtime's optional
-`cozy-runtime-cuda-kernels` wheel is also base-owned; SDXL activates only `media` and neither
-resolves nor stores the kernel wheel.
+`cozy-runtime-cuda-kernels` wheel is also base-owned. SDXL activates Runtime's `media` and
+`model-execution` capabilities; Runtime owns the transitive TensorFS requirement, and package code
+declares no false direct TensorFS dependency.
 
 ## Cozy-owned wheel
 
@@ -13,7 +14,8 @@ The wheel was built twice from the pinned merged Git commit with
 
 | file | source commit | source tree | bytes | SHA256 |
 | --- | --- | --- | ---: | --- |
-| `vendor/cozy_runtime-0.0.23-py3-none-any.whl` | `cozy-runtime` `b286b18404a56d87ef89f141019e7bb7e4f3f9c1` | `11a9478141aeb034d8caa5b8a59782a518377223` | 750,585 | `eabb44ebb99d30627b41d37549f3774f770834505d37c46cd03fc53f63d7826d` |
+| `vendor/cozy_runtime-0.0.24-py3-none-any.whl` | `cozy-runtime` `a81f49c340788c2bc842bb3ced2ba4215c303fd1` | `f5e08b29efd4b00ac50fe5ec19d805659c7f8a0a` | 750,611 | `3a166d45ad28a59a54f7963628b275477c61e8edd5d37814658fedaf14327b81` |
+| `vendor/tensorfs-0.0.6-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | `tensorfs` `ba40d92bc68e33f10c92848733d407ab887d11c7` | `00e762f61c2e0bc01339b53b0d3ee17d8cae2567` | 2,347,973 | `83bbf80e3279d1f5ced912731a2a259ad557c483b8cb0123fc4795c2383d8b1f` |
 
 ## Locked publication wheels
 
