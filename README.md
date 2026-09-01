@@ -160,7 +160,7 @@ The cheap gates require no weights or GPU:
 ```bash
 uv venv --python 3.12 .venv-check
 uv pip install --python .venv-check/bin/python \
-  h3/vendor/cozy_runtime-0.0.15-py3-none-any.whl \
+  h3/vendor/cozy_runtime-0.0.29-py3-none-any.whl \
   msgspec protobuf grpcio av mypy ruff
 
 .venv-check/bin/python scripts/fence.py
@@ -217,7 +217,7 @@ h3/.venv/bin/python scripts/h3-live.py \
   --expected-lane 'profile=fp8-adaln-pruned' \
   --expected-checkpoint 'sha256:EXACT_64_LOWERCASE_HEX_SNAPSHOT' \
   --expected-package-descriptor-digest \
-    'sha256:8564b7f7ebe6d829a7553b4ba5247987d373ea265e25e544007e1a58e4d412c7' \
+    'sha256:EXACT_64_LOWERCASE_HEX_PACKAGE_DESCRIPTOR' \
   --expected-fl-plan-digest \
     'sha256:8da103b9b09629f9f4bcc7c3311929a83c4bc76d5ac2a49fa8ad6c08a140d99b' \
   --expected-ref-plan-digest \

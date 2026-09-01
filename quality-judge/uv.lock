@@ -73,17 +73,18 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.0.15"
-source = { path = "vendor/cozy_runtime-0.0.15-py3-none-any.whl" }
+version = "0.0.29"
+source = { path = "vendor/cozy_runtime-0.0.29-py3-none-any.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
     { name = "msgspec" },
     { name = "packaging" },
+    { name = "pillow" },
     { name = "protobuf" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.0.15-py3-none-any.whl", hash = "sha256:3bf8fc0832553a90dd0c08207cc6f8c634ddf63724bb0fdebd4ae1a930d65352" },
+    { filename = "cozy_runtime-0.0.29-py3-none-any.whl", hash = "sha256:d4f5c2afee924422cb6e974af9674be0ca63c7436113cde48b4aad73c1413b97" },
 ]
 
 [package.optional-dependencies]
@@ -94,17 +95,20 @@ media = [
 [package.metadata]
 requires-dist = [
     { name = "av", marker = "extra == 'media'", specifier = ">=18.1,<19" },
+    { name = "cozy-runtime-cuda-kernels", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda-kernels'", specifier = "==0.1.0+torch2.13cu130" },
     { name = "cryptography", specifier = ">=45" },
     { name = "diffusers", marker = "extra == 'corpus'", specifier = ">=0.36" },
     { name = "grpcio", specifier = ">=1.76" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "packaging", specifier = ">=24" },
+    { name = "pillow", specifier = ">=12,<13" },
     { name = "protobuf", specifier = ">=6.31" },
+    { name = "tensorfs", marker = "extra == 'model-execution'", specifier = "==0.0.7" },
     { name = "torch", marker = "extra == 'corpus'", specifier = ">=2.13,<3" },
     { name = "torch", marker = "extra == 'derive'", specifier = ">=2.13,<3" },
     { name = "transformers", marker = "extra == 'corpus'", specifier = ">=4.40,<5" },
 ]
-provides-extras = ["corpus", "derive", "media"]
+provides-extras = ["corpus", "cuda-kernels", "derive", "media", "model-execution"]
 
 [[package]]
 name = "cryptography"
@@ -597,7 +601,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.15-py3-none-any.whl" },
+    { name = "cozy-runtime", extras = ["media"], path = "vendor/cozy_runtime-0.0.29-py3-none-any.whl" },
     { name = "hf-xet", path = "vendor/hf_xet-1.6.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
@@ -606,7 +610,7 @@ requires-dist = [
     { name = "regex", path = "vendor/regex-2026.7.19-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl" },
     { name = "safetensors", path = "vendor/safetensors-0.8.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
     { name = "shellingham", path = "vendor/shellingham-1.5.4-py2.py3-none-any.whl" },
-    { name = "tensorfs", path = "vendor/tensorfs-0.0.5-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
+    { name = "tensorfs", path = "vendor/tensorfs-0.0.7-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
     { name = "tokenizers", path = "vendor/tokenizers-0.23.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
     { name = "torch", specifier = ">=2.13,<3" },
     { name = "transformers", specifier = "==5.16.1" },
@@ -713,10 +717,10 @@ wheels = [
 
 [[package]]
 name = "tensorfs"
-version = "0.0.5"
-source = { path = "vendor/tensorfs-0.0.5-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
+version = "0.0.7"
+source = { path = "vendor/tensorfs-0.0.7-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 wheels = [
-    { filename = "tensorfs-0.0.5-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a131c4688188dacd1518fbe93c417e64d6af575f65b52edac48bcb60f88d43a5" },
+    { filename = "tensorfs-0.0.7-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a3296ef604061ce2984fdb74e329cf5e2daa69d7b45b924d5806b53ab9dc2521" },
 ]
 
 [[package]]

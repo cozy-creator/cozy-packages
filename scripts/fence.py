@@ -793,7 +793,7 @@ def fence_descriptor_minimality() -> Fence:
             for index, item in enumerate(value):
                 visit(item, f"{where}[{index}]")
 
-    expected = {"application", "entrypoints", "format", "jobs", "model_productions"}
+    expected = {"application", "entrypoints", "format", "jobs"}
     for project in projects():
         path = project / "package.descriptor.json"
         try:
@@ -1121,7 +1121,7 @@ def fence_native_publication_wheels() -> Fence:
 def fence_model_execution_ownership() -> Fence:
     bad: list[str] = []
     tensorfs_wheel = (
-        "vendor/tensorfs-0.0.6-cp312-abi3-manylinux_2_17_x86_64."
+        "vendor/tensorfs-0.0.7-cp312-abi3-manylinux_2_17_x86_64."
         "manylinux2014_x86_64.whl"
     )
     for name in ("anima", "sdxl"):
@@ -1129,13 +1129,13 @@ def fence_model_execution_ownership() -> Fence:
         document = tomllib.loads(path.read_text())
         project = document.get("project", {})
         dependencies = project.get("dependencies", [])
-        expected = "cozy-runtime[media,model-execution]==0.0.26"
+        expected = "cozy-runtime[media,model-execution]==0.0.29"
         if expected not in dependencies:
             bad.append(f"{rel(path)}: modeled package does not select {expected}")
         if any(_requirement_distribution(value) == "tensorfs" for value in dependencies):
             bad.append(f"{rel(path)}: package falsely declares TensorFS directly")
         dev = document.get("dependency-groups", {}).get("dev", [])
-        if "tensorfs==0.0.6" not in dev:
+        if "tensorfs==0.0.7" not in dev:
             bad.append(f"{rel(path)}: temporary local TensorFS source anchor is absent")
         source = document.get("tool", {}).get("uv", {}).get("sources", {}).get("tensorfs")
         if source != {"path": tensorfs_wheel}:
