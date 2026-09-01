@@ -1,13 +1,17 @@
 #!/usr/bin/env python
 """Structural fences for the package sources. Static analysis, never a test suite.
 
-Sixteen properties CI must not let drift, each checked as a fact about the source rather than
-as a convention someone remembers:
+Eighteen properties CI must not let drift, each checked as a fact about the source rather
+than as a convention someone remembers:
 
-  1. author-surface-only  a package imports `cozy_runtime.author` and nothing else from
-                          the runtime (boundaries.md). `cozy_runtime.internal`, the worker
-                          protocol, TensorFS or a hub client inside package code is the
-                          boundary violation the whole author surface exists to prevent.
+  1. author-surface-only  package code AND the repo's drivers import the PUBLIC
+                          `cozy_runtime.author` surface and nothing else from the runtime
+                          (boundaries.md). `cozy_runtime.internal`, an underscored
+                          `author._*` mechanism, the worker protocol, TensorFS or a hub
+                          client is the boundary violation the author surface exists to
+                          prevent — and a driver reaching past it breaks exactly as
+                          silently, so the scan covers drivers too. `DRIVER_INTERNALS`
+                          enumerates the exceptions a driver has EARNED, with the reason.
   2. no-identifiers       code states CAPABILITY, bindings state SELECTION (§1.0/§1.1).
                           A model, release, checkpoint digest or model revision spelled in
                           package code is a binding hard-coded into a build.
@@ -48,6 +52,9 @@ as a convention someone remembers:
                           every reachable non-base dependency that Creator cannot mirror as an
                           exact `py3-none-any` registry wheel is one explicit local wheel whose
                           stored bytes match package-local provenance and the current lock.
+18. driver-boundary-armed  the driver rule FIRES. A boundary check nobody has watched go
+                          red is a boundary check nobody knows works, so the private
+                          spellings are run through the same predicate on every run.
 17. model-execution-ownership
                           modeled packages select Runtime's complete execution capability; package
                           metadata never falsely claims TensorFS as a direct dependency.
@@ -122,6 +129,15 @@ def package_modules() -> list[pathlib.Path]:
     return sorted(f for project in projects() for f in project.rglob("*.py") if ours(f))
 
 
+def driver_modules() -> list[pathlib.Path]:
+    """Source WE wrote that no package project owns: the repo's conformance and check
+    scripts. No boundaries.md rule reaches a driver, which is exactly why an import of a
+    private Runtime module here used to be invisible — it holds the same Runtime the
+    packages ship against, and a `_assets` or `internal` refactor breaks it in silence."""
+    inside = {f for project in projects() for f in project.rglob("*.py")}
+    return sorted(f for f in ROOT.rglob("*.py") if ours(f) and f not in inside)
+
+
 def h3_modules() -> list[pathlib.Path]:
     return sorted(f for f in (ROOT / "h3").rglob("*.py") if ours(f))
 
@@ -168,23 +184,129 @@ def imports(tree: ast.AST, package: str = "") -> Iterator[tuple[str, int]]:
                 yield name, node.lineno
 
 
+#: The runtime surface anything in this repo may import: `cozy_runtime.author` and its
+#: PUBLIC submodules. An underscored submodule — `author._assets`, `author._services` — is
+#: Runtime's own mechanism, and `cozy_runtime.internal` is the plane the author surface
+#: exists to hide. Both break the same way: the name stops existing on a later Runtime with
+#: nothing here having said it depended on one.
+def public_runtime_surface(module: str) -> bool:
+    parts = module.split(".")
+    return parts[:2] == ["cozy_runtime", "author"] and not any(
+        part.startswith("_") for part in parts[2:]
+    )
+
+
+#: Every private Runtime module ONE named driver may import, with the reason it is not a
+#: public surface and what would retire the entry. Enumerated because an accepted coupling
+#: that is written down is one a rename can find; the alternative is not fewer couplings,
+#: only invisible ones.
+DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    ("scripts/h3-conform.py", "cozy_runtime.internal.derive"): (
+        "the derive harness is Runtime's CONSTRUCTION plane and cannot become author "
+        "surface: `cozy_runtime.author` is torch-free by construction and Runtime's own "
+        "`checks/architecture.py` forbids it importing `cozy_runtime.internal`. The "
+        "supported spelling is `cozy-model-contract-proof`, which today derives only "
+        "inside a receipt-selected sandboxed build seat and has no in-process entry point "
+        "for one synthetic model. Retire this entry when it grows one."
+    ),
+}
+
+STORE_AND_NETWORK = ("tensorfs", "tensorhub", "cozy_creator", "grpc", "requests", "httpx")
+
+
+def surface_violations(label: str, source: str, *, driver: bool) -> list[str]:
+    """The boundary rule for ONE file, over its real AST imports.
+
+    A module name is a fact about an import statement here, never a word found in the
+    source: a fence that reads prose goes red on a docstring, which is a recorded incident
+    in this repo and not a hypothetical one.
+    """
+    bad: list[str] = []
+    for module, line in imports(ast.parse(source, filename=label)):
+        top = module.split(".")[0]
+        if top == "cozy_runtime" and not public_runtime_surface(module):
+            if driver and (label, module) in DRIVER_INTERNALS:
+                continue
+            who = "a driver" if driver else "a package"
+            how = (
+                " Use the public surface, or record the exception in DRIVER_INTERNALS."
+                if driver
+                else ""
+            )
+            bad.append(
+                f"{label}:{line}: {module!r} — {who} imports the PUBLIC "
+                f"`cozy_runtime.author` surface and nothing else from the runtime; a "
+                f"private module is a coupling that breaks silently.{how}"
+            )
+        if not driver and top in STORE_AND_NETWORK:
+            bad.append(
+                f"{label}:{line}: {module!r} — package code speaks to no store, "
+                "no hub and no network; every byte it sees arrives as a typed input"
+            )
+    return bad
+
+
 def fence_author_surface() -> Fence:
     bad: list[str] = []
     for path in package_modules():
-        tree = ast.parse(path.read_text(), filename=str(path))
-        for module, line in imports(tree):
-            top = module.split(".")[0]
-            if top == "cozy_runtime" and not module.startswith("cozy_runtime.author"):
-                bad.append(
-                    f"{rel(path)}:{line}: {module!r} — a package imports "
-                    "`cozy_runtime.author` and nothing else from the runtime"
-                )
-            if top in ("tensorfs", "tensorhub", "cozy_creator", "grpc", "requests", "httpx"):
-                bad.append(
-                    f"{rel(path)}:{line}: {module!r} — package code speaks to no store, "
-                    "no hub and no network; every byte it sees arrives as a typed input"
-                )
-    return bad, f"{len(package_modules())} package modules import author only"
+        bad += surface_violations(rel(path), path.read_text(), driver=False)
+    imported: set[tuple[str, str]] = set()
+    for path in driver_modules():
+        source = path.read_text()
+        bad += surface_violations(rel(path), source, driver=True)
+        imported |= {
+            (rel(path), module) for module, _ in imports(ast.parse(source, filename=rel(path)))
+        }
+    for label, module in DRIVER_INTERNALS:
+        if (label, module) not in imported:
+            bad.append(
+                f"{label}: recorded internal {module!r} is not imported — a stale exception "
+                "reads as a coupling that still exists and grants one that does not"
+            )
+    return bad, (
+        f"{len(package_modules())} package modules and {len(driver_modules())} drivers "
+        f"import the public author surface, past {len(DRIVER_INTERNALS)} recorded exception(s)"
+    )
+
+
+#: The arm. Each is the spelling the rule exists to catch, run through the same predicate.
+ARM_PRIVATE = (
+    "from cozy_runtime.author._assets import asset_dec_hook, bind",
+    "from cozy_runtime.author._services import Attempt",
+    "from cozy_runtime.internal.derive import derive",
+    "import cozy_runtime.internal.executor",
+    "import cozy_runtime",
+)
+ARM_PUBLIC = (
+    "from cozy_runtime.author import Outputs, decode_request",
+    "from cozy_runtime.author.fakes import fake_attempt, fake_input",
+    "import cozy_runtime.author",
+)
+
+
+def fence_driver_arm() -> Fence:
+    """Fire the driver rule. A boundary check nobody has watched go red is a boundary check
+    nobody knows works — and this one covers files no other rule in this repo reaches."""
+    bad: list[str] = []
+    for source in ARM_PRIVATE:
+        if not surface_violations("scripts/arm.py", source, driver=True):
+            bad.append(f"a driver importing {source!r} does not fail the fence")
+        if not surface_violations("h3/arm.py", source, driver=False):
+            bad.append(f"package code importing {source!r} does not fail the fence")
+    for source in ARM_PUBLIC:
+        if surface_violations("scripts/arm.py", source, driver=True):
+            bad.append(f"a driver importing the public {source!r} fails the fence")
+    recorded = "from cozy_runtime.internal.derive import derive"
+    if surface_violations("scripts/h3-conform.py", recorded, driver=True):
+        bad.append("the recorded exception does not admit the driver it names")
+    if not surface_violations("scripts/torch_family.py", recorded, driver=True):
+        bad.append("a recorded exception admits a driver it does not name")
+    if not surface_violations("scripts/h3-conform.py", ARM_PRIVATE[0], driver=True):
+        bad.append("a recorded exception admits a private module it does not name")
+    return bad, (
+        f"{len(ARM_PRIVATE)} private spellings fire the boundary, {len(ARM_PUBLIC)} public "
+        "ones do not, and a recorded exception admits exactly its own driver and module"
+    )
 
 
 #: Things that identify an ARTIFACT rather than a capability. Deliberately literal: this
@@ -864,6 +986,7 @@ def fence_model_execution_ownership() -> Fence:
 
 FENCES = (
     ("author-surface-only", fence_author_surface),
+    ("driver-boundary-armed", fence_driver_arm),
     ("no-identifiers-in-code", fence_identifiers),
     ("no-memory-choreography", fence_no_choreography),
     ("no-test-suite", fence_no_tests),
