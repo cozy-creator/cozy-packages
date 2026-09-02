@@ -257,7 +257,10 @@ def run(
     audio = granted(master, run_id, "master_audio") if master is not None else None
     base_decoder = MediaDecoder(attempt, active=lambda: False)
     decoder = (
-        cast(MediaDecoder, CorruptingDecoder(base_decoder, *reversed(corrupt_on_video_open)))
+        cast(
+            MediaDecoder,
+            CorruptingDecoder(base_decoder, corrupt_on_video_open[1], corrupt_on_video_open[0]),
+        )
         if corrupt_on_video_open is not None
         else base_decoder
     )

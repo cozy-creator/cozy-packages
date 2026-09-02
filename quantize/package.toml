@@ -1,0 +1,5 @@
+# Carrier-free model derivation jobs. TensorFS Manifest inputs and outputs are scoped by
+# Runtime WeightsSink capabilities; Tensorhub alone cuts and publishes production lanes.
+
+[application]
+object = "tensorhub_quantize:app"
