@@ -9,11 +9,10 @@ conformance drivers, and default development bindings.
 | path | responsibility |
 |---|---|
 | `h3/` | MiniMax H3 dual-task package; immutable deployment binding selects FULL or AdaLN-pruned weights |
-| `sdxl/` | SDXL text-to-image package; default binding is WAI Illustrious (se-008) |
+| `sdxl/` | SDXL text-to-image package plus the family's three-lane quantize job (se-008, cr-073); default binding is WAI Illustrious |
 | `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
 | `quality-judge/` | evaluation actions (ev-003) |
 | `video-assembly/` | fixed CPU-only 2-8-shot streaming assembler (se-014) |
-| `quantize/` | carrier-free FP8/MXFP8/BF16 derivation jobs over `cozy_runtime.derive` (cr-071) |
 | `h3-quality-gate/` | metric-only H3 release gate; owns its quality application and its cozy-eval dependency (cr-071) |
 | `minimax-h3-tools/` | H3 timestep-table and structural precompute jobs (cr-071) |
 | `*/package.toml` | default model selection; deployment bindings remain authoritative |

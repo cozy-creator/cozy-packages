@@ -20,3 +20,10 @@ object = "sdxl:app"
 model = "paul/wai-illustrious"
 release = "17.0.0"
 lane = "bf16"
+
+# The quantize job's DEFAULT source (cr-073): the reviewed BF16 checkpoint the three-lane
+# derivation reads. The actual source binds per invocation (--model / JobDirective).
+[bindings."quantize-three-lane.models.source"]
+model = "paul/sdxl"
+release = "1.0.0"
+lane = "bf16"

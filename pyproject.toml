@@ -7,7 +7,7 @@
 python_version = "3.12"
 files = [
     "anima", "minimax-h3", "quality-judge", "sdxl", "scripts",
-    "h3-quality-gate/src", "minimax-h3-tools/src", "quantize/src",
+    "h3-quality-gate/src", "minimax-h3-tools/src",
 ]
 strict = true
 warn_unreachable = true
@@ -43,7 +43,7 @@ warn_unused_ignores = false
 line-length = 100
 src = [
     "anima", "minimax-h3", "quality-judge", "sdxl", "scripts",
-    "h3-quality-gate", "minimax-h3-tools", "quantize",
+    "h3-quality-gate", "minimax-h3-tools",
 ]
 exclude = [".venv"]
 
