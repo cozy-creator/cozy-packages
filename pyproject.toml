@@ -6,7 +6,7 @@
 [tool.mypy]
 python_version = "3.12"
 files = [
-    "anima", "h3", "quality-judge", "sdxl", "scripts",
+    "anima", "minimax-h3", "quality-judge", "sdxl", "scripts",
     "h3-quality-gate/src", "minimax-h3-tools/src", "quantize/src",
 ]
 strict = true
@@ -42,7 +42,7 @@ warn_unused_ignores = false
 [tool.ruff]
 line-length = 100
 src = [
-    "anima", "h3", "quality-judge", "sdxl", "scripts",
+    "anima", "minimax-h3", "quality-judge", "sdxl", "scripts",
     "h3-quality-gate", "minimax-h3-tools", "quantize",
 ]
 exclude = [".venv"]

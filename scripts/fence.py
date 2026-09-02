@@ -98,7 +98,7 @@ def driver_modules() -> list[pathlib.Path]:
 
 
 def h3_modules() -> list[pathlib.Path]:
-    return sorted(f for f in (ROOT / "h3").rglob("*.py") if ours(f))
+    return sorted(f for f in (ROOT / "minimax-h3").rglob("*.py") if ours(f))
 
 
 def h3_owned_modules() -> list[pathlib.Path]:
@@ -470,7 +470,7 @@ def fence_h3_media_boundary() -> Fence:
 def fence_h3_official_hardcut() -> Fence:
     """The official Diffusers path replaces the interim port; it does not sit beside it."""
     bad: list[str] = []
-    legacy_dir = ROOT / "h3" / "h3_arch"
+    legacy_dir = ROOT / "minimax-h3" / "h3_arch"
     if legacy_dir.exists():
         bad.append("h3/h3_arch: legacy community architecture still exists")
 
@@ -529,7 +529,7 @@ def fence_no_env() -> Fence:
 
 def fence_h3_binding_identity() -> Fence:
     """A release name is product identity, not the issue that happened to cut it."""
-    binding = (ROOT / "h3" / "package.toml").read_text()
+    binding = (ROOT / "minimax-h3" / "package.toml").read_text()
     releases = re.findall(r'^release\s*=\s*"([^"]+)"\s*$', binding, flags=re.MULTILINE)
     lanes = re.findall(r'^lane\s*=\s*"([^"]+)"\s*$', binding, flags=re.MULTILINE)
     bad: list[str] = []
