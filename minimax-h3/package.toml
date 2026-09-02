@@ -12,4 +12,4 @@ object = "h3:app"
 [bindings."H3Model"]
 model = "paul/minimax-h3"
 release = "1.0.0"
-lane = "fp8-adaln-pruned"
+lane = "profile=fp8-adaln-pruned"

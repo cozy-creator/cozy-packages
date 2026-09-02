@@ -34,7 +34,7 @@ jobs:
 
       - name: Lint
         run: >-
-          uv run --no-project ruff check anima/ h3/ quality-judge/ scripts/ sdxl/
+          uv run --no-project ruff check anima/ minimax-h3/ quality-judge/ scripts/ sdxl/
           h3-quality-gate/ minimax-h3-tools/ quantize/
 
       - name: Types
@@ -121,7 +121,7 @@ jobs:
           uv sync --locked --no-cache --no-install-project
 
       - name: Arms
-        run: h3/.venv/bin/python scripts/h3-conform.py
+        run: minimax-h3/.venv/bin/python scripts/h3-conform.py
 
   package-locks:
     # Independent so a failure to materialize an exact dependency environment cannot hide
