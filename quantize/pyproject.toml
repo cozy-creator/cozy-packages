@@ -6,13 +6,14 @@ dependencies = [
     "cozy-runtime>=0.1,<1.0.0",
     "msgspec>=0.19",
     "numpy>=1.26",
+    "torch>=2.13,<3",
 ]
 
 [project.entry-points."cozy.application"]
 default = "tensorhub_quantize:app"
 
 [dependency-groups]
-dev = ["mypy==2.3.1", "ruff==0.16.4"]
+dev = ["mypy==2.3.1", "ruff==0.16.4", "tensorfs>=0.1,<1"]
 
 [build-system]
 requires = ["hatchling"]
@@ -23,6 +24,9 @@ packages = ["src/tensorhub_quantize"]
 
 [tool.cozy]
 organization = "paul"
+
+[tool.uv]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 
 [tool.mypy]
 python_version = "3.12"
