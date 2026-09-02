@@ -191,8 +191,8 @@ class AnimaModel(Model[AnimaPipeline]):
         if denoise is None:
             raise RuntimeError("Diffusers Anima workflow has no denoise.denoise block")
         denoise.progress_bar = _progress_bar(tel)
-        tel.progress(0, stage="conditioning")
-        return pipeline(
+        tel.progress(0, stage="conditioning", overall_fraction=0.0)
+        result = pipeline(
             prompt=prompt,
             negative_prompt=negative_prompt,
             width=width,
@@ -202,6 +202,8 @@ class AnimaModel(Model[AnimaPipeline]):
             output="images",
             output_type="pt",
         )
+        tel.progress(1, stage="decoding", overall_fraction=0.98)
+        return result
 
 
 class _DenoiseProgress:
@@ -214,7 +216,10 @@ class _DenoiseProgress:
         self.step: Callable[[int], None] | None = None
 
     def __enter__(self) -> _DenoiseProgress:
-        self.step = self.tel.step_callback(self.total, stage="denoise")
+        self.tel.progress(1, stage="conditioning", overall_fraction=0.10)
+        self.step = self.tel.step_callback(
+            self.total, stage="denoise", overall_range=(0.10, 0.90)
+        )
         return self
 
     def update(self, count: int = 1) -> None:
@@ -226,7 +231,7 @@ class _DenoiseProgress:
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         if exc_type is None:
-            self.tel.progress(0, stage="decoding")
+            self.tel.progress(0, stage="decoding", overall_fraction=0.90)
 
 
 def _progress_bar(tel: Telemetry) -> Callable[..., _DenoiseProgress]:
@@ -271,7 +276,7 @@ def generate(
         pixels = pixels.permute(1, 2, 0)
     pixels = pixels.contiguous()
     rgb = bytes(pixels.numpy().tobytes())
-    with tel.stage("encode_webp"):
+    with tel.stage("encode_webp", overall_range=(0.98, 1.00)):
         asset = out.save_image(ImageFrame(width, height, rgb), format="webp")
     return ImageOutput(
         asset, width, height, steps, payload.guidance, hashlib.sha256(rgb).hexdigest()

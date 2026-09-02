@@ -710,7 +710,9 @@ def assemble_video(
 ) -> AssembleVideoResponse:
     check = ctx.raise_if_cancelled
     tolerance = out.video_audio_frame_samples
-    scan_step = tel.step_callback(len(payload.videos), stage="scan")
+    scan_step = tel.step_callback(
+        len(payload.videos), stage="scan", overall_range=(0.00, 0.10)
+    )
     scans = []
     for index, item in enumerate(payload.videos):
         scans.append(_scan_video(decoder, item, check))
@@ -754,7 +756,9 @@ def assemble_video(
                 rgb_hashes,
                 global_gain=global_gain,
                 check=check,
-                on_frame=tel.step_callback(output_frames, stage="assemble"),
+                on_frame=tel.step_callback(
+                    output_frames, stage="assemble", overall_range=(0.10, 1.00)
+                ),
             )
         )
         audio_mode: Literal["segments", "master"] = "segments"
@@ -787,7 +791,9 @@ def assemble_video(
                 target_audio=target_audio,
                 padding=audio_padded,
                 check=check,
-                on_frame=tel.step_callback(output_frames, stage="assemble"),
+                on_frame=tel.step_callback(
+                    output_frames, stage="assemble", overall_range=(0.10, 1.00)
+                ),
             )
         )
         audio_mode = "master"

@@ -324,7 +324,7 @@ def _finish(
     import torch
 
     cancel()
-    with tel.stage("decode_audio"):
+    with tel.stage("decode_audio", overall_range=(0.85, 0.90)):
         audio, sample_rate = model.decode_audio(task, state)
         release_rate = model.pipe.sample_rate
         if audio.ndim != 3 or int(audio.shape[0]) != 1 or sample_rate != release_rate:
@@ -335,7 +335,7 @@ def _finish(
             )
         waveform = audio[0].to(torch.float32).contiguous().cpu()
     cancel()
-    with tel.stage("decode_video"):
+    with tel.stage("decode_video", overall_range=(0.90, 0.97)):
         decoded = model.decode_video(task, state)
         if decoded.ndim != 5 or int(decoded.shape[0]) != 1 or int(decoded.shape[2]) != 3:
             raise OutputError(
@@ -363,7 +363,7 @@ def _finish(
             code="output_integrity",
         )
 
-    with tel.stage("gate_pre_encode"):
+    with tel.stage("gate_pre_encode", overall_range=(0.97, 0.98)):
         pre_encode_gate(
             torch,
             pixels=pixels,
@@ -378,7 +378,7 @@ def _finish(
     pixel_array = pixels.numpy()
     audio_array = waveform.numpy()
     frame_bytes = bytes(pixel_array[-1])
-    with tel.stage("encode_outputs"):
+    with tel.stage("encode_outputs", overall_range=(0.98, 1.00)):
         video = out.save_video(
             pixels,
             fps=FPS,
@@ -450,7 +450,7 @@ def first_last_frame_to_video(
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
-    with tel.stage("prepare"):
+    with tel.stage("prepare", overall_range=(0.00, 0.03)):
         first = _decode_keyframe(
             payload.first_frame, field="first_frame", decoder=decoder, pipe=model.pipe
         )
@@ -463,15 +463,17 @@ def first_last_frame_to_video(
             last_frame=last,
             generator=model.pipe.generator(view.generator),
         )
-    with tel.stage("condition_text"):
+    with tel.stage("condition_text", overall_range=(0.03, 0.08)):
         model.condition_text("fl2va", state)
     if first is not None or last is not None:
-        with tel.stage("condition_media"):
+        with tel.stage("condition_media", overall_range=(0.08, 0.15)):
             model.condition_fl2va_media(state)
-    with tel.stage("denoise"):
+    with tel.stage("denoise", overall_range=(0.15, 0.85)):
         schedule = model.sample_fl2va(
             state,
-            on_step=tel.step_callback(TRANSFORMER_EVALUATIONS, stage="denoise"),
+            on_step=tel.step_callback(
+                TRANSFORMER_EVALUATIONS, stage="denoise", overall_range=(0.15, 0.85)
+            ),
             cancel=ctx.raise_if_cancelled,
         )
     return _finish(
@@ -499,21 +501,23 @@ def reference_media_to_video(
     ctx.raise_if_cancelled()
     del facts
     view = model.for_request(ctx, seed=payload.seed)
-    with tel.stage("prepare"):
+    with tel.stage("prepare", overall_range=(0.00, 0.03)):
         references = _decode_references(payload.references, decoder=decoder, pipe=model.pipe)
         state = model.pipe.start_ref2va(
             prompt=payload.prompt,
             references=references,
             generator=model.pipe.generator(view.generator),
         )
-    with tel.stage("condition_text"):
+    with tel.stage("condition_text", overall_range=(0.03, 0.08)):
         model.condition_text("ref2va", state)
-    with tel.stage("condition_media"):
+    with tel.stage("condition_media", overall_range=(0.08, 0.15)):
         model.condition_ref2va_media(state)
-    with tel.stage("denoise"):
+    with tel.stage("denoise", overall_range=(0.15, 0.85)):
         schedule = model.sample_ref2va(
             state,
-            on_step=tel.step_callback(TRANSFORMER_EVALUATIONS, stage="denoise"),
+            on_step=tel.step_callback(
+                TRANSFORMER_EVALUATIONS, stage="denoise", overall_range=(0.15, 0.85)
+            ),
             cancel=ctx.raise_if_cancelled,
         )
     return _finish(

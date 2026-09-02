@@ -583,7 +583,7 @@ def judge(
     del facts  # admission already keyed on it; the handler re-validates nothing
     replies: list[JudgeReply] = []
     total = 0.0
-    step = tel.step_callback(len(payload.calls), stage="judge")
+    step = tel.step_callback(len(payload.calls), stage="judge", overall_range=(0.0, 1.0))
     for i, call in enumerate(payload.calls):
         started = time.perf_counter()
         try:
@@ -626,7 +626,7 @@ def soft(
     del facts
     replies: list[SoftReply] = []
     total = 0.0
-    step = tel.step_callback(len(payload.calls), stage="soft")
+    step = tel.step_callback(len(payload.calls), stage="soft", overall_range=(0.0, 1.0))
     for i, call in enumerate(payload.calls):
         started = time.perf_counter()
         try:
@@ -670,7 +670,7 @@ def pairwise(
     del facts
     replies: list[PairReply] = []
     total = 0.0
-    step = tel.step_callback(len(payload.calls), stage="pairwise")
+    step = tel.step_callback(len(payload.calls), stage="pairwise", overall_range=(0.0, 1.0))
     for i, call in enumerate(payload.calls):
         started = time.perf_counter()
         try:
@@ -719,7 +719,7 @@ def transcribe(
 
     replies: list[AudioReply] = []
     total = 0.0
-    step = tel.step_callback(len(payload.calls), stage="transcribe")
+    step = tel.step_callback(len(payload.calls), stage="transcribe", overall_range=(0.0, 1.0))
     for i, call in enumerate(payload.calls):
         started = time.perf_counter()
         seconds = 0.0
