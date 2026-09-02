@@ -36,7 +36,7 @@ from cozy_runtime.author import (
     VideoAsset,
     decode_request,
 )
-from cozy_runtime.author.fakes import fake_attempt, fake_input
+from cozy_runtime.author.fakes import fake_attempt, fake_input, fake_telemetry
 
 from video_assembly import (
     AssembleVideoRequest,
@@ -271,12 +271,18 @@ def run(
         checks += 1
         return cancel_after_checks is not None and checks >= cancel_after_checks
 
+    context = Context(run_id, time.monotonic() + 300, _cancel=cancelled)
     response = assemble_video(
         AssembleVideoRequest(videos, audio),
-        Context(run_id, time.monotonic() + 300, _cancel=cancelled),
+        context,
         decoder,
         Outputs(attempt),
+        fake_telemetry(attempt, context),
     )
+    if attempt.position != response.output_frames:
+        raise AssertionError(
+            f"assemble progress ended at position {attempt.position}, not {response.output_frames}"
+        )
     if not decode_output:
         return response, None
     decoded = decoder.decode_video(granted(response.video, run_id, "result.video"))
