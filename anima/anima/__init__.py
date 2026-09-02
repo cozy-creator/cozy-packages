@@ -81,7 +81,7 @@ _WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
 
 
 class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: str = "masterpiece, best quality, 1girl, solo, city lights"
+    prompt: str
     negative_prompt: str = "low quality, worst quality, blurry"
     aspect_ratio: AspectRatio = AspectRatio.SQUARE
     megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP2

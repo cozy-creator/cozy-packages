@@ -164,7 +164,7 @@ _TOKENIZERS = Path(__file__).resolve().parent
 
 
 class Txt2ImgInput(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: str = "a photograph of an astronaut riding a horse"
+    prompt: str
     negative_prompt: str = ""
     aspect_ratio: AspectRatio = AspectRatio.SQUARE
     megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP1
