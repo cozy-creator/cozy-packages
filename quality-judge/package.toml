@@ -5,13 +5,24 @@
 # repo, release, checkpoint or revision — the judge and transcriber checkpoints, their
 # licences and their pinned revisions live here and in the catalog row, never in code.
 
+# One binding grammar, the slot path (model-code-fit §1): the three JudgeModel slots name
+# the judge checkpoint each, the transcriber slot names its own.
+
 [application]
 object = "quality_judge:app"
 
-[bindings."JudgeModel"]
+[bindings."judge.models.model"]
 model = "cozy/quality-judge-judge"
 release = "ev-003"
 
-[bindings."TranscriberModel"]
+[bindings."pairwise.models.model"]
+model = "cozy/quality-judge-judge"
+release = "ev-003"
+
+[bindings."soft.models.model"]
+model = "cozy/quality-judge-judge"
+release = "ev-003"
+
+[bindings."transcribe.models.model"]
 model = "cozy/quality-judge-transcriber"
 release = "ev-003"
