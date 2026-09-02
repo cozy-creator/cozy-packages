@@ -1,6 +1,6 @@
 [project]
 name = "h3"
-version = "1.0.8"
+version = "1.0.9"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cozy-runtime[media]>=0.1,<1",
