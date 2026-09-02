@@ -71,85 +71,21 @@ wheels = [
 
 [[package]]
 name = "cozy-eval"
-version = "2.3.3"
-source = { path = "vendor/cozy_eval-2.3.3-py3-none-any.whl" }
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "msgspec" },
     { name = "numpy" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/bf/f7/7b0363d3309c2c92e76b1045bffe8d393ffe84bc7f5eac9b066d03885f13/cozy_eval-0.1.1.tar.gz", hash = "sha256:0e145168bd28f6d6db9aa02e18a6fac57d3ff9bfa337ad5f474a21e27acda50e", size = 1751967, upload-time = "2026-09-02T02:42:24.855Z" }
 wheels = [
-    { filename = "cozy_eval-2.3.3-py3-none-any.whl", hash = "sha256:c5821e0c3d34307a67e4a241afb35253a47c575847e15353942c39492cfd8009" },
+    { url = "https://files.pythonhosted.org/packages/0f/86/5500e44680f2be21eb0155629b133fc2e08922fd84aa860813701b97e808/cozy_eval-0.1.1-py3-none-any.whl", hash = "sha256:bbe0c1d37208be62eb42940bb00de3c647f861d3156a825a5442886cdaf99794", size = 294949, upload-time = "2026-09-02T02:42:23.277Z" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "cvvdp", marker = "extra == 'all'", specifier = ">=0.5.6" },
-    { name = "cvvdp", marker = "extra == 'reference'", specifier = ">=0.5.6" },
-    { name = "ffmpeg-quality-metrics", marker = "extra == 'all'", specifier = ">=3.12" },
-    { name = "ffmpeg-quality-metrics", marker = "extra == 'reference'", specifier = ">=3.12" },
-    { name = "huggingface-hub", marker = "extra == 'all'", specifier = ">=0.23" },
-    { name = "huggingface-hub", marker = "extra == 'hpsv3'", specifier = ">=0.23" },
-    { name = "lpips", marker = "extra == 'all'", specifier = ">=0.1.4" },
-    { name = "lpips", marker = "extra == 'reference'", specifier = ">=0.1.4" },
-    { name = "msgspec", specifier = ">=0.19" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
-    { name = "numpy", specifier = ">=1.26" },
-    { name = "numpy", marker = "extra == 'all'", specifier = ">=1.26" },
-    { name = "numpy", marker = "extra == 'audio'", specifier = ">=1.26" },
-    { name = "numpy", marker = "extra == 'detail'", specifier = ">=1.26" },
-    { name = "numpy", marker = "extra == 'judge'", specifier = ">=1.26" },
-    { name = "numpy", marker = "extra == 'quality'", specifier = ">=1.26" },
-    { name = "numpy", marker = "extra == 'similarity'", specifier = ">=1.26" },
-    { name = "numpy", marker = "extra == 'video'", specifier = ">=1.26" },
-    { name = "onnxruntime", marker = "extra == 'all'", specifier = ">=1.18" },
-    { name = "onnxruntime", marker = "extra == 'detail'", specifier = ">=1.18" },
-    { name = "onnxruntime", marker = "extra == 'ocr'", specifier = ">=1.18" },
-    { name = "opencv-python-headless", marker = "extra == 'all'", specifier = ">=4.9" },
-    { name = "opencv-python-headless", marker = "extra == 'video'", specifier = ">=4.9" },
-    { name = "pillow", marker = "extra == 'all'", specifier = ">=10" },
-    { name = "pillow", marker = "extra == 'detail'", specifier = ">=10" },
-    { name = "pillow", marker = "extra == 'dev'", specifier = ">=10" },
-    { name = "pillow", marker = "extra == 'hpsv3'", specifier = ">=10" },
-    { name = "pillow", marker = "extra == 'judge'", specifier = ">=10" },
-    { name = "pillow", marker = "extra == 'quality'", specifier = ">=10" },
-    { name = "pillow", marker = "extra == 'video'", specifier = ">=10" },
-    { name = "piq", marker = "extra == 'all'", specifier = ">=0.8" },
-    { name = "piq", marker = "extra == 'quality'", specifier = ">=0.8" },
-    { name = "rapidocr", marker = "extra == 'all'", specifier = ">=3.0" },
-    { name = "rapidocr", marker = "extra == 'detail'", specifier = ">=3.0" },
-    { name = "rapidocr", marker = "extra == 'ocr'", specifier = ">=3.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
-    { name = "safetensors", marker = "extra == 'all'", specifier = ">=0.4" },
-    { name = "safetensors", marker = "extra == 'hpsv3'", specifier = ">=0.4" },
-    { name = "scipy", marker = "extra == 'all'", specifier = ">=1.11" },
-    { name = "scipy", marker = "extra == 'audio'", specifier = ">=1.11" },
-    { name = "scipy", marker = "extra == 'detail'", specifier = ">=1.11" },
-    { name = "scipy", marker = "extra == 'quality'", specifier = ">=1.11" },
-    { name = "torch", marker = "extra == 'all'", specifier = ">=2.13,<3" },
-    { name = "torch", marker = "extra == 'detail'", specifier = ">=2.13,<3" },
-    { name = "torch", marker = "extra == 'hpsv3'", specifier = ">=2.13,<3" },
-    { name = "torch", marker = "extra == 'judge'", specifier = ">=2.13,<3" },
-    { name = "torch", marker = "extra == 'preference'", specifier = ">=2.13,<3" },
-    { name = "torch", marker = "extra == 'quality'", specifier = ">=2.13,<3" },
-    { name = "torch", marker = "extra == 'reference'", specifier = ">=2.13,<3" },
-    { name = "torch", marker = "extra == 'similarity'", specifier = ">=2.13,<3" },
-    { name = "torchmetrics", extras = ["image"], marker = "extra == 'all'", specifier = ">=1.9" },
-    { name = "torchmetrics", extras = ["image"], marker = "extra == 'detail'", specifier = ">=1.9" },
-    { name = "torchmetrics", extras = ["image"], marker = "extra == 'quality'", specifier = ">=1.9" },
-    { name = "torchmetrics", extras = ["image"], marker = "extra == 'similarity'", specifier = ">=1.9" },
-    { name = "transformers", marker = "extra == 'all'", specifier = ">=4.53" },
-    { name = "transformers", marker = "extra == 'all'", specifier = ">=4.57" },
-    { name = "transformers", marker = "extra == 'detail'", specifier = ">=4.57" },
-    { name = "transformers", marker = "extra == 'hpsv3'", specifier = ">=4.53" },
-    { name = "transformers", marker = "extra == 'judge'", specifier = ">=4.57" },
-    { name = "transformers", marker = "extra == 'preference'", specifier = ">=4.57" },
-]
-provides-extras = ["all", "audio", "detail", "dev", "hpsv3", "judge", "ocr", "preference", "quality", "reference", "similarity", "video"]
 
 [[package]]
 name = "cozy-runtime"
 version = "0.1.0"
-source = { path = "vendor/cozy_runtime-0.1.0-py3-none-any.whl" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
@@ -158,27 +94,10 @@ dependencies = [
     { name = "pillow" },
     { name = "protobuf" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/bc/16f85f1b6c8414cf4a9d6cde782b7fb823c0bba0b6773007745e7389f6dc/cozy_runtime-0.1.0.tar.gz", hash = "sha256:3419c163921b7a85891bb1ada5c31d16fbc2d57be1608b29051d3c50bdc2e3b0", size = 3343577, upload-time = "2026-09-02T02:51:24.603Z" }
 wheels = [
-    { filename = "cozy_runtime-0.1.0-py3-none-any.whl", hash = "sha256:eeb7b224e8a8d19b44ed877faddb801bccced1ea9485dc8b989e29525e922634" },
+    { url = "https://files.pythonhosted.org/packages/fa/3b/083138e3d71fb8c7eed527a6d1e0c67544b8285e5a0ee31b8b5216e7f3f9/cozy_runtime-0.1.0-py3-none-any.whl", hash = "sha256:e35de7f56e508068b8a5718b9b0d126417688b947ccd53704d91f3e2a05ac9db", size = 816385, upload-time = "2026-09-02T02:51:22.864Z" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "av", marker = "extra == 'media'", specifier = ">=18.1,<19" },
-    { name = "cozy-runtime-cuda-kernels", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda-kernels'", specifier = "==0.1.0+torch2.13cu130" },
-    { name = "cryptography", specifier = ">=45" },
-    { name = "diffusers", marker = "extra == 'corpus'", specifier = ">=0.36" },
-    { name = "grpcio", specifier = ">=1.76" },
-    { name = "msgspec", specifier = ">=0.19" },
-    { name = "packaging", specifier = ">=24" },
-    { name = "pillow", specifier = ">=12,<13" },
-    { name = "protobuf", specifier = ">=6.31" },
-    { name = "tensorfs", marker = "extra == 'model-execution'", specifier = "==0.0.8" },
-    { name = "torch", marker = "extra == 'corpus'", specifier = ">=2.13,<3" },
-    { name = "torch", marker = "extra == 'derive'", specifier = ">=2.13,<3" },
-    { name = "transformers", marker = "extra == 'corpus'", specifier = ">=4.40,<5" },
-]
-provides-extras = ["corpus", "cuda-kernels", "derive", "media", "model-execution"]
 
 [[package]]
 name = "cryptography"
@@ -256,8 +175,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-eval", path = "vendor/cozy_eval-2.3.3-py3-none-any.whl" },
-    { name = "cozy-runtime", path = "vendor/cozy_runtime-0.1.0-py3-none-any.whl" },
+    { name = "cozy-eval", specifier = ">=0.1,<1" },
+    { name = "cozy-runtime", specifier = ">=0.1,<1.0.0" },
     { name = "msgspec", specifier = ">=0.19" },
 ]
 

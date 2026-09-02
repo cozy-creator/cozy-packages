@@ -14,7 +14,7 @@ warn_unreachable = true
 disallow_any_generics = true
 implicit_reexport = false
 
-# Static checks install the exact vendored, typed Runtime wheel. Heavy model libraries remain
+# Static checks install the typed Runtime distribution from PyPI. Heavy model libraries remain
 # absent because module-scope imports are forbidden and descriptor analysis must stay light.
 [[tool.mypy.overrides]]
 module = [

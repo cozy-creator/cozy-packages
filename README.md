@@ -118,19 +118,11 @@ Telemetry, never result fields.
 ### Release closure
 
 The package lock targets CPython 3.12 and pins released Diffusers, Transformers, and the
-PyTorch 2.13/CUDA 13.0 family. Until the
-first-party packages are published, lower-bound Cozy Runtime and exact Cozy Eval wheels are committed as
-vendored build inputs. The five minimal tokenizer/processor data files are bundled from the pinned
-official MiniMax snapshot and are the sole unweighted authority; the bound artifact owns only
-weighted component configs. See `h3/VENDORED.md` for source SHAs, stored-byte hashes, and
-reproduction commands.
-
-Creator automatically mirrors only ordinary registry wheels ending in `-py3-none-any.whl` after
-pruning the base-owned closure. Each model package therefore carries its exact remaining native
-Linux x86-64 CPython 3.12/abi3 wheels as explicit local direct dependencies. Their package-local
-`vendor/native-provenance.json` files bind the locked URL, filename, length, and SHA-256; the
-repository fence rejects missing bytes, path/requirement drift, or a newly reachable native-only
-registry dependency. Video assembly has no such closure and remains unchanged.
+PyTorch 2.13/CUDA 13.0 family. Cozy Runtime, TensorFS, and Cozy Eval resolve from PyPI like any
+dependency; each package declares ranges for image-owned names and the lock records the exact
+resolution. The five minimal tokenizer/processor data files are bundled from the pinned official
+MiniMax snapshot and are the sole unweighted authority; the bound artifact owns only weighted
+component configs.
 
 The lock is necessary but not sufficient for a production claim. Promotion also requires a
 platform-specific verified wheel set, an offline empty-environment install receipt, codec census,
@@ -163,7 +155,7 @@ The cheap gates require no weights or GPU:
 ```bash
 uv venv --python 3.12 .venv-check
 uv pip install --python .venv-check/bin/python \
-  h3/vendor/cozy_runtime-0.0.29-py3-none-any.whl \
+  "cozy-runtime>=0.1,<1" \
   msgspec protobuf grpcio av mypy ruff
 
 .venv-check/bin/python scripts/fence.py
