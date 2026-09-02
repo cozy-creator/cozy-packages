@@ -83,7 +83,7 @@ def _sdxl_targets(
         WeightsOutput("fp8", max_new_bytes=SDXL_OUTPUT_BYTES),
         WeightsOutput("mxfp8", max_new_bytes=SDXL_OUTPUT_BYTES),
     ),
-    source_profiles={"source": "civitai/sdxl/single-file/1"},
+    source_profiles={"source": "paul/sdxl/1.0.0/bf16"},
 )
 def sdxl_three_lane(
     ctx: Context,

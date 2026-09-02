@@ -72,7 +72,7 @@ wheels = [
 [[package]]
 name = "cozy-runtime"
 version = "0.1.0"
-source = { path = "vendor/cozy_runtime-0.1.0-py3-none-any.whl" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
@@ -81,27 +81,10 @@ dependencies = [
     { name = "pillow" },
     { name = "protobuf" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/bc/16f85f1b6c8414cf4a9d6cde782b7fb823c0bba0b6773007745e7389f6dc/cozy_runtime-0.1.0.tar.gz", hash = "sha256:3419c163921b7a85891bb1ada5c31d16fbc2d57be1608b29051d3c50bdc2e3b0", size = 3343577, upload-time = "2026-09-02T02:51:24.603Z" }
 wheels = [
-    { filename = "cozy_runtime-0.1.0-py3-none-any.whl", hash = "sha256:eeb7b224e8a8d19b44ed877faddb801bccced1ea9485dc8b989e29525e922634" },
+    { url = "https://files.pythonhosted.org/packages/fa/3b/083138e3d71fb8c7eed527a6d1e0c67544b8285e5a0ee31b8b5216e7f3f9/cozy_runtime-0.1.0-py3-none-any.whl", hash = "sha256:e35de7f56e508068b8a5718b9b0d126417688b947ccd53704d91f3e2a05ac9db", size = 816385, upload-time = "2026-09-02T02:51:22.864Z" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "av", marker = "extra == 'media'", specifier = ">=18.1,<19" },
-    { name = "cozy-runtime-cuda-kernels", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda-kernels'", specifier = "==0.1.0+torch2.13cu130" },
-    { name = "cryptography", specifier = ">=45" },
-    { name = "diffusers", marker = "extra == 'corpus'", specifier = ">=0.36" },
-    { name = "grpcio", specifier = ">=1.76" },
-    { name = "msgspec", specifier = ">=0.19" },
-    { name = "packaging", specifier = ">=24" },
-    { name = "pillow", specifier = ">=12,<13" },
-    { name = "protobuf", specifier = ">=6.31" },
-    { name = "tensorfs", marker = "extra == 'model-execution'", specifier = "==0.0.8" },
-    { name = "torch", marker = "extra == 'corpus'", specifier = ">=2.13,<3" },
-    { name = "torch", marker = "extra == 'derive'", specifier = ">=2.13,<3" },
-    { name = "transformers", marker = "extra == 'corpus'", specifier = ">=4.40,<5" },
-]
-provides-extras = ["corpus", "cuda-kernels", "derive", "media", "model-execution"]
 
 [[package]]
 name = "cryptography"
@@ -327,7 +310,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", path = "vendor/cozy_runtime-0.1.0-py3-none-any.whl" },
+    { name = "cozy-runtime", specifier = ">=0.1,<1.0.0" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
 ]

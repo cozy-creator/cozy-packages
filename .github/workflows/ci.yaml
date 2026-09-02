@@ -16,14 +16,13 @@ jobs:
           version: "0.12.7"
       - run: uv python install 3.12
 
-      # The exact Runtime wheel is a committed first-party build input. CI therefore sees
-      # the real author types and media capability on every run; there is no secret-gated
-      # skipped-green path.
+      # Runtime installs from PyPI like any dependency. CI therefore sees the real author
+      # types and media capability on every run; there is no secret-gated skipped-green path.
       - name: Environment
         run: |
           uv venv --python 3.12
           uv pip install \
-            quantize/vendor/cozy_runtime-0.1.0-py3-none-any.whl \
+            "cozy-runtime>=0.1,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences

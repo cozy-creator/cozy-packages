@@ -24,9 +24,6 @@ packages = ["src/tensorhub_quantize"]
 [tool.cozy]
 organization = "paul"
 
-[tool.uv.sources]
-cozy-runtime = { path = "vendor/cozy_runtime-0.1.0-py3-none-any.whl" }
-
 [tool.mypy]
 python_version = "3.12"
 files = ["src"]
