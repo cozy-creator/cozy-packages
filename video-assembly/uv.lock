@@ -110,7 +110,7 @@ media = [
 
 [[package]]
 name = "cozy-video-assembly"
-version = "1.0.9"
+version = "1.0.10"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
