@@ -22,7 +22,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parent.parent
-H3 = ROOT / "h3"
+H3 = ROOT / "minimax-h3"
 sys.path.insert(0, str(H3))
 
 from cozy_runtime.author import canonical_json, describe  # noqa: E402

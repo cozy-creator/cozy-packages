@@ -34,7 +34,7 @@ jobs:
 
       - name: Lint
         run: >-
-          uv run --no-project ruff check anima/ h3/ quality-judge/ scripts/ sdxl/
+          uv run --no-project ruff check anima/ minimax-h3/ quality-judge/ scripts/ sdxl/
           h3-quality-gate/ minimax-h3-tools/ quantize/
 
       - name: Types
@@ -42,7 +42,7 @@ jobs:
 
       - name: Descriptors are current
         run: |
-          test "$(uv run --no-project cozy-runtime --json --dir h3 describe)" = "$(cat h3/package.descriptor.json)"
+          test "$(uv run --no-project cozy-runtime --json --dir minimax-h3 describe)" = "$(cat minimax-h3/package.descriptor.json)"
           test "$(uv run --no-project cozy-runtime --json --dir anima describe)" = "$(cat anima/package.descriptor.json)"
           test "$(uv run --no-project cozy-runtime --json --dir quality-judge describe)" = "$(cat quality-judge/package.descriptor.json)"
           test "$(uv run --no-project cozy-runtime --json --dir sdxl describe)" = "$(cat sdxl/package.descriptor.json)"
@@ -58,14 +58,14 @@ jobs:
       # the hub refuses drift); restore quantize when the org index has a CI-reachable URL.
       - name: Every package has a current lock
         run: |
-          for package in anima h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools; do
+          for package in anima minimax-h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools; do
             uv lock --check --project "$package"
           done
 
       - name: Every package builds and imports from its wheel
         run: |
           mkdir -p dist/packages
-          for package in anima h3 quality-judge sdxl video-assembly quantize h3-quality-gate minimax-h3-tools; do
+          for package in anima minimax-h3 quality-judge sdxl video-assembly quantize h3-quality-gate minimax-h3-tools; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done
@@ -116,12 +116,12 @@ jobs:
       # retaining a second copy of the roughly 7.6 GiB CUDA closure on the hosted runner.
       - name: Exact locked environment
         run: |
-          uv lock --check --project h3
-          cd h3
+          uv lock --check --project minimax-h3
+          cd minimax-h3
           uv sync --locked --no-cache --no-install-project
 
       - name: Arms
-        run: h3/.venv/bin/python scripts/h3-conform.py
+        run: minimax-h3/.venv/bin/python scripts/h3-conform.py
 
   package-locks:
     # Independent so a failure to materialize an exact dependency environment cannot hide

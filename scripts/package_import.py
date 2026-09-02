@@ -35,7 +35,7 @@ PACKAGES = {
     "sdxl": ("sdxl", ("torch", "triton", "transformers", "diffusers", "av")),
     "quality-judge": ("quality_judge", ("torch", "triton", "transformers", "tokenizers",
                                         "numpy", "PIL.Image", "tensorfs", "av")),
-    "h3": ("h3", ("torch", "torchvision", "torchvision.ops", "triton", "transformers",
+    "minimax-h3": ("h3", ("torch", "torchvision", "torchvision.ops", "triton", "transformers",
                   "diffusers", "tensorfs", "av")),
     "quantize": ("tensorhub_quantize", ("numpy", "msgspec")),
     "h3-quality-gate": ("h3_quality_gate", ("cozy_eval", "numpy", "msgspec")),
