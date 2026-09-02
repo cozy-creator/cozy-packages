@@ -184,14 +184,18 @@ def imports(tree: ast.AST, package: str = "") -> Iterator[tuple[str, int]]:
                 yield name, node.lineno
 
 
-#: The runtime surface anything in this repo may import: `cozy_runtime.author` and its
+#: The runtime surface anything in this repo may import: `cozy_runtime.author` and
+#: `cozy_runtime.derive` (cr-071's public derivation plane for job packages) and their
 #: PUBLIC submodules. An underscored submodule — `author._assets`, `author._services` — is
 #: Runtime's own mechanism, and `cozy_runtime.internal` is the plane the author surface
 #: exists to hide. Both break the same way: the name stops existing on a later Runtime with
 #: nothing here having said it depended on one.
+PUBLIC_RUNTIME_ROOTS = (["cozy_runtime", "author"], ["cozy_runtime", "derive"])
+
+
 def public_runtime_surface(module: str) -> bool:
     parts = module.split(".")
-    return parts[:2] == ["cozy_runtime", "author"] and not any(
+    return parts[:2] in PUBLIC_RUNTIME_ROOTS and not any(
         part.startswith("_") for part in parts[2:]
     )
 
@@ -281,6 +285,7 @@ ARM_PUBLIC = (
     "from cozy_runtime.author import Outputs, decode_request",
     "from cozy_runtime.author.fakes import fake_attempt, fake_input",
     "import cozy_runtime.author",
+    "from cozy_runtime.derive.quantization import derive_fp8",
 )
 
 
@@ -319,6 +324,15 @@ IDENTIFIERS = (
 )
 
 
+#: Digest spellings a package has EARNED, with the reason. minimax-h3-tools is the H3
+#: structural precompute (cr-071): its whole job is attesting the exact plan/config/
+#: topology bytes it derives from, so a `sha256:` there is a self-integrity pin over its
+#: own committed assets and expected outputs — never a model-selection binding, which
+#: still lives in package.toml. Scoped to the checkpoint-digest shape only; every other
+#: identifier rule applies to these files unchanged.
+DIGEST_PINNED_PREFIXES = ("minimax-h3-tools/src/h3_tables/",)
+
+
 def fence_identifiers() -> Fence:
     bad: list[str] = []
     for path in package_modules():
@@ -332,6 +346,10 @@ def fence_identifiers() -> Fence:
         for line_no, line in enumerate(code.splitlines(), 1):
             for pattern, what in IDENTIFIERS:
                 if pattern.search(line):
+                    if what == "a checkpoint digest" and rel(path).startswith(
+                        DIGEST_PINNED_PREFIXES
+                    ):
+                        continue
                     bad.append(
                         f"{rel(path)}:{line_no}: {what} in package code — code states "
                         f"capability, bindings state selection: {line.strip()[:80]}"

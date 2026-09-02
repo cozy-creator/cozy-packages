@@ -1,0 +1,5 @@
+# The quality gate's app object. It binds no models and grants itself no store: the media
+# it judges arrives as a granted tree, bound by digest to the publications that produced it.
+
+[application]
+object = "h3_quality_gate.job:app"
