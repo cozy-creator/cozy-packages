@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from enum import Enum
+from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -32,20 +32,50 @@ _ROOT = _MODULE_ROOT / "anima_assets" if (_MODULE_ROOT / "anima_assets").is_dir(
 
 class AspectRatio(Enum):
     SQUARE = "1:1"
-    SQUARE_1536 = "1:1@1536"
     LANDSCAPE = "4:3"
     WIDE = "16:9"
     PORTRAIT = "3:4"
     TALL = "9:16"
 
 
-_BUCKETS: dict[AspectRatio, tuple[int, int]] = {
-    AspectRatio.SQUARE: (1024, 1024),
-    AspectRatio.SQUARE_1536: (1536, 1536),
-    AspectRatio.LANDSCAPE: (1152, 896),
-    AspectRatio.WIDE: (1344, 768),
-    AspectRatio.PORTRAIT: (896, 1152),
-    AspectRatio.TALL: (768, 1344),
+class Megapixels(IntEnum):
+    """Anima's native resolution classes, in nominal megapixels (se-024).
+
+    Tier 2 is the 1536-class (~2.3 MP) the model is meant to be run at and this
+    package's default; tier 1 trades resolution for speed. Denoise attention is full
+    (no windowing), so time and VRAM scale roughly linearly with area — tier 1 costs
+    about half of tier 2. The VAE always tiles. Every bucket is a multiple of the
+    pipeline's 16-px stride.
+    """
+
+    MP1 = 1
+    MP2 = 2
+
+
+#: (aspect, tier) -> (width, height): tier 1 is the ~1 MP training set, tier 2 scales it
+#: by exactly 1.5 to the 1536 class. A pair absent here does not round — it refuses at
+#: decode (today the grid is complete, so only an out-of-enum value can refuse).
+_BUCKETS: dict[tuple[AspectRatio, Megapixels], tuple[int, int]] = {
+    (AspectRatio.SQUARE, Megapixels.MP1): (1024, 1024),
+    (AspectRatio.LANDSCAPE, Megapixels.MP1): (1152, 896),
+    (AspectRatio.WIDE, Megapixels.MP1): (1344, 768),
+    (AspectRatio.PORTRAIT, Megapixels.MP1): (896, 1152),
+    (AspectRatio.TALL, Megapixels.MP1): (768, 1344),
+    (AspectRatio.SQUARE, Megapixels.MP2): (1536, 1536),
+    (AspectRatio.LANDSCAPE, Megapixels.MP2): (1728, 1344),
+    (AspectRatio.WIDE, Megapixels.MP2): (2016, 1152),
+    (AspectRatio.PORTRAIT, Megapixels.MP2): (1344, 1728),
+    (AspectRatio.TALL, Megapixels.MP2): (1152, 2016),
+}
+
+#: The demand table `Shape` reads: the runtime derives (width, height, pixels) from ONE
+#: field, so the tier carries its largest bucket as an upper bound over the tier.
+_TIER_DEMAND: dict[Megapixels, tuple[int, int]] = {
+    tier: max(
+        (size for (_, t), size in _BUCKETS.items() if t is tier),
+        key=lambda size: size[0] * size[1],
+    )
+    for tier in Megapixels
 }
 _WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
 
@@ -53,7 +83,8 @@ _WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
 class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: str = "masterpiece, best quality, 1girl, solo, city lights"
     negative_prompt: str = "low quality, worst quality, blurry"
-    aspect_ratio: Annotated[AspectRatio, Shape(pixels=_BUCKETS)] = AspectRatio.SQUARE
+    aspect_ratio: AspectRatio = AspectRatio.SQUARE
+    megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP2
     steps: Annotated[ModelDefault[int], msgspec.Meta(ge=8, le=50)] = 30
     guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=1.0, le=10.0)] = 4.5
     seed: int = 1005
@@ -218,7 +249,7 @@ def generate(
     """Generate one native-resolution Anima image."""
     import torch
 
-    width, height = _BUCKETS[payload.aspect_ratio]
+    width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
     steps = payload.steps
     if ctx.boot_warmup:
         width = height = 512
