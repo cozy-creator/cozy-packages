@@ -24,7 +24,7 @@ lane = "bf16"
 # The quantize job's DEFAULT source (cr-073): the family's own default checkpoint — the
 # hub derives ONE topology fact per slot class, so every SdxlModel slot seeds the same
 # pair. The actual source binds per invocation (--model / JobDirective).
-[bindings."quantize-three-lane.models.source"]
+[bindings."quantize.models.source"]
 model = "paul/wai-illustrious"
 release = "17.0.0"
 lane = "bf16"

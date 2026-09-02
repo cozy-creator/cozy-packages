@@ -26,9 +26,11 @@ What it adds over cr-008b's corpus fixture, which it is otherwise faithful to (i
   * AN OUTPUT-INTEGRITY FLOOR. A decode that produced NaNs, or a flat field with no
     picture in it, is a failure this package reports rather than a PNG it publishes.
 
-Since cr-073 the family's quantization job (`quantize-three-lane`) ships here too — a
+Since cr-073 the family's quantization job (`quantize`, se-023) ships here too — a
 package legally mixes entrypoints and jobs, the job's slot is this file's own SdxlModel,
-and `cozy_runtime.derive` owns the quantization math and the tier-1 tripwire.
+and `cozy_runtime.derive` owns the quantization math and the tier-1 tripwire. The request
+names the derived lanes it wants ({fp8, mxfp8}); `bf16` is not a lane the job produces —
+the SOURCE is the canonical BF16 cut.
 
 Code states CAPABILITY; bindings state SELECTION. Nothing here names a repo, release,
 checkpoint or revision — `package.toml` and the deploy binding do.
@@ -39,7 +41,7 @@ from __future__ import annotations
 import hashlib
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import cozy_runtime.derive as derive
 import msgspec
@@ -57,11 +59,11 @@ from cozy_runtime.author import (
     Outputs,
     Shape,
     Telemetry,
+    UnsupportedInput,
     WeightsOutput,
     WeightsSink,
     uses_components,
 )
-from cozy_runtime.derive.quantization import ArtifactQuantizationRequest
 
 app = App()
 
@@ -525,41 +527,56 @@ def generate(
 # ------------------------------------------------------------------ the quantize job
 
 
-#: The family's three delivery lanes (cr-073): BF16 normalization plus both row-wise UNet
-#: encodings. Quantization lives with its serving package — the slot is this file's own
+#: The family's derived UNet encodings by lane (cr-073, se-023). `bf16` is not an output
+#: here: the SOURCE is the canonical BF16 cut, and the lane name stays in the catalog as
+#: that cut. Quantization lives with its serving package — the slot is this file's own
 #: SdxlModel, and `cozy_runtime.derive` owns the math and the tier-1 tripwire.
-_LANES = (("bf16", None), ("fp8", "fp8-rowwise/1"), ("mxfp8", "mxfp8/1"))
+_LANE_ENCODINGS: dict[str, str] = {"fp8": "fp8-rowwise/1", "mxfp8": "mxfp8/1"}
 _LANE_BYTES = 16 << 30
+
+Lane = Literal["fp8", "mxfp8"]
+
+
+class QuantizeInput(msgspec.Struct, forbid_unknown_fields=True):
+    lanes: Annotated[tuple[Lane, ...], msgspec.Meta(min_length=1)] = ("fp8", "mxfp8")
+    max_relative_frobenius: float | None = None
 
 
 class QuantizedLanes(msgspec.Struct):
-    """Each committed lane's full `derive.QuantizeResult`, keyed by output."""
+    """Each requested lane's full `derive.QuantizeResult`; an unrequested lane is null."""
 
-    bf16: derive.QuantizeResult
-    fp8: derive.QuantizeResult
-    mxfp8: derive.QuantizeResult
+    fp8: derive.QuantizeResult | None = None
+    mxfp8: derive.QuantizeResult | None = None
 
 
 @app.job(
-    name="quantize-three-lane",
-    weights=tuple(WeightsOutput(out, max_new_bytes=_LANE_BYTES) for out, _ in _LANES),
+    name="quantize",
+    weights=tuple(WeightsOutput(lane, max_new_bytes=_LANE_BYTES) for lane in _LANE_ENCODINGS),
 )
-def quantize_three_lane(
+def quantize(
     ctx: Context,
-    payload: ArtifactQuantizationRequest,
+    payload: QuantizeInput,
     source: SdxlModel,
     weights: WeightsSink,
     tel: Telemetry,
 ) -> QuantizedLanes:
-    """Normalize one reviewed source to BF16 and derive both row-wise UNet lanes."""
-    cap = payload.max_relative_frobenius
-    bf16, fp8, mxfp8 = (
-        derive.quantize(
+    """Derive the requested row-wise UNet lanes from one reviewed BF16 source.
+
+    Outputs stay declared for the full supported set — the descriptor is static — and an
+    unrequested lane is simply never opened; the sink permits unwritten declared outputs.
+    """
+    if len(set(payload.lanes)) != len(payload.lanes):
+        raise UnsupportedInput("quantize lanes must be unique", code="quantization_lanes")
+    results = {
+        lane: derive.quantize(
             source,
-            derive.plan(("unet",) if enc else (), enc,
-                        max_relative_frobenius=cap if enc else None),
-            sink=weights, ctx=ctx, tel=tel, output=out,
+            derive.plan(
+                ("unet",),
+                _LANE_ENCODINGS[lane],
+                max_relative_frobenius=payload.max_relative_frobenius,
+            ),
+            sink=weights, ctx=ctx, tel=tel, output=lane,
         )
-        for out, enc in _LANES
-    )
-    return QuantizedLanes(bf16, fp8, mxfp8)
+        for lane in payload.lanes
+    }
+    return QuantizedLanes(fp8=results.get("fp8"), mxfp8=results.get("mxfp8"))
