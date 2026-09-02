@@ -537,20 +537,22 @@ def fence_h3_binding_identity() -> Fence:
         bad.append("h3/package.toml: no default model release is bound")
     if len(set(releases)) > 1:
         bad.append(f"h3/package.toml: default model bindings disagree: {sorted(set(releases))}")
-    if releases != ["1.0.0"]:
-        bad.append(f"h3/package.toml: default release is {releases!r}, expected ['1.0.0']")
+    # One grammar, the slot path (model-code-fit §1): both H3 slots bind, and both name
+    # the same release and profile selector.
+    if len(releases) != 2 or set(releases) != {"1.0.0"}:
+        bad.append(f"h3/package.toml: default releases are {releases!r}, expected two of '1.0.0'")
     for release in releases:
         if re.search(r"(?:^|[-_.])se-\d+(?:$|[-_.])", release):
             bad.append(
                 f"h3/package.toml: release {release!r} contains a tracker issue, "
                 "not only content identity"
             )
-    if lanes != ["profile=fp8-adaln-pruned"]:
+    if len(lanes) != 2 or set(lanes) != {"profile=fp8-adaln-pruned"}:
         bad.append(
-            "h3/package.toml: bare local binding must use the exact "
+            "h3/package.toml: both slot bindings must use the exact "
             f"profile selector, got {lanes!r}"
         )
-    return bad, "H3 binds release 1.0.0 with the Hopper/local profile=fp8-adaln-pruned selector"
+    return bad, "H3 binds both slots to release 1.0.0 with the profile=fp8-adaln-pruned selector"
 
 
 def fence_typed_model_bindings() -> Fence:
