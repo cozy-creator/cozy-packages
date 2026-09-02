@@ -613,14 +613,15 @@ def fence_anima_defaults() -> Fence:
 
 
 def fence_step_progress() -> Fence:
-    """Every generation loop reports measured steps through `tel.step_callback` (cl-104).
+    """Every generation loop reports stage steps and package-owned overall ranges.
 
     Paul's ruling: no denoising (or comparably long iterative) loop runs silently — each
     iteration posts an incremental update on Runtime's measured lane."""
 
-    def calls(path: pathlib.Path) -> tuple[set[str], set[str]]:
+    def calls(path: pathlib.Path) -> tuple[set[str], set[str], set[str]]:
         progress: set[str] = set()
         steps: set[str] = set()
+        overall: set[str] = set()
         for node in ast.walk(ast.parse(path.read_text())):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                 continue
@@ -636,15 +637,24 @@ def fence_step_progress() -> Fence:
             )
             if node.func.attr == "progress" and stage:
                 progress.add(stage)
+                if any(keyword.arg == "overall_fraction" for keyword in node.keywords):
+                    overall.add(stage)
             if node.func.attr == "step_callback" and stage:
                 steps.add(stage)
-        return progress, steps
+                if any(keyword.arg == "overall_range" for keyword in node.keywords):
+                    overall.add(stage)
+        return progress, steps, overall
 
     bad: list[str] = []
-    anima_progress, anima_steps = calls(ROOT / "anima" / "anima" / "__init__.py")
+    anima_progress, anima_steps, anima_overall = calls(
+        ROOT / "anima" / "anima" / "__init__.py"
+    )
     stage_gap = {"conditioning", "decoding"} - anima_progress
     if stage_gap:
         bad.append(f"anima: missing progress stages {sorted(stage_gap)}")
+    overall_gap = {"conditioning", "denoise", "decoding"} - anima_overall
+    if overall_gap:
+        bad.append(f"anima: missing overall progress for stages {sorted(overall_gap)}")
     required: dict[str, set[str]] = {
         "anima/anima/__init__.py": {"denoise"},
         "sdxl/sdxl/__init__.py": {"denoise"},
@@ -652,11 +662,18 @@ def fence_step_progress() -> Fence:
         "video-assembly/video_assembly.py": {"scan", "assemble"},
     }
     for rel, stages in required.items():
-        steps = anima_steps if rel.startswith("anima/") else calls(ROOT / rel)[1]
+        _, steps, overall = (
+            (anima_progress, anima_steps, anima_overall)
+            if rel.startswith("anima/")
+            else calls(ROOT / rel)
+        )
         missing = stages - steps
         if missing:
             bad.append(f"{rel}: no measured step_callback for stages {sorted(missing)}")
-    return bad, "every generation loop reports measured steps (anima, sdxl, h3, video-assembly)"
+        missing_overall = stages - overall
+        if missing_overall:
+            bad.append(f"{rel}: no overall_range for stages {sorted(missing_overall)}")
+    return bad, "generation loops report measured stage steps and overall ranges"
 
 
 def fence_descriptor_format() -> Fence:

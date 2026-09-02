@@ -141,6 +141,7 @@ def _compute_table_parts(
     source_component: str,
     write_part: Callable[[str, bytes], None],
     tel: Telemetry,
+    overall_range: tuple[float, float] = (0.0, 1.0),
 ) -> tuple[int, int]:
     source_bytes = 0
     table_bytes = 0
@@ -168,7 +169,13 @@ def _compute_table_parts(
 
     def progress(done: int, total: int) -> None:
         ctx.raise_if_cancelled()
-        tel.progress(done / total, stage=f"timestep-table-{task}")
+        stage_fraction = done / total
+        overall = overall_range[0] + stage_fraction * (overall_range[1] - overall_range[0])
+        tel.progress(
+            stage_fraction,
+            stage=f"timestep-table-{task}",
+            overall_fraction=overall,
+        )
         tel.log(
             "precomputed timestep table",
             level="info",
@@ -543,6 +550,7 @@ def _write_tables(
     source_transaction: WeightsTransaction,
     transactions: Mapping[str, WeightsTransaction],
     tel: Telemetry,
+    overall_range: tuple[float, float],
 ) -> int:
     sections = parse_production_config(_asset("model-config.json"))
     plan = parse_declared_plan(_asset(f"timestep-plan.{task}.json"))
@@ -566,6 +574,7 @@ def _write_tables(
         component,
         write_part,
         tel,
+        overall_range,
     )
     return source_bytes
 
@@ -624,8 +633,8 @@ def four_lane(
     current = current_order(_asset("whole-order.json"))
 
     full_config = dual_full_config(sections)
-    tel.progress(0.0, stage="bf16-full")
-    with tel.stage("bf16-full"):
+    tel.progress(0.0, stage="bf16-full", overall_fraction=0.0)
+    with tel.stage("bf16-full", overall_range=(0.00, 0.15)):
         full = artifacts.derive(
             "bf16-full",
             sources=sources,
@@ -639,7 +648,7 @@ def four_lane(
             },
             order=_full_order(sections, current.rows),
         )
-    tel.progress(1.0, stage="bf16-full")
+    tel.progress(1.0, stage="bf16-full", overall_fraction=0.15)
 
     fl_plan = parse_plan(_asset("timestep-plan.fl2va.json"), task="fl2va")
     ref_plan = parse_plan(_asset("timestep-plan.ref2va.json"), task="ref2va")
@@ -690,21 +699,24 @@ def four_lane(
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.set_float32_matmul_precision("highest")
             source_transaction = next(iter(active.values()))
-            for task in ("fl2va", "ref2va"):
-                with tel.stage(f"timestep-table-{task}"):
+            for task, overall_range in (
+                ("fl2va", (0.15, 0.25)),
+                ("ref2va", (0.25, 0.35)),
+            ):
+                with tel.stage(f"timestep-table-{task}", overall_range=overall_range):
                     source_bytes += _write_tables(
-                        task, ctx, source_transaction, active, tel
+                        task, ctx, source_transaction, active, tel, overall_range
                     )
 
         quant_request = ArtifactQuantizationRequest()
-        for name, encoding in (
-            ("fp8-adaln-pruned", "fp8-rowwise/1"),
-            ("mxfp8-adaln-pruned", "mxfp8/1"),
+        for name, encoding, overall_range in (
+            ("fp8-adaln-pruned", "fp8-rowwise/1", (0.35, 0.60)),
+            ("mxfp8-adaln-pruned", "mxfp8/1", (0.60, 0.85)),
         ):
             transaction = active.get(name)
             if transaction is None:
                 continue
-            with tel.stage(name):
+            with tel.stage(name, overall_range=overall_range):
                 for component in TARGET_COMPONENT.values():
                     stats.append(
                         quantize_component_into(
@@ -721,11 +733,17 @@ def four_lane(
                         )
                     )
 
+        commit_ranges = {
+            "bf16-adaln-pruned": (0.85, 0.90),
+            "fp8-adaln-pruned": (0.90, 0.95),
+            "mxfp8-adaln-pruned": (0.95, 1.00),
+        }
         for name, transaction in active.items():
-            tel.progress(0.0, stage=f"commit-{name}")
+            overall_range = commit_ranges[name]
+            tel.progress(0.0, stage=f"commit-{name}", overall_fraction=overall_range[0])
             transaction.add_config("model", pruned_config)
             receipts[name] = transaction.commit()
-            tel.progress(1.0, stage=f"commit-{name}")
+            tel.progress(1.0, stage=f"commit-{name}", overall_fraction=overall_range[1])
         for name, transaction in transactions.items():
             if name not in receipts:
                 receipts[name] = _receipt(transaction)
