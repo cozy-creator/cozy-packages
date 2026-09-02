@@ -5,11 +5,18 @@
 # a repo, release, checkpoint or revision — the artifact and its release live here.
 #
 # Both actions bind one uniform dual-DiT artifact and therefore share one model generation.
+# One binding grammar, the slot path (model-code-fit §1): each slot is named, and the two
+# name the same checkpoint.
 
 [application]
 object = "h3:app"
 
-[bindings."H3Model"]
+[bindings."first_last_frame_to_video.models.model"]
+model = "paul/minimax-h3"
+release = "1.0.0"
+lane = "profile=fp8-adaln-pruned"
+
+[bindings."reference_media_to_video.models.model"]
 model = "paul/minimax-h3"
 release = "1.0.0"
 lane = "profile=fp8-adaln-pruned"
