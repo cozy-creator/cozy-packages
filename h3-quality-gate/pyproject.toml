@@ -1,6 +1,6 @@
 [project]
 name = "h3-quality-gate"
-version = "1.1.0"
+version = "1.1.1"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cozy-eval>=0.1,<1",
