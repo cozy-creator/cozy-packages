@@ -160,6 +160,6 @@ jobs:
       - run: uv sync --project video-assembly --locked --group dev
       - run: uv run --project video-assembly ruff check video-assembly
       - run: uv run --project video-assembly ruff format --check video-assembly
-      - run: uv run --project video-assembly mypy
+      - run: cd video-assembly && uv run mypy
       - run: test "$(uv run --project video-assembly cozy-runtime --json --dir video-assembly describe)" = "$(cat video-assembly/package.descriptor.json)"
       - run: uv run --project video-assembly python video-assembly/live.py

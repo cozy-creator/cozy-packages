@@ -39,7 +39,7 @@ PACKAGES = {
                   "diffusers", "tensorfs", "av")),
     "quantize": ("tensorhub_quantize", ("numpy", "msgspec")),
     "h3-quality-gate": ("h3_quality_gate", ("cozy_eval", "numpy", "msgspec")),
-    "minimax-h3-tools": ("h3_tables", ("torch", "triton", "numpy", "msgspec")),
+    "minimax-h3-tools": ("h3_tables.job", ("torch", "triton", "numpy", "msgspec")),
 }
 
 
@@ -81,11 +81,14 @@ def main(argv: list[str]) -> int:
     sys.path.insert(0, str(source_root if source_root.is_dir() else package_root))
     for peer in peers:
         importlib.import_module(peer)
-    torch = importlib.import_module("torch")
-    print(f"{package}: torch {torch.__version__}, {len(peers)} peers imported")
-    if package == "anima":
-        check_anima_cosmos_padding_mask(torch)
-        print("anima: Cosmos padding-mask forward passed on CPU")
+    if "torch" in peers:
+        torch = importlib.import_module("torch")
+        print(f"{package}: torch {torch.__version__}, {len(peers)} peers imported")
+        if package == "anima":
+            check_anima_cosmos_padding_mask(torch)
+            print("anima: Cosmos padding-mask forward passed on CPU")
+    else:
+        print(f"{package}: torch-free, {len(peers)} peers imported")
     module = importlib.import_module(module_name)
     app = module.app
     print(f"{package}: {module_name}:app registers {sorted(app._registry)}")
