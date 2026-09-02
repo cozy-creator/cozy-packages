@@ -10,7 +10,7 @@ supported-markers = [
 
 [[package]]
 name = "anima"
-version = "0.1.28"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -159,6 +159,7 @@ dependencies = [
     { name = "pillow" },
     { name = "protobuf" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/cf/73/ab5d20159c4556e8d403ef310182eb597dd04547bf7281e58ef9e94653b2/cozy_runtime-0.1.3.tar.gz", hash = "sha256:3257d9bc2d579c462d1f3793df030dd5d8c1cce63af437596103016fdf125f36", size = 1046998, upload-time = "2026-09-02T05:02:21.873Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0d/25/a8d8f16e358e46ff6a6893418d48da4dea3e1cf0746f53f678c5888adf40/cozy_runtime-0.1.3-py3-none-any.whl", hash = "sha256:7ee424fe218986c5b2fcc969d363285a3d1223b1023778f15c7131affcee7026", size = 854656, upload-time = "2026-09-02T05:02:19.846Z" },
 ]

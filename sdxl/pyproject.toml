@@ -5,7 +5,7 @@
 
 [project]
 name = "sdxl"
-version = "2.2.0"
+version = "2.3.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cozy-runtime[media]>=0.1,<1",

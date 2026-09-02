@@ -11,10 +11,12 @@ the answer.
 What it adds over cr-008b's corpus fixture, which it is otherwise faithful to (its banked
 1024px pixel digest reproduces here, byte for byte):
 
-  * ASPECT BUCKETS. SDXL fine-tunes are trained on fixed resolutions, not free geometry, so
-    the request names a bucket and `Shape(pixels=...)` is how the demand axes are derived
-    from a preset the runtime cannot otherwise measure (§1.2). A bucket this package does
-    not offer is unspellable, not rounded.
+  * ASPECT x MEGAPIXEL BUCKETS (se-024). SDXL fine-tunes are trained on fixed
+    resolutions, not free geometry, so the request names a ratio and a pixel-count tier
+    and `_BUCKETS` maps the pair to one native bucket; `Shape(pixels=...)` on the tier is
+    how the demand axes are derived from a preset the runtime cannot otherwise measure
+    (§1.2). A pair this package does not offer is unspellable, not rounded. Tiers above
+    1 ride HiDiffusion — base SDXL duplicates subjects past its training resolution.
   * `ModelDefault` steps/guidance, and the TWO-LAYER CLAMP. Layer 1 is the field's own
     `Meta` bound, which REJECTS what the caller actually sent. Layer 2 is a deployment's
     visible `Clamp`, which lowers it and says so in the adjustments envelope. A silent
@@ -39,7 +41,7 @@ checkpoint or revision — `package.toml` and the deploy binding do.
 from __future__ import annotations
 
 import hashlib
-from enum import Enum
+from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -78,15 +80,73 @@ class AspectRatio(Enum):
     TALL = "9:16"
 
 
-#: bucket -> (width, height). SDXL's own training resolutions, each ~1 megapixel and each a
-#: multiple of 64 so the latent grid is exact.
-_BUCKETS: dict[AspectRatio, tuple[int, int]] = {
-    AspectRatio.SQUARE: (1024, 1024),
-    AspectRatio.LANDSCAPE: (1152, 896),
-    AspectRatio.WIDE: (1344, 768),
-    AspectRatio.PORTRAIT: (896, 1152),
-    AspectRatio.TALL: (768, 1344),
+class Megapixels(IntEnum):
+    """The offered pixel-count tiers, in nominal megapixels.
+
+    Tier 1 is SDXL's native training resolution; every higher tier rides HiDiffusion
+    (RAU-Net + windowed attention), whose published recipes cover the 2048-class through
+    ~8MP and the 4096² flagship. VRAM, fp16, CFG on (weights 6.5 GiB total, staged per
+    method — denoise holds the 4.8 GiB UNet, decode holds the 0.16 GiB VAE):
+
+        1   ~1.0 MP  the launch envelope — serves on 8 GiB
+        2   ~2.1 MP  denoise ~6 GiB, whole-frame fp32 decode ~4 GiB — a 12 GiB card
+        4   ~4.2 MP  denoise ~8 GiB, whole-frame fp32 decode ~8 GiB — 12 GiB at its edge
+        8   ~8.3 MP  denoise ~12 GiB, decode tiled — a 24 GiB card
+        16  ~16.8 MP denoise ~15-19 GiB, decode tiled, 1:1 only — the top of 24 GiB
+    """
+
+    MP1 = 1
+    MP2 = 2
+    MP4 = 4
+    MP8 = 8
+    MP16 = 16
+
+
+#: (aspect, tier) -> (width, height). Tier 1 is SDXL's own training buckets; a higher
+#: tier scales them by sqrt(tier) and snaps to the 64-px stride the latent grid requires.
+#: Tier 16 offers only 1:1: HiDiffusion's 4096-class recipe engages when BOTH latent
+#: sides reach 512, which no non-square 16 MP bucket satisfies — those pairs are absent,
+#: not rounded.
+_BUCKETS: dict[tuple[AspectRatio, Megapixels], tuple[int, int]] = {
+    (AspectRatio.SQUARE, Megapixels.MP1): (1024, 1024),
+    (AspectRatio.LANDSCAPE, Megapixels.MP1): (1152, 896),
+    (AspectRatio.WIDE, Megapixels.MP1): (1344, 768),
+    (AspectRatio.PORTRAIT, Megapixels.MP1): (896, 1152),
+    (AspectRatio.TALL, Megapixels.MP1): (768, 1344),
+    (AspectRatio.SQUARE, Megapixels.MP2): (1472, 1472),
+    (AspectRatio.LANDSCAPE, Megapixels.MP2): (1600, 1280),
+    (AspectRatio.WIDE, Megapixels.MP2): (1920, 1088),
+    (AspectRatio.PORTRAIT, Megapixels.MP2): (1280, 1600),
+    (AspectRatio.TALL, Megapixels.MP2): (1088, 1920),
+    (AspectRatio.SQUARE, Megapixels.MP4): (2048, 2048),
+    (AspectRatio.LANDSCAPE, Megapixels.MP4): (2304, 1792),
+    (AspectRatio.WIDE, Megapixels.MP4): (2688, 1536),
+    (AspectRatio.PORTRAIT, Megapixels.MP4): (1792, 2304),
+    (AspectRatio.TALL, Megapixels.MP4): (1536, 2688),
+    (AspectRatio.SQUARE, Megapixels.MP8): (2880, 2880),
+    (AspectRatio.LANDSCAPE, Megapixels.MP8): (3264, 2560),
+    (AspectRatio.WIDE, Megapixels.MP8): (3776, 2176),
+    (AspectRatio.PORTRAIT, Megapixels.MP8): (2560, 3264),
+    (AspectRatio.TALL, Megapixels.MP8): (2176, 3776),
+    (AspectRatio.SQUARE, Megapixels.MP16): (4096, 4096),
 }
+
+#: The demand table `Shape` reads. The runtime derives (width, height, pixels) from ONE
+#: field, so the tier carries its largest bucket: pixel count is the axis that moves VRAM
+#: (attention and decode scale with area; aspect at equal area does not), and the largest
+#: bucket keeps the derived demand an upper bound over the tier.
+_TIER_DEMAND: dict[Megapixels, tuple[int, int]] = {
+    tier: max(
+        (size for (_, t), size in _BUCKETS.items() if t is tier),
+        key=lambda size: size[0] * size[1],
+    )
+    for tier in Megapixels
+}
+
+#: Whole-frame decode stops here. Above the 4 MP class one fp32 frame's decoder features
+#: alone outgrow a 24 GiB card, so the VAE tiles; at or below it the decode stays
+#: whole-frame and the banked 1024px digest is untouched.
+_UNTILED_DECODE_PIXELS = 2048 * 2048
 _WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
 
 #: The boot warm pass's geometry and step count. `ctx.boot_warmup` is honoured because the
@@ -106,16 +166,33 @@ _TOKENIZERS = Path(__file__).resolve().parent
 class Txt2ImgInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: str = "a photograph of an astronaut riding a horse"
     negative_prompt: str = ""
-    aspect_ratio: Annotated[AspectRatio, Shape(pixels=_BUCKETS)] = AspectRatio.SQUARE
+    aspect_ratio: AspectRatio = AspectRatio.SQUARE
+    megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP1
     #: A caller may opt out of HiDiffusion without changing the selected model or package.
-    #: Non-square buckets always use baseline SDXL because those live comparisons regressed.
+    #: At tier 1, non-square buckets always use baseline SDXL because those live
+    #: comparisons regressed. Above tier 1 there is no baseline to fall back to.
     hidiffusion: bool = True
     #: LAYER 1 of the two-layer clamp. These bounds REJECT; they never quietly clip. The
     #: `ModelDefault` marker is what makes the field omittable on the wire and concrete
     #: before the handler runs — the handler sees `int`, never `int | None`.
-    steps: Annotated[ModelDefault[int], msgspec.Meta(ge=1, le=50)] = 20
+    steps: Annotated[ModelDefault[int], msgspec.Meta(ge=1, le=50)] = 30
     guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=0.0, le=20.0)] = 7.0
     seed: int = 1005
+
+    def __post_init__(self) -> None:
+        if (self.aspect_ratio, self.megapixels) not in _BUCKETS:
+            offered = ", ".join(
+                aspect.value for aspect, tier in _BUCKETS if tier is self.megapixels
+            )
+            raise ValueError(
+                f"no {self.megapixels.value}-megapixel bucket for aspect "
+                f"{self.aspect_ratio.value}; this tier offers: {offered}"
+            )
+        if self.megapixels is not Megapixels.MP1 and not self.hidiffusion:
+            raise ValueError(
+                "megapixels above 1 requires HiDiffusion: base SDXL is trained at ~1MP "
+                "and duplicates subjects beyond it — omit hidiffusion or send true"
+            )
 
 
 class ImageOutput(msgspec.Struct):
@@ -128,7 +205,7 @@ class ImageOutput(msgspec.Struct):
     """Whether the negative branch ran. Value-plane gating, made observable: a caller can
     see that `guidance <= 1.0` bought it a one-pass step rather than having to trust it."""
     hidiffusion_applied: bool
-    """Whether this request actually used HiDiffusion after applying the geometry gate."""
+    """Whether this request actually used HiDiffusion after the tier and geometry gates."""
     digest: str
     """sha256 of the decoded RGB pixel bytes — the determinism fence over the WHOLE loop,
     not over one step."""
@@ -303,6 +380,9 @@ class SdxlModel(Model[SdxlPipeline]):
         import torch
 
         vae = self.pipe.components["vae"]
+        tiled = int(latents.shape[-2]) * int(latents.shape[-1]) * 64 > _UNTILED_DECODE_PIXELS
+        if tiled:
+            vae.enable_tiling()
         original_dtype = next(vae.parameters()).dtype
         upcast = bool(getattr(vae.config, "force_upcast", False))
         if upcast:
@@ -314,6 +394,8 @@ class SdxlModel(Model[SdxlPipeline]):
         finally:
             if upcast:
                 vae.to(dtype=original_dtype)
+            if tiled:
+                vae.disable_tiling()
 
 
 # ------------------------------------------------------------------ the handler
@@ -420,12 +502,17 @@ def generate(
     from diffusers import EulerDiscreteScheduler
 
     view = model.for_request(ctx, seed=payload.seed)
-    width, height = _BUCKETS[payload.aspect_ratio]
+    width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
     steps = payload.steps
     if ctx.boot_warmup:
         width = height = _WARM_SIDE
         steps = _WARM_STEPS
-    hidiffusion_applied = payload.hidiffusion and width == height
+    # Above tier 1 HiDiffusion always runs — decode already refused the contradiction —
+    # and any aspect is legal: past its training resolution base SDXL is not an
+    # alternative. At tier 1 the measured geometry gate stands: square only.
+    hidiffusion_applied = payload.hidiffusion and (
+        payload.megapixels is not Megapixels.MP1 or width == height
+    )
     # The value plane, and the only branch in this file that reads a request number: above
     # 1.0 the negative branch is worth its second forward pass, at or below it is not.
     classifier_free = payload.guidance > 1.0
