@@ -29,6 +29,8 @@ from cozy_runtime.derive.quantization import (
     write_bf16,
 )
 
+from sdxl import SdxlModel
+
 app = App()
 
 SDXL_OUTPUT_BYTES = 16 << 30
@@ -83,12 +85,15 @@ def _sdxl_targets(
         WeightsOutput("fp8", max_new_bytes=SDXL_OUTPUT_BYTES),
         WeightsOutput("mxfp8", max_new_bytes=SDXL_OUTPUT_BYTES),
     ),
-    source_profiles={"source": "paul/sdxl/1.0.0/bf16/unet"},
+    # Four segments, no th-114 config selector: SdxlModel constructs from the
+    # runtime-assembled mapping of every named config, and evidence identity
+    # must equal serving identity (cr-073; the selector retires with cr-077).
+    source_profiles={"source": "paul/sdxl/1.0.0/bf16"},
 )
 def sdxl_three_lane(
     ctx: Context,
     payload: ArtifactQuantizationRequest,
-    source: QuantizationSource,
+    source: SdxlModel,
     weights: WeightsSink,
     tel: Telemetry,
 ) -> SdxlThreeLaneResult:

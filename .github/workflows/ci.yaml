@@ -18,12 +18,16 @@ jobs:
 
       # Runtime installs from PyPI like any dependency. CI therefore sees the real author
       # types and media capability on every run; there is no secret-gated skipped-green path.
+      # quantize imports the sdxl model class (cr-073); its published dependency resolves
+      # from the paul org index (th-113), which is the standing dev hub and unreachable from
+      # CI, so the repo's own sdxl source stands in for the import/describe checks here.
       - name: Environment
         run: |
           uv venv --python 3.12
           uv pip install \
             "cozy-runtime>=0.1,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
+          uv pip install --no-deps ./sdxl
 
       - name: Fences
         run: uv run --no-project python scripts/fence.py
@@ -48,9 +52,13 @@ jobs:
       # A package with no `[project]` pyproject and no lock resolves no `ResolvedWheelSet`
       # and cannot publish at all, so a stale or absent lock is a release-blocking fact and
       # belongs in the cheap static job, not only in the heavy per-package ones.
+      # quantize is absent: its lock pins sdxl from the paul org index (th-113), whose dev
+      # hub CI cannot reach, so `uv lock --check` cannot re-resolve here. Publish enforces
+      # the exact lock instead (package-prepare re-derives in the locked environment and
+      # the hub refuses drift); restore quantize when the org index has a CI-reachable URL.
       - name: Every package has a current lock
         run: |
-          for package in anima h3 quality-judge sdxl video-assembly quantize h3-quality-gate minimax-h3-tools; do
+          for package in anima h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools; do
             uv lock --check --project "$package"
           done
 
@@ -124,7 +132,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [anima, sdxl, quality-judge, quantize, h3-quality-gate, minimax-h3-tools]
+        # quantize is absent: its lock pins sdxl from the paul org index (th-113), whose
+        # dev hub CI cannot reach, so the exact environment cannot materialize here. The
+        # publish path materializes and proves that same lock locally; restore quantize
+        # when the org index has a CI-reachable URL.
+        package: [anima, sdxl, quality-judge, h3-quality-gate, minimax-h3-tools]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
