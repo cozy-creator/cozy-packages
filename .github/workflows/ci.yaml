@@ -58,14 +58,14 @@ jobs:
       # the hub refuses drift); restore quantize when the org index has a CI-reachable URL.
       - name: Every package has a current lock
         run: |
-          for package in anima h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools; do
+          for package in anima minimax-h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools; do
             uv lock --check --project "$package"
           done
 
       - name: Every package builds and imports from its wheel
         run: |
           mkdir -p dist/packages
-          for package in anima h3 quality-judge sdxl video-assembly quantize h3-quality-gate minimax-h3-tools; do
+          for package in anima minimax-h3 quality-judge sdxl video-assembly quantize h3-quality-gate minimax-h3-tools; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done
