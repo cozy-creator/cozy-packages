@@ -1,5 +1,14 @@
 # Carrier-free model derivation jobs. TensorFS Manifest inputs and outputs are scoped by
 # Runtime WeightsSink capabilities; Tensorhub alone cuts and publishes production lanes.
+#
+# Code states CAPABILITY (the slot's SdxlModel annotation); this binding states the
+# DEFAULT selection — and it is the publish-time slot-facts derivation seed (cr-077).
+# The actual source binds per invocation (--model / JobDirective).
 
 [application]
 object = "tensorhub_quantize:app"
+
+[bindings."sdxl-three-lane.models.source"]
+model = "paul/sdxl"
+release = "1.0.0"
+lane = "bf16"
