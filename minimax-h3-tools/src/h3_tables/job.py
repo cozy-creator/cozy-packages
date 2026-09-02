@@ -604,10 +604,9 @@ def _receipt(transaction: WeightsTransaction) -> WeightsReceipt:
             encodings=(PLAIN_SPEC, MXFP8_SPEC),
         ),
     ),
-    source_profiles={
-        "dits": "hf/minimax-h3/native-dual-bf16/1",
-        "shared": "hf/minimax-h3/shared-bf16/1",
-    },
+    # source_profiles return once the minimax-h3 model repo exists on the hub
+    # (H3 ingest, se-022/th-109 residue); until then the pairs are undeclarable
+    # and these slots bind per-invocation like this package's other jobs.
 )
 def four_lane(
     ctx: Context,
