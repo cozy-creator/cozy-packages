@@ -1,6 +1,6 @@
 [project]
 name = "cozy-video-assembly"
-version = "1.0.10"
+version = "1.0.11"
 requires-python = ">=3.12,<3.13"
 dependencies = ["cozy-runtime[media]>=0.1,<1", "msgspec>=0.19"]
 

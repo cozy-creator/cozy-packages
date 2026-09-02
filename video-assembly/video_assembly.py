@@ -31,6 +31,7 @@ from cozy_runtime.author import (
     InvalidRequest,
     MediaDecoder,
     Outputs,
+    Telemetry,
     VideoAsset,
 )
 
@@ -501,6 +502,7 @@ def _segment_events(
     *,
     global_gain: float,
     check: Callable[[], None],
+    on_frame: Callable[[int], None],
 ) -> Iterator[DecodedMediaEvent]:
     video = scans[0].header.video
     audio = scans[0].header.audio
@@ -535,6 +537,7 @@ def _segment_events(
                         color_matrix=event.color_matrix,
                         color_range=event.color_range,
                     )
+                    on_frame(output_frame)
                     output_frame += 1
                     seen_frames += 1
                     continue
@@ -598,6 +601,7 @@ def _master_events(
     target_audio: int,
     padding: int,
     check: Callable[[], None],
+    on_frame: Callable[[int], None],
 ) -> Iterator[DecodedMediaEvent]:
     video = scans[0].header.video
     assert video is not None and video.nominal_frame_rate is not None
@@ -654,6 +658,7 @@ def _master_events(
                         color_matrix=event.color_matrix,
                         color_range=event.color_range,
                     )
+                    on_frame(output_frame)
                     output_frame += 1
                     seen_frames += 1
             if seen_frames != scan.frames:
@@ -697,11 +702,19 @@ def _master_events(
 
 @app.entrypoint
 def assemble_video(
-    payload: AssembleVideoRequest, ctx: Context, decoder: MediaDecoder, out: Outputs
+    payload: AssembleVideoRequest,
+    ctx: Context,
+    decoder: MediaDecoder,
+    out: Outputs,
+    tel: Telemetry,
 ) -> AssembleVideoResponse:
     check = ctx.raise_if_cancelled
     tolerance = out.video_audio_frame_samples
-    scans = [_scan_video(decoder, item, check) for item in payload.videos]
+    scan_step = tel.step_callback(len(payload.videos), stage="scan")
+    scans = []
+    for index, item in enumerate(payload.videos):
+        scans.append(_scan_video(decoder, item, check))
+        scan_step(index)
     video_format = scans[0].header.video
     assert video_format is not None and video_format.nominal_frame_rate is not None
     if video_format.nominal_frame_rate != 24:
@@ -741,6 +754,7 @@ def assemble_video(
                 rgb_hashes,
                 global_gain=global_gain,
                 check=check,
+                on_frame=tel.step_callback(output_frames, stage="assemble"),
             )
         )
         audio_mode: Literal["segments", "master"] = "segments"
@@ -773,6 +787,7 @@ def assemble_video(
                 target_audio=target_audio,
                 padding=audio_padded,
                 check=check,
+                on_frame=tel.step_callback(output_frames, stage="assemble"),
             )
         )
         audio_mode = "master"
