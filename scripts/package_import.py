@@ -37,7 +37,6 @@ PACKAGES = {
                                         "numpy", "PIL.Image", "tensorfs", "av")),
     "minimax-h3": ("h3", ("torch", "torchvision", "torchvision.ops", "triton", "transformers",
                   "diffusers", "tensorfs", "av")),
-    "quantize": ("tensorhub_quantize", ("numpy", "msgspec")),
     "h3-quality-gate": ("h3_quality_gate", ("cozy_eval", "numpy", "msgspec")),
     "minimax-h3-tools": ("h3_tables.job", ("torch", "triton", "numpy", "msgspec")),
 }
