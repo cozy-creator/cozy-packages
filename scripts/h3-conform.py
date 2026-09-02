@@ -644,12 +644,14 @@ def arm_text_conditioner() -> None:
         result = derive(
             package.H3Model(),
             Artifact("se-018-audit", {}, Config(model_config)),
-            release="se-018-audit",
-            application="h3:h3.app",
-            hardware_variant="sm90",
-            declared_variants=("sm90",),
         )
-        return cast(dict[str, object], result.contract.render())
+        return {
+            "schema": "cozy.runtime.model_construction_contract.v1",
+            "destination_sets": [
+                {"component": row.component, "keys": list(row.keys)}
+                for row in result.destination_sets
+            ],
+        }
 
     first_contract = contract_document()
     second_contract = contract_document()
@@ -1300,7 +1302,8 @@ def arm_descriptor() -> None:
             fields,
         )
         check(f"{name} shared model", entry["models"][0]["class"], "H3Model")
-        check(f"{name} carries no task-selection stamp", entry["models"][0]["stamps"], {})
+        check(f"{name} carries no retired stamps member", "stamps" in entry["models"][0], False)
+        check(f"{name} slot admits encoded leaves", entry["models"][0]["encoded_leaves"], "accept")
         component_use = entry["models"][0]["component_use"]
         check(
             f"{name} task DiT lease exists",

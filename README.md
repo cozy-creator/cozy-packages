@@ -9,7 +9,7 @@ conformance drivers, and default development bindings.
 | path | responsibility |
 |---|---|
 | `h3/` | MiniMax H3 dual-task package; immutable deployment binding selects FULL or AdaLN-pruned weights |
-| `sdxl/` | SDXL text-to-image package plus the family's three-lane quantize job (se-008, cr-073); default binding is WAI Illustrious |
+| `sdxl/` | SDXL text-to-image package plus the family's lane-selecting quantize job (se-008, cr-073, se-023); default binding is WAI Illustrious |
 | `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
 | `quality-judge/` | evaluation actions (ev-003) |
 | `video-assembly/` | fixed CPU-only 2-8-shot streaming assembler (se-014) |
