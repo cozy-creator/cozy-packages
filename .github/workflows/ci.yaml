@@ -22,7 +22,7 @@ jobs:
         run: |
           uv venv --python 3.12
           uv pip install \
-            "cozy-runtime>=0.1,<1" \
+            "cozy-runtime>=0.2.6,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences
@@ -36,13 +36,13 @@ jobs:
       - name: Types
         run: uv run --no-project mypy
 
-      - name: Descriptors are current
+      - name: Package interfaces are current
         run: |
-          test "$(uv run --no-project cozy-runtime --json --dir minimax-h3 describe)" = "$(cat minimax-h3/package.descriptor.json)"
-          test "$(uv run --no-project cozy-runtime --json --dir anima describe)" = "$(cat anima/package.descriptor.json)"
-          test "$(uv run --no-project cozy-runtime --json --dir quality-judge describe)" = "$(cat quality-judge/package.descriptor.json)"
-          test "$(uv run --no-project cozy-runtime --json --dir sdxl describe)" = "$(cat sdxl/package.descriptor.json)"
-          test "$(uv run --no-project cozy-runtime --json --dir h3-quality-gate describe)" = "$(cat h3-quality-gate/package.descriptor.json)"
+          test "$(uv run --no-project cozy-runtime --json --dir minimax-h3 describe)" = "$(cat minimax-h3/metadata/package-interface.json)"
+          test "$(uv run --no-project cozy-runtime --json --dir anima describe)" = "$(cat anima/metadata/package-interface.json)"
+          test "$(uv run --no-project cozy-runtime --json --dir quality-judge describe)" = "$(cat quality-judge/metadata/package-interface.json)"
+          test "$(uv run --no-project cozy-runtime --json --dir sdxl describe)" = "$(cat sdxl/metadata/package-interface.json)"
+          test "$(uv run --no-project cozy-runtime --json --dir h3-quality-gate describe)" = "$(cat h3-quality-gate/metadata/package-interface.json)"
 
       # A package with no `[project]` pyproject and no lock resolves no `ResolvedWheelSet`
       # and cannot publish at all, so a stale or absent lock is a release-blocking fact and
@@ -158,5 +158,5 @@ jobs:
       - run: uv run --project video-assembly ruff check video-assembly
       - run: uv run --project video-assembly ruff format --check video-assembly
       - run: cd video-assembly && uv run mypy
-      - run: test "$(uv run --project video-assembly cozy-runtime --json --dir video-assembly describe)" = "$(cat video-assembly/package.descriptor.json)"
+      - run: test "$(uv run --project video-assembly cozy-runtime --json --dir video-assembly describe)" = "$(cat video-assembly/metadata/package-interface.json)"
       - run: uv run --project video-assembly python video-assembly/live.py

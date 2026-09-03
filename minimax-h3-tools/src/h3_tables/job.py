@@ -52,12 +52,6 @@ app = App()
 PLAIN_SPEC = "sha256:71409d585d82c513f364ac730d2f573f0261828c4700ce653333a758d15e14bd"
 FP8_SPEC = "sha256:8c86b26daec5bcd287401d9873b70aa3594855f97ac4d01cf75cc2bafd5d50b5"
 MXFP8_SPEC = "sha256:796a50ed4d63e0b7cfc70a8cd797a5fe796bba64cb3143de4d35f059653f5d80"
-FULL_TOPOLOGY = (
-    "sha256:d5a786f0fff4cde9301b7aeac19b171d8ce82679c30bb29437d1ae5d3af7b101"
-)
-PRUNED_TOPOLOGY = (
-    "sha256:c1bd44b74abbe85a377f4187243bfc109046f532027ec4241b8f121cee17909d"
-)
 
 TABLE_BYTES = 288_347_136
 SOURCE_READ_CHUNK = 32 << 20
@@ -588,30 +582,10 @@ def _receipt(transaction: WeightsTransaction) -> WeightsReceipt:
 @app.job(
     name="four-lane",
     weights=(
-        WeightsOutput(
-            "bf16-full",
-            max_new_bytes=MAX_FULL_BYTES,
-            topology_digest=FULL_TOPOLOGY,
-            encodings=(PLAIN_SPEC,),
-        ),
-        WeightsOutput(
-            "bf16-adaln-pruned",
-            max_new_bytes=MAX_PRUNED_BYTES,
-            topology_digest=PRUNED_TOPOLOGY,
-            encodings=(PLAIN_SPEC,),
-        ),
-        WeightsOutput(
-            "fp8-adaln-pruned",
-            max_new_bytes=MAX_QUANTIZED_BYTES,
-            topology_digest=PRUNED_TOPOLOGY,
-            encodings=(PLAIN_SPEC, FP8_SPEC),
-        ),
-        WeightsOutput(
-            "mxfp8-adaln-pruned",
-            max_new_bytes=MAX_QUANTIZED_BYTES,
-            topology_digest=PRUNED_TOPOLOGY,
-            encodings=(PLAIN_SPEC, MXFP8_SPEC),
-        ),
+        WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES),
+        WeightsOutput("bf16-adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES),
+        WeightsOutput("fp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES),
+        WeightsOutput("mxfp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES),
     ),
     # Default [bindings] for these slots arrive once the minimax-h3 model repo
     # exists on the hub (H3 ingest, se-022/th-109 residue); until then no slot

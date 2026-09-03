@@ -1268,11 +1268,11 @@ def arm_output_gates() -> None:
     )
 
 
-def arm_descriptor() -> None:
+def arm_interface() -> None:
     print("\n== committed public surface ==")
-    descriptor_path = H3 / "package.descriptor.json"
-    descriptor = json.loads(descriptor_path.read_text())
-    entries = {entry["name"]: entry for entry in descriptor["entrypoints"]}
+    interface_path = H3 / "metadata" / "package-interface.json"
+    interface = json.loads(interface_path.read_text())
+    entries = {entry["name"]: entry for entry in interface["entrypoints"]}
     surfaces = {surface.name: surface for surface in describe(package.app)}
     check(
         "exact action names",
@@ -1329,7 +1329,7 @@ ARMS = {
     "processor": arm_processor,
     "media": arm_media,
     "gates": arm_output_gates,
-    "descriptor": arm_descriptor,
+    "interface": arm_interface,
 }
 
 

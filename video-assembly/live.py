@@ -279,9 +279,10 @@ def run(
         Outputs(attempt),
         fake_telemetry(attempt, context),
     )
-    if attempt.position != response.output_frames:
+    expected_progress = len(videos) + response.output_frames
+    if attempt.position != expected_progress:
         raise AssertionError(
-            f"assemble progress ended at position {attempt.position}, not {response.output_frames}"
+            f"scan+assemble progress ended at position {attempt.position}, not {expected_progress}"
         )
     if not decode_output:
         return response, None
