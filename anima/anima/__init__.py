@@ -97,6 +97,12 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     #: behaviour; the swept default lands only with its quality bank.
     cfg_interval_start: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.0
     cfg_interval_stop: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 1.0
+    #: First-block cache (cr-086 arm 2, FBCache): when the first transformer block's
+    #: residual moves less than this threshold between steps, the remaining 27 blocks are
+    #: skipped and the cached tail residual is reused. 0.0 is OFF — exactly today's
+    #: behaviour; the swept default lands only with its quality bank. Cond and uncond
+    #: passes keep separate cache states under this package's sequential batch-1 CFG.
+    first_block_cache: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.0
     seed: int = 1005
 
 
@@ -179,6 +185,7 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         steps: int,
         guidance: float,
         cfg_interval: tuple[float, float],
+        first_block_cache: float,
         seed: int,
         tel: Telemetry,
     ) -> Any:
@@ -204,21 +211,26 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         # Diffusers 0.40 stores the interval on private attrs set by BaseGuidance.__init__;
         # outside [start, stop) num_conditions == 1 and the uncond forward never runs.
         pipeline.guider._start, pipeline.guider._stop = cfg_interval
+        transformer = self.pipe.components["transformer"]
+        restore_cache = _apply_first_block_cache(transformer, pipeline.guider, first_block_cache)
         denoise = pipeline.blocks.sub_blocks.get("denoise.denoise")
         if denoise is None:
             raise RuntimeError("Diffusers Anima workflow has no denoise.denoise block")
         denoise.progress_bar = _progress_bar(tel)
         tel.progress(0, stage="conditioning", overall_fraction=0.0)
-        result = pipeline(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            width=width,
-            height=height,
-            num_inference_steps=steps,
-            generator=generator,
-            output="images",
-            output_type="pt",
-        )
+        try:
+            result = pipeline(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                width=width,
+                height=height,
+                num_inference_steps=steps,
+                generator=generator,
+                output="images",
+                output_type="pt",
+            )
+        finally:
+            restore_cache()
         tel.progress(1, stage="decoding", overall_fraction=0.98)
         return result
 
@@ -289,6 +301,7 @@ def generate(
             steps,
             payload.guidance,
             (payload.cfg_interval_start, payload.cfg_interval_stop),
+            payload.first_block_cache,
             payload.seed,
             tel,
         )
@@ -303,6 +316,56 @@ def generate(
     return ImageOutput(
         asset, width, height, steps, payload.guidance, hashlib.sha256(rgb).hexdigest()
     )
+
+
+def _apply_first_block_cache(transformer: Any, guider: Any, threshold: float) -> Callable[[], None]:
+    """Attach FBCache hooks for one request; returns the restore. 0.0 attaches nothing.
+
+    Diffusers ships `apply_first_block_cache` but its registry does not know
+    `CosmosTransformerBlock` — the one-line registration below is the whole shim. Under
+    this package's sequential batch-1 CFG the cond and uncond forwards would otherwise
+    share one residual cache and compare cond against uncond; wrapping the transformer
+    forward in a per-condition `cache_context` keeps the two streams separate. Hooks are
+    request-scoped (the HiDiffusion precedent in sdxl): removed in the restore so the
+    resident module leaves exactly as it entered.
+    """
+    if threshold <= 0.0:
+        return lambda: None
+    from diffusers.hooks._helpers import TransformerBlockMetadata, TransformerBlockRegistry
+    from diffusers.hooks.first_block_cache import (
+        _FBC_BLOCK_HOOK,
+        _FBC_LEADER_BLOCK_HOOK,
+        FirstBlockCacheConfig,
+        apply_first_block_cache,
+    )
+    from diffusers.hooks.hooks import HookRegistry
+    from diffusers.models.transformers.transformer_cosmos import CosmosTransformerBlock
+
+    try:
+        TransformerBlockRegistry.get(CosmosTransformerBlock)
+    except ValueError:
+        TransformerBlockRegistry.register(
+            CosmosTransformerBlock,
+            TransformerBlockMetadata(return_hidden_states_index=0),
+        )
+    apply_first_block_cache(transformer, FirstBlockCacheConfig(threshold=threshold))
+    original_forward = transformer.forward
+
+    def forward(*args: Any, **kwargs: Any) -> Any:
+        with transformer.cache_context("cond" if guider.is_conditional else "uncond"):
+            return original_forward(*args, **kwargs)
+
+    transformer.forward = forward
+
+    def restore() -> None:
+        transformer.forward = original_forward
+        for block in transformer.transformer_blocks:
+            registry = HookRegistry.check_if_exists_or_initialize(block)
+            for name in (_FBC_LEADER_BLOCK_HOOK, _FBC_BLOCK_HOOK):
+                if name in registry.hooks:
+                    registry.remove_hook(name, recurse=False)
+
+    return restore
 
 
 # ------------------------------------------------------------------ the quantize job
