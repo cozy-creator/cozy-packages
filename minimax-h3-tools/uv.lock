@@ -35,7 +35,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.2.13"
+version = "0.2.14"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -45,9 +45,9 @@ dependencies = [
     { name = "pillow" },
     { name = "protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a6/99/2570b81192412d0d04169931f5d86dd6e2226d39cc2f3027971918a9f00e/cozy_runtime-0.2.13.tar.gz", hash = "sha256:de8fd3446d4f85f551fc003fdbab47e49d6c04be128aa179f6415c81cc440a20", size = 1096707, upload-time = "2026-09-03T03:47:29.597Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8d/f2/b743e9eada0c43aca8eb23462a90726cf817daa02fabcdf17bf982d47f5d/cozy_runtime-0.2.14.tar.gz", hash = "sha256:95303d03d6a87f9f7667a2a45883f28e8c20236454144c0f0dc99be1b9ef4d17", size = 1097126, upload-time = "2026-09-03T04:24:13.284Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7b/c1/4acf664b8ce62f7b1cd4d849984e2831a9649cda680f10bd044bb2688bc2/cozy_runtime-0.2.13-py3-none-any.whl", hash = "sha256:d178514616e9120365ddd5daad141802f906827249d1dad99fc1422fe41ed7c5", size = 881911, upload-time = "2026-09-03T03:47:27.513Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/3b/fda622b49742d1153aa237e4969dbbf4dedba49cd00692b0017cc5e5c067/cozy_runtime-0.2.14-py3-none-any.whl", hash = "sha256:c1e822cb5b09b6e8d8db669ebd4f455d23bf2d1d84885263699c87fa47d273f4", size = 882383, upload-time = "2026-09-03T04:24:11.18Z" },
 ]
 
 [[package]]
@@ -202,7 +202,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3-tools"
-version = "2.2.3"
+version = "2.2.4"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime" },
@@ -220,7 +220,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", specifier = ">=0.2.13,<1.0.0" },
+    { name = "cozy-runtime", specifier = ">=0.2.14,<1.0.0" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "torch", specifier = ">=2.13,<3" },
