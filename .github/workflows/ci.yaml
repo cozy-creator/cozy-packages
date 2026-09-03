@@ -22,7 +22,7 @@ jobs:
         run: |
           uv venv --python 3.12
           uv pip install \
-            "cozy-runtime>=0.2.11,<1" \
+            "cozy-runtime>=0.2.12,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences
@@ -140,7 +140,9 @@ jobs:
         run: ${{ matrix.package }}/.venv/bin/python scripts/package_import.py ${{ matrix.package }}
       - name: H3 table construction order proof
         if: matrix.package == 'minimax-h3-tools'
-        run: minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/order-proof.py
+        run: |
+          minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/order-proof.py
+          minimax-h3-tools/.venv/bin/python scripts/tensorfs_seeds.py
         env:
           PYTHONPATH: minimax-h3-tools/src
 
