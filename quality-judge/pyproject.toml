@@ -14,7 +14,7 @@ name = "quality-judge"
 version = "1.0.11"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "cozy-runtime[media]>=0.2.7,<1",
+    "cozy-runtime[media]>=0.2.9,<1",
     "hf-xet==1.6.0",
     "msgspec>=0.19",
     "numpy>=1.26",
@@ -23,7 +23,7 @@ dependencies = [
     "regex==2026.7.19",
     "safetensors==0.8.0",
     "shellingham==1.5.4",
-    "tensorfs>=0.2.1,<1",
+    "tensorfs>=0.3.0,<1",
     "tokenizers>=0.22",
     "torch>=2.13,<3",
     "transformers==5.16.1",
