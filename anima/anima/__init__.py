@@ -91,6 +91,12 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP2
     steps: Annotated[ModelDefault[int], msgspec.Meta(ge=8, le=50)] = 30
     guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=1.0, le=10.0)] = 4.5
+    #: CFG interval (cr-086 arm 1, Kynkäänniemi et al., NeurIPS 2024): guidance helps only
+    #: in a middle band of the noise schedule, so the uncond forward is skipped outside
+    #: [start, stop) of the step fraction. (0, 1) is full-range CFG — exactly today's
+    #: behaviour; the swept default lands only with its quality bank.
+    cfg_interval_start: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.0
+    cfg_interval_stop: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 1.0
     seed: int = 1005
 
 
@@ -172,6 +178,7 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         height: int,
         steps: int,
         guidance: float,
+        cfg_interval: tuple[float, float],
         seed: int,
         tel: Telemetry,
     ) -> Any:
@@ -194,6 +201,9 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
             t5_tokenizer=self.pipe.t5_tokenizer,
         )
         pipeline.guider.guidance_scale = guidance
+        # Diffusers 0.40 stores the interval on private attrs set by BaseGuidance.__init__;
+        # outside [start, stop) num_conditions == 1 and the uncond forward never runs.
+        pipeline.guider._start, pipeline.guider._stop = cfg_interval
         denoise = pipeline.blocks.sub_blocks.get("denoise.denoise")
         if denoise is None:
             raise RuntimeError("Diffusers Anima workflow has no denoise.denoise block")
@@ -266,6 +276,10 @@ def generate(
     if ctx.boot_warmup:
         width = height = 512
         steps = 1
+    if payload.cfg_interval_start > payload.cfg_interval_stop:
+        raise UnsupportedInput(
+            "cfg_interval_start must not exceed cfg_interval_stop", code="cfg_interval"
+        )
     with tel.stage("generate"):
         images = model.render(
             payload.prompt,
@@ -274,6 +288,7 @@ def generate(
             height,
             steps,
             payload.guidance,
+            (payload.cfg_interval_start, payload.cfg_interval_stop),
             payload.seed,
             tel,
         )
