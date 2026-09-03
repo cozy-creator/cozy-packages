@@ -1,5 +1,5 @@
 owner: codex /root/package_runtime_tf03
-purpose: cut all package sources to cozy-runtime 0.2.9 and tensorfs 0.3.0, regenerate package interfaces, and prepare seven publication refs
-branch: codex/runtime029-tensorfs030
-base: 050d59a9f16f00a749052a5150590df660b621ec
+purpose: cut all seven package sources and interfaces to cozy-runtime 0.2.11
+branch: codex/runtime0211
+base: c756c45df9535cab8a45ec09e5e4e1815fd76de4
 started: 2026-09-03
