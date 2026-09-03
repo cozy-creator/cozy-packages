@@ -350,10 +350,16 @@ def _apply_first_block_cache(transformer: Any, guider: Any, threshold: float) ->
         )
     apply_first_block_cache(transformer, FirstBlockCacheConfig(threshold=threshold))
     original_forward = transformer.forward
+    registry = HookRegistry.check_if_exists_or_initialize(transformer)
 
     def forward(*args: Any, **kwargs: Any) -> Any:
-        with transformer.cache_context("cond" if guider.is_conditional else "uncond"):
+        # CosmosTransformer3DModel predates diffusers' CacheMixin, so the context is set
+        # on the hook registry directly — the same two calls `cache_context` makes.
+        registry._set_context("cond" if guider.is_conditional else "uncond")
+        try:
             return original_forward(*args, **kwargs)
+        finally:
+            registry._set_context(None)
 
     transformer.forward = forward
 
