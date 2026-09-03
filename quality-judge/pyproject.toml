@@ -14,7 +14,7 @@ name = "quality-judge"
 version = "1.0.11"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "cozy-runtime[media]>=0.2.10,<1",
+    "cozy-runtime[media]>=0.2.11,<1",
     "hf-xet==1.6.0",
     "msgspec>=0.19",
     "numpy>=1.26",
