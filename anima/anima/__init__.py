@@ -7,8 +7,9 @@ import json
 from collections.abc import Callable
 from enum import Enum, IntEnum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
+import cozy_runtime.derive as derive
 import msgspec
 from cozy_runtime.author import (
     App,
@@ -22,6 +23,9 @@ from cozy_runtime.author import (
     Outputs,
     Shape,
     Telemetry,
+    UnsupportedInput,
+    WeightsOutput,
+    WeightsSink,
     uses_components,
 )
 
@@ -87,6 +91,18 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP2
     steps: Annotated[ModelDefault[int], msgspec.Meta(ge=8, le=50)] = 30
     guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=1.0, le=10.0)] = 4.5
+    #: CFG interval (cr-086 arm 1, Kynkäänniemi et al., NeurIPS 2024): guidance helps only
+    #: in a middle band of the noise schedule, so the uncond forward is skipped outside
+    #: [start, stop) of the step fraction. (0, 1) is full-range CFG — exactly today's
+    #: behaviour; the swept default lands only with its quality bank.
+    cfg_interval_start: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.0
+    cfg_interval_stop: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 1.0
+    #: First-block cache (cr-086 arm 2, FBCache): when the first transformer block's
+    #: residual moves less than this threshold between steps, the remaining 27 blocks are
+    #: skipped and the cached tail residual is reused. 0.0 is OFF — exactly today's
+    #: behaviour; the swept default lands only with its quality bank. Cond and uncond
+    #: passes keep separate cache states under this package's sequential batch-1 CFG.
+    first_block_cache: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.0
     seed: int = 1005
 
 
@@ -150,7 +166,10 @@ def build_pipeline(config: Any) -> AnimaPipeline:
     return AnimaPipeline(config)
 
 
-class AnimaModel(Model[AnimaPipeline]):
+class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
+    """Touches its components through their forward passes only, so an encoded lane may
+    replace DiT linears with native leaves (the fp8 lane's whole point on sm89)."""
+
     pipe: AnimaPipeline
 
     def load(self, loader: Loader) -> None:
@@ -165,6 +184,8 @@ class AnimaModel(Model[AnimaPipeline]):
         height: int,
         steps: int,
         guidance: float,
+        cfg_interval: tuple[float, float],
+        first_block_cache: float,
         seed: int,
         tel: Telemetry,
     ) -> Any:
@@ -187,21 +208,29 @@ class AnimaModel(Model[AnimaPipeline]):
             t5_tokenizer=self.pipe.t5_tokenizer,
         )
         pipeline.guider.guidance_scale = guidance
+        # Diffusers 0.40 stores the interval on private attrs set by BaseGuidance.__init__;
+        # outside [start, stop) num_conditions == 1 and the uncond forward never runs.
+        pipeline.guider._start, pipeline.guider._stop = cfg_interval
+        transformer = self.pipe.components["transformer"]
+        restore_cache = _apply_first_block_cache(transformer, pipeline.guider, first_block_cache)
         denoise = pipeline.blocks.sub_blocks.get("denoise.denoise")
         if denoise is None:
             raise RuntimeError("Diffusers Anima workflow has no denoise.denoise block")
         denoise.progress_bar = _progress_bar(tel)
         tel.progress(0, stage="conditioning", overall_fraction=0.0)
-        result = pipeline(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            width=width,
-            height=height,
-            num_inference_steps=steps,
-            generator=generator,
-            output="images",
-            output_type="pt",
-        )
+        try:
+            result = pipeline(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                width=width,
+                height=height,
+                num_inference_steps=steps,
+                generator=generator,
+                output="images",
+                output_type="pt",
+            )
+        finally:
+            restore_cache()
         tel.progress(1, stage="decoding", overall_fraction=0.98)
         return result
 
@@ -259,6 +288,10 @@ def generate(
     if ctx.boot_warmup:
         width = height = 512
         steps = 1
+    if payload.cfg_interval_start > payload.cfg_interval_stop:
+        raise UnsupportedInput(
+            "cfg_interval_start must not exceed cfg_interval_stop", code="cfg_interval"
+        )
     with tel.stage("generate"):
         images = model.render(
             payload.prompt,
@@ -267,6 +300,8 @@ def generate(
             height,
             steps,
             payload.guidance,
+            (payload.cfg_interval_start, payload.cfg_interval_stop),
+            payload.first_block_cache,
             payload.seed,
             tel,
         )
@@ -281,3 +316,112 @@ def generate(
     return ImageOutput(
         asset, width, height, steps, payload.guidance, hashlib.sha256(rgb).hexdigest()
     )
+
+
+def _apply_first_block_cache(transformer: Any, guider: Any, threshold: float) -> Callable[[], None]:
+    """Attach FBCache hooks for one request; returns the restore. 0.0 attaches nothing.
+
+    Diffusers ships `apply_first_block_cache` but its registry does not know
+    `CosmosTransformerBlock` — the one-line registration below is the whole shim. Under
+    this package's sequential batch-1 CFG the cond and uncond forwards would otherwise
+    share one residual cache and compare cond against uncond; wrapping the transformer
+    forward in a per-condition `cache_context` keeps the two streams separate. Hooks are
+    request-scoped (the HiDiffusion precedent in sdxl): removed in the restore so the
+    resident module leaves exactly as it entered.
+    """
+    if threshold <= 0.0:
+        return lambda: None
+    from diffusers.hooks._helpers import TransformerBlockMetadata, TransformerBlockRegistry
+    from diffusers.hooks.first_block_cache import (
+        _FBC_BLOCK_HOOK,
+        _FBC_LEADER_BLOCK_HOOK,
+        FirstBlockCacheConfig,
+        apply_first_block_cache,
+    )
+    from diffusers.hooks.hooks import HookRegistry
+    from diffusers.models.transformers.transformer_cosmos import CosmosTransformerBlock
+
+    try:
+        TransformerBlockRegistry.get(CosmosTransformerBlock)
+    except ValueError:
+        TransformerBlockRegistry.register(
+            CosmosTransformerBlock,
+            TransformerBlockMetadata(return_hidden_states_index=0),
+        )
+    apply_first_block_cache(transformer, FirstBlockCacheConfig(threshold=threshold))
+    original_forward = transformer.forward
+    registry = HookRegistry.check_if_exists_or_initialize(transformer)
+
+    def forward(*args: Any, **kwargs: Any) -> Any:
+        # CosmosTransformer3DModel predates diffusers' CacheMixin, so the context is set
+        # on the hook registry directly — the same two calls `cache_context` makes.
+        registry._set_context("cond" if guider.is_conditional else "uncond")
+        try:
+            return original_forward(*args, **kwargs)
+        finally:
+            registry._set_context(None)
+
+    transformer.forward = forward
+
+    def restore() -> None:
+        transformer.forward = original_forward
+        for block in transformer.transformer_blocks:
+            registry = HookRegistry.check_if_exists_or_initialize(block)
+            for name in (_FBC_LEADER_BLOCK_HOOK, _FBC_BLOCK_HOOK):
+                if name in registry.hooks:
+                    registry.remove_hook(name, recurse=False)
+
+    return restore
+
+
+# ------------------------------------------------------------------ the quantize job
+
+
+#: The family's derived DiT encodings by lane (se-009/cr-086, same shape as sdxl's
+#: se-023 job). `bf16` is not an output: the SOURCE is the canonical BF16 cut. Only the
+#: transformer quantizes — text encoder, conditioner and VAE stay at source precision.
+_LANE_ENCODINGS: dict[str, str] = {"fp8": "fp8-rowwise/1", "mxfp8": "mxfp8/1"}
+_LANE_BYTES = 16 << 30
+
+Lane = Literal["fp8", "mxfp8"]
+
+
+class QuantizeInput(msgspec.Struct, forbid_unknown_fields=True):
+    lanes: Annotated[tuple[Lane, ...], msgspec.Meta(min_length=1)] = ("fp8", "mxfp8")
+    max_relative_frobenius: float | None = None
+
+
+class QuantizedLanes(msgspec.Struct):
+    """Each requested lane's full `derive.QuantizeResult`; an unrequested lane is null."""
+
+    fp8: derive.QuantizeResult | None = None
+    mxfp8: derive.QuantizeResult | None = None
+
+
+@app.job(
+    name="quantize",
+    weights=tuple(WeightsOutput(lane, max_new_bytes=_LANE_BYTES) for lane in _LANE_ENCODINGS),
+)
+def quantize(
+    ctx: Context,
+    payload: QuantizeInput,
+    source: AnimaModel,
+    weights: WeightsSink,
+    tel: Telemetry,
+) -> QuantizedLanes:
+    """Derive the requested row-wise DiT lanes from one reviewed BF16 source."""
+    if len(set(payload.lanes)) != len(payload.lanes):
+        raise UnsupportedInput("quantize lanes must be unique", code="quantization_lanes")
+    results = {
+        lane: derive.quantize(
+            source,
+            derive.plan(
+                ("transformer",),
+                _LANE_ENCODINGS[lane],
+                max_relative_frobenius=payload.max_relative_frobenius,
+            ),
+            sink=weights, ctx=ctx, tel=tel, output=lane,
+        )
+        for lane in payload.lanes
+    }
+    return QuantizedLanes(fp8=results.get("fp8"), mxfp8=results.get("mxfp8"))
