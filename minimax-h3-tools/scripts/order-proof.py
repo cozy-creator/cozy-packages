@@ -16,6 +16,7 @@ from cozy_runtime.derive.quantization import (
 from h3_tables.job import (
     FP8_SPEC,
     MXFP8_SPEC,
+    PLAIN_SPEC,
     TABLE_BYTES,
     _full_order,
     _full_targets,
@@ -27,6 +28,7 @@ from h3_tables.model_config import parse_production_config
 from h3_tables.order import current_order
 from h3_tables.plans import parse_declared_plan, parse_plan
 from h3_tables.source import source_only_keys, text_source_only_keys
+from tensorfs import seed_digests
 
 PROJECT = Path(__file__).resolve().parents[1]
 ASSETS = PROJECT / "src/h3_tables/assets"
@@ -41,6 +43,17 @@ def refuse(raw: bytes, task: str) -> None:
 
 
 def main() -> None:
+    seeds = set(seed_digests())
+    expected_seeds = {
+        ("plain/1", PLAIN_SPEC),
+        ("fp8-rowwise/1", FP8_SPEC),
+        ("mxfp8/1", MXFP8_SPEC),
+    }
+    if not expected_seeds <= seeds:
+        raise RuntimeError(
+            f"package encoding identities are not TensorFS seeds: "
+            f"{sorted(expected_seeds - seeds)}"
+        )
     sections = parse_production_config((ASSETS / "model-config.json").read_bytes())
     whole = current_order((ASSETS / "whole-order.json").read_bytes())
     full = _full_order(sections, whole.rows)

@@ -1,5 +1,5 @@
 owner: codex /root/package_runtime_tf03
-purpose: cut all seven package sources and interfaces to cozy-runtime 0.2.11
-branch: codex/runtime0211
-base: c756c45df9535cab8a45ec09e5e4e1815fd76de4
+purpose: hardcut package TensorFS seed identities and relock all seven packages on Runtime 0.2.12
+branch: codex/tf03-seed-runtime0212
+base: 36f9d2bfadcfc50306b7f69a91519611c5ab5041
 started: 2026-09-03
