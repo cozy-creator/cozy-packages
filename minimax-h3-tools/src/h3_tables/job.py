@@ -242,7 +242,6 @@ def _generate_timestep_table(
         },
         configs={
             "model": WeightsConfig(
-                media_type="application/json",
                 data=config_bytes,
                 length=len(config_bytes),
             )
@@ -395,9 +394,7 @@ def assemble_full(
         sources={"dits": dits, "shared": shared},
         targets=_full_targets(),
         configs={
-            "model": WeightsConfig(
-                media_type="application/json", data=config, length=len(config)
-            )
+            "model": WeightsConfig(data=config, length=len(config))
         },
         order=_full_order(sections, current.rows),
     )
@@ -449,9 +446,7 @@ def assemble_dual(
         sources={"fl2va": fl2va, "ref2va": ref2va, "shared": shared},
         targets=_dual_targets(),
         configs={
-            "model": WeightsConfig(
-                media_type="application/json", data=config, length=len(config)
-            )
+            "model": WeightsConfig(data=config, length=len(config))
         },
         order=order.rows,
     ) as transaction:
@@ -615,7 +610,6 @@ def four_lane(
             targets=_full_targets(),
             configs={
                 "model": WeightsConfig(
-                    media_type="application/json",
                     data=full_config,
                     length=len(full_config),
                 )
@@ -629,7 +623,6 @@ def four_lane(
     pruned_config = dual_adaln_pruned_config(sections, fl_plan, ref_plan)
     config = {
         "model": WeightsConfig(
-            media_type="application/json",
             data=pruned_config,
             length=len(pruned_config),
         )
