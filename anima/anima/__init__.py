@@ -7,8 +7,9 @@ import json
 from collections.abc import Callable
 from enum import Enum, IntEnum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
+import cozy_runtime.derive as derive
 import msgspec
 from cozy_runtime.author import (
     App,
@@ -22,6 +23,9 @@ from cozy_runtime.author import (
     Outputs,
     Shape,
     Telemetry,
+    UnsupportedInput,
+    WeightsOutput,
+    WeightsSink,
     uses_components,
 )
 
@@ -150,7 +154,10 @@ def build_pipeline(config: Any) -> AnimaPipeline:
     return AnimaPipeline(config)
 
 
-class AnimaModel(Model[AnimaPipeline]):
+class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
+    """Touches its components through their forward passes only, so an encoded lane may
+    replace DiT linears with native leaves (the fp8 lane's whole point on sm89)."""
+
     pipe: AnimaPipeline
 
     def load(self, loader: Loader) -> None:
@@ -281,3 +288,56 @@ def generate(
     return ImageOutput(
         asset, width, height, steps, payload.guidance, hashlib.sha256(rgb).hexdigest()
     )
+
+
+# ------------------------------------------------------------------ the quantize job
+
+
+#: The family's derived DiT encodings by lane (se-009/cr-086, same shape as sdxl's
+#: se-023 job). `bf16` is not an output: the SOURCE is the canonical BF16 cut. Only the
+#: transformer quantizes — text encoder, conditioner and VAE stay at source precision.
+_LANE_ENCODINGS: dict[str, str] = {"fp8": "fp8-rowwise/1", "mxfp8": "mxfp8/1"}
+_LANE_BYTES = 16 << 30
+
+Lane = Literal["fp8", "mxfp8"]
+
+
+class QuantizeInput(msgspec.Struct, forbid_unknown_fields=True):
+    lanes: Annotated[tuple[Lane, ...], msgspec.Meta(min_length=1)] = ("fp8", "mxfp8")
+    max_relative_frobenius: float | None = None
+
+
+class QuantizedLanes(msgspec.Struct):
+    """Each requested lane's full `derive.QuantizeResult`; an unrequested lane is null."""
+
+    fp8: derive.QuantizeResult | None = None
+    mxfp8: derive.QuantizeResult | None = None
+
+
+@app.job(
+    name="quantize",
+    weights=tuple(WeightsOutput(lane, max_new_bytes=_LANE_BYTES) for lane in _LANE_ENCODINGS),
+)
+def quantize(
+    ctx: Context,
+    payload: QuantizeInput,
+    source: AnimaModel,
+    weights: WeightsSink,
+    tel: Telemetry,
+) -> QuantizedLanes:
+    """Derive the requested row-wise DiT lanes from one reviewed BF16 source."""
+    if len(set(payload.lanes)) != len(payload.lanes):
+        raise UnsupportedInput("quantize lanes must be unique", code="quantization_lanes")
+    results = {
+        lane: derive.quantize(
+            source,
+            derive.plan(
+                ("transformer",),
+                _LANE_ENCODINGS[lane],
+                max_relative_frobenius=payload.max_relative_frobenius,
+            ),
+            sink=weights, ctx=ctx, tel=tel, output=lane,
+        )
+        for lane in payload.lanes
+    }
+    return QuantizedLanes(fp8=results.get("fp8"), mxfp8=results.get("mxfp8"))
