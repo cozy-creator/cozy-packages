@@ -710,9 +710,7 @@ def assemble_video(
 ) -> AssembleVideoResponse:
     check = ctx.raise_if_cancelled
     tolerance = out.video_audio_frame_samples
-    scan_step = tel.step_callback(
-        len(payload.videos), stage="scan", overall_range=(0.00, 0.10)
-    )
+    scan_step = tel.step_callback(len(payload.videos), stage="scan", overall_range=(0.00, 0.10))
     scans = []
     for index, item in enumerate(payload.videos):
         scans.append(_scan_video(decoder, item, check))
