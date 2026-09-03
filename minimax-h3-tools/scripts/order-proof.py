@@ -15,10 +15,7 @@ from cozy_runtime.derive.quantization import (
 )
 from h3_tables.job import (
     FP8_SPEC,
-    FULL_TOPOLOGY,
     MXFP8_SPEC,
-    PLAIN_SPEC,
-    PRUNED_TOPOLOGY,
     TABLE_BYTES,
     _full_order,
     _full_targets,
@@ -124,12 +121,14 @@ def main() -> None:
         changed["evaluations"][0]["video_sigma"] = (0.5).hex()
         refuse(canonical_json.encode(changed), task)
 
-    descriptor = json.loads((PROJECT / "package.descriptor.json").read_bytes())
-    if "model_productions" in descriptor:
+    package_interface = json.loads(
+        (PROJECT / "metadata" / "package-interface.json").read_bytes()
+    )
+    if "model_productions" in package_interface:
         raise RuntimeError("package retained the retired model-production graph")
-    declared = descriptor.get("jobs")
+    declared = package_interface.get("jobs")
     if not isinstance(declared, list):
-        raise TypeError("package jobs are not one descriptor list")
+        raise TypeError("package jobs are not one interface list")
     jobs = {str(row["name"]): row for row in declared}
     if set(jobs) != {
         "assemble_dual",
@@ -144,29 +143,16 @@ def main() -> None:
     if set(models) != {"four-lane.models.dits", "four-lane.models.shared"}:
         raise RuntimeError("four-lane changed its two typed source slots")
     outputs = {output["output_id"]: output for output in job["weights_outputs"]}
-    contracts = {
-        "bf16-full": {
-            "topology_digest": FULL_TOPOLOGY,
-            "encodings": [PLAIN_SPEC],
-        },
-        "bf16-adaln-pruned": {
-            "topology_digest": PRUNED_TOPOLOGY,
-            "encodings": [PLAIN_SPEC],
-        },
-        "fp8-adaln-pruned": {
-            "topology_digest": PRUNED_TOPOLOGY,
-            "encodings": sorted((PLAIN_SPEC, FP8_SPEC)),
-        },
-        "mxfp8-adaln-pruned": {
-            "topology_digest": PRUNED_TOPOLOGY,
-            "encodings": sorted((PLAIN_SPEC, MXFP8_SPEC)),
-        },
+    expected_outputs = {
+        "bf16-full",
+        "bf16-adaln-pruned",
+        "fp8-adaln-pruned",
+        "mxfp8-adaln-pruned",
     }
-    if set(outputs) != set(contracts):
+    if set(outputs) != expected_outputs:
         raise RuntimeError("four-lane changed its exact output set")
-    for name, contract in contracts.items():
-        if outputs[name].get("required_contract") != contract:
-            raise RuntimeError(f"{name} changed its exact TensorFS contract")
+    if any("required_contract" in output for output in outputs.values()):
+        raise RuntimeError("four-lane retained a publish-time tensor requirements contract")
     if "resources" in job:
         raise RuntimeError(
             "four-lane should derive and measure resources instead of authoring them"

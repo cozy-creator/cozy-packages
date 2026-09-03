@@ -517,13 +517,13 @@ def generate(
     # 1.0 the negative branch is worth its second forward pass, at or below it is not.
     classifier_free = payload.guidance > 1.0
 
-    with tel.stage("tokenize"):
+    with tel.stage("tokenize", overall_range=(0.00, 0.02)):
         tokenizers = (_tokenizer("tokenizer"), _tokenizer("tokenizer_2"))
         ids, ids_2 = _tokenize(tokenizers, payload.prompt)
         if classifier_free:
             neg, neg_2 = _tokenize(tokenizers, payload.negative_prompt)
 
-    with tel.stage("encode"):
+    with tel.stage("encode", overall_range=(0.02, 0.10)):
         prompt, pooled = model.encode(ids, ids_2)
         if classifier_free:
             negative, neg_pooled = model.encode(neg, neg_2)
@@ -559,12 +559,12 @@ def generate(
     else:
         batch_prompt, batch_pooled, batch_ids = prompt, pooled, time_ids
 
-    on_step = tel.step_callback(steps, stage="denoise")
+    on_step = tel.step_callback(steps, stage="denoise", overall_range=(0.10, 0.90))
     # HiDiffusion's window-attention shift uses torch's CPU RNG. Isolate and seed it from
     # the request so a canceled or concurrent history cannot change this request's output.
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(payload.seed)
-        with tel.stage("denoise"):
+        with tel.stage("denoise", overall_range=(0.10, 0.90)):
             for index, timestep in enumerate(scheduler.timesteps):
                 ctx.raise_if_cancelled()
                 batch = torch.cat([latents] * 2) if classifier_free else latents
@@ -588,7 +588,7 @@ def generate(
                 on_step(index)
     tel.metric("latent_absmax", _finite(torch, latents))
 
-    with tel.stage("decode"):
+    with tel.stage("decode", overall_range=(0.90, 0.98)):
         image = model.decode(latents)
     tel.metric("image_absmax", _finite(torch, image))
     pixels = ((image / 2 + 0.5).clamp(0, 1)[0] * 255).to(torch.uint8).permute(1, 2, 0).contiguous()
@@ -597,7 +597,7 @@ def generate(
     rgb = bytes(pixels.cpu().numpy().tobytes())
     decoded_h, decoded_w = int(pixels.shape[0]), int(pixels.shape[1])
     tel.metric("decoded_pixels", float(decoded_w * decoded_h))
-    with tel.stage("encode_webp"):
+    with tel.stage("encode_webp", overall_range=(0.98, 1.00)):
         asset = out.save_image(ImageFrame(decoded_w, decoded_h, rgb), format="webp")
     return ImageOutput(
         image=asset,

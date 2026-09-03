@@ -35,13 +35,13 @@ than as a convention someone remembers:
                           production.
   9. h3-binding-identity  H3 releases describe content, never tracker issue numbers; every
                           default model binding selects the same immutable release.
-10. descriptor-minimality
-                          committed descriptor/1 files carry no retired unused facts.
+10. interface-minimality
+                          committed interface/1 files carry no retired unused facts.
  11. h3-adaln-pruned-vocabulary
                           H3 source and contracts carry no retired modulation spelling.
 12. typed-model-bindings package.toml names selected model resources with `model` only.
-13. package-manifest-hardcut
-                          package.toml and PackageDescriptor/1 are the only source metadata;
+13. package-metadata-hardcut
+                          package.toml and PackageInterface/1 are the only source metadata;
                           the retired source filenames and canonical namespace are absent.
 14. private-h3-shapes    H3 config, plan, and probe files are identified by their package
                           member and strict shape, not another globally versioned schema tag.
@@ -613,14 +613,15 @@ def fence_anima_defaults() -> Fence:
 
 
 def fence_step_progress() -> Fence:
-    """Every generation loop reports measured steps through `tel.step_callback` (cl-104).
+    """Every generation loop reports stage steps and package-owned overall ranges.
 
     Paul's ruling: no denoising (or comparably long iterative) loop runs silently — each
     iteration posts an incremental update on Runtime's measured lane."""
 
-    def calls(path: pathlib.Path) -> tuple[set[str], set[str]]:
+    def calls(path: pathlib.Path) -> tuple[set[str], set[str], set[str]]:
         progress: set[str] = set()
         steps: set[str] = set()
+        overall: set[str] = set()
         for node in ast.walk(ast.parse(path.read_text())):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                 continue
@@ -636,15 +637,24 @@ def fence_step_progress() -> Fence:
             )
             if node.func.attr == "progress" and stage:
                 progress.add(stage)
+                if any(keyword.arg == "overall_fraction" for keyword in node.keywords):
+                    overall.add(stage)
             if node.func.attr == "step_callback" and stage:
                 steps.add(stage)
-        return progress, steps
+                if any(keyword.arg == "overall_range" for keyword in node.keywords):
+                    overall.add(stage)
+        return progress, steps, overall
 
     bad: list[str] = []
-    anima_progress, anima_steps = calls(ROOT / "anima" / "anima" / "__init__.py")
+    anima_progress, anima_steps, anima_overall = calls(
+        ROOT / "anima" / "anima" / "__init__.py"
+    )
     stage_gap = {"conditioning", "decoding"} - anima_progress
     if stage_gap:
         bad.append(f"anima: missing progress stages {sorted(stage_gap)}")
+    overall_gap = {"conditioning", "denoise", "decoding"} - anima_overall
+    if overall_gap:
+        bad.append(f"anima: missing overall progress for stages {sorted(overall_gap)}")
     required: dict[str, set[str]] = {
         "anima/anima/__init__.py": {"denoise"},
         "sdxl/sdxl/__init__.py": {"denoise"},
@@ -652,27 +662,34 @@ def fence_step_progress() -> Fence:
         "video-assembly/video_assembly.py": {"scan", "assemble"},
     }
     for rel, stages in required.items():
-        steps = anima_steps if rel.startswith("anima/") else calls(ROOT / rel)[1]
+        _, steps, overall = (
+            (anima_progress, anima_steps, anima_overall)
+            if rel.startswith("anima/")
+            else calls(ROOT / rel)
+        )
         missing = stages - steps
         if missing:
             bad.append(f"{rel}: no measured step_callback for stages {sorted(missing)}")
-    return bad, "every generation loop reports measured steps (anima, sdxl, h3, video-assembly)"
+        missing_overall = stages - overall
+        if missing_overall:
+            bad.append(f"{rel}: no overall_range for stages {sorted(missing_overall)}")
+    return bad, "generation loops report measured stage steps and overall ranges"
 
 
-def fence_descriptor_format() -> Fence:
-    """Every descriptor is exactly a descriptor/1 document with the four root fields."""
+def fence_interface_format() -> Fence:
+    """Every interface is exactly an interface/1 document with the four root fields."""
     expected = {"application", "entrypoints", "format", "jobs"}
     bad: list[str] = []
     for project in projects():
-        path = project / "package.descriptor.json"
+        path = project / "metadata" / "package-interface.json"
         try:
             document = json.loads(path.read_bytes())
         except (OSError, json.JSONDecodeError) as exc:
             bad.append(f"{rel(path)}: unreadable: {exc}")
             continue
-        if set(document) != expected or document.get("format") != "cozy.package.descriptor/1":
-            bad.append(f"{rel(path)}: root fields/format are not exact descriptor/1")
-    return bad, f"{len(projects())} descriptor/1 files carry the four root fields"
+        if set(document) != expected or document.get("format") != "cozy.package.interface/1":
+            bad.append(f"{rel(path)}: root fields/format are not exact interface/1")
+    return bad, f"{len(projects())} interface/1 files carry the four root fields"
 
 
 def fence_publication_metadata() -> Fence:
@@ -703,8 +720,8 @@ def fence_publication_metadata() -> Fence:
         applications = (
             entry_points.get("cozy.application") if isinstance(entry_points, dict) else None
         )
-        package_manifest = tomllib.loads((project / "package.toml").read_text())
-        application = package_manifest.get("application")
+        package_config = tomllib.loads((project / "package.toml").read_text())
+        application = package_config.get("application")
         expected = application.get("object") if isinstance(application, dict) else None
         if not isinstance(applications, dict) or list(applications.values()) != [expected]:
             bad.append(
@@ -728,7 +745,7 @@ FENCES = (
     ("sdxl-defaults", fence_sdxl_defaults),
     ("anima-defaults", fence_anima_defaults),
     ("step-progress", fence_step_progress),
-    ("descriptor-format", fence_descriptor_format),
+    ("interface-format", fence_interface_format),
     ("publication-metadata", fence_publication_metadata),
 )
 

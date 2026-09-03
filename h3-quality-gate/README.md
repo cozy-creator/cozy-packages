@@ -10,5 +10,5 @@ remain unmeasured, and the job never renders media or selects a public model lan
 The implementation stays in the shared `cozy-jobs` library so metric identity, digest handling,
 red arms, and the noise-floor reader have one owner. Its metric core is the portable
 `cozy-eval==2.3.3` wheel. This project is the thin deployable Package surface: it supplies an exact
-lock, wheel, PackageDescriptor, and application import. The job is CPU-only and declares an 8 GiB
+lock, wheel, PackageInterface, and application import. The job is CPU-only and declares an 8 GiB
 host-RAM floor.

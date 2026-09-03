@@ -561,7 +561,8 @@ def h3_quality_gate(
             audio_source=audio_source,
         )
 
-    with tel.stage("reference"):
+    total_arms = len(payload.candidates) + 1
+    with tel.stage("reference", overall_range=(0.0, 1.0 / total_arms)):
         ref_m = measure(payload.reference)
     ref_video, ref_audio = ref_m.video, ref_m.audio
     if ref_m.structural != "COHERENT":
@@ -573,8 +574,11 @@ def h3_quality_gate(
     floor_table = floor.table if floor is not None else {}
     arms: list[ArmResult] = []
     measured_assets: dict[str, list[dict[str, Any]]] = {}
-    for candidate in payload.candidates:
-        with tel.stage(f"candidate:{candidate.approximation_site or candidate.manifest_id[:16]}"):
+    for index, candidate in enumerate(payload.candidates, start=1):
+        with tel.stage(
+            f"candidate:{candidate.approximation_site or candidate.manifest_id[:16]}",
+            overall_range=(index / total_arms, (index + 1) / total_arms),
+        ):
             m = measure(candidate)
         measured_assets[candidate.manifest_id] = m.assets
         video_failed, video_unmeasured = _gate(m.video, payload.protocol.video)
