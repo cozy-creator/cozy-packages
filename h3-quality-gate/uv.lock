@@ -84,7 +84,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.2.12"
+version = "0.2.13"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -94,9 +94,9 @@ dependencies = [
     { name = "pillow" },
     { name = "protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/75/e1/64a10f8c8cc6c0b8c87112dc4cdfe9fafe83e6a4b6661c650f22b2c9d02e/cozy_runtime-0.2.12.tar.gz", hash = "sha256:4c2f9bf8812c759819933fa1b75056fb1e38ab5bcebabcaf13c10eb1522971ab", size = 1095758, upload-time = "2026-09-03T03:28:24.959Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a6/99/2570b81192412d0d04169931f5d86dd6e2226d39cc2f3027971918a9f00e/cozy_runtime-0.2.13.tar.gz", hash = "sha256:de8fd3446d4f85f551fc003fdbab47e49d6c04be128aa179f6415c81cc440a20", size = 1096707, upload-time = "2026-09-03T03:47:29.597Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7c/cc/c378be314242519334bb55960f7f8d00ed8858c72ab612a7e5b12930e5aa/cozy_runtime-0.2.12-py3-none-any.whl", hash = "sha256:31335c556e95ef9e9c6e7d9bd55823132b73e3b164473ec6f9dcee744b6dd421", size = 881762, upload-time = "2026-09-03T03:28:23.282Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/c1/4acf664b8ce62f7b1cd4d849984e2831a9649cda680f10bd044bb2688bc2/cozy_runtime-0.2.13-py3-none-any.whl", hash = "sha256:d178514616e9120365ddd5daad141802f906827249d1dad99fc1422fe41ed7c5", size = 881911, upload-time = "2026-09-03T03:47:27.513Z" },
 ]
 
 [[package]]
@@ -176,7 +176,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cozy-eval", specifier = ">=0.1,<1" },
-    { name = "cozy-runtime", specifier = ">=0.2.12,<1.0.0" },
+    { name = "cozy-runtime", specifier = ">=0.2.13,<1.0.0" },
     { name = "msgspec", specifier = ">=0.19" },
 ]
 
