@@ -1,5 +1,5 @@
-owner: codex /root/runtime023_fleet_package_repin
-purpose: vendor Runtime 0.0.23 into Anima and SDXL and make patch releases
-branch: codex/runtime023-package-repin
-base: e8d9e4d7b9a8e8d49f99d853aa8ab0642a318f4c
-started: 2026-08-31
+owner: codex /root/package_runtime_tf03
+purpose: cut all package sources to cozy-runtime 0.2.9 and tensorfs 0.3.0, regenerate package interfaces, and prepare seven publication refs
+branch: codex/runtime029-tensorfs030
+base: 050d59a9f16f00a749052a5150590df660b621ec
+started: 2026-09-03
