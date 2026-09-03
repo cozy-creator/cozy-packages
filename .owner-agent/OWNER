@@ -1,5 +1,5 @@
 owner: codex /root/package_runtime_tf03
-purpose: hardcut package TensorFS seed identities and relock all seven packages on Runtime 0.2.12
-branch: codex/tf03-seed-runtime0212
-base: 36f9d2bfadcfc50306b7f69a91519611c5ab5041
+purpose: relock all seven package sources and interfaces on cozy-runtime 0.2.13
+branch: codex/runtime0213
+base: da3b1c756fff10a6b7fa1be3bb044273492f58fd
 started: 2026-09-03
