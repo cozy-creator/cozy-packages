@@ -138,6 +138,13 @@ jobs:
       # against the wrong torch, and nothing cheaper observes that.
       - name: The locked stack imports
         run: ${{ matrix.package }}/.venv/bin/python scripts/package_import.py ${{ matrix.package }}
+      # The progress meter is only observable by RUNNING the seam: se-026's denoise hook was
+      # installed on a deepcopy of the block tree, so every static check stayed green while
+      # the meter sat frozen for the whole render. These arms execute Diffusers' own loop.
+      - name: Anima progress arms
+        if: matrix.package == 'anima'
+        run: anima/.venv/bin/python scripts/anima-conform.py
+
       - name: H3 table construction order proof
         if: matrix.package == 'minimax-h3-tools'
         run: |

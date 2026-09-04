@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from enum import Enum, IntEnum
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from types import TracebackType
+from typing import Annotated, Any, Literal, NamedTuple
 
 import cozy_runtime.derive as derive
 import msgspec
@@ -82,6 +84,29 @@ _TIER_DEMAND: dict[Megapixels, tuple[int, int]] = {
     for tier in Megapixels
 }
 _WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
+
+
+class _Phase(NamedTuple):
+    """One render phase: the stage name a person reads, and its overall-progress span."""
+
+    stage: str
+    start: float
+    stop: float
+
+    @property
+    def bounds(self) -> tuple[float, float]:
+        return self.start, self.stop
+
+
+#: The render ladder. `cozy run list` renders "<stage> <percent>" verbatim, so these names
+#: are read by a person; the spans are contiguous and cover the whole request. Only
+#: `denoise` is measured per step — it is the only phase long enough to need it, and at the
+#: default 1536 class it is 150 of the roughly 160 seconds.
+_ENCODE_PROMPT = _Phase("encoding prompt", 0.00, 0.06)
+_CONDITION = _Phase("conditioning", 0.06, 0.10)
+_DENOISE = _Phase("denoise", 0.10, 0.90)
+_DECODE = _Phase("decoding", 0.90, 0.98)
+_SAVE = _Phase("saving image", 0.98, 1.00)
 
 #: The official Anima model card's negative prompt, verbatim (se-026). Owner-labelled bank
 #: 2026-09-02: with seed, steps, guidance and geometry fixed, THIS string is the quality
@@ -222,19 +247,14 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         first_block_cache: float,
         seed: int,
         tel: Telemetry,
+        phases: _Phases,
     ) -> Any:
         import torch
-        from diffusers import AnimaModularPipeline, FlowMatchEulerDiscreteScheduler
+        from diffusers import FlowMatchEulerDiscreteScheduler
 
         device = next(self.pipe.components["transformer"].parameters()).device
         generator = torch.Generator(device=device).manual_seed(seed)
-
-        class RuntimeAnimaPipeline(AnimaModularPipeline):
-            @property
-            def _execution_device(self) -> Any:
-                return device
-
-        pipeline: Any = RuntimeAnimaPipeline(workflow="text2image")
+        pipeline: Any = _text2image_pipeline(device, tel, phases)
         pipeline.register_components(
             **self.pipe.components,
             scheduler=FlowMatchEulerDiscreteScheduler.from_config(self.pipe.scheduler_config),
@@ -247,11 +267,7 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         pipeline.guider._start, pipeline.guider._stop = cfg_interval
         transformer = self.pipe.components["transformer"]
         restore_cache = _apply_first_block_cache(transformer, pipeline.guider, first_block_cache)
-        denoise = pipeline.blocks.sub_blocks.get("denoise.denoise")
-        if denoise is None:
-            raise RuntimeError("Diffusers Anima workflow has no denoise.denoise block")
-        denoise.progress_bar = _progress_bar(tel)
-        tel.progress(0, stage="conditioning", overall_fraction=0.0)
+        phases.enter(_ENCODE_PROMPT)
         try:
             result = pipeline(
                 prompt=prompt,
@@ -265,23 +281,95 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
             )
         finally:
             restore_cache()
-        tel.progress(1, stage="decoding", overall_fraction=0.98)
         return result
+
+
+def _text2image_pipeline(device: Any, tel: Telemetry, phases: _Phases) -> Any:
+    """The text2image pipeline, instrumented on the blocks it will actually run.
+
+    `ModularPipeline.blocks` is a property returning a DEEPCOPY, so a hook installed through
+    it is thrown away and the meter never moves — the whole of the frozen `conditioning 0%`
+    defect (se-026). `blocks=` hands the pipeline the object it keeps, and the identity is
+    the fix: `scripts/anima-conform.py` executes Diffusers' own loop driver against it.
+    """
+    from diffusers import AnimaAutoBlocks, AnimaModularPipeline
+    from diffusers.modular_pipelines import ModularPipelineBlocks
+
+    class Announce(ModularPipelineBlocks):
+        """A weightless block whose only effect is to advance the meter."""
+
+        model_name = "anima"
+
+        @property
+        def description(self) -> str:
+            return "Announces Anima's conditioning phase to Runtime telemetry."
+
+        def __call__(self, components: Any, state: Any) -> tuple[Any, Any]:
+            phases.enter(_CONDITION)
+            return components, state
+
+    class RuntimeAnimaPipeline(AnimaModularPipeline):
+        @property
+        def _execution_device(self) -> Any:
+            return device
+
+    blocks = AnimaAutoBlocks().get_workflow("text2image")
+    order = list(blocks.sub_blocks)
+    if not {"denoise.denoise", "denoise.text_conditioning"} <= set(order):
+        raise RuntimeError(f"Diffusers Anima text2image blocks changed: {order}")
+    blocks.sub_blocks["denoise.denoise"].progress_bar = _progress_bar(tel, phases)
+    blocks.sub_blocks.insert("conditioning", Announce(), order.index("denoise.text_conditioning"))
+    return RuntimeAnimaPipeline(blocks=blocks)
+
+
+class _Phases:
+    """The one open `tel.stage` bracket, advanced from inside Diffusers' opaque call.
+
+    `pipeline(...)` runs text encoding, conditioning, denoise and decode behind a single
+    call, so the brackets are opened and closed by the blocks themselves rather than by
+    `with` statements around them.
+    """
+
+    def __init__(self, tel: Telemetry) -> None:
+        self.tel = tel
+        self.open: AbstractContextManager[None] | None = None
+
+    def enter(self, phase: _Phase) -> None:
+        self.close()
+        self.open = self.tel.stage(phase.stage, overall_range=phase.bounds)
+        self.open.__enter__()
+
+    def close(self) -> None:
+        self.__exit__(None, None, None)
+
+    def __enter__(self) -> _Phases:
+        return self
+
+    def __exit__(
+        self,
+        kind: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        bracket, self.open = self.open, None
+        if bracket is not None:
+            bracket.__exit__(kind, exc, traceback)
 
 
 class _DenoiseProgress:
     """Diffusers' denoise-loop progress bar projected onto Runtime telemetry."""
 
-    def __init__(self, total: int, tel: Telemetry) -> None:
+    def __init__(self, total: int, tel: Telemetry, phases: _Phases) -> None:
         self.total = total
         self.tel = tel
+        self.phases = phases
         self.position = 0
         self.step: Callable[[int], None] | None = None
 
     def __enter__(self) -> _DenoiseProgress:
-        self.tel.progress(1, stage="conditioning", overall_fraction=0.10)
+        self.phases.enter(_DENOISE)
         self.step = self.tel.step_callback(
-            self.total, stage="denoise", overall_range=(0.10, 0.90)
+            self.total, stage=_DENOISE.stage, overall_range=_DENOISE.bounds
         )
         return self
 
@@ -294,14 +382,14 @@ class _DenoiseProgress:
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         if exc_type is None:
-            self.tel.progress(0, stage="decoding", overall_fraction=0.90)
+            self.phases.enter(_DECODE)
 
 
-def _progress_bar(tel: Telemetry) -> Callable[..., _DenoiseProgress]:
+def _progress_bar(tel: Telemetry, phases: _Phases) -> Callable[..., _DenoiseProgress]:
     def progress_bar(iterable: object = None, total: int | None = None) -> _DenoiseProgress:
         if iterable is not None or total is None or total < 1:
             raise RuntimeError("Anima denoise progress requires one positive total")
-        return _DenoiseProgress(total, tel)
+        return _DenoiseProgress(total, tel, phases)
 
     return progress_bar
 
@@ -326,7 +414,7 @@ def generate(
         raise UnsupportedInput(
             "cfg_interval_start must not exceed cfg_interval_stop", code="cfg_interval"
         )
-    with tel.stage("generate"):
+    with _Phases(tel) as phases:
         images = model.render(
             payload.quality_prefix + payload.prompt,
             payload.negative_prompt,
@@ -338,14 +426,17 @@ def generate(
             payload.first_block_cache,
             payload.seed,
             tel,
+            phases,
         )
-    image = images[0]
-    pixels = (image.clamp(0, 1) * 255).to("cpu", dtype=torch.uint8)
-    if pixels.ndim == 3 and pixels.shape[0] == 3:
-        pixels = pixels.permute(1, 2, 0)
-    pixels = pixels.contiguous()
-    rgb = bytes(pixels.numpy().tobytes())
-    with tel.stage("encode_webp", overall_range=(0.98, 1.00)):
+        # Still `decoding`: the pipeline left that bracket open and the host copy below is
+        # the tail of the same work.
+        image = images[0]
+        pixels = (image.clamp(0, 1) * 255).to("cpu", dtype=torch.uint8)
+        if pixels.ndim == 3 and pixels.shape[0] == 3:
+            pixels = pixels.permute(1, 2, 0)
+        pixels = pixels.contiguous()
+        rgb = bytes(pixels.numpy().tobytes())
+        phases.enter(_SAVE)
         asset = out.save_image(ImageFrame(width, height, rgb), format="webp")
     return ImageOutput(
         asset, width, height, steps, payload.guidance, hashlib.sha256(rgb).hexdigest()
