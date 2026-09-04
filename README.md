@@ -147,6 +147,100 @@ This keeps model inference, media transformation, and lifecycle recovery separat
 `generate_long`, package loop, hidden child invocation, community interpolation path, or second
 workflow ledger in this repository.
 
+## Anima
+
+### The default negative prompt is the model's quality knob
+
+`generate.negative_prompt` defaults to the official Anima card negative, verbatim:
+
+```
+worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, chromatic aberration
+```
+
+This is not stylistic taste. Anima's score-bucket conditioning acts through the NEGATIVE, so
+what the negative pushes away decides the aesthetic. The owner-labelled bank of 2026-09-02
+(se-026, `~/.cozy/outputs/paul-anima/research-20260902/`) holds same-seed pairs with seed,
+steps, guidance and geometry fixed: both labelled winners carry this string and the labelled
+loser carries the previous default `low quality, worst quality, blurry`. The loser also
+carried `score_7, safe` in its POSITIVE prompt and still lost, and one winner carried no
+positive quality prefix at all — so the negative is the isolated cause and the positive
+prefix is not.
+
+`artist name` is a literal Danbooru tag; it suppresses rendered signature text rather than
+naming an artist.
+
+Passing `negative_prompt` replaces this default whole. `negative_prompt=""` is a legal way to
+run with no negative at all.
+
+### The package injects nothing into the prompt
+
+`prompt` reaches the sampler exactly as the caller wrote it. There is no server-side quality
+preamble and no content-rating tag.
+
+**Recorded decision (Paul, 2026-09-03).** se-026 proposed a typed `rating` enum
+(`safe`/`sensitive`/`nsfw`/`explicit`, default `safe`) prepended server-side, because the
+research observed two neutral prompts producing NSFW output. The owner declined it: *"don't
+include `safe` in the prompt."* The consequence is recorded rather than mitigated — **a
+neutral prompt can return NSFW output, by design, and callers who want a rating apply the tag
+themselves.** The owner labelled one such output a winner (`117dafeb…`, "NSFW-leaning, no
+`safe`"), so this is an informed choice about what the model is for, not an oversight.
+
+The same reasoning covers a quality preamble: prepending `masterpiece, best quality` to every
+request would be invisible and would fight a caller who asked for `crayon drawing, childlike,
+naive`. Conventions that help belong in the prompt the caller writes, which is what the rest
+of this section is for.
+
+### Sampling shortcuts: one on, one off, both exposed
+
+Both were measured on an sm89 RTX 4070 Laptop (8 GiB) at the package's own default 1536
+class, bf16 verbatim lane, seed 1005, 30 steps, guidance 4.5 (se-026, 2026-09-03).
+
+| configuration | denoise loop | verdict |
+|---|---:|---|
+| full CFG, no cache (previous default) | 205 s | the owner-approved reference pixels |
+| `cfg_interval` 0.15–0.7 | 156 s (-24%) | **ON by default** |
+| `first_block_cache` 0.075 alone | — | **refused**: `device_shortfall` on 8 GiB, 3/3 runs |
+| both | 86 s (-58%) | survives, but only because CFG interval masks the cache's cost |
+
+**`cfg_interval_start` / `cfg_interval_stop` default to 0.15 / 0.7.** Guidance contributes
+almost nothing outside a middle band of the noise schedule, so the unconditional forward is
+skipped there. Every block still runs on every step: the mechanism is subtractive and
+bounded, and its failure mode is uniform rather than structural. Pass `0.0` / `1.0` for
+full-range CFG.
+
+**`first_block_cache` defaults to 0.0 (off).** It skips 27 of 28 blocks whenever the first
+block's residual moves less than the threshold, on the assumption the whole network moves
+like its first block. Measured at 0.075 rather than assumed:
+
+- it extrapolates **44% of forwards** (alternating skip/compute; the final steps always compute);
+- against the same seed it consistently **smooths faces and coarsens fine texture** — the two
+  places where the first block is a poor proxy for the other 27;
+- the cached residuals stay live, so it **costs VRAM**: alone at the 1536 class it refuses
+  `device_shortfall` on an 8 GiB card, reproducibly. It survives only when `cfg_interval` is
+  also narrowing the live cache states.
+
+Turn it on per request when throughput matters more than faces.
+
+### Card conventions, for whoever is writing the prompt
+
+`paul/anima@1.0.0` is CircleStone Labs **Anima Base v1.0** (`circlestone-labs/Anima-Base-v1.0-Diffusers`).
+
+- **Two independent quality-tag systems**, and any combination of them works: the
+  aesthetic-classifier buckets `score_1`…`score_9` (`score_9` is the maximum; the card
+  suggests `score_7` to stay out of slop territory) and the human-scored ladder
+  `masterpiece / best quality / good quality / normal quality / low quality / worst quality`.
+  **Aesthetic-variant checkpoints omit `score_*` entirely** — those tags belong to Base.
+- **Rating tags**: `safe`, `sensitive`, `nsfw`, `explicit`. Nothing supplies one by default.
+- **Tags** are lowercase Danbooru, spaces not underscores (Gelbooru spelling on conflicts).
+- **Artists** are `@name`.
+- **Tag order**: quality / meta / year / rating → count → character → series → artist → general.
+- **Year** tags are `year 2025`.
+- **Weighting** is `(tag:2)`-scale — Anima needs distinctly higher factors than SDXL does.
+- **CFG 4–5 over 30–50 steps** for this checkpoint; the package defaults (guidance 4.5,
+  steps 30) sit inside that and are confirmed by the same bank. Below ~20 steps the same seed
+  goes murky and then degraded; that is a scheduler and checkpoint limit, not a default to
+  tune.
+
 ## Local verification
 
 The cheap gates require no weights or GPU:

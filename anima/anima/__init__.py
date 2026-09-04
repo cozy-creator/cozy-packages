@@ -83,25 +83,59 @@ _TIER_DEMAND: dict[Megapixels, tuple[int, int]] = {
 }
 _WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
 
+#: The official Anima model card's negative prompt, verbatim (se-026). Owner-labelled bank
+#: 2026-09-02: with seed, steps, guidance and geometry fixed, THIS string is the quality
+#: knob — Anima's score-bucket conditioning acts through the negative, so pushing away
+#: score_1/score_2/score_3 (plus jpeg artifacts, chromatic aberration, artist name — a
+#: literal tag that suppresses signature text) moves output off the model's flat dated
+#: aesthetic. The negative is the ISOLATED cause: the labelled loser carried `score_7, safe`
+#: in its positive prompt and still lost, and one labelled winner carried no positive quality
+#: prefix at all — so `quality_prefix` below reproduces the judged configuration but is not
+#: what carries the quality. Changing this string changes every render that omits the field.
+CARD_NEGATIVE = (
+    "worst quality, low quality, score_1, score_2, score_3, "
+    "artist name, blurry, jpeg artifacts, chromatic aberration"
+)
+
+#: The card's human-scored quality prefix, prepended to the caller's prompt (se-026). Every
+#: owner-approved image in the 2026-09-02 bank carried this text, so it is what a bare prompt
+#: has to reproduce to land in the configuration that was actually judged. It is a DEFAULTED
+#: FIELD, not a hidden injection: `quality_prefix=""` turns it off, and a caller whose intent
+#: it fights ("crayon drawing, childlike, naive") can say so. No rating tag rides along —
+#: se-026 proposed `safe` and the owner declined it (2026-09-03), so a neutral prompt can
+#: return NSFW output by design.
+CARD_QUALITY_PREFIX = "masterpiece, best quality, "
+
 
 class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: str
-    negative_prompt: str = "low quality, worst quality, blurry"
+    quality_prefix: str = CARD_QUALITY_PREFIX
+    negative_prompt: str = CARD_NEGATIVE
     aspect_ratio: AspectRatio = AspectRatio.SQUARE
     megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP2
     steps: Annotated[ModelDefault[int], msgspec.Meta(ge=8, le=50)] = 30
     guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=1.0, le=10.0)] = 4.5
     #: CFG interval (cr-086 arm 1, Kynkäänniemi et al., NeurIPS 2024): guidance helps only
     #: in a middle band of the noise schedule, so the uncond forward is skipped outside
-    #: [start, stop) of the step fraction. (0, 1) is full-range CFG — exactly today's
-    #: behaviour; the swept default lands only with its quality bank.
-    cfg_interval_start: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.0
-    cfg_interval_stop: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 1.0
+    #: [start, stop) of the step fraction. (0, 1) is full-range CFG. The banked default is
+    #: ON (se-026, 2026-09-03): at the default 1536 class it cut the denoise loop from 205 s
+    #: to 156 s on an sm89 4070, and the same-seed image was at least as good — the paper's
+    #: own claim is that the omitted band costs nothing. Subtractive and bounded: every block
+    #: still runs on every step, so its failure mode is uniform rather than structural.
+    cfg_interval_start: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.15
+    cfg_interval_stop: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.7
     #: First-block cache (cr-086 arm 2, FBCache): when the first transformer block's
     #: residual moves less than this threshold between steps, the remaining 27 blocks are
-    #: skipped and the cached tail residual is reused. 0.0 is OFF — exactly today's
-    #: behaviour; the swept default lands only with its quality bank. Cond and uncond
-    #: passes keep separate cache states under this package's sequential batch-1 CFG.
+    #: skipped and the cached tail residual is reused. Cond and uncond passes keep separate
+    #: cache states under this package's sequential batch-1 CFG.
+    #:
+    #: DEFAULT OFF, deliberately (se-026, 2026-09-03). Measured at 0.075 rather than assumed:
+    #: it extrapolates 44% of forwards, and against the same seed it consistently smooths
+    #: faces and coarsens fine texture — the two places the first block is a bad proxy for
+    #: the other 27. It also costs VRAM, because those cached residuals stay live: ALONE at
+    #: the default 1536 class it refuses `device_shortfall` on an 8 GiB card, reproducibly.
+    #: It survives only when `cfg_interval` happens to be narrowing the live cache states,
+    #: and a default that works only because another default masks it is not a default.
     first_block_cache: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.0
     seed: int = 1005
 
@@ -294,7 +328,7 @@ def generate(
         )
     with tel.stage("generate"):
         images = model.render(
-            payload.prompt,
+            payload.quality_prefix + payload.prompt,
             payload.negative_prompt,
             width,
             height,
