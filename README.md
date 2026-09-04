@@ -147,6 +147,69 @@ This keeps model inference, media transformation, and lifecycle recovery separat
 `generate_long`, package loop, hidden child invocation, community interpolation path, or second
 workflow ledger in this repository.
 
+## Anima
+
+### The default negative prompt is the model's quality knob
+
+`generate.negative_prompt` defaults to the official Anima card negative, verbatim:
+
+```
+worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg artifacts, chromatic aberration
+```
+
+This is not stylistic taste. Anima's score-bucket conditioning acts through the NEGATIVE, so
+what the negative pushes away decides the aesthetic. The owner-labelled bank of 2026-09-02
+(se-026, `~/.cozy/outputs/paul-anima/research-20260902/`) holds same-seed pairs with seed,
+steps, guidance and geometry fixed: both labelled winners carry this string and the labelled
+loser carries the previous default `low quality, worst quality, blurry`. The loser also
+carried `score_7, safe` in its POSITIVE prompt and still lost, and one winner carried no
+positive quality prefix at all — so the negative is the isolated cause and the positive
+prefix is not.
+
+`artist name` is a literal Danbooru tag; it suppresses rendered signature text rather than
+naming an artist.
+
+Passing `negative_prompt` replaces this default whole. `negative_prompt=""` is a legal way to
+run with no negative at all.
+
+### The package injects nothing into the prompt
+
+`prompt` reaches the sampler exactly as the caller wrote it. There is no server-side quality
+preamble and no content-rating tag.
+
+**Recorded decision (Paul, 2026-09-03).** se-026 proposed a typed `rating` enum
+(`safe`/`sensitive`/`nsfw`/`explicit`, default `safe`) prepended server-side, because the
+research observed two neutral prompts producing NSFW output. The owner declined it: *"don't
+include `safe` in the prompt."* The consequence is recorded rather than mitigated — **a
+neutral prompt can return NSFW output, by design, and callers who want a rating apply the tag
+themselves.** The owner labelled one such output a winner (`117dafeb…`, "NSFW-leaning, no
+`safe`"), so this is an informed choice about what the model is for, not an oversight.
+
+The same reasoning covers a quality preamble: prepending `masterpiece, best quality` to every
+request would be invisible and would fight a caller who asked for `crayon drawing, childlike,
+naive`. Conventions that help belong in the prompt the caller writes, which is what the rest
+of this section is for.
+
+### Card conventions, for whoever is writing the prompt
+
+`paul/anima@1.0.0` is CircleStone Labs **Anima Base v1.0** (`circlestone-labs/Anima-Base-v1.0-Diffusers`).
+
+- **Two independent quality-tag systems**, and any combination of them works: the
+  aesthetic-classifier buckets `score_1`…`score_9` (`score_9` is the maximum; the card
+  suggests `score_7` to stay out of slop territory) and the human-scored ladder
+  `masterpiece / best quality / good quality / normal quality / low quality / worst quality`.
+  **Aesthetic-variant checkpoints omit `score_*` entirely** — those tags belong to Base.
+- **Rating tags**: `safe`, `sensitive`, `nsfw`, `explicit`. Nothing supplies one by default.
+- **Tags** are lowercase Danbooru, spaces not underscores (Gelbooru spelling on conflicts).
+- **Artists** are `@name`.
+- **Tag order**: quality / meta / year / rating → count → character → series → artist → general.
+- **Year** tags are `year 2025`.
+- **Weighting** is `(tag:2)`-scale — Anima needs distinctly higher factors than SDXL does.
+- **CFG 4–5 over 30–50 steps** for this checkpoint; the package defaults (guidance 4.5,
+  steps 30) sit inside that and are confirmed by the same bank. Below ~20 steps the same seed
+  goes murky and then degraded; that is a scheduler and checkpoint limit, not a default to
+  tune.
+
 ## Local verification
 
 The cheap gates require no weights or GPU:

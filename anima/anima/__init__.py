@@ -83,10 +83,34 @@ _TIER_DEMAND: dict[Megapixels, tuple[int, int]] = {
 }
 _WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
 
+#: The official Anima model card's negative prompt, verbatim (se-026). Owner-labelled bank
+#: 2026-09-02: with seed, steps, guidance and geometry fixed, THIS string is the quality
+#: knob — Anima's score-bucket conditioning acts through the negative, so pushing away
+#: score_1/score_2/score_3 (plus jpeg artifacts, chromatic aberration, artist name — a
+#: literal tag that suppresses signature text) moves output off the model's flat dated
+#: aesthetic. The negative is the ISOLATED cause: the labelled loser carried `score_7, safe`
+#: in its positive prompt and still lost, and one labelled winner carried no positive quality
+#: prefix at all — so `quality_prefix` below reproduces the judged configuration but is not
+#: what carries the quality. Changing this string changes every render that omits the field.
+CARD_NEGATIVE = (
+    "worst quality, low quality, score_1, score_2, score_3, "
+    "artist name, blurry, jpeg artifacts, chromatic aberration"
+)
+
+#: The card's human-scored quality prefix, prepended to the caller's prompt (se-026). Every
+#: owner-approved image in the 2026-09-02 bank carried this text, so it is what a bare prompt
+#: has to reproduce to land in the configuration that was actually judged. It is a DEFAULTED
+#: FIELD, not a hidden injection: `quality_prefix=""` turns it off, and a caller whose intent
+#: it fights ("crayon drawing, childlike, naive") can say so. No rating tag rides along —
+#: se-026 proposed `safe` and the owner declined it (2026-09-03), so a neutral prompt can
+#: return NSFW output by design.
+CARD_QUALITY_PREFIX = "masterpiece, best quality, "
+
 
 class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: str
-    negative_prompt: str = "low quality, worst quality, blurry"
+    quality_prefix: str = CARD_QUALITY_PREFIX
+    negative_prompt: str = CARD_NEGATIVE
     aspect_ratio: AspectRatio = AspectRatio.SQUARE
     megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP2
     steps: Annotated[ModelDefault[int], msgspec.Meta(ge=8, le=50)] = 30
@@ -294,7 +318,7 @@ def generate(
         )
     with tel.stage("generate"):
         images = model.render(
-            payload.prompt,
+            payload.quality_prefix + payload.prompt,
             payload.negative_prompt,
             width,
             height,

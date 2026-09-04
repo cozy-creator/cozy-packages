@@ -594,8 +594,23 @@ def fence_sdxl_defaults() -> Fence:
     return bad, "SDXL binds the exact paul/wai-illustrious@17.0.0/bf16 lane"
 
 
+#: The Anima model card's negative prompt, spelled here independently of the package so a
+#: drift in either copy is a red rather than two edits agreeing with each other (se-026).
+ANIMA_CARD_NEGATIVE = (
+    "worst quality, low quality, score_1, score_2, score_3, "
+    "artist name, blurry, jpeg artifacts, chromatic aberration"
+)
+
+#: The card quality prefix the package prepends when the caller does not override it. It
+#: carries no rating tag: se-026 proposed `safe` and the owner declined it (2026-09-03), so
+#: a tag appearing here would be a silent reversal of a recorded decision.
+ANIMA_CARD_QUALITY_PREFIX = "masterpiece, best quality, "
+ANIMA_RATING_TAGS = ("safe", "sensitive", "nsfw", "explicit")
+
+
 def fence_anima_defaults() -> Fence:
-    """The bare local install selects one exact immutable model lane."""
+    """The bare local install selects one exact immutable model lane, and the request
+    default negative is the card string that carries this model's quality."""
 
     manifest = tomllib.loads((ROOT / "anima" / "package.toml").read_text())
     binding = manifest.get("bindings", {}).get("generate.models.model", {})
@@ -609,7 +624,98 @@ def fence_anima_defaults() -> Fence:
         if binding == expected
         else [f"anima/package.toml: got {binding!r}, expected {expected!r}"]
     )
-    return bad, "Anima binds the exact paul/anima@1.0.0/bf16 lane"
+    bad += _anima_field_default("negative_prompt", ANIMA_CARD_NEGATIVE)
+    bad += _anima_field_default("quality_prefix", ANIMA_CARD_QUALITY_PREFIX)
+    bad += _anima_no_rating_tag()
+    return bad, "Anima binds paul/anima@1.0.0/bf16 and defaults to the card prompt strings"
+
+
+def _anima_generate_input() -> tuple[ast.Module, ast.ClassDef | None]:
+    """The parsed anima module and its GenerateInput class."""
+    tree = ast.parse(
+        (ROOT / "anima" / "anima" / "__init__.py").read_text(),
+        filename="anima/anima/__init__.py",
+    )
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "GenerateInput":
+            return tree, node
+    return tree, None
+
+
+def _anima_field_default(field: str, expected: str) -> list[str]:
+    """One `GenerateInput` string default, read off the AST.
+
+    These defaults are the whole of se-026: they are what every request that does not spell
+    the field gets, and the owner's labelled bank isolates the negative as the causal
+    quality knob. Reading the annotated assignment rather than importing the module keeps
+    the fence static, and folding the implicit concatenation here is why the source may stay
+    wrapped.
+    """
+    tree, generate_input = _anima_generate_input()
+    if generate_input is None:
+        return ["anima/anima/__init__.py declares no GenerateInput"]
+    for item in generate_input.body:
+        if not (
+            isinstance(item, ast.AnnAssign)
+            and isinstance(item.target, ast.Name)
+            and item.target.id == field
+        ):
+            continue
+        value = _anima_literal(tree, item.value)
+        if value == expected:
+            return []
+        return [
+            f"anima GenerateInput.{field} default is {value!r}, expected {expected!r}"
+        ]
+    return [f"anima GenerateInput declares no {field} field"]
+
+
+def _anima_no_rating_tag() -> list[str]:
+    """No card rating tag rides on a package-supplied default (owner ruling, 2026-09-03).
+
+    The proposal se-026 carried was a `rating` enum prepended server-side; the owner
+    declined it in those words. A rating tag reappearing inside a default string is how that
+    decision would get reversed without anyone deciding to reverse it, so the fence reads
+    the defaults rather than trusting the field name to stay honest.
+    """
+    tree, generate_input = _anima_generate_input()
+    if generate_input is None:
+        return ["anima/anima/__init__.py declares no GenerateInput"]
+    bad: list[str] = []
+    for item in generate_input.body:
+        if not (
+            isinstance(item, ast.AnnAssign)
+            and isinstance(item.target, ast.Name)
+            and item.target.id in ("prompt", "quality_prefix")
+        ):
+            continue
+        value = _anima_literal(tree, item.value) or ""
+        tags = {tag.strip() for tag in value.split(",")}
+        found = sorted(tags.intersection(ANIMA_RATING_TAGS))
+        if found:
+            bad.append(
+                f"anima GenerateInput.{item.target.id} default supplies rating tag(s) "
+                f"{found}: the owner declined a package-supplied rating (2026-09-03)"
+            )
+    return bad
+
+
+def _anima_literal(tree: ast.Module, node: ast.expr | None) -> str | None:
+    """A str default written literally, or via ONE module-level str constant."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        for item in tree.body:
+            if (
+                isinstance(item, ast.Assign)
+                and any(
+                    isinstance(t, ast.Name) and t.id == node.id for t in item.targets
+                )
+                and isinstance(item.value, ast.Constant)
+                and isinstance(item.value.value, str)
+            ):
+                return item.value.value
+    return None
 
 
 def fence_step_progress() -> Fence:
