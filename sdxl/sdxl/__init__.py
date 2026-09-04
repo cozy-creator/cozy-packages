@@ -307,6 +307,24 @@ class SdxlPipeline:
         self.vae_scale: float = float(mapping["vae"]["scaling_factor"])
 
 
+def warmup() -> None:
+    """Pay this package's DEFERRED import cost before Runtime takes the lane's device lock.
+
+    Runtime calls this off the lock, while another tenant is still computing on the card
+    (cr-104). Every import below is one the construction would otherwise do with the card
+    already vacated for it and idle: `import diffusers` measured 2.69 s warm, and it is
+    what `_hidiffusion_unet_type` actually spends -- the subclass body itself is free.
+    Nothing here may touch the device.
+    """
+    from diffusers import (  # noqa: F401
+        AutoencoderKL,
+        EulerDiscreteScheduler,
+        UNet2DConditionModel,
+    )
+
+    _hidiffusion_unet_type()
+
+
 def build_pipeline(config: Any) -> SdxlPipeline:
     return SdxlPipeline(config)
 

@@ -221,6 +221,32 @@ class AnimaPipeline:
         }
 
 
+def warmup() -> None:
+    """Pay this package's DEFERRED import cost before Runtime takes the lane's device lock.
+
+    Runtime calls this off the lock, while another tenant is still computing on the card
+    (cr-104). `import anima` is 5 ms precisely because these are deferred, which is right
+    for every caller except the construction -- deferred, `import diffusers` (2.77 s warm)
+    lands inside it, under the lock, on the far side of the vacate. Nothing here may touch
+    the device.
+    """
+    from diffusers import (  # noqa: F401
+        AnimaAutoBlocks,
+        AnimaModularPipeline,
+        AnimaTextConditioner,
+        AutoencoderKLQwenImage,
+        CosmosTransformer3DModel,
+        FlowMatchEulerDiscreteScheduler,
+    )
+    from diffusers.modular_pipelines import ModularPipelineBlocks  # noqa: F401
+    from transformers import (  # noqa: F401
+        PreTrainedTokenizerFast,
+        Qwen3Config,
+        Qwen3Model,
+    )
+    from transformers import initialization as transformer_init  # noqa: F401
+
+
 def build_pipeline(config: Any) -> AnimaPipeline:
     return AnimaPipeline(config)
 
