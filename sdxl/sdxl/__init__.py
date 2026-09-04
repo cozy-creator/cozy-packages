@@ -329,8 +329,15 @@ def build_pipeline(config: Any) -> SdxlPipeline:
     return SdxlPipeline(config)
 
 
-class SdxlModel(Model[SdxlPipeline]):
+class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
     """Admits by pure topology satisfaction: no structural twins, so no stamp keyword.
+
+    `encoded_leaves="accept"` because every method below reaches its components through
+    their FORWARD PASS only — nothing here reads `.weight` off a UNet leaf — so the fp8
+    lane's `encoded_gemm` route may replace the UNet's 743 rank-2 leaves with native
+    ones. Without the consent this package's own fp8 lane resolves to the decode floor:
+    the encoded bytes are dequantized back to fp16 destinations at fill, which spends the
+    quantization's quality and returns neither its speed nor its residency.
 
     THREE component sets rather than one coarse whole-pipeline set. The coarse form is
     legal and simpler, and on this card it is not servable: 6.461 GiB of weights declared
