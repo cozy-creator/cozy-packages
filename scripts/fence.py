@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import ast
 import io
+import itertools
 import json
 import pathlib
 import re
@@ -606,6 +607,9 @@ ANIMA_CARD_NEGATIVE = (
 #: a tag appearing here would be a silent reversal of a recorded decision.
 ANIMA_CARD_QUALITY_PREFIX = "masterpiece, best quality, "
 ANIMA_RATING_TAGS = ("safe", "sensitive", "nsfw", "explicit")
+#: Anima's render phases, spelled here independently of the package. `cozy run list` renders
+#: "<stage> <percent>" verbatim, so a stage name is product copy a person reads.
+ANIMA_PHASE_NAMES = ("encoding prompt", "conditioning", "denoise", "decoding", "saving image")
 
 
 def fence_anima_defaults() -> Fence:
@@ -779,28 +783,14 @@ def fence_step_progress() -> Fence:
                     overall.add(stage)
         return progress, steps, overall
 
-    bad: list[str] = []
-    anima_progress, anima_steps, anima_overall = calls(
-        ROOT / "anima" / "anima" / "__init__.py"
-    )
-    stage_gap = {"conditioning", "decoding"} - anima_progress
-    if stage_gap:
-        bad.append(f"anima: missing progress stages {sorted(stage_gap)}")
-    overall_gap = {"conditioning", "denoise", "decoding"} - anima_overall
-    if overall_gap:
-        bad.append(f"anima: missing overall progress for stages {sorted(overall_gap)}")
+    bad: list[str] = _anima_progress_ladder()
     required: dict[str, set[str]] = {
-        "anima/anima/__init__.py": {"denoise"},
         "sdxl/sdxl/__init__.py": {"denoise"},
         "minimax-h3/h3.py": {"denoise"},
         "video-assembly/video_assembly.py": {"scan", "assemble"},
     }
     for rel, stages in required.items():
-        _, steps, overall = (
-            (anima_progress, anima_steps, anima_overall)
-            if rel.startswith("anima/")
-            else calls(ROOT / rel)
-        )
+        _, steps, overall = calls(ROOT / rel)
         missing = stages - steps
         if missing:
             bad.append(f"{rel}: no measured step_callback for stages {sorted(missing)}")
@@ -808,6 +798,59 @@ def fence_step_progress() -> Fence:
         if missing_overall:
             bad.append(f"{rel}: no overall_range for stages {sorted(missing_overall)}")
     return bad, "generation loops report measured stage steps and overall ranges"
+
+
+def _anima_progress_ladder() -> list[str]:
+    """Anima's phase ladder: named for a person, contiguous, and covering the request.
+
+    Anima names its stages through `_Phase` constants rather than at each call site, because
+    one modular-pipeline call spans four of them. This reads the constants, not the calls.
+
+    THE AST ONLY SAYS THE LADDER IS SPELLED RIGHT. That the hooks FIRE is
+    `scripts/anima-conform.py`'s job — se-026 shipped a denoise hook installed on a deepcopy
+    of the block tree, so a fence like this one was green while the meter sat frozen at
+    `conditioning 0%` for the whole render.
+    """
+    tree, _ = _anima_generate_input()
+    phases: dict[str, tuple[str, float, float]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        target = node.targets[0]
+        if not isinstance(node.value.func, ast.Name) or node.value.func.id != "_Phase":
+            continue
+        args = [a.value for a in node.value.args if isinstance(a, ast.Constant)]
+        named = isinstance(args[0], str) if args else False
+        numbers = [a for a in args[1:] if isinstance(a, (int, float))]
+        if isinstance(target, ast.Name) and named and len(numbers) == 2:
+            phases[target.id] = (str(args[0]), float(numbers[0]), float(numbers[1]))
+    ladder = list(phases.values())
+    bad: list[str] = []
+    if [name for name, _start, _stop in ladder] != list(ANIMA_PHASE_NAMES):
+        return [f"anima phase ladder is {[p[0] for p in ladder]}, expected {ANIMA_PHASE_NAMES}"]
+    if (ladder[0][1], ladder[-1][2]) != (0.0, 1.0):
+        bad.append(f"anima phase ladder covers {ladder[0][1]}..{ladder[-1][2]}, expected 0.0..1.0")
+    for (name, start, stop), (following, next_start, _) in itertools.pairwise(ladder):
+        if start >= stop:
+            bad.append(f"anima phase {name!r} does not advance: {start}..{stop}")
+        if stop != next_start:
+            bad.append(
+                f"anima phase gap between {name!r} and {following!r}: {stop} != {next_start}"
+            )
+    measured = {
+        phases.get(keyword.value.value.id, ("", 0.0, 0.0))[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "step_callback"
+        and any(k.arg == "overall_range" for k in node.keywords)
+        for keyword in node.keywords
+        if keyword.arg == "stage"
+        and isinstance(keyword.value, ast.Attribute)
+        and isinstance(keyword.value.value, ast.Name)
+    }
+    if "denoise" not in measured:
+        bad.append("anima: the denoise phase has no step_callback carrying its overall_range")
+    return bad
 
 
 def fence_interface_format() -> Fence:
