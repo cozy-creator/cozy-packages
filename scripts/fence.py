@@ -627,6 +627,9 @@ def fence_anima_defaults() -> Fence:
     bad += _anima_field_default("negative_prompt", ANIMA_CARD_NEGATIVE)
     bad += _anima_field_default("quality_prefix", ANIMA_CARD_QUALITY_PREFIX)
     bad += _anima_no_rating_tag()
+    bad += _anima_number_default("cfg_interval_start", "0.15")
+    bad += _anima_number_default("cfg_interval_stop", "0.7")
+    bad += _anima_number_default("first_block_cache", "0.0")
     return bad, "Anima binds paul/anima@1.0.0/bf16 and defaults to the card prompt strings"
 
 
@@ -667,6 +670,31 @@ def _anima_field_default(field: str, expected: str) -> list[str]:
         return [
             f"anima GenerateInput.{field} default is {value!r}, expected {expected!r}"
         ]
+    return [f"anima GenerateInput declares no {field} field"]
+
+
+def _anima_number_default(field: str, expected: str) -> list[str]:
+    """One `GenerateInput` numeric default, spelled as source text.
+
+    `first_block_cache` is the load-bearing one: se-026 measured it extrapolating 44% of
+    forwards, smoothing faces and coarsening fine texture, and refusing `device_shortfall`
+    at the default 1536 class on an 8 GiB card when `cfg_interval` is not also narrowing the
+    live cache states. Turning it on is a decision with a quality bank behind it, not a
+    default someone may flip while tuning.
+    """
+    _tree, generate_input = _anima_generate_input()
+    if generate_input is None:
+        return ["anima/anima/__init__.py declares no GenerateInput"]
+    for item in generate_input.body:
+        if (
+            isinstance(item, ast.AnnAssign)
+            and isinstance(item.target, ast.Name)
+            and item.target.id == field
+        ):
+            got = ast.unparse(item.value) if item.value is not None else "<none>"
+            return [] if got == expected else [
+                f"anima GenerateInput.{field} default is {got}, expected {expected}"
+            ]
     return [f"anima GenerateInput declares no {field} field"]
 
 

@@ -117,15 +117,25 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=1.0, le=10.0)] = 4.5
     #: CFG interval (cr-086 arm 1, Kynkäänniemi et al., NeurIPS 2024): guidance helps only
     #: in a middle band of the noise schedule, so the uncond forward is skipped outside
-    #: [start, stop) of the step fraction. (0, 1) is full-range CFG — exactly today's
-    #: behaviour; the swept default lands only with its quality bank.
-    cfg_interval_start: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.0
-    cfg_interval_stop: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 1.0
+    #: [start, stop) of the step fraction. (0, 1) is full-range CFG. The banked default is
+    #: ON (se-026, 2026-09-03): at the default 1536 class it cut the denoise loop from 205 s
+    #: to 156 s on an sm89 4070, and the same-seed image was at least as good — the paper's
+    #: own claim is that the omitted band costs nothing. Subtractive and bounded: every block
+    #: still runs on every step, so its failure mode is uniform rather than structural.
+    cfg_interval_start: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.15
+    cfg_interval_stop: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.7
     #: First-block cache (cr-086 arm 2, FBCache): when the first transformer block's
     #: residual moves less than this threshold between steps, the remaining 27 blocks are
-    #: skipped and the cached tail residual is reused. 0.0 is OFF — exactly today's
-    #: behaviour; the swept default lands only with its quality bank. Cond and uncond
-    #: passes keep separate cache states under this package's sequential batch-1 CFG.
+    #: skipped and the cached tail residual is reused. Cond and uncond passes keep separate
+    #: cache states under this package's sequential batch-1 CFG.
+    #:
+    #: DEFAULT OFF, deliberately (se-026, 2026-09-03). Measured at 0.075 rather than assumed:
+    #: it extrapolates 44% of forwards, and against the same seed it consistently smooths
+    #: faces and coarsens fine texture — the two places the first block is a bad proxy for
+    #: the other 27. It also costs VRAM, because those cached residuals stay live: ALONE at
+    #: the default 1536 class it refuses `device_shortfall` on an 8 GiB card, reproducibly.
+    #: It survives only when `cfg_interval` happens to be narrowing the live cache states,
+    #: and a default that works only because another default masks it is not a default.
     first_block_cache: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.0
     seed: int = 1005
 
