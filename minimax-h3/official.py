@@ -648,22 +648,33 @@ def _dit_spec(
     component = _DIT_COMPONENT[task]
     upstream = _section(mapping, component)
     extension = upstream.pop("cozy_h3", None)
-    if not isinstance(extension, Mapping) or set(extension) != {
-        "task",
-        "modulation",
-        "timestep_plan_digest",
-    }:
+    if not isinstance(extension, Mapping):
+        raise ConformanceError(
+            f"artifact config {component!r} has no closed cozy_h3 structure",
+            code="artifact_config",
+            fields=[component, "cozy_h3"],
+        )
+    structure = extension.get("modulation")
+    if structure not in {"full", "adaln-pruned"}:
+        raise ConformanceError(
+            f"artifact config {component!r} has unknown modulation structure {structure!r}",
+            code="artifact_config",
+            fields=[component, "cozy_h3", "modulation"],
+        )
+    # FULL computes modulation from live weights; only pruned tables bind a plan.
+    fields = {"task", "modulation"}
+    if structure == "adaln-pruned":
+        fields.add("timestep_plan_digest")
+    if set(extension) != fields:
         raise ConformanceError(
             f"artifact config {component!r} has no closed cozy_h3 structure",
             code="artifact_config",
             fields=[component, "cozy_h3"],
         )
     plan = canonical_timestep_plan(task)
-    expected_digest = f"sha256:{plan.digest}"
-    expected = {
-        "task": task,
-        "timestep_plan_digest": expected_digest,
-    }
+    expected: dict[str, str] = {"task": task}
+    if structure == "adaln-pruned":
+        expected["timestep_plan_digest"] = f"sha256:{plan.digest}"
     for name, want in expected.items():
         if extension[name] != want:
             raise ConformanceError(
@@ -671,13 +682,6 @@ def _dit_spec(
                 code="artifact_config",
                 fields=[component, "cozy_h3", name],
             )
-    structure = extension["modulation"]
-    if structure not in {"full", "adaln-pruned"}:
-        raise ConformanceError(
-            f"artifact config {component!r} has unknown modulation structure {structure!r}",
-            code="artifact_config",
-            fields=[component, "cozy_h3", "modulation"],
-        )
     return upstream, str(structure), plan
 
 
