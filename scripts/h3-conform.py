@@ -87,13 +87,60 @@ TOKEN_CORPUS_DIGEST = "47759c8d2e1a24944edb8f712c7ffe66b650aa3481352487970bcdb3c
 
 def dit_config(task: str, modulation: str = "full") -> dict[str, object]:
     plan = canonical_timestep_plan(cast(Any, task))
-    return {
-        "cozy_h3": {
-            "task": task,
-            "modulation": modulation,
-            "timestep_plan_digest": f"sha256:{plan.digest}",
-        }
+    extension = {"task": task, "modulation": modulation}
+    if modulation == "adaln-pruned":
+        extension["timestep_plan_digest"] = f"sha256:{plan.digest}"
+    return {"cozy_h3": extension}
+
+
+def arm_producer_configs() -> None:
+    """Pass actual producer bytes into the serving parser before any weight transfer."""
+    sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
+    from h3_tables.model_config import (
+        dual_adaln_pruned_config,
+        dual_full_config,
+        parse_production_config,
+    )
+    from h3_tables.plans import parse_plan
+
+    assets = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
+    sections = parse_production_config((assets / "model-config.json").read_bytes())
+    plans = {
+        task: parse_plan((assets / f"timestep-plan.{task}.json").read_bytes(), task=task)
+        for task in ("fl2va", "ref2va")
     }
+    for structure, raw in (
+        ("full", dual_full_config(sections)),
+        ("adaln-pruned", dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])),
+    ):
+        document = canonical_json.decode(raw)
+        specs = _dit_specs(_artifact_sections(document))
+        check(f"actual producer {structure} config serves both tasks", set(specs), set(plans))
+        check(
+            f"actual producer {structure} modulation",
+            {row[1] for row in specs.values()},
+            {structure},
+        )
+        for component, task in (("fl2va_dit", "fl2va"), ("ref2va_dit", "ref2va")):
+            for field, value in (
+                ("task", "ref2va" if task == "fl2va" else "fl2va"),
+                ("timestep_plan_digest", "sha256:" + "0" * 64),
+            ):
+                changed = canonical_json.decode(raw)
+                changed[component]["cozy_h3"][field] = value
+                refusal(
+                    f"{structure} {component} wrong {field} refuses",
+                    partial(_dit_specs, changed),
+                    "artifact_config",
+                )
+            if structure == "adaln-pruned":
+                changed = canonical_json.decode(raw)
+                del changed[component]["cozy_h3"]["timestep_plan_digest"]
+                refusal(
+                    f"{component} pruned tables need their plan digest",
+                    partial(_dit_specs, changed),
+                    "artifact_config",
+                )
 
 
 def tiny_text_config() -> dict[str, object]:
@@ -450,7 +497,7 @@ def arm_graph_and_dtypes() -> None:
         ),
         "artifact_config",
     )
-    wrong_plan = dit_config("fl2va")
+    wrong_plan = dit_config("fl2va", "adaln-pruned")
     cast(dict[str, Any], wrong_plan["cozy_h3"])["timestep_plan_digest"] = "sha256:" + "0" * 64
     refusal(
         "an AdaLN-pruned plan digest is exact artifact config",
@@ -1322,6 +1369,7 @@ def arm_interface() -> None:
 
 
 ARMS = {
+    "producer-configs": arm_producer_configs,
     "schedule": arm_schedule,
     "graph": arm_graph_and_dtypes,
     "conditioner": arm_text_conditioner,
