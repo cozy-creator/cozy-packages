@@ -529,31 +529,33 @@ def fence_no_env() -> Fence:
 
 
 def fence_h3_binding_identity() -> Fence:
-    """A release name is product identity, not the issue that happened to cut it."""
-    binding = (ROOT / "minimax-h3" / "package.toml").read_text()
-    releases = re.findall(r'^release\s*=\s*"([^"]+)"\s*$', binding, flags=re.MULTILINE)
-    lanes = re.findall(r'^lane\s*=\s*"([^"]+)"\s*$', binding, flags=re.MULTILINE)
+    """Both declared H3 slots select one uniform artifact; Runtime parses the binding grammar."""
+    project = ROOT / "minimax-h3"
+    bindings = tomllib.loads((project / "package.toml").read_text()).get("bindings", {})
+    interface = json.loads((project / "metadata" / "package-interface.json").read_text())
+    slots = {model["path"] for entry in interface["entrypoints"] for model in entry["models"]}
     bad: list[str] = []
-    if not releases:
-        bad.append("h3/package.toml: no default model release is bound")
-    if len(set(releases)) > 1:
-        bad.append(f"h3/package.toml: default model bindings disagree: {sorted(set(releases))}")
-    # One grammar, the slot path (model-code-fit §1): both H3 slots bind, and both name
-    # the same release and profile selector.
-    if len(releases) != 2 or set(releases) != {"1.0.0"}:
-        bad.append(f"h3/package.toml: default releases are {releases!r}, expected two of '1.0.0'")
-    for release in releases:
-        if re.search(r"(?:^|[-_.])se-\d+(?:$|[-_.])", release):
-            bad.append(
-                f"h3/package.toml: release {release!r} contains a tracker issue, "
-                "not only content identity"
+    if not isinstance(bindings, dict) or set(bindings) != slots or len(slots) != 2:
+        bad.append("h3/package.toml: bind exactly the two declared model slots")
+    else:
+        selected = []
+        for slot in sorted(slots):
+            value = bindings[slot]
+            fields = (
+                tuple(value.get(key) for key in ("model", "release", "lane"))
+                if isinstance(value, dict)
+                else ()
             )
-    if len(lanes) != 2 or set(lanes) != {"profile=fp8-adaln-pruned"}:
-        bad.append(
-            "h3/package.toml: both slot bindings must use the exact "
-            f"profile selector, got {lanes!r}"
-        )
-    return bad, "H3 binds both slots to release 1.0.0 with the profile=fp8-adaln-pruned selector"
+            if len(fields) != 3 or any(
+                not isinstance(item, str) or not item.strip() for item in fields
+            ):
+                bad.append(
+                    f"h3/package.toml: {slot} needs typed nonempty model/release/lane fields"
+                )
+            selected.append(fields)
+        if selected[0] != selected[1]:
+            bad.append("h3/package.toml: both model slots must select the same model/release/lane")
+    return bad, "H3 declared slots select one uniform typed model/release/lane"
 
 
 def fence_typed_model_bindings() -> Fence:
