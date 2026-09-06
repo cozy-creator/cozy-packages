@@ -1432,6 +1432,100 @@ def arm_interface() -> None:
     check("H3 permits Runtime encoded linear leaves", package.H3Model.__encoded_leaves__, "accept")
 
 
+def arm_attention_profile() -> None:
+    """Actual CPU profiler, exact outputs, first-forward bound and failure cleanup."""
+    import torch
+    from cozy_runtime.author.fakes import fake_telemetry
+
+    print("\n== first Ref2VA forward profiling lifecycle (CPU) ==")
+    module = torch.nn.MultiheadAttention(16, 2, dropout=0, batch_first=True)
+    value = torch.arange(128, dtype=torch.float32).reshape(1, 8, 16) / 128
+    with torch.no_grad():
+        expected = module(value, value, value, need_weights=False)[0]
+    calls: list[int] = []
+
+    def existing_hook(_module: Any, _args: Any) -> None:
+        calls.append(1)
+
+    foreign = module.register_forward_pre_hook(existing_hook)
+    telemetry = fake_telemetry()
+    with torch.no_grad(), package._first_ref2va_attention_profile(module, telemetry):
+        for _ in range(3):
+            actual = module(value, value, value, need_weights=False)[0]
+            check(
+                "profiling preserves the exact forward output", torch.equal(actual, expected), True
+            )
+    metrics = {e.name: e.value for e in telemetry.events if e.kind == "metric"}
+    check(
+        "one actual SDPA call profiled across three forwards",
+        metrics["attention_profile_sdpa_calls"],
+        1,
+    )
+    check(
+        "CPU fallback identifies an actual backend",
+        metrics["attention_profile_backend_identified"],
+        1,
+    )
+    check(
+        "CPU fallback reports unmeasured device timing",
+        metrics["attention_profile_device_timing_observed"],
+        0,
+    )
+    check(
+        "device milliseconds are absent when unmeasured",
+        any(k.endswith("_device_ms") for k in metrics),
+        False,
+    )
+    check("foreign hooks still run", len(calls), 3)
+    check("only the foreign pre-hook remains", list(module._forward_pre_hooks), [foreign.id])
+    check("profile post-hook removed", len(module._forward_hooks), 0)
+
+    for mode in ("no-forward", "forward-error", "earlier-hook-error"):
+        record = fake_telemetry()
+        failure = None
+        if mode == "earlier-hook-error":
+
+            def reject(_module: Any, _args: Any) -> None:
+                raise ValueError("earlier hook refused")
+
+            failure = module.register_forward_pre_hook(reject)
+        try:
+            with torch.no_grad(), package._first_ref2va_attention_profile(module, record):
+                if mode == "forward-error":
+                    module(value[..., :15], value, value, need_weights=False)
+                elif mode == "earlier-hook-error":
+                    module(value, value, value, need_weights=False)
+        except (AssertionError, ValueError) as error:
+            check("the original forward/hook error is preserved", mode != "no-forward", True)
+            if mode == "earlier-hook-error":
+                check("earlier hook error is unchanged", str(error), "earlier hook refused")
+        else:
+            check("failure controls actually raise", mode, "no-forward")
+        finally:
+            if failure is not None:
+                failure.remove()
+        check(f"{mode}: profile hooks cleaned", list(module._forward_pre_hooks), [foreign.id])
+        check(f"{mode}: post-hook cleaned", len(module._forward_hooks), 0)
+        if mode == "forward-error":
+            failed_metrics = {e.name: e.value for e in record.events if e.kind == "metric"}
+            check(
+                "failed forward is not marked complete",
+                failed_metrics["attention_profile_complete"],
+                0,
+            )
+        else:
+            check("no forward means no fabricated measurement", len(record.events), 0)
+
+    # A fresh real profiler can start after both error paths; no leaked global profiling state.
+    final = fake_telemetry()
+    with torch.no_grad(), package._first_ref2va_attention_profile(module, final):
+        check(
+            "profiling can restart after errors",
+            torch.equal(module(value, value, value, need_weights=False)[0], expected),
+            True,
+        )
+    check("fresh profiler produced a measurement", bool(final.events), True)
+    foreign.remove()
 
 
 ARMS = {
@@ -1445,6 +1539,7 @@ ARMS = {
     "media": arm_media,
     "gates": arm_output_gates,
     "interface": arm_interface,
+    "attention-profile": arm_attention_profile,
 }
 
 
