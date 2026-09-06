@@ -190,9 +190,9 @@ def _first_ref2va_attention_profile(module: Any, telemetry: Telemetry) -> Iterat
                     f"attention_profile_{name}_device_ms", float(event.device_time_total) / 1000
                 )
 
-    handles.append(module.register_forward_pre_hook(begin))
-    handles.append(module.register_forward_hook(end, always_call=True))
     try:
+        handles.append(module.register_forward_pre_hook(begin))
+        handles.append(module.register_forward_hook(end, always_call=True))
         yield
     finally:
         close()
