@@ -8,6 +8,8 @@ stages weighted roots, and joins those two boundaries.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
+from contextlib import contextmanager
 from fractions import Fraction
 from typing import Annotated, Any
 
@@ -118,6 +120,84 @@ def _reference_kind(reference: Reference) -> str:
     return "audio"
 
 
+@contextmanager
+def _first_ref2va_attention_profile(module: Any, telemetry: Telemetry) -> Iterator[None]:
+    """Profile one actual forward; keep only bounded SDPA operator summaries."""
+    import torch
+
+    activities = [torch.profiler.ProfilerActivity.CPU]
+    cuda_requested = next(module.parameters()).is_cuda and (
+        torch.profiler.ProfilerActivity.CUDA in torch.profiler.supported_activities()
+    )
+    if cuda_requested:
+        activities.append(torch.profiler.ProfilerActivity.CUDA)
+    profile = torch.profiler.profile(
+        activities=activities, record_shapes=False, profile_memory=False, with_stack=False
+    )
+    active = False
+    handles: list[Any] = []
+
+    def close() -> None:
+        nonlocal active
+        for handle in handles:
+            handle.remove()
+        if active:
+            active = False
+            profile.stop()
+
+    def begin(_module: Any, _args: Any) -> None:
+        nonlocal active
+        profile.start()
+        active = True
+
+    def end(_module: Any, _args: Any, output: Any) -> None:
+        if not active:
+            close()
+            return
+        close()
+        operators = {
+            "aten::scaled_dot_product_attention": "sdpa",
+            "aten::_scaled_dot_product_cudnn_attention": "cudnn",
+            "aten::_scaled_dot_product_flash_attention": "flash",
+            "aten::_scaled_dot_product_efficient_attention": "efficient",
+            "aten::_scaled_dot_product_attention_math": "math",
+            "aten::_scaled_dot_product_flash_attention_for_cpu": "flash_cpu",
+        }
+        events = [event for event in profile.key_averages() if event.key in operators]
+        device_timed = any(event.device_time_total > 0 for event in events)
+        backend_identified = any(
+            event.key != "aten::scaled_dot_product_attention" for event in events
+        )
+        telemetry.metric("attention_profile_complete", float(output is not None))
+        telemetry.metric("attention_profile_backend_identified", float(backend_identified))
+        telemetry.metric("attention_profile_cuda_requested", float(cuda_requested))
+        telemetry.metric("attention_profile_device_timing_observed", float(device_timed))
+        for event in events:
+            name = operators[event.key]
+            fields = dict(
+                operator=event.key,
+                calls=int(event.count),
+                cpu_ms=float(event.cpu_time_total) / 1000,
+            )
+            if device_timed:
+                fields["device_ms"] = float(event.device_time_total) / 1000
+            else:
+                fields["device_timing"] = "unmeasured"
+            telemetry.log("first Ref2VA attention operator", **fields)
+            telemetry.metric(f"attention_profile_{name}_calls", float(event.count))
+            if device_timed:
+                telemetry.metric(
+                    f"attention_profile_{name}_device_ms", float(event.device_time_total) / 1000
+                )
+
+    handles.append(module.register_forward_pre_hook(begin))
+    handles.append(module.register_forward_hook(end, always_call=True))
+    try:
+        yield
+    finally:
+        close()
+
+
 class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept"):
     pipe: OfficialH3Pipeline
 
@@ -152,8 +232,11 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept"):
         return self.pipe.denoise("fl2va", state, on_step=on_step, cancel=cancel)
 
     @uses_components("ref2va_dit")
-    def sample_ref2va(self, state: Any, *, on_step: Any, cancel: Any) -> ScheduleFacts:
-        return self.pipe.denoise("ref2va", state, on_step=on_step, cancel=cancel)
+    def sample_ref2va(
+        self, state: Any, *, on_step: Any, cancel: Any, telemetry: Telemetry
+    ) -> ScheduleFacts:
+        with _first_ref2va_attention_profile(self.pipe.components["ref2va_dit"], telemetry):
+            return self.pipe.denoise("ref2va", state, on_step=on_step, cancel=cancel)
 
 
 def _decode_keyframe(
@@ -519,6 +602,7 @@ def reference_media_to_video(
                 TRANSFORMER_EVALUATIONS, stage="denoise", overall_range=(0.15, 0.85)
             ),
             cancel=ctx.raise_if_cancelled,
+            telemetry=tel,
         )
     return _finish(
         model,
