@@ -79,6 +79,7 @@ class FourLaneResult(msgspec.Struct):
     replayed_outputs: int
     source_bytes_read_this_run: int
     quantized_keys_this_run: int
+    weight_fidelity_this_run: dict[str, dict[str, QuantizationStats]]
 
 
 class TimestepTableResult(msgspec.Struct):
@@ -639,7 +640,7 @@ def four_lane(
         ),
     }
     receipts: dict[str, WeightsReceipt] = {"bf16-full": full}
-    stats: list[QuantizationStats] = []
+    fidelity: dict[str, dict[str, QuantizationStats]] = {}
     source_bytes = 0
 
     with ExitStack() as stack:
@@ -687,19 +688,25 @@ def four_lane(
             with tel.stage(name, overall_range=overall_range):
                 if encoding is not None:
                     for component in TARGET_COMPONENT.values():
-                        stats.append(
-                            quantize_component_into(
-                                transaction,
-                                ctx,
-                                quant_request,
-                                tel,
-                                encoding=encoding,
-                                plan=quantization,
-                                component="dit",
-                                source="dits",
-                                source_component=component,
-                                target_component=component,
-                            )
+                        stats = quantize_component_into(
+                            transaction,
+                            ctx,
+                            quant_request,
+                            tel,
+                            encoding=encoding,
+                            plan=quantization,
+                            component="dit",
+                            source="dits",
+                            source_component=component,
+                            target_component=component,
+                        )
+                        fidelity.setdefault(name, {})[component] = stats
+                        tel.log(
+                            "weight fidelity",
+                            level="info",
+                            output_slot=name,
+                            component=component,
+                            **msgspec.to_builtins(stats),
                         )
                 # Keep a finished checkpoint replayable if a later lane fails.
                 transaction.add_config("model", pruned_config)
@@ -709,11 +716,12 @@ def four_lane(
             if name not in receipts:
                 receipts[name] = _receipt(transaction)
 
-    source_bytes += sum(stat.source_bytes_read for stat in stats)
+    measured = [stats for components in fidelity.values() for stats in components.values()]
+    source_bytes += sum(stat.source_bytes_read for stat in measured)
     tel.metric("h3.source_bytes", float(source_bytes), unit="bytes")
     tel.metric(
         "h3.quantized_bytes",
-        float(sum(stat.new_bytes_written for stat in stats)),
+        float(sum(stat.new_bytes_written for stat in measured)),
         unit="bytes",
     )
     return FourLaneResult(
@@ -729,5 +737,6 @@ def four_lane(
         ].tensorfs_receipt_digest,
         replayed_outputs=sum(receipt.replayed for receipt in receipts.values()),
         source_bytes_read_this_run=source_bytes,
-        quantized_keys_this_run=sum(stat.encoded_keys for stat in stats),
+        quantized_keys_this_run=sum(stat.encoded_keys for stat in measured),
+        weight_fidelity_this_run=fidelity,
     )
