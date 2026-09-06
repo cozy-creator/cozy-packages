@@ -69,9 +69,9 @@ def main() -> None:
         or any(tensor.component != "dit" for tensor in quantization.tensors)
     ):
         raise RuntimeError("quantization changed its closed 584/313 component plan")
-    pruned = _pruned_targets(sections, tables)
-    fp8 = _pruned_targets(sections, tables, quantization, "fp8-rowwise/1")
-    mxfp8 = _pruned_targets(sections, tables, quantization, "mxfp8/1")
+    pruned = _pruned_targets(sections, tables, full_targets)
+    fp8 = _pruned_targets(sections, tables, full_targets, quantization, "fp8-rowwise/1")
+    mxfp8 = _pruned_targets(sections, tables, full_targets, quantization, "mxfp8/1")
 
     for task, source, component in (
         ("fl2va", "transformer", "fl2va_dit"),
