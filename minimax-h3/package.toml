@@ -13,10 +13,10 @@ object = "h3:app"
 
 [bindings."first_last_frame_to_video.models.model"]
 model = "paul/minimax-h3"
-release = "1.0.0"
-lane = "profile=fp8-adaln-pruned"
+release = "1.0.0-rc.1"
+lane = "bf16-full"
 
 [bindings."reference_media_to_video.models.model"]
 model = "paul/minimax-h3"
-release = "1.0.0"
-lane = "profile=fp8-adaln-pruned"
+release = "1.0.0-rc.1"
+lane = "bf16-full"
