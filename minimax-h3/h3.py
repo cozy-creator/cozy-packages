@@ -97,8 +97,8 @@ class H3VideoOutput(msgspec.Struct):
     """The catalog wire shape. Checkpoint, plan, geometry, and digest facts remain
     attempt observations (se-012): they ride Telemetry, never the customer result."""
 
-    video: VideoAsset
-    continuation_frame: ImageAsset
+    video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",))]
+    continuation_frame: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
 
 
 def preflight_reference_media(payload: ReferenceMediaToVideoInput) -> ReferencePolicyFacts:
