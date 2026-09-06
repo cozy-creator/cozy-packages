@@ -56,3 +56,11 @@ the shared `cozy-jobs` wheel owns the exact H3 quantization plan used here and b
 quantization callables. They are not Creator-supplied assets. Run
 `scripts/order-proof.py` to recheck their closed census and
 `../../proofs/producer-callable.py` to validate the generated graph-free descriptor.
+
+The four-lane result preserves the Runtime quantizer's existing weight measurements in
+`weight_fidelity_this_run`, keyed by output slot and component: worst per-tensor relative
+Frobenius error, saturated element count, measured tensor count and byte counters. Each
+completed component also logs those same values before later stages run. Replayed outputs
+are absent from this run's measurements; absence never means zero error. BF16 inheritance
+and AdaLN table production do not claim quantizer measurements. Activation fidelity,
+matched output distance and output quality require separate inference/evaluation evidence.

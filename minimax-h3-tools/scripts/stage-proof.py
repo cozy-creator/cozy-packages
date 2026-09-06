@@ -79,7 +79,7 @@ class Recorder:
         self.events.append(event + ":" + kwargs["target_component"])
         if self.fail_at == event:
             raise Interrupted(event)
-        return QuantizationStats(1, 1, 1, 0, 0.0)
+        return QuantizationStats(1, 1, 1, 2, 0.03125)
 
 
 class Telemetry:
@@ -90,6 +90,9 @@ class Telemetry:
         pass
 
     def metric(self, *_: Any, **__: Any) -> None:
+        pass
+
+    def log(self, *_: Any, **__: Any) -> None:
         pass
 
 
@@ -135,6 +138,12 @@ def main() -> None:
         result = invoke(recorder)
         assert tuple(recorder.committed) == slots
         assert result.replayed_outputs == len(retained)
+        assert set(result.weight_fidelity_this_run) == set(slots[2:]) - set(retained)
+        for components in result.weight_fidelity_this_run.values():
+            assert set(components) == {"fl2va_dit", "ref2va_dit"}
+            for stats in components.values():
+                assert stats.saturated_elements == 2
+                assert stats.worst_relative_frobenius == 0.03125
         assert not any(event == "commit:" + slot for slot in retained for event in recorder.events)
         for slot in retained:
             assert not any(event.startswith("quantize:" + slot) for event in recorder.events)
@@ -142,6 +151,7 @@ def main() -> None:
         recorder.events.clear()
         result = invoke(recorder)
         assert result.replayed_outputs == 4
+        assert result.weight_fidelity_this_run == {}
         assert result.source_bytes_read_this_run == result.quantized_keys_this_run == 0
         assert recorder.events == []
     print(
