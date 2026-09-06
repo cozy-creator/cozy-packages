@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
+from dataclasses import replace
 from importlib.resources import files
 from typing import Any
 
@@ -375,6 +376,31 @@ def _full_targets() -> dict[str, WeightsTarget]:
     }
 
 
+def _select_full_targets(
+    artifacts: WeightsSink, sources: Mapping[str, H3FullTransformer]
+) -> dict[str, WeightsTarget]:
+    """Drop source-only rows that remain in these exact granted checkpoints."""
+    keys: dict[str, set[tuple[str, str]]] = {}
+    for source in sources.values():
+        if source.checkpoint_ref not in keys:
+            keys[source.checkpoint_ref] = {
+                (tensor.component, tensor.key) for tensor in artifacts.structure(source).tensors
+            }
+    targets = _full_targets()
+    return {
+        component: replace(
+            target,
+            drop=tuple(
+                key
+                for key in target.drop
+                if (target.source_component, key) in keys[sources[target.source].checkpoint_ref]
+            ),
+        )
+        for component, target in targets.items()
+    }
+
+
+
 def _assembly_result(receipt: WeightsReceipt) -> AssemblyResult:
     return AssemblyResult(
         receipt.weights_transaction_id,
@@ -396,10 +422,11 @@ def assemble_full(
     sections = parse_production_config(_asset("model-config.json"))
     current = current_order(_asset("whole-order.json"))
     config = dual_full_config(sections)
+    sources = {"dits": dits, "shared": shared}
     receipt = artifacts.derive(
         "model",
-        sources={"dits": dits, "shared": shared},
-        targets=_full_targets(),
+        sources=sources,
+        targets=_select_full_targets(artifacts, sources),
         configs={
             "model": WeightsConfig(data=config, length=len(config))
         },
@@ -496,6 +523,7 @@ def _table_additions(
 def _pruned_targets(
     sections: dict[str, dict[str, Any]],
     tables: Mapping[str, Mapping[str, WeightsTensor]],
+    full_targets: Mapping[str, WeightsTarget],
     quantization: ArtifactQuantizationPlan | None = None,
     encoding: str | None = None,
 ) -> dict[str, WeightsTarget]:
@@ -504,39 +532,19 @@ def _pruned_targets(
         if encoding is not None and quantization is not None
         else {}
     )
-    targets: dict[str, WeightsTarget] = {}
+    targets = dict(full_targets)
     for task, section in (("fl2va", "transformer"), ("ref2va", "transformer_ref")):
         topology = H3Topology.from_config(sections[section])
         component = TARGET_COMPONENT[task]
         additions = {**tables[task], **encoded}
         drop = tuple(
-            sorted(
-                set(source_only_keys())
-                | set(removed_keys(topology))
-                | set(encoded)
-            )
+            sorted(set(full_targets[component].drop) | set(removed_keys(topology)) | set(encoded))
         )
-        targets[component] = WeightsTarget(
-            source="dits",
-            source_component=component,
+        targets[component] = replace(
+            full_targets[component],
             drop=drop,
             add=additions,
         )
-    targets.update(
-        {
-            "text_encoder": WeightsTarget(
-                source="shared",
-                source_component="text_encoder",
-                drop=text_source_only_keys(),
-            ),
-            "video_vae": WeightsTarget(
-                source="shared", source_component="video_vae"
-            ),
-            "audio_vae": WeightsTarget(
-                source="shared", source_component="audio_vae"
-            ),
-        }
-    )
     return targets
 
 
@@ -605,6 +613,7 @@ def four_lane(
     """Produce full, AdaLN-pruned, FP8, and MXFP8 checkpoints in one attempt."""
     del payload
     sources = {"dits": dits, "shared": shared}
+    full_targets = _select_full_targets(artifacts, sources)
     sections = parse_production_config(_asset("model-config.json"))
     current = current_order(_asset("whole-order.json"))
 
@@ -614,7 +623,7 @@ def four_lane(
         full = artifacts.derive(
             "bf16-full",
             sources=sources,
-            targets=_full_targets(),
+            targets=full_targets,
             configs={
                 "model": WeightsConfig(
                     data=full_config,
@@ -637,12 +646,12 @@ def four_lane(
     tables = _table_additions(sections)
     quantization = prepare_quantization(h3_quantization_plan())
     targets = {
-        "bf16-adaln-pruned": _pruned_targets(sections, tables),
+        "bf16-adaln-pruned": _pruned_targets(sections, tables, full_targets),
         "fp8-adaln-pruned": _pruned_targets(
-            sections, tables, quantization, "fp8-rowwise/1"
+            sections, tables, full_targets, quantization, "fp8-rowwise/1"
         ),
         "mxfp8-adaln-pruned": _pruned_targets(
-            sections, tables, quantization, "mxfp8/1"
+            sections, tables, full_targets, quantization, "mxfp8/1"
         ),
     }
     receipts: dict[str, WeightsReceipt] = {"bf16-full": full}
@@ -732,15 +741,9 @@ def four_lane(
     )
     return FourLaneResult(
         bf16_full_receipt_digest=receipts["bf16-full"].tensorfs_receipt_digest,
-        bf16_adaln_pruned_receipt_digest=receipts[
-            "bf16-adaln-pruned"
-        ].tensorfs_receipt_digest,
-        fp8_adaln_pruned_receipt_digest=receipts[
-            "fp8-adaln-pruned"
-        ].tensorfs_receipt_digest,
-        mxfp8_adaln_pruned_receipt_digest=receipts[
-            "mxfp8-adaln-pruned"
-        ].tensorfs_receipt_digest,
+        bf16_adaln_pruned_receipt_digest=receipts["bf16-adaln-pruned"].tensorfs_receipt_digest,
+        fp8_adaln_pruned_receipt_digest=receipts["fp8-adaln-pruned"].tensorfs_receipt_digest,
+        mxfp8_adaln_pruned_receipt_digest=receipts["mxfp8-adaln-pruned"].tensorfs_receipt_digest,
         replayed_outputs=sum(receipt.replayed for receipt in receipts.values()),
         source_bytes_read_this_run=source_bytes,
         quantized_keys_this_run=sum(stat.encoded_keys for stat in measured),

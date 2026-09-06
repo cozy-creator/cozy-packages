@@ -14,6 +14,14 @@ pinned MiniMaxAI/MiniMax-H3 provider download:
 - `shared` → `hf/minimax-h3/shared-bf16/1`: the text conditioner, video VAE, and audio
   VAE under `diffusers.identity/1`.
 
+Both slots can also bind the same complete `bf16-full` checkpoint. The job reads
+each distinct granted checkpoint's structure once and drops only source-only rows
+still present. The existing full checkpoint has already removed those rows; its
+retained BF16 tensors feed the same table and quantization computations. Required
+modulation and quantized replacement tensors remain mandatory, and TensorFS still
+checks the complete destination order. This does not accept a pruned or quantized
+checkpoint as a substitute for the full BF16 source.
+
 One attempt emits exactly four dual-task checkpoints:
 
 - `bf16-full`

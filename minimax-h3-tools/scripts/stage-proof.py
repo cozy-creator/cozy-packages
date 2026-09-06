@@ -12,7 +12,12 @@ from contextlib import nullcontext
 from dataclasses import replace
 from typing import Any
 
-from cozy_runtime.author import WeightsReceipt
+from cozy_runtime.author import (
+    WeightsReceipt,
+    WeightsSource,
+    WeightsSourcePart,
+    WeightsSourceTensor,
+)
 from cozy_runtime.derive.quantization import QuantizationStats
 from h3_tables import job
 
@@ -53,6 +58,18 @@ class Recorder:
         self.committed: dict[str, WeightsReceipt] = {}
         self.events: list[str] = []
         self.fail_at = ""
+
+    def structure(self, _: Any) -> WeightsSource:
+        return WeightsSource(
+            (),
+            tuple(
+                WeightsSourceTensor(
+                    component, key, "f32", (1,), (WeightsSourcePart("value", "f32", (1,)),)
+                )
+                for component, target in job._full_targets().items()
+                for key in target.drop
+            ),
+        )
 
     def open(self, slot: str, **_: Any) -> Transaction:
         return Transaction(self, slot)
@@ -109,7 +126,10 @@ def invoke(recorder: Recorder, fail_at: str = "") -> Any:
         module._write_tables = recorder.tables
         module.quantize_component_into = recorder.quantize
         module.torch.cuda.is_available = lambda: True
-        return module.four_lane(None, job.ProductionRequest(), None, None, recorder, Telemetry())
+        source = job.H3FullTransformer.for_test()
+        return module.four_lane(
+            None, job.ProductionRequest(), source, source, recorder, Telemetry()
+        )
     finally:
         job._write_tables = original_tables
         job.quantize_component_into = original_quantize
