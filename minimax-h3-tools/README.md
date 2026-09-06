@@ -58,7 +58,7 @@ quantization callables. They are not Creator-supplied assets. Run
 `../../proofs/producer-callable.py` to validate the generated graph-free descriptor.
 
 The four-lane result preserves the Runtime quantizer's existing weight measurements in
-`weight_fidelity_this_run`, keyed by output slot and component: worst per-tensor relative
+`weight_fidelity_this_run`, a list of rows naming output slot, component and stats: worst per-tensor relative
 Frobenius error, saturated element count, measured tensor count and byte counters. Each
 completed component also logs those same values before later stages run. Replayed outputs
 are absent from this run's measurements; absence never means zero error. BF16 inheritance

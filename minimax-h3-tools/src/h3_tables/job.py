@@ -71,6 +71,12 @@ class ProductionRequest(msgspec.Struct, forbid_unknown_fields=True):
     pass
 
 
+class WeightFidelity(msgspec.Struct):
+    output_slot: str
+    component: str
+    stats: QuantizationStats
+
+
 class FourLaneResult(msgspec.Struct):
     bf16_full_receipt_digest: str
     bf16_adaln_pruned_receipt_digest: str
@@ -79,7 +85,7 @@ class FourLaneResult(msgspec.Struct):
     replayed_outputs: int
     source_bytes_read_this_run: int
     quantized_keys_this_run: int
-    weight_fidelity_this_run: dict[str, dict[str, QuantizationStats]]
+    weight_fidelity_this_run: list[WeightFidelity]
 
 
 class TimestepTableResult(msgspec.Struct):
@@ -640,7 +646,7 @@ def four_lane(
         ),
     }
     receipts: dict[str, WeightsReceipt] = {"bf16-full": full}
-    fidelity: dict[str, dict[str, QuantizationStats]] = {}
+    fidelity: list[WeightFidelity] = []
     source_bytes = 0
 
     with ExitStack() as stack:
@@ -700,7 +706,7 @@ def four_lane(
                             source_component=component,
                             target_component=component,
                         )
-                        fidelity.setdefault(name, {})[component] = stats
+                        fidelity.append(WeightFidelity(name, component, stats))
                         tel.log(
                             "weight fidelity",
                             level="info",
@@ -716,7 +722,7 @@ def four_lane(
             if name not in receipts:
                 receipts[name] = _receipt(transaction)
 
-    measured = [stats for components in fidelity.values() for stats in components.values()]
+    measured = [row.stats for row in fidelity]
     source_bytes += sum(stat.source_bytes_read for stat in measured)
     tel.metric("h3.source_bytes", float(source_bytes), unit="bytes")
     tel.metric(

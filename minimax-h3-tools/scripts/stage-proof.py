@@ -138,12 +138,14 @@ def main() -> None:
         result = invoke(recorder)
         assert tuple(recorder.committed) == slots
         assert result.replayed_outputs == len(retained)
-        assert set(result.weight_fidelity_this_run) == set(slots[2:]) - set(retained)
-        for components in result.weight_fidelity_this_run.values():
-            assert set(components) == {"fl2va_dit", "ref2va_dit"}
-            for stats in components.values():
-                assert stats.saturated_elements == 2
-                assert stats.worst_relative_frobenius == 0.03125
+        assert {(row.output_slot, row.component) for row in result.weight_fidelity_this_run} == {
+            (slot, component)
+            for slot in set(slots[2:]) - set(retained)
+            for component in ("fl2va_dit", "ref2va_dit")
+        }
+        for row in result.weight_fidelity_this_run:
+            assert row.stats.saturated_elements == 2
+            assert row.stats.worst_relative_frobenius == 0.03125
         assert not any(event == "commit:" + slot for slot in retained for event in recorder.events)
         for slot in retained:
             assert not any(event.startswith("quantize:" + slot) for event in recorder.events)
@@ -151,7 +153,7 @@ def main() -> None:
         recorder.events.clear()
         result = invoke(recorder)
         assert result.replayed_outputs == 4
-        assert result.weight_fidelity_this_run == {}
+        assert result.weight_fidelity_this_run == []
         assert result.source_bytes_read_this_run == result.quantized_keys_this_run == 0
         assert recorder.events == []
     print(
