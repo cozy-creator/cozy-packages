@@ -397,6 +397,8 @@ class OfficialH3Pipeline:
             task: _build_dit(upstream, structure, plan)
             for task, (upstream, structure, plan) in dit_specs.items()
         }
+        # Separate experiment: force the installed native Flash backend for Ref2VA.
+        dits["ref2va"].set_attention_backend("_native_flash")
         _validate_dual_dit_topology(dits)
         text_encoder = build_text_conditioner(_section(mapping, "text_encoder"))
         video_vae = AutoencoderKLMiniMaxH3.from_config(_section(mapping, "video_vae")).eval()
