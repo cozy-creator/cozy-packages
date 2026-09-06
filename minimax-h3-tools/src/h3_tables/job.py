@@ -677,39 +677,33 @@ def four_lane(
 
         quant_request = ArtifactQuantizationRequest()
         for name, encoding, overall_range in (
-            ("fp8-adaln-pruned", "fp8-rowwise/1", (0.35, 0.60)),
-            ("mxfp8-adaln-pruned", "mxfp8/1", (0.60, 0.85)),
+            ("bf16-adaln-pruned", None, (0.35, 0.40)),
+            ("fp8-adaln-pruned", "fp8-rowwise/1", (0.40, 0.70)),
+            ("mxfp8-adaln-pruned", "mxfp8/1", (0.70, 1.00)),
         ):
             transaction = active.get(name)
             if transaction is None:
                 continue
             with tel.stage(name, overall_range=overall_range):
-                for component in TARGET_COMPONENT.values():
-                    stats.append(
-                        quantize_component_into(
-                            transaction,
-                            ctx,
-                            quant_request,
-                            tel,
-                            encoding=encoding,
-                            plan=quantization,
-                            component="dit",
-                            source="dits",
-                            source_component=component,
-                            target_component=component,
+                if encoding is not None:
+                    for component in TARGET_COMPONENT.values():
+                        stats.append(
+                            quantize_component_into(
+                                transaction,
+                                ctx,
+                                quant_request,
+                                tel,
+                                encoding=encoding,
+                                plan=quantization,
+                                component="dit",
+                                source="dits",
+                                source_component=component,
+                                target_component=component,
+                            )
                         )
-                    )
-
-        commit_ranges = {
-            "bf16-adaln-pruned": (0.85, 0.90),
-            "fp8-adaln-pruned": (0.90, 0.95),
-            "mxfp8-adaln-pruned": (0.95, 1.00),
-        }
-        for name, transaction in active.items():
-            overall_range = commit_ranges[name]
-            tel.progress(0.0, stage=f"commit-{name}", overall_fraction=overall_range[0])
-            transaction.add_config("model", pruned_config)
-            receipts[name] = transaction.commit()
+                # Keep a finished checkpoint replayable if a later lane fails.
+                transaction.add_config("model", pruned_config)
+                receipts[name] = transaction.commit()
             tel.progress(1.0, stage=f"commit-{name}", overall_fraction=overall_range[1])
         for name, transaction in transactions.items():
             if name not in receipts:
