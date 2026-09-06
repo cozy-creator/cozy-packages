@@ -143,6 +143,72 @@ def arm_producer_configs() -> None:
                 )
 
 
+def arm_producer_construction_order() -> None:
+    """The producer's one ordered spec resource follows the real serving factory."""
+    import torch
+    from cozy_runtime.author import Config
+
+    from official import OfficialH3Pipeline
+
+    sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
+    from h3_tables.job import _asset, _full_order
+    from h3_tables.model_config import (
+        dual_adaln_pruned_config,
+        dual_full_config,
+        parse_production_config,
+    )
+    from h3_tables.order import current_order
+    from h3_tables.plans import parse_plan
+    from h3_tables.source import official_full_specs
+
+    sections = parse_production_config(_asset("model-config.json"))
+    current = current_order(_asset("whole-order.json"))
+    plans = {
+        task: parse_plan(_asset(f"timestep-plan.{task}.json"), task=task)
+        for task in ("fl2va", "ref2va")
+    }
+    for mode, raw, expected in (
+        ("full", dual_full_config(sections), _full_order(sections, current.rows)),
+        (
+            "adaln-pruned",
+            dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"]),
+            current.rows,
+        ),
+    ):
+        with torch.device("meta"):
+            pipeline = OfficialH3Pipeline(Config(canonical_json.decode(raw)))
+        actual = tuple(
+            (component, key)
+            for component, module in pipeline.components.items()
+            for key in module.state_dict()
+        )
+        check(
+            f"{mode} producer order equals actual serving constructor ({len(actual)} rows)",
+            expected == actual, True,
+        )
+        if mode == "full":
+            for component, section in (
+                ("fl2va_dit", "transformer"), ("ref2va_dit", "transformer_ref")
+            ):
+                state = pipeline.components[component].state_dict()
+                specs = official_full_specs(sections[section])
+                check(f"{component} ordered spec names", tuple(specs) == tuple(state), True)
+                check(
+                    f"{component} lexical ordering is a rejected control",
+                    tuple(sorted(specs)) == tuple(state),
+                    False,
+                )
+                for key, (dtype, shape) in specs.items():
+                    value = state[key]
+                    if tuple(value.shape) != shape or value.dtype != {
+                        "bf16": torch.bfloat16, "f32": torch.float32
+                    }[dtype]:
+                        raise AssertionError(
+                            f"ordered full spec geometry changed: {component}/{key}"
+                        )
+                observe(f"{component} all 638 ordered spec shapes and dtypes match")
+
+
 def tiny_text_config() -> dict[str, object]:
     """Production key topology at tiny dimensions: 27 vision and 64 source text layers."""
     return {
@@ -1370,6 +1436,7 @@ def arm_interface() -> None:
 
 ARMS = {
     "producer-configs": arm_producer_configs,
+    "producer-construction-order": arm_producer_construction_order,
     "schedule": arm_schedule,
     "graph": arm_graph_and_dtypes,
     "conditioner": arm_text_conditioner,

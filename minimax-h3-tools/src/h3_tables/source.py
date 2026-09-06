@@ -15,7 +15,7 @@ from .plans import TimestepPlan
 
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _FULL_SPECS_DIGEST = (
-    "sha256:e20e33b3ef8a531390d7d6d32624c8c3649ff2c795501089b189e1c23e3b4fe9"
+    "sha256:3af7354b5080f4c117922157971261fd079f12790f9584615e87b4fdd95ae3e2"
 )
 _FULL_CONFIG_DIGEST = (
     "sha256:4150e2b9009aad13cf5a18b9878337346b2bfa7662b3f8037a0286cdaa806382"
@@ -71,13 +71,18 @@ class _FullSpec(msgspec.Struct, forbid_unknown_fields=True):
 
 class _FullSpecs(msgspec.Struct, forbid_unknown_fields=True):
     config_digest: str
-    specs: dict[str, _FullSpec]
+    specs: tuple[tuple[str, _FullSpec], ...]
 
 
 def official_full_specs(
     config: dict[str, Any],
 ) -> dict[str, tuple[str, tuple[int, ...]]]:
-    """Load the exact banked 638-row destination contract without importing Diffusers."""
+    """Load the ordered 638-row serving destination contract without importing Diffusers.
+
+    The existing resource is an ordered pair array, so canonical JSON cannot sort
+    away the real factory's state_dict traversal. h3-conform checks every row,
+    shape and dtype against the same OfficialH3Pipeline used by inference.
+    """
     if canonical_json.digest(config) != _FULL_CONFIG_DIGEST:
         raise ValueError(
             "H3 model config changed without a matching full-spec contract"
@@ -96,8 +101,10 @@ def official_full_specs(
             "H3 full-spec resource changed its config binding or 638-row census"
         )
     result = {
-        name: (value.dtype, value.shape) for name, value in document.specs.items()
+        name: (value.dtype, value.shape) for name, value in document.specs
     }
+    if len(result) != len(document.specs):
+        raise ValueError("H3 full-spec resource repeats a tensor destination")
     if any(
         dtype not in {"bf16", "f32"} or not shape or any(n <= 0 for n in shape)
         for dtype, shape in result.values()
