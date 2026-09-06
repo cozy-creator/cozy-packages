@@ -43,6 +43,13 @@ original BF16 DiTs independently through their own caller-owned transactions. Th
 workflow graph and no nested job invocation. Tensorhub owns final retention or publication;
 the job receives no publisher credential or store path.
 
+Each checkpoint commits as soon as its computation finishes: full BF16 first, pruned
+BF16 after both table passes, FP8 after both FP8 passes, then MXFP8. A retry replays
+retained native receipts and computes only the remaining outputs. Terminal owner
+abandonment can release those outputs; a receipt alone is not retained payload custody.
+A local commit does not imply remote custody; Creator still verifies uploads before
+publishing a release.
+
 The production inputs are package-owned and immutable: exact model config, full DiT shape
 contract, construction order, and task plans live as importlib resources in the tools wheel;
 the shared `cozy-jobs` wheel owns the exact H3 quantization plan used here and by the standalone
