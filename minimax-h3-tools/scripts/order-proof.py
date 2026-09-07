@@ -59,7 +59,7 @@ def structure(rows: list[tuple[str, str, str, tuple[int, ...]]]) -> WeightsSourc
 
 
 def prove_retable(sections: dict[str, dict[str, object]]) -> None:
-    """The retable declaration edits only table keys and refuses the wrong sources."""
+    """The retable declarations edit only table keys and refuse the wrong sources."""
     tables = _table_additions(sections)
     shared = [(c, f"{c}.w", "f32", (1,)) for c in ("text_encoder", "video_vae", "audio_vae")]
     pruned_rows, full_rows = list(shared), list(shared)
@@ -73,22 +73,33 @@ def prove_retable(sections: dict[str, dict[str, object]]) -> None:
             (component, key, {"torch.float32": "f32", "torch.bfloat16": "bf16"}[str(dtype)], shape)
             for key, (dtype, shape) in source_shapes(topology).items()
         ]
-    targets = _retable_targets(structure(pruned_rows), structure(full_rows), sections, tables)
+    bank, retabled = _retable_targets(
+        structure(pruned_rows), structure(full_rows), sections, tables
+    )
+    if set(bank) != {"fl2va_dit", "ref2va_dit"}:
+        raise RuntimeError("the table bank must hold exactly both DiTs")
     for task in ("fl2va", "ref2va"):
-        target = targets[f"{task}_dit"]
+        component = f"{task}_dit"
+        target = retabled[component]
         if (
             target.source != "pruned"
             or set(target.drop) != set(tables[task])
             or target.add != tables[task]
         ):
             raise RuntimeError(f"retable {task} target is not the exact table replacement")
-    if any(targets[c].source != "full" or targets[c].drop for c, *_ in shared):
-        raise RuntimeError("retable shared components must derive unchanged from full")
+        present = {key for owner, key, *_ in full_rows if owner == component}
+        if (
+            bank[component].source != "full"
+            or set(bank[component].drop) != present
+            or bank[component].add != tables[task]
+        ):
+            raise RuntimeError(f"table bank {task} target must drop every full row")
+    if any(retabled[c].source != "pruned" or retabled[c].drop for c, *_ in shared):
+        raise RuntimeError("retable shared components must derive unchanged from pruned")
     for name, bad_pruned, bad_full in (
         ("missing table", pruned_rows[:-1], full_rows),
         ("dynamic weights kept", [*pruned_rows, full_rows[-1]], full_rows),
         ("full lacks modulation", pruned_rows, full_rows[:-1]),
-        ("shared differ", pruned_rows, [("text_encoder", "other", "f32", (1,)), *full_rows[1:]]),
     ):
         try:
             _retable_targets(structure(bad_pruned), structure(bad_full), sections, tables)
@@ -222,8 +233,11 @@ def main() -> None:
     if {row["path"] for row in retable["models"]} != {
         "retable.models.full",
         "retable.models.pruned",
-    } or [output["output_id"] for output in retable["weights_outputs"]] != ["adaln-pruned"]:
-        raise RuntimeError("retable changed its two typed sources or one output")
+    } or {output["output_id"] for output in retable["weights_outputs"]} != {
+        "adaln-pruned",
+        "tables",
+    }:
+        raise RuntimeError("retable changed its two typed sources or two outputs")
     print(
         "H3 FOUR-LANE CONTRACT PASS jobs=6 graphs=0 outputs=4 full_rows=3968 "
         "task_rows=583 shared_text_drop=156 quantized_per_task=313 tables_per_task=51 "

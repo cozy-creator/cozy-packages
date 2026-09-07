@@ -48,11 +48,13 @@ The ordinary `retable` job recomputes only those tables for an existing AdaLN-pr
 checkpoint of any encoding: `pruned` (the checkpoint to inherit, BF16, FP8 or MXFP8) and
 `full` (the complete BF16 checkpoint whose modulation weights the rows are computed from).
 Every non-table tensor is inherited by reference and nothing is requantized, so widening the
-plan's schedule set costs table bytes only. Both DiTs derive from `pruned`; the shared
-conditioner and VAEs derive from `full` (TensorFS admits only sources a target derives
-from) after their rows are proven identical in both. It refuses before any read unless
-`pruned` carries table rows and no dynamic modulation weights for both DiTs and `full`
-carries the exact modulation weights.
+plan's schedule set costs table bytes only. It emits two outputs from one table pass:
+`adaln-pruned` (the retabled checkpoint, every component inherited from `pruned`) and
+`tables` (a two-DiT table bank derived from `full` with every other row dropped) — a
+transaction may read only the source components its targets derive from, so the bank
+transaction is where the modulation weights are read. The retabled checkpoint commits
+first. It refuses before any read unless `pruned` carries table rows and no dynamic
+modulation weights for both DiTs and `full` carries the exact modulation weights.
 
 The package declares no GPU, SM, VRAM, or host-RAM guess. Creator derives accelerator-class work
 from the typed model inputs; exact artifact residency and measured request/scratch envelopes drive

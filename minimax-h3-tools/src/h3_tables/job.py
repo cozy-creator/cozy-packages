@@ -139,7 +139,7 @@ class RetableResult(msgspec.Struct):
     source_checkpoint: str
     steps: list[int]
     tensorfs_receipt_digest: str
-    weights_transaction_id: str
+    table_bank_receipt_digest: str
     replayed: bool
     table_tensors: int
     table_bytes_this_run: int
@@ -785,26 +785,26 @@ def _retable_targets(
     full: WeightsSource,
     sections: dict[str, dict[str, Any]],
     tables: Mapping[str, Mapping[str, WeightsTensor]],
-) -> dict[str, WeightsTarget]:
-    """Inherit one AdaLN-pruned checkpoint and replace only its table rows.
+) -> tuple[dict[str, WeightsTarget], dict[str, WeightsTarget]]:
+    """Declare the table bank derived from `full` and the retabled checkpoint from `pruned`.
 
-    Both DiTs derive from `pruned`, dropping and re-adding exactly the table keys. TensorFS
-    admits only sources some target derives from, so the shared conditioner and VAEs derive
-    from `full`, whose rows are proven identical to `pruned`'s before the declaration. Refuses
-    before any read unless `pruned` carries table rows and no dynamic modulation weights for
-    both DiTs, and `full` carries the exact modulation weights those rows are computed from.
+    A transaction may read only the source components its targets derive from, so the
+    modulation weights are read through the bank transaction (both DiTs from `full`, every
+    other row dropped) while the retabled checkpoint inherits `pruned` by reference and
+    replaces exactly its table keys. Refuses before any read unless `pruned` carries table
+    rows and no dynamic modulation weights for both DiTs and `full` carries the exact
+    modulation weights those rows are computed from.
     """
     present = {(tensor.component, tensor.key): tensor for tensor in pruned.tensors}
     full_present = {(tensor.component, tensor.key): tensor for tensor in full.tensors}
     components = {tensor.component for tensor in pruned.tensors}
     if components != set(_dual_targets()):
         raise ValueError(f"retable source components are {sorted(components)}")
-    targets: dict[str, WeightsTarget] = {}
-    for component in components - set(TARGET_COMPONENT.values()):
-        rows = [tensor for tensor in pruned.tensors if tensor.component == component]
-        if rows != [tensor for tensor in full.tensors if tensor.component == component]:
-            raise ValueError(f"{component} differs between the pruned and full sources")
-        targets[component] = WeightsTarget(source="full", source_component=component)
+    bank: dict[str, WeightsTarget] = {}
+    retabled = {
+        component: WeightsTarget(source="pruned", source_component=component)
+        for component in components - set(TARGET_COMPONENT.values())
+    }
     for task, section in SOURCE_SECTION.items():
         component = TARGET_COMPONENT[task]
         topology = H3Topology.from_config(sections[section])
@@ -821,18 +821,27 @@ def _retable_targets(
                 or TORCH_DTYPE.get(tensor.logical_dtype) != dtype
             ):
                 raise ValueError(f"full source lacks modulation weight {component}/{key}")
-        targets[component] = WeightsTarget(
+        bank[component] = WeightsTarget(
+            source="full",
+            source_component=component,
+            drop=tuple(sorted(key for owner, key in full_present if owner == component)),
+            add=tables[task],
+        )
+        retabled[component] = WeightsTarget(
             source="pruned",
             source_component=component,
             drop=tuple(sorted(tables[task])),
             add=tables[task],
         )
-    return targets
+    return bank, retabled
 
 
 @app.job(
     name="retable",
-    weights=(WeightsOutput("adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES),),
+    weights=(
+        WeightsOutput("adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES),
+        WeightsOutput("tables", max_new_bytes=MAX_PRUNED_BYTES),
+    ),
 )
 def retable(
     ctx: Context,
@@ -846,29 +855,47 @@ def retable(
 
     Every non-table tensor of `pruned` (BF16, FP8 or MXFP8 alike) is inherited by reference;
     only the modulation rows are read from `full` and recomputed, so a plan that adds
-    schedules costs table bytes, never a requantization.
+    schedules costs table bytes, never a requantization. The same rows also commit as a
+    two-DiT table bank, the transaction the modulation reads are scoped to.
     """
     del payload
     sections = parse_production_config(_asset("model-config.json"))
     plans = {task: _production_plan(task) for task in SOURCE_SECTION}
     pruned_config = dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
+    config = {"model": WeightsConfig(data=pruned_config, length=len(pruned_config))}
     tables = _table_additions(sections)
-    targets = _retable_targets(
+    bank_targets, targets = _retable_targets(
         artifacts.structure(pruned), artifacts.structure(full), sections, tables
     )
-    steps = list(plans["fl2va"].steps)
+    order = current_order(_asset("whole-order.json"))
+    bank_order = tuple(
+        row
+        for row in order.rows
+        if row[0] in bank_targets and row[1] in bank_targets[row[0]].add
+    )
     source_bytes = written = 0
-    with artifacts.open(
-        "adaln-pruned",
-        sources={"full": full, "pruned": pruned},
-        targets=targets,
-        configs={"model": WeightsConfig(data=pruned_config, length=len(pruned_config))},
-        order=current_order(_asset("whole-order.json")).rows,
-    ) as transaction:
-        if transaction.replayed:
-            receipt = transaction.receipt
-            assert receipt is not None
-        else:
+    receipts: dict[str, WeightsReceipt] = {}
+    with ExitStack() as stack:
+        bank = stack.enter_context(
+            artifacts.open(
+                "tables", sources={"full": full}, targets=bank_targets, configs=config,
+                order=bank_order,
+            )
+        )
+        retabled = stack.enter_context(
+            artifacts.open(
+                "adaln-pruned", sources={"pruned": pruned}, targets=targets, configs=config,
+                order=order.rows,
+            )
+        )
+        transactions = {"adaln-pruned": retabled, "tables": bank}
+        active = {name: t for name, t in transactions.items() if not t.replayed}
+        if active:
+            if bank.replayed:
+                raise ValueError(
+                    "the table bank was retained without its retabled checkpoint; "
+                    "rerun under a new request identity"
+                )
             if not torch.cuda.is_available():
                 raise ValueError("H3 timestep-table precompute requires a CUDA worker")
             torch.backends.cuda.matmul.allow_tf32 = False
@@ -876,25 +903,24 @@ def retable(
             for task, overall_range in (("fl2va", (0.0, 0.5)), ("ref2va", (0.5, 1.0))):
                 with tel.stage(f"timestep-table-{task}", overall_range=overall_range):
                     read, emitted = _write_tables(
-                        task,
-                        ctx,
-                        transaction,
-                        {"adaln-pruned": transaction},
-                        tel,
-                        overall_range,
-                        source="full",
+                        task, ctx, bank, active, tel, overall_range, source="full"
                     )
                 source_bytes += read
                 written += emitted
-            transaction.add_config("model", pruned_config)
-            receipt = transaction.commit()
+            # The retabled checkpoint commits first: its retention never strands the bank.
+            for name, transaction in active.items():
+                transaction.add_config("model", pruned_config)
+                receipts[name] = transaction.commit()
+        for name, transaction in transactions.items():
+            if name not in receipts:
+                receipts[name] = _receipt(transaction)
     tel.metric("h3.source_bytes", float(source_bytes), unit="bytes")
     return RetableResult(
         pruned.checkpoint_ref,
-        steps,
-        receipt.tensorfs_receipt_digest,
-        receipt.weights_transaction_id,
-        receipt.replayed,
+        list(plans["fl2va"].steps),
+        receipts["adaln-pruned"].tensorfs_receipt_digest,
+        receipts["tables"].tensorfs_receipt_digest,
+        receipts["adaln-pruned"].replayed,
         sum(len(rows) for rows in tables.values()),
         written,
         source_bytes,
