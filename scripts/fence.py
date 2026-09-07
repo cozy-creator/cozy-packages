@@ -165,6 +165,16 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    ("scripts/h3-repair-proof.py", "cozy_runtime.author._model"): (
+        "the repair integration driver constructs the same exact-checkpoint job source "
+        "record as Runtime; for_test intentionally permits test:// identities only. "
+        "Retire when a public native job fixture factory owns this constructor."
+    ),
+    ("scripts/h3-repair-proof.py", "cozy_runtime.internal.weights_sink"): (
+        "the repair integration driver exercises the public job against the real Runtime "
+        "host and TensorFS writer, including interrupted resume and exact receipt replay. "
+        "Retire when the public fake weights service can construct this native host."
+    ),
     ("scripts/h3-conform.py", "cozy_runtime.internal.derive"): (
         "the derive harness is Runtime's CONSTRUCTION plane and cannot become author "
         "surface: `cozy_runtime.author` is torch-free by construction and Runtime's own "
@@ -290,7 +300,12 @@ IDENTIFIERS = (
 #: own committed assets and expected outputs — never a model-selection binding, which
 #: still lives in package.toml. Scoped to the checkpoint-digest shape only; every other
 #: identifier rule applies to these files unchanged.
-DIGEST_PINNED_PREFIXES = ("minimax-h3-tools/src/h3_tables/",)
+#: The repair package pins only its recorded bad source roots and their immutable
+#: encoding identities; native proof verifies the encoding IDs against TensorFS seeds.
+DIGEST_PINNED_PREFIXES = (
+    "minimax-h3-tools/src/h3_tables/",
+    "checkpoint-repair/src/checkpoint_repair/",
+)
 
 
 def fence_identifiers() -> Fence:
