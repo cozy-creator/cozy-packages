@@ -7,7 +7,12 @@ import copy
 import json
 from pathlib import Path
 
-from cozy_runtime.author import canonical_json
+from cozy_runtime.author import (
+    WeightsSource,
+    WeightsSourcePart,
+    WeightsSourceTensor,
+    canonical_json,
+)
 from cozy_runtime.derive.quantization import (
     h3_quantization_plan,
     prepare_quantization,
@@ -20,9 +25,10 @@ from h3_tables.job import (
     _full_order,
     _full_targets,
     _pruned_targets,
+    _retable_targets,
     _table_additions,
 )
-from h3_tables.kernel import H3Topology, removed_keys, table_shapes
+from h3_tables.kernel import H3Topology, removed_keys, source_shapes, table_shapes
 from h3_tables.model_config import parse_production_config
 from h3_tables.order import current_order
 from h3_tables.plans import parse_declared_plan, parse_plan
@@ -38,6 +44,57 @@ def refuse(raw: bytes, task: str) -> None:
     except ValueError:
         return
     raise RuntimeError(f"changed {task} TimestepPlan did not refuse")
+
+
+def structure(rows: list[tuple[str, str, str, tuple[int, ...]]]) -> WeightsSource:
+    return WeightsSource(
+        ("model",),
+        tuple(
+            WeightsSourceTensor(
+                component, key, dtype, shape, (WeightsSourcePart("value", dtype, shape),)
+            )
+            for component, key, dtype, shape in rows
+        ),
+    )
+
+
+def prove_retable(sections: dict[str, dict[str, object]]) -> None:
+    """The retable declaration edits only table keys and refuses the wrong sources."""
+    tables = _table_additions(sections)
+    shared = [(c, f"{c}.w", "f32", (1,)) for c in ("text_encoder", "video_vae", "audio_vae")]
+    pruned_rows, full_rows = list(shared), list(shared)
+    for task, section in (("fl2va", "transformer"), ("ref2va", "transformer_ref")):
+        component = f"{task}_dit"
+        topology = H3Topology.from_config(sections[section])
+        pruned_rows += [(component, "proj_in.weight", "bf16", (2, 2))]
+        pruned_rows += [(component, key, "bf16", (1, 6, 8)) for key in tables[task]]
+        full_rows += [(component, "proj_in.weight", "bf16", (2, 2))]
+        full_rows += [
+            (component, key, {"torch.float32": "f32", "torch.bfloat16": "bf16"}[str(dtype)], shape)
+            for key, (dtype, shape) in source_shapes(topology).items()
+        ]
+    targets = _retable_targets(structure(pruned_rows), structure(full_rows), sections, tables)
+    for task in ("fl2va", "ref2va"):
+        target = targets[f"{task}_dit"]
+        if (
+            target.source != "pruned"
+            or set(target.drop) != set(tables[task])
+            or target.add != tables[task]
+        ):
+            raise RuntimeError(f"retable {task} target is not the exact table replacement")
+    if any(targets[c].source != "full" or targets[c].drop for c, *_ in shared):
+        raise RuntimeError("retable shared components must derive unchanged from full")
+    for name, bad_pruned, bad_full in (
+        ("missing table", pruned_rows[:-1], full_rows),
+        ("dynamic weights kept", [*pruned_rows, full_rows[-1]], full_rows),
+        ("full lacks modulation", pruned_rows, full_rows[:-1]),
+        ("shared differ", pruned_rows, [("text_encoder", "other", "f32", (1,)), *full_rows[1:]]),
+    ):
+        try:
+            _retable_targets(structure(bad_pruned), structure(bad_full), sections, tables)
+        except ValueError:
+            continue
+        raise RuntimeError(f"retable accepted a source with {name}")
 
 
 def main() -> None:
@@ -61,6 +118,7 @@ def main() -> None:
             raise RuntimeError(f"{component} lost its direct full source mapping")
 
     tables = _table_additions(sections)
+    prove_retable(sections)
     quantization = prepare_quantization(h3_quantization_plan())
     if (
         quantization.components != ["dit"]

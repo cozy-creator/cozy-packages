@@ -788,19 +788,23 @@ def _retable_targets(
 ) -> dict[str, WeightsTarget]:
     """Inherit one AdaLN-pruned checkpoint and replace only its table rows.
 
-    Refuses before any read unless `pruned` carries table rows and no dynamic modulation
-    weights for both DiTs, and `full` carries the exact modulation weights those rows are
-    computed from.
+    Both DiTs derive from `pruned`, dropping and re-adding exactly the table keys. TensorFS
+    admits only sources some target derives from, so the shared conditioner and VAEs derive
+    from `full`, whose rows are proven identical to `pruned`'s before the declaration. Refuses
+    before any read unless `pruned` carries table rows and no dynamic modulation weights for
+    both DiTs, and `full` carries the exact modulation weights those rows are computed from.
     """
     present = {(tensor.component, tensor.key): tensor for tensor in pruned.tensors}
     full_present = {(tensor.component, tensor.key): tensor for tensor in full.tensors}
     components = {tensor.component for tensor in pruned.tensors}
     if components != set(_dual_targets()):
         raise ValueError(f"retable source components are {sorted(components)}")
-    targets = {
-        component: WeightsTarget(source="pruned", source_component=component)
-        for component in components
-    }
+    targets: dict[str, WeightsTarget] = {}
+    for component in components - set(TARGET_COMPONENT.values()):
+        rows = [tensor for tensor in pruned.tensors if tensor.component == component]
+        if rows != [tensor for tensor in full.tensors if tensor.component == component]:
+            raise ValueError(f"{component} differs between the pruned and full sources")
+        targets[component] = WeightsTarget(source="full", source_component=component)
     for task, section in SOURCE_SECTION.items():
         component = TARGET_COMPONENT[task]
         topology = H3Topology.from_config(sections[section])
@@ -817,8 +821,11 @@ def _retable_targets(
                 or TORCH_DTYPE.get(tensor.logical_dtype) != dtype
             ):
                 raise ValueError(f"full source lacks modulation weight {component}/{key}")
-        targets[component] = replace(
-            targets[component], drop=tuple(sorted(tables[task])), add=tables[task]
+        targets[component] = WeightsTarget(
+            source="pruned",
+            source_component=component,
+            drop=tuple(sorted(tables[task])),
+            add=tables[task],
         )
     return targets
 
