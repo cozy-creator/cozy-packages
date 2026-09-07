@@ -1394,11 +1394,6 @@ def arm_media() -> None:
     check("eight-shot exact duration", Fraction(8 * FRAMES - 7, FPS), Fraction(2753, 24))
 
 
-class _Telemetry:
-    def metric(self, name: str, value: int | float) -> None:
-        del name, value
-
-
 class _NumericalTelemetry:
     def __init__(self) -> None:
         self.rows: list[dict[str, Any]] = []
@@ -1547,6 +1542,7 @@ def arm_numerics() -> None:
 
 def arm_output_gates() -> None:
     import torch
+    from cozy_runtime.author.fakes import fake_telemetry
 
     print("\n== structural refusals and quality observations ==")
     requested = MediaFacts(width=1, height=1, frames=2, fps=24, sample_rate=24, mute=False)
@@ -1564,7 +1560,7 @@ def arm_output_gates() -> None:
             video_nonfinite_fraction=package._nonfinite_fraction(torch, poisoned),
             audio_nonfinite_fraction=0.0,
             requested=requested,
-            tel=cast(Any, _Telemetry()),
+            tel=fake_telemetry(),
         ),
         "output_integrity",
     )
@@ -1582,7 +1578,7 @@ def arm_output_gates() -> None:
             video_nonfinite_fraction=0.0,
             audio_nonfinite_fraction=0.0,
             requested=requested,
-            tel=cast(Any, _Telemetry()),
+            tel=fake_telemetry(),
         ),
         "output_integrity",
     )
@@ -1598,7 +1594,7 @@ def arm_output_gates() -> None:
         video_nonfinite_fraction=0.0,
         audio_nonfinite_fraction=0.0,
         requested=requested,
-        tel=cast(Any, _Telemetry()),
+        tel=fake_telemetry(),
     )
     check(
         "periodic output is returned with its actual quality rejection",
