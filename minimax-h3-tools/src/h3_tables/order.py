@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 from collections import Counter
 from dataclasses import dataclass
+from typing import Any
 
 from cozy_runtime.author import canonical_json
+
+from .source import TARGET_COMPONENT, official_full_specs
 
 CURRENT_ORDER = (
     "sha256:4767caa9b6187bae5966b15633668123fdbcb61bf06b2f99788f49fd0cb527b5"
@@ -84,3 +87,21 @@ def current_order(raw: bytes) -> ConstructionOrder:
             "not the exact post-se018 H3 construction"
         )
     return order
+
+
+def full_order(
+    sections: dict[str, dict[str, Any]], current: tuple[tuple[str, str], ...]
+) -> tuple[tuple[str, str], ...]:
+    fl = tuple(
+        ("fl2va_dit", key) for key in official_full_specs(sections["transformer"])
+    )
+    ref = tuple(
+        ("ref2va_dit", key)
+        for key in official_full_specs(sections["transformer_ref"])
+    )
+    shared = tuple(row for row in current if row[0] not in TARGET_COMPONENT.values())
+    if len(fl) != 638 or len(ref) != 638 or len(shared) != 2692:
+        raise ValueError(
+            f"full H3 order is {len(fl)}/{len(ref)}/{len(shared)}, expected 638/638/2692"
+        )
+    return (*fl, *ref, *shared)

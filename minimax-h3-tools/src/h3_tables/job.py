@@ -14,7 +14,6 @@ import torch
 from cozy_runtime.author import (
     App,
     Context,
-    Model,
     Telemetry,
     WeightsConfig,
     WeightsOutput,
@@ -45,8 +44,14 @@ from .model_config import (
     parse_production_config,
 )
 from .order import current_order
+from .order import full_order as _full_order
 from .plans import TimestepPlan, parse_declared_plan
-from .source import official_full_specs, source_only_keys, text_source_only_keys
+from .source import (
+    TARGET_COMPONENT,
+    H3FullTransformer,
+    source_only_keys,
+    text_source_only_keys,
+)
 
 app = App()
 
@@ -55,7 +60,6 @@ FP8_SPEC = "sha256:c4be0120fb4548306b134f6ee07eb2545a363bc140a005af1ef6543c790cf
 MXFP8_SPEC = "sha256:7e9b1ad8f2e5ddd236a4d4303042d632a96eadef4f25d44eb0fb63124cec7cfd"
 
 SOURCE_READ_CHUNK = 32 << 20
-TARGET_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
 SOURCE_SECTION = {"fl2va": "transformer", "ref2va": "transformer_ref"}
 TORCH_DTYPE = {"bf16": torch.bfloat16, "f32": torch.float32}
 
@@ -84,11 +88,6 @@ TABLE_BYTES = _table_budget()
 MAX_FULL_BYTES = 64 << 10
 MAX_PRUNED_BYTES = 2 * TABLE_BYTES + (128 << 10)
 MAX_QUANTIZED_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_PRUNED_BYTES
-
-
-class H3FullTransformer(Model[object]):
-    def load(self, loader: Any) -> None:
-        del loader
 
 
 class ProductionRequest(msgspec.Struct, forbid_unknown_fields=True):
@@ -217,24 +216,6 @@ def _compute_table_parts(
     if written != expected or len(table_shapes(topology, plan)) != topology.num_layers + 1:
         raise ValueError(f"{task} emitted {written} table bytes, expected {expected}")
     return source_bytes, written
-
-
-def _full_order(
-    sections: dict[str, dict[str, Any]], current: tuple[tuple[str, str], ...]
-) -> tuple[tuple[str, str], ...]:
-    fl = tuple(
-        ("fl2va_dit", key) for key in official_full_specs(sections["transformer"])
-    )
-    ref = tuple(
-        ("ref2va_dit", key)
-        for key in official_full_specs(sections["transformer_ref"])
-    )
-    shared = tuple(row for row in current if row[0] not in TARGET_COMPONENT.values())
-    if len(fl) != 638 or len(ref) != 638 or len(shared) != 2692:
-        raise ValueError(
-            f"full H3 order is {len(fl)}/{len(ref)}/{len(shared)}, expected 638/638/2692"
-        )
-    return (*fl, *ref, *shared)
 
 
 def _full_targets() -> dict[str, WeightsTarget]:
@@ -717,6 +698,9 @@ def retable(
 
 
 # Register after defining the source capability used by the managed operation.
-from .operations import quantize_lane  # noqa: E402
+from . import operations  # noqa: E402
 
-app.job(quantize_lane, weights=(WeightsOutput("model", max_new_bytes=MAX_QUANTIZED_BYTES),))
+app.job(
+    operations.quantize, name="quantize-artifact",
+    weights=(WeightsOutput("model", max_new_bytes=MAX_QUANTIZED_BYTES),),
+)

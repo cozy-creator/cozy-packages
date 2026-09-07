@@ -6,15 +6,14 @@ from typing import Literal
 
 import cozy_runtime.derive as derive
 from cozy_runtime.author import Context, ModelArtifact, Telemetry, WeightsSink, invocable
-
-from . import SdxlModel
+from cozy_runtime.derive.quantization import QuantizationSource
 
 
 @invocable(memoize=True)
-async def quantize_lane(
+async def quantize(
     ctx: Context,
     *,
-    source: SdxlModel,
+    source: QuantizationSource,
     encoding: Literal["fp8-rowwise/1", "mxfp8/1"],
     max_relative_frobenius: float | None = None,
     weights: WeightsSink,

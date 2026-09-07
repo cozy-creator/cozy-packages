@@ -63,6 +63,41 @@ cozy package bind paul/minimax-h3 reference_media_to_video.models.model paul/min
   There is no curator stamp or `profile=` prefix.
 - A request overrides one slot for that call with `model.<param>=<org/model@release>`.
 
+## Client quantization operations
+
+The family libraries export `sdxl.operations.quantize`, `anima.operations.quantize`,
+and `h3_tables.operations.quantize`. Each is an awaitable `@invocable(memoize=True)`
+operation that takes one granted full-precision model artifact, an `encoding` of
+`"fp8-rowwise/1"` or `"mxfp8/1"`, and optional `max_relative_frobenius`. It returns one
+`ModelArtifact`. For example, after preparing `original` in a private client script:
+
+```python
+from sdxl.operations import quantize
+
+fp8 = await quantize(source=original, encoding="fp8-rowwise/1")
+mxfp8 = await quantize(source=original, encoding="mxfp8/1")
+```
+
+Completed managed results are independently memoizable. On an unfinished operation,
+native checkpoints preserve complete logical tensor data/scale groups; the kernel
+skips their reads and encoding, and recomputes an incomplete group. Reuse requires
+the same captured implementation/dependencies, source and numerical options. Changed
+parameters or code must not adopt incompatible partial results; cross-request partial
+adoption is governed by Runtime's workspace, not this library.
+
+H3 accepts the existing complete full or AdaLN-pruned BF16 checkpoint contracts. Its
+reviewed 313 selected tensors per DiT are encoded, while all other weights, table
+bytes and configs are inherited at their original precision. FP8 and MXFP8 always
+derive independently from the BF16 source. Measurements remain observations of the
+original execution; resumed missing fidelity measurements remain missing.
+
+The existing SDXL/Anima `quantize` jobs retain their multi-output request/result
+schemas. Their registry names are already occupied, so the new managed export uses
+`quantize-artifact` as its dispatch registration; client Python only calls `quantize`.
+These operations require Runtime's `derive.quantize_artifact` API. Native fixture
+checks establish transformation and interruption behavior, not model quality or new
+GPU numerical qualification.
+
 ## MiniMax H3
 
 The H3 package exposes both official actions from one model generation:
