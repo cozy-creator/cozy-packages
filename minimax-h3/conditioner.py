@@ -62,7 +62,12 @@ def build_text_conditioner(config: Mapping[str, object]) -> Any:
     language.layers = torch.nn.ModuleList(list(language.layers[:_RETAINED_LAYERS]))
     language.norm = torch.nn.Identity()
     model.lm_head = torch.nn.Identity()
-    model.to(dtype=torch.bfloat16).eval()
+    # Match from_pretrained(dtype=BF16): weights are BF16, while config-derived
+    # rotary buffers retain their constructor precision. A whole-model .to(BF16)
+    # rounds both text and vision frequencies before their FP32 forward math.
+    for parameter in model.parameters():
+        parameter.data = parameter.data.to(dtype=torch.bfloat16)
+    model.eval()
     _validate_census(model, language, torch)
     return model
 
