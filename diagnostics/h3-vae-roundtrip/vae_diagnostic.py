@@ -45,6 +45,7 @@ class Result(msgspec.Struct):
 class ShortInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
     seed: int = 24680
+    correct_mlp_order: bool = True
 
 
 class ShortResult(msgspec.Struct):
@@ -89,6 +90,45 @@ def fingerprints(component: str, module: Any) -> dict[str, str]:
 
 
 class VaeModel(H3Model):
+    @uses_components("fl2va_dit")
+    def sample_short(
+        self,
+        state: Any,
+        *,
+        correct_mlp_order: bool,
+        on_step: Any,
+        cancel: Any,
+        checks: NumericalChecks,
+    ) -> None:
+        import types
+
+        import torch
+        from diffusers.models.activations import SwiGLU
+
+        root = self.pipe.components["fl2va_dit"]
+        originals = []
+
+        def original_h3_swiglu(activation: Any, value: Any) -> Any:
+            gate, linear = activation.proj(value).chunk(2, dim=-1)
+            return torch.nn.functional.silu(gate) * linear
+
+        try:
+            if correct_mlp_order:
+                # Diagnostic only: unchanged original gate/value weight bytes.
+                # Production repair belongs to conversion into Diffusers order.
+                for activation in root.modules():
+                    if not isinstance(activation, SwiGLU):
+                        continue
+                    originals.append((activation, activation.forward))
+                    activation.forward = types.MethodType(original_h3_swiglu, activation)
+                assert len(originals) == 52, "expected 50 main and two token-refiner SwiGLUs"
+            checks.component("fl2va_dit", root)
+            with checks.forwards(root, "fl2va_dit"):
+                self.pipe.denoise("fl2va", state, on_step=on_step, cancel=cancel, checks=checks)
+        finally:
+            for activation, forward in originals:
+                activation.forward = forward
+
     @uses_components("video_vae")
     def encode_probe(self, pixels: Any, frames: int) -> tuple[Any, dict[str, str]]:
         vae = self.pipe.components["video_vae"]
@@ -175,7 +215,7 @@ def roundtrip(
 
 @app.entrypoint()
 def short_denoise(
-    ctx: Context, payload: ShortInput, model: H3Model, out: Outputs, tel: Telemetry
+    ctx: Context, payload: ShortInput, model: VaeModel, out: Outputs, tel: Telemetry
 ) -> ShortResult:
     """124-frame, 384p text-only control with actual conditioning and latent artifacts."""
     import io
@@ -200,8 +240,9 @@ def short_denoise(
         model.condition_text("fl2va", state, checks=checks)
     prompt_embeds = state.prompt_embeds.detach().float().cpu().numpy().copy()
     with tel.stage("denoise"):
-        model.sample_fl2va(
+        model.sample_short(
             state,
+            correct_mlp_order=payload.correct_mlp_order,
             on_step=tel.step_callback(TRANSFORMER_EVALUATIONS, stage="denoise"),
             cancel=ctx.raise_if_cancelled,
             checks=checks,
@@ -213,6 +254,7 @@ def short_denoise(
         prompt_embeds=prompt_embeds,
         video_latents=state.latents.detach().float().cpu().numpy(),
         audio_latents=state.audio_latents.detach().float().cpu().numpy(),
+        corrected_mlp_order=np.asarray(payload.correct_mlp_order),
     )
     with tel.stage("decode_video"):
         video = model.decode_video("fl2va", state, checks=checks)
