@@ -8,6 +8,7 @@ run is a CPU semantic proof, not a generation or accelerator proof.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import struct
@@ -434,9 +435,7 @@ def arm_schedule() -> None:
             scheduler = MiniMaxH3Scheduler(shift=shift)
             scheduler.set_timesteps(schedule.sigma_grid_points)
             official_sigmas = tuple(float(value) for value in scheduler.sigmas.float().cpu())
-            official_timesteps = tuple(
-                float(value) for value in scheduler.timesteps.float().cpu()
-            )
+            official_timesteps = tuple(float(value) for value in scheduler.timesteps.float().cpu())
             check(f"{steps}-step {name} sigmas equal Diffusers", sigmas, official_sigmas)
             check(f"{steps}-step {name} timesteps equal Diffusers", timesteps, official_timesteps)
             check(f"{steps}-step {name} forwards", len(official_timesteps), steps)
@@ -2074,6 +2073,91 @@ def arm_output_gates() -> None:
     )
 
 
+def arm_vae_tiles() -> None:
+    """h3a-017: one chunk's tiles decode as one batch, within one ulp of the tile-at-a-time
+    decode, on the real VAE class at the release tile geometry (CPU, random weights)."""
+    import torch
+    from diffusers import AutoencoderKLMiniMaxH3
+
+    from vae_tiles import TILE_BATCH, TileBatchedVideoVAE
+
+    print("\n== tile-batched video VAE decode ==")
+    torch.manual_seed(0)
+    vae = TileBatchedVideoVAE(
+        block_out_channels=(8, 8, 8, 8, 8, 8),
+        layers_per_block=1,
+        norm_num_groups=8,
+        decoder_num_layers=1,
+        decoder_num_attention_heads=2,
+    ).eval()
+    with torch.no_grad():
+        for parameter in vae.parameters():
+            parameter.normal_(0, 0.02)
+    check(
+        "the served video VAE is the tile-batched class",
+        type(meta_h3_pipeline().components["video_vae"]),
+        TileBatchedVideoVAE,
+    )
+    check("tile-batched VAE keeps the release VAE contract", vae.tokens_chunk_size, 5)
+
+    # 1344x768 at the release tile geometry: latent 84x48 -> 4x7 tiles of (1, 24, 7, 16, 16).
+    ratio = vae.spatial_compression_ratio
+    rows = vae._split_tiles(768, vae.tile_sample_min_height, vae.tile_sample_min_overlap_height)
+    columns = vae._split_tiles(1344, vae.tile_sample_min_width, vae.tile_sample_min_overlap_width)
+    check(
+        "TILE_BATCH is the release grid, one forward per chunk",
+        len(rows[0]) * len(columns[0]),
+        TILE_BATCH,
+    )
+    clip = torch.randn(
+        1, 24, 7, 768 // ratio, 1344 // ratio, generator=torch.Generator().manual_seed(1)
+    )
+    with torch.no_grad():
+        sequential = AutoencoderKLMiniMaxH3._decode_clip(vae, clip)
+        batched = TileBatchedVideoVAE._decode_clip(vae, clip)
+    check("batched decode has the clip's pixel shape", tuple(batched.shape), (1, 3, 28, 768, 1344))
+    # A larger GEMM may reduce in another order, so the bytes are not the identity; the
+    # accuracy is. Against the same decode in float64, the batched fp32 result must sit in
+    # the sequential fp32 result's error class — a wrong tile, order or dtype is orders of
+    # magnitude out, a re-associated dot product is not.
+    with torch.no_grad():
+        exact = AutoencoderKLMiniMaxH3._decode_clip(copy.deepcopy(vae).double(), clip.double())
+    sequential_error = float((sequential.double() - exact).abs().max())
+    batched_error = float((batched.double() - exact).abs().max())
+    check("the sequential fp32 decode is itself inexact", sequential_error > 0, True)
+    check(
+        "batched tiles decode in the sequential decode's error class",
+        batched_error <= 2 * sequential_error,
+        True,
+    )
+    observe(
+        "tile-batch drift",
+        f"sequential_vs_fp64={sequential_error:.3e} batched_vs_fp64={batched_error:.3e} "
+        f"batched_vs_sequential={float((sequential - batched).abs().max()):.3e}",
+    )
+    # Red arm: a tile grid stitched in the wrong order is far outside that class.
+    with torch.no_grad():
+        wrong = TileBatchedVideoVAE._stitch_tiles(
+            vae,
+            [
+                [
+                    AutoencoderKLMiniMaxH3._decode_clip(
+                        vae, clip[..., y // ratio : y // ratio + 16, x // ratio : x // ratio + 16]
+                    )
+                    for x in reversed(columns[0])
+                ]
+                for y in rows[0]
+            ],
+            rows[2],
+            columns[2],
+        )
+    red(
+        "a reversed tile order still sits in the sequential error class",
+        float((wrong.double() - exact).abs().max()) <= 2 * sequential_error,
+        True,
+    )
+
+
 def arm_interface() -> None:
     print("\n== committed public surface ==")
     interface_path = H3 / "metadata" / "package-interface.json"
@@ -2144,6 +2228,7 @@ ARMS = {
     "gates": arm_output_gates,
     "numerics": arm_numerics,
     "resident-fill": arm_resident_fill,
+    "vae-tiles": arm_vae_tiles,
     "interface": arm_interface,
 }
 

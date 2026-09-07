@@ -1,6 +1,6 @@
 [project]
 name = "minimax-h3"
-version = "1.2.0"
+version = "1.2.1"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cozy-runtime[media]>=0.2.13,<1",
@@ -38,6 +38,7 @@ only-include = [
     "processor",
     "timestep-plans",
     "tokenizer",
+    "vae_tiles.py",
 ]
 
 [tool.cozy]

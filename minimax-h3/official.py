@@ -723,12 +723,13 @@ class OfficialH3Pipeline:
 
     def __init__(self, config: Config) -> None:
         from diffusers import (
-            AutoencoderKLMiniMaxH3,
             AutoencoderKLMiniMaxH3Audio,
             MiniMaxH3Blocks,
             MiniMaxH3ModularPipeline,
             MiniMaxH3Scheduler,
         )
+
+        from vae_tiles import TileBatchedVideoVAE
 
         mapping = _artifact_sections(config.mapping())
         blocks = {name: MiniMaxH3Blocks().get_workflow(name) for name in _WORKFLOW_TASKS}
@@ -740,7 +741,7 @@ class OfficialH3Pipeline:
         }
         _validate_dual_dit_topology(dits)
         text_encoder = build_text_conditioner(_section(mapping, "text_encoder"))
-        video_vae = AutoencoderKLMiniMaxH3.from_config(_section(mapping, "video_vae")).eval()
+        video_vae = TileBatchedVideoVAE.from_config(_section(mapping, "video_vae")).eval()
         audio_vae = AutoencoderKLMiniMaxH3Audio.from_config(_section(mapping, "audio_vae")).eval()
         for task in _TASKS:
             _validate_model_contract(pipes[task], dits[task], video_vae, audio_vae)
