@@ -373,10 +373,14 @@ class NumericalChecks:
                         parked += 1
                         continue
                     count += 1
+                    # Stored FP8 reductions are not supported on every backend.
+                    # Widen only this bounded observation, never the weight itself.
+                    widen = tensor.element_size() == 1
+                    chunk_elements = 1024 * 1024 if widen else 16 * 1024 * 1024
                     chunks = [tensor.detach()]
                     while chunks:
                         part = chunks.pop()
-                        if part.numel() > 16 * 1024 * 1024:
+                        if part.numel() > chunk_elements:
                             axis = max(range(part.ndim), key=lambda dim: part.shape[dim])
                             chunks.extend(part.split(max(1, part.shape[axis] // 2), dim=axis))
                             continue
@@ -384,6 +388,8 @@ class NumericalChecks:
                         elements += size
                         if not size:
                             continue
+                        if widen:
+                            part = part.float()
                         bad = int((~torch.isfinite(part)).sum().item())
                         if bad:
                             self.telemetry.log(
