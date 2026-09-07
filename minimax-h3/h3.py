@@ -493,7 +493,7 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
 
 
 @app.entrypoint()
-def first_last_frame_to_video(
+def fl2va(
     ctx: Context,
     payload: FirstLastFrameToVideoInput,
     model: H3Model,
@@ -546,7 +546,7 @@ def first_last_frame_to_video(
 
 
 @app.entrypoint(preflight=preflight_reference_media)
-def reference_media_to_video(
+def ref2va(
     ctx: Context,
     payload: ReferenceMediaToVideoInput,
     facts: Preflight[ReferencePolicyFacts],

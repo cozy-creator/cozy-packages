@@ -48,9 +48,9 @@ is an owner action on the hub, never a default in `package.toml`. A freshly publ
 unbound until the owner binds it:
 
 ```sh
-cozy package bind paul/minimax-h3 first_last_frame_to_video.models.model paul/minimax-h3@1.0.0-rc.2 \
+cozy package bind paul/minimax-h3 fl2va.models.model paul/minimax-h3@1.0.0-rc.2 \
   --gpu H100=fp8-adaln-pruned --gpu B200=fp8-adaln-pruned --gpu 5090=fp8-adaln-pruned
-cozy package bind paul/minimax-h3 reference_media_to_video.models.model paul/minimax-h3@1.0.0-rc.2 \
+cozy package bind paul/minimax-h3 ref2va.models.model paul/minimax-h3@1.0.0-rc.2 \
   --gpu H100=fp8-adaln-pruned --gpu B200=fp8-adaln-pruned --gpu 5090=fp8-adaln-pruned
 ```
 
@@ -67,8 +67,8 @@ cozy package bind paul/minimax-h3 reference_media_to_video.models.model paul/min
 
 The H3 package exposes both official actions from one model generation:
 
-- `first_last_frame_to_video` accepts zero, first, last, or first-and-last keyframes.
-- `reference_media_to_video` accepts one ordered tagged list of image,
+- `fl2va` accepts zero, first, last, or first-and-last keyframes.
+- `ref2va` accepts one ordered tagged list of image,
   video, and standalone-audio references.
 
 Both actions use the official Diffusers MiniMax H3 implementation and share one exact BF16
@@ -126,7 +126,7 @@ not consume the standalone-audio count. Standalone audio cannot be the only refe
 The optional `reference_image_short_edge` selects the image-reference resolution in pixels,
 from 256 to 2048. Diffusers rounds the resulting dimensions to its 32-pixel grid. The default remains 2048. Lower values such as 768 reduce
 reference detail and attention work while preserving the generated video's resolution. For
-example, pass `reference_image_short_edge=768` to `reference_media_to_video`.
+example, pass `reference_image_short_edge=768` to `ref2va`.
 Video and audio references keep their
 existing presentation. The selected value drives both official Diffusers preprocessing and
 the vision-token budget through a request-local configuration view; it never changes the shared

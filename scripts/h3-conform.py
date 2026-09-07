@@ -2083,19 +2083,19 @@ def arm_interface() -> None:
     check(
         "exact action names",
         set(entries),
-        {"first_last_frame_to_video", "reference_media_to_video"},
+        {"fl2va", "ref2va"},
     )
     check(
         "both official actions are visible",
         set(entries),
-        {"first_last_frame_to_video", "reference_media_to_video"},
+        {"fl2va", "ref2va"},
     )
     expected = {
-        "first_last_frame_to_video": (
+        "fl2va": (
             ["prompt", "first_frame", "last_frame", "mute", "seed", "steps"],
             "fl2va_dit",
         ),
-        "reference_media_to_video": (
+        "ref2va": (
             ["prompt", "references", "mute", "seed", "reference_image_short_edge", "steps"],
             "ref2va_dit",
         ),

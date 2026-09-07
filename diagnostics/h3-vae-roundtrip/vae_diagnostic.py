@@ -29,7 +29,7 @@ from h3 import (
     preflight_reference_media,
 )
 from h3 import (
-    reference_media_to_video as reference_media_to_video,
+    ref2va as ref2va,
 )
 from official import (
     NumericalChecks,
@@ -294,7 +294,7 @@ def reference_trace(
 
     trace = ActivationTrace(evaluations=payload.steps, first_step=False)
     with trace.active():
-        result = reference_media_to_video(ctx, payload, facts, model, decoder, out, tel)
+        result = ref2va(ctx, payload, facts, model, decoder, out, tel)
     return TraceResult(
         inference=result,
         activations=save_trace(trace, ctx, payload, model, out),
@@ -318,7 +318,7 @@ def reference_activations(
     trace = ActivationTrace(evaluations=payload.steps, first_step=True)
     with trace.active():
         try:
-            reference_media_to_video(ctx, payload, facts, model, decoder, out, tel)
+            ref2va(ctx, payload, facts, model, decoder, out, tel)
         except FirstStepCaptured:
             pass
         else:
