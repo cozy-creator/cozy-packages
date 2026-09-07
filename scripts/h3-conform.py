@@ -36,6 +36,7 @@ from official import (  # noqa: E402
     FRAMES,
     MAX_CONDITIONER_VISION_TOKENS,
     NumericalChecks,
+    ResidentWeights,
     ScheduleFacts,
     _aligned_soundtrack,
     _apply_transformer_dtype,
@@ -1241,25 +1242,30 @@ def arm_adaln_pruned() -> None:
     checks.component("actual_h3", full)
     with checks.forwards(full, "actual_h3"):
         checked_output = full(**forward)
-        check(
-            "actual Diffusers H3 output PyTree is checked without changing values",
-            all(torch.equal(a, b) for a, b in zip(full_output, checked_output, strict=True)),
-            True,
+    check(
+        "actual Diffusers H3 output PyTree is checked without changing values",
+        all(torch.equal(a, b) for a, b in zip(full_output, checked_output, strict=True)),
+        True,
+    )
+    first = next(row for row in numerical.rows if row.get("stage") == "actual_h3.prediction.0")
+    check("actual H3 tuple exposes both predictions", first["tensors"], 2)
+    saved = full.proj_in.bias.detach().clone()
+
+    def poisoned_step() -> None:
+        with checks.forwards(full, "actual_h3"):
+            full(**forward)
+
+    try:
+        with torch.no_grad():
+            full.proj_in.bias.fill_(float("nan"))
+        refusal(
+            "a later actual H3 prediction refuses when its loop settles",
+            poisoned_step,
+            "numerical_nonfinite",
         )
-        first = next(row for row in numerical.rows if row.get("stage") == "actual_h3.prediction.0")
-        check("actual H3 tuple exposes both predictions", first["tensors"], 2)
-        saved = full.proj_in.bias.detach().clone()
-        try:
-            with torch.no_grad():
-                full.proj_in.bias.fill_(float("nan"))
-            refusal(
-                "a later actual H3 prediction refuses immediately",
-                lambda: full(**forward),
-                "numerical_nonfinite",
-            )
-        finally:
-            with torch.no_grad():
-                full.proj_in.bias.copy_(saved)
+    finally:
+        with torch.no_grad():
+            full.proj_in.bias.copy_(saved)
     check(
         "actual H3 diagnostic hooks close after refusal",
         (len(full._forward_pre_hooks), len(full._forward_hooks)),
@@ -1777,7 +1783,7 @@ def arm_numerics() -> None:
         with checks.forwards(module, "bad_input"):
             module(torch.full((1, 4), float("inf")))
 
-    refusal("invalid input refuses before forward", bad_input, "numerical_nonfinite")
+    refusal("invalid input refuses when its loop settles", bad_input, "numerical_nonfinite")
     check(
         "input refusal removes both hooks",
         (len(module._forward_pre_hooks), len(module._forward_hooks)),
@@ -1843,6 +1849,165 @@ def arm_numerics() -> None:
             required=True,
         ),
         "numerical_nonfinite",
+    )
+
+
+def arm_resident_fill() -> None:
+    import torch
+    from diffusers import MiniMaxH3Scheduler
+    from diffusers.modular_pipelines.minimax_h3.denoise import MiniMaxH3LoopSchedulerStep
+    from torch.utils._python_dispatch import TorchDispatchMode
+
+    print("\n== resident weights are scanned once per fill ==")
+
+    class Kernels(TorchDispatchMode):  # type: ignore[misc]  # Torch is absent in static CI.
+        """Every dispatched operator; a reused verdict must launch none at all."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.dispatched = 0
+
+        def __torch_dispatch__(
+            self, func: Any, types: Any, args: Any = (), kwargs: Any = None
+        ) -> Any:
+            self.dispatched += 1
+            return func(*args, **(kwargs or {}))
+
+    def request(resident: ResidentWeights, module: Any) -> tuple[dict[str, Any], int]:
+        """One request: a fresh NumericalChecks over the verdicts the pipeline keeps."""
+        telemetry = _NumericalTelemetry()
+        with Kernels() as kernels:
+            NumericalChecks(cast(Any, telemetry), resident).component("dit", module)
+        return telemetry.rows[-1], kernels.dispatched
+
+    def tensors(module: Any) -> list[tuple[str, Any]]:
+        return [*module.named_parameters(), *module.named_buffers()]
+
+    def restage(module: Any, values: dict[str, Any]) -> None:
+        """Exactly Runtime's shape: park on meta, reserve fresh storage, fill in place."""
+        module.to_empty(device="meta")
+        module.to_empty(device="cpu")
+        with torch.no_grad():
+            for name, tensor in tensors(module):
+                tensor.view(-1).view(torch.uint8).copy_(values[name].view(-1).view(torch.uint8))
+
+    module = torch.nn.Linear(4, 4)
+    module.register_buffer("rotary", torch.ones(2), persistent=False)
+    weights = {name: tensor.detach().clone() for name, tensor in tensors(module)}
+    resident = ResidentWeights()
+    row, scanned = request(resident, module)
+    check(
+        "the first request scans the fill", (row["status"], scanned > 0), ("finite_resident", True)
+    )
+    check("the first request counts every resident value", row["elements"], 16 + 4 + 2)
+    row, scanned = request(resident, module)
+    check("the second request reuses the verdict", (row["status"], scanned), ("verified_fill", 0))
+    check("the reused verdict names the verified tensors", row["tensors"], 3)
+    red("a request-local registry rescans", request(ResidentWeights(), module)[1], 0)
+
+    restage(module, weights)
+    row, scanned = request(resident, module)
+    check(
+        "a re-staged fill is scanned again", (row["status"], scanned > 0), ("finite_resident", True)
+    )
+    row, scanned = request(resident, module)
+    check("the re-staged verdict is reused", (row["status"], scanned), ("verified_fill", 0))
+
+    # A paged block parks by resizing its storage to zero and refills the same storage.
+    module.weight.untyped_storage().resize_(0)
+    row, scanned = request(resident, module)
+    check("a parked weight is neither claimed nor scanned", (row["tensors"], scanned), (2, 0))
+    module.weight.untyped_storage().resize_(weights["weight"].numel() * 4)
+    with torch.no_grad():
+        module.weight.view(-1).view(torch.uint8).copy_(weights["weight"].view(-1).view(torch.uint8))
+    row, scanned = request(resident, module)
+    check("a refilled storage is rescanned alone", (row["elements"], scanned > 0), (16, True))
+
+    poisoned = dict(weights, weight=weights["weight"].clone())
+    poisoned["weight"][0, 0] = float("nan")
+    restage(module, poisoned)
+    refusal(
+        "non-finite weights are refused after a re-stage",
+        lambda: request(resident, module),
+        "numerical_nonfinite",
+    )
+    refusal(
+        "a refused fill leaves no verdict to reuse",
+        lambda: request(resident, module),
+        "numerical_nonfinite",
+    )
+
+    print("\n== step checks settle once, after the loop ==")
+
+    class Sampler(torch.nn.Module):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+            self.poison_at = -1
+
+        def forward(self, value: torch.Tensor) -> torch.Tensor:
+            self.calls += 1
+            return value * float("nan") if self.calls - 1 == self.poison_at else value + 1
+
+    telemetry = _NumericalTelemetry()
+    checks = NumericalChecks(cast(Any, telemetry))
+    sampler = Sampler()
+
+    def loop() -> None:
+        latents = torch.ones(1, 4)
+        with checks.forwards(sampler, "dit"):
+            for index in range(3):
+                latents = sampler(latents)
+                checks.tensors(
+                    f"dit.updated.{index}", [("latents", latents)], required=True, defer=True
+                )
+            check("nothing is read inside the loop", len(telemetry.rows), 0)
+
+    loop()
+    stages = [
+        f"dit.{stage}.{index}" for index in range(3) for stage in ("input", "prediction", "updated")
+    ]
+    check("every step settles in step order", [row["stage"] for row in telemetry.rows], stages)
+    check("the settled loop names its maximum", telemetry.rows[-1]["absmax"], 4.0)
+
+    telemetry.rows.clear()
+    sampler.calls, sampler.poison_at = 0, 1
+    refusal("a planted NaN in a step output fails the attempt", loop, "numerical_nonfinite")
+    check("the first non-finite stage is named", telemetry.rows[-1]["stage"], "dit.prediction.1")
+    check(
+        "the stages before it settled first",
+        [row["stage"] for row in telemetry.rows[:-1]],
+        stages[:4],
+    )
+    check("a refusal leaves nothing pending", checks._pending, [])
+    check(
+        "the loop's hooks close after refusal",
+        (len(sampler._forward_pre_hooks), len(sampler._forward_hooks)),
+        (0, 0),
+    )
+
+    # The official update is an affine blend with no clamp: a step-0 NaN reaches the end.
+    video, audio = MiniMaxH3Scheduler(), MiniMaxH3Scheduler()
+    for scheduler in (video, audio):
+        scheduler.set_timesteps(DEFAULT_STEPS)
+    state = SimpleNamespace(
+        num_condition_video_rows=0,
+        num_condition_audio_rows=0,
+        audio_noise_pred=torch.zeros((1, 1, 1)),
+        latents=torch.ones((2, 1)),
+        audio_latents=torch.ones((1, 1)),
+        audio_timesteps=audio.timesteps,
+    )
+    components = SimpleNamespace(scheduler=video, audio_scheduler=audio)
+    for index, timestep in enumerate(video.timesteps):
+        state.noise_pred = torch.zeros((1, 2, 1))
+        if index == 0:
+            state.noise_pred[0, 1, 0] = float("nan")
+        MiniMaxH3LoopSchedulerStep()(components, state, i=index, t=timestep)
+    check(
+        "the official update carries a step-0 NaN into the final latents",
+        torch.isfinite(state.latents).flatten().tolist(),
+        [True, False],
     )
 
 
@@ -1978,6 +2143,7 @@ ARMS = {
     "media": arm_media,
     "gates": arm_output_gates,
     "numerics": arm_numerics,
+    "resident-fill": arm_resident_fill,
     "interface": arm_interface,
 }
 
