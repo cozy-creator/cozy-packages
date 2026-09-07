@@ -31,7 +31,7 @@ jobs:
       - name: Lint
         run: >-
           uv run --no-project ruff check anima/ minimax-h3/ quality-judge/ scripts/ sdxl/
-          h3-quality-gate/ minimax-h3-tools/ checkpoint-repair/
+          h3-quality-gate/ minimax-h3-tools/ checkpoint-repair/ diagnostics/h3-vae-roundtrip/
 
       - name: Types
         run: uv run --no-project mypy
@@ -77,6 +77,15 @@ jobs:
           for asset in ("processor", "timestep-plans", "tokenizer"):
               assert (h3_root / asset).is_dir()
           PY
+      - name: Optional H3 diagnostics build and expose bounded assets
+        run: |
+          mkdir -p diagnostics/h3-vae-roundtrip/dependencies
+          cp dist/packages/minimax-h3/*.whl diagnostics/h3-vae-roundtrip/dependencies/
+          uv lock --check --project diagnostics/h3-vae-roundtrip
+          uv build --project diagnostics/h3-vae-roundtrip --wheel --out-dir dist/diagnostic
+          uv pip install --python .venv/bin/python --no-deps dist/diagnostic/*.whl
+          .venv/bin/cozy-runtime --json --dir diagnostics/h3-vae-roundtrip describe > dist/diagnostic/interface.json
+
       - name: The minimax-h3-tools wheel carries its job and assets
         run: |
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/job.py'
@@ -114,6 +123,9 @@ jobs:
 
       - name: Arms
         run: minimax-h3/.venv/bin/python scripts/h3-conform.py
+
+      - name: Diagnostic hooks preserve outputs and stop explicitly
+        run: PYTHONPATH=minimax-h3 minimax-h3/.venv/bin/python scripts/h3-activation-proof.py
 
   package-locks:
     # Independent so a failure to materialize an exact dependency environment cannot hide

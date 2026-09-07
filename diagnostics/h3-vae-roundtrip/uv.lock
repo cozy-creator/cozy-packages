@@ -99,7 +99,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.2.29"
+version = "0.2.34"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -109,10 +109,10 @@ dependencies = [
     { name = "pillow" },
     { name = "protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e2/60/017f301f81d0389450dc26b524792aa1db8a6dba4f49597b13e783406f8f/cozy_runtime-0.2.29.tar.gz", hash = "sha256:2304042624a08011d27f0d9bd6ba338110fd635556ca2582097fe5c2da684702", size = 1236372, upload-time = "2026-09-07T00:34:27.83Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c8/e6/344e07077633582de07a9b2e88c0340e445483016a407ded794e17009dc3/cozy_runtime-0.2.34.tar.gz", hash = "sha256:26cbb0d8713451c6f407f81e6a27189d4196ff066d50b8942f1849557720af24", size = 1266628, upload-time = "2026-09-07T10:53:24.959Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/77/6d/b260f45ce68aaa30c04f3792bc5d649c0b43674e982f3e87ec19460eec1c/cozy_runtime-0.2.29-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:646116c8a48d09508e38603a6ff0582e376ec101ae78adebbfabd0493926b25b", size = 13400961, upload-time = "2026-09-07T00:34:23.958Z" },
-    { url = "https://files.pythonhosted.org/packages/19/34/2bc3c533dc47fc306cb1f0d117fb1bfcd370da7b11256ddfbfae5634e85c/cozy_runtime-0.2.29-py3-none-any.whl", hash = "sha256:41b187e3acef79e1b9ada4054058ffbdb6d8d49f9a3395650dd61eb7dfa74587", size = 933540, upload-time = "2026-09-07T00:34:26.311Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/9d/0a2ae6853bb946bf00d15a001fe88d6fde4f7315187a5cf7795cb7766e2b/cozy_runtime-0.2.34-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:a7b3ca344b8fe63cac004dcbdc904bd5c93f1780174660a6d9dbb87d9a1b84bf", size = 13409908, upload-time = "2026-09-07T10:53:21.634Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/e2/f87f2f7da1b4ec545abdf8c271ccf6ffbc465d15ec58cf7f682cb4c249a4/cozy_runtime-0.2.34-py3-none-any.whl", hash = "sha256:3c087703fcdfb2ac5c42a22b2f7ac5d2c67a7903bd959d29b5d8236706b276f0", size = 942491, upload-time = "2026-09-07T10:53:23.579Z" },
 ]
 
 [package.optional-dependencies]
@@ -269,7 +269,7 @@ wheels = [
 
 [[package]]
 name = "h3-vae-diagnostic"
-version = "1.0.9"
+version = "1.0.10"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-eval" },
@@ -279,18 +279,20 @@ dependencies = [
     { name = "msgspec" },
     { name = "numpy" },
     { name = "pillow" },
+    { name = "safetensors" },
     { name = "torch" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "cozy-eval", specifier = ">=0.3.2,<1" },
-    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.2.29,<1" },
+    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.2.34,<1" },
     { name = "diffusers", specifier = "==0.40.0" },
-    { name = "minimax-h3", path = "dependencies/minimax_h3-1.1.9-py3-none-any.whl" },
+    { name = "minimax-h3", path = "dependencies/minimax_h3-1.1.11-py3-none-any.whl" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=12" },
+    { name = "safetensors", specifier = ">=0.7" },
     { name = "torch", specifier = ">=2.13,<3" },
 ]
 
@@ -418,8 +420,8 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.1.9"
-source = { path = "dependencies/minimax_h3-1.1.9-py3-none-any.whl" }
+version = "1.1.11"
+source = { path = "dependencies/minimax_h3-1.1.11-py3-none-any.whl" }
 dependencies = [
     { name = "cozy-eval" },
     { name = "cozy-runtime", extra = ["media"] },
@@ -439,7 +441,7 @@ dependencies = [
     { name = "transformers" },
 ]
 wheels = [
-    { filename = "minimax_h3-1.1.9-py3-none-any.whl", hash = "sha256:999a2b203d513c97dc3775681c93188915535d6261b56ffcafe79aaff0aa1643" },
+    { filename = "minimax_h3-1.1.11-py3-none-any.whl", hash = "sha256:bcf8c749b6fd69a201a1452cae6ea42d49a2811249c4da38d58fcddc82d40136" },
 ]
 
 [package.metadata]

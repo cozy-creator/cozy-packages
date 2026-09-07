@@ -1,4 +1,4 @@
-"""Pretrained VAE reconstruction through the serving package and Runtime scopes."""
+"""Optional H3 observations over the unchanged inference dependency and Runtime scopes."""
 
 from typing import Annotated, Any, Literal
 
@@ -6,10 +6,13 @@ import msgspec
 from cozy_runtime.author import (
     App,
     AssetBound,
+    Config,
     Context,
     FileAsset,
     ImageAsset,
     ImageFrame,
+    InvalidRequest,
+    Loader,
     MediaDecoder,
     Outputs,
     Preflight,
@@ -24,7 +27,9 @@ from h3 import (
     ReferenceMediaToVideoInput,
     _rgb8,
     preflight_reference_media,
-    reference_media_to_video,
+)
+from h3 import (
+    reference_media_to_video as reference_media_to_video,
 )
 from official import (
     TRANSFORMER_EVALUATIONS,
@@ -55,19 +60,6 @@ class Result(msgspec.Struct):
     reconstruction: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
     grid_peak_ratio: float
     hashes: list[TensorObservation]
-
-
-class ShortInput(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
-    seed: int = 24680
-    correct_mlp_order: bool = False
-
-
-class ShortResult(msgspec.Struct):
-    video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",))]
-    frame: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
-    tensors: Annotated[FileAsset, AssetBound(media_types=("application/octet-stream",))]
-    grid_peak_ratio: float
 
 
 def encode(h3_pipe: Any, pixels: Any, frames: int) -> Any:
@@ -104,81 +96,7 @@ def fingerprints(component: str, module: Any) -> dict[str, str]:
     return {**actual, **{"expected/" + key: value for key, value in expected.items()}}
 
 
-def sample_gate_first(
-    pipe: OfficialH3Pipeline,
-    task: Task,
-    state: Any,
-    *,
-    enabled: bool,
-    on_step: Any,
-    cancel: Any,
-    checks: NumericalChecks,
-) -> ScheduleFacts:
-    import types
-
-    import torch
-    from diffusers.models.activations import SwiGLU
-
-    component = f"{task}_dit"
-    root = pipe.components[component]
-    originals = []
-
-    def original_h3_swiglu(activation: Any, value: Any) -> Any:
-        gate, linear = activation.proj(value).chunk(2, dim=-1)
-        return torch.nn.functional.silu(gate) * linear
-
-    try:
-        if enabled:
-            # Diagnostic only: unchanged original gate/value weight bytes.
-            # Production repair belongs to conversion into Diffusers order.
-            for activation in root.modules():
-                if not isinstance(activation, SwiGLU):
-                    continue
-                originals.append((activation, activation.forward))
-                activation.forward = types.MethodType(original_h3_swiglu, activation)
-            assert len(originals) == 52, "expected 50 main and two token-refiner SwiGLUs"
-        checks.component(component, root)
-        with checks.forwards(root, component):
-            return pipe.denoise(task, state, on_step=on_step, cancel=cancel, checks=checks)
-    finally:
-        for activation, forward in originals:
-            activation.forward = forward
-
-
 class VaeModel(H3Model):
-    @uses_components("fl2va_dit")
-    def sample_short(
-        self,
-        state: Any,
-        *,
-        correct_mlp_order: bool,
-        on_step: Any,
-        cancel: Any,
-        checks: NumericalChecks,
-    ) -> None:
-        sample_gate_first(
-            self.pipe,
-            "fl2va",
-            state,
-            enabled=correct_mlp_order,
-            on_step=on_step,
-            cancel=cancel,
-            checks=checks,
-        )
-
-    @uses_components("ref2va_dit")
-    def sample_ref2va(
-        self,
-        state: Any,
-        *,
-        on_step: Any,
-        cancel: Any,
-        checks: NumericalChecks,
-    ) -> ScheduleFacts:
-        return sample_gate_first(
-            self.pipe, "ref2va", state, enabled=True, on_step=on_step, cancel=cancel, checks=checks
-        )
-
     @uses_components("video_vae")
     def encode_probe(self, pixels: Any, frames: int) -> tuple[Any, dict[str, str]]:
         vae = self.pipe.components["video_vae"]
@@ -263,74 +181,147 @@ def roundtrip(
     )
 
 
-@app.entrypoint()
-def short_denoise(
-    ctx: Context, payload: ShortInput, model: VaeModel, out: Outputs, tel: Telemetry
-) -> ShortResult:
-    """124-frame, 384p text-only control with actual conditioning and latent artifacts."""
-    import io
+class TraceResult(msgspec.Struct):
+    inference: H3VideoOutput
+    activations: Annotated[
+        FileAsset, AssetBound(max_bytes=1 << 20, media_types=("application/json",))
+    ]
+    final_latents: Annotated[
+        FileAsset, AssetBound(max_bytes=128 << 20, media_types=("application/octet-stream",))
+    ]
 
-    import numpy as np
-    import torch
-    from cozy_eval.integrity import output_integrity
 
-    ctx.raise_if_cancelled()
-    view = model.for_request(ctx, seed=payload.seed)
-    state = model.pipe.start_fl2va(
-        prompt=payload.prompt,
-        first_frame=None,
-        last_frame=None,
-        generator=model.pipe.generator(view.generator),
-    )
-    state.set("num_frames", 124)
-    state.set("height", 384)
-    state.set("width", 672)
-    checks = NumericalChecks(tel)
-    with tel.stage("condition_text"):
-        model.condition_text("fl2va", state, checks=checks)
-    prompt_embeds = state.prompt_embeds.detach().float().cpu().numpy().copy()
-    with tel.stage("denoise"):
-        model.sample_short(
-            state,
-            correct_mlp_order=payload.correct_mlp_order,
-            on_step=tel.step_callback(TRANSFORMER_EVALUATIONS, stage="denoise"),
-            cancel=ctx.raise_if_cancelled,
-            checks=checks,
+class ProbeResult(msgspec.Struct):
+    activations: Annotated[
+        FileAsset, AssetBound(max_bytes=1 << 20, media_types=("application/json",))
+    ]
+    completed_steps: int
+
+
+class TracePipeline(OfficialH3Pipeline):
+    def denoise(
+        self,
+        task: Task,
+        state: Any,
+        *,
+        on_step: Any,
+        cancel: Any,
+        checks: NumericalChecks | None = None,
+    ) -> ScheduleFacts:
+        from activation_trace import ACTIVE_TRACE
+
+        trace = ACTIVE_TRACE.get()
+        if trace is None:
+            raise RuntimeError("diagnostic capture context is absent")
+        with trace.observe(self.components[f"{task}_dit"]):
+            result = super().denoise(
+                task, state, on_step=trace.step_callback(on_step), cancel=cancel, checks=checks
+            )
+        trace.final_latents(state)
+        return result
+
+
+def build_trace_pipeline(config: Config) -> TracePipeline:
+    return TracePipeline(config)
+
+
+class TraceModel(H3Model):
+    def load(self, loader: Loader) -> None:
+        self.pipe = loader.construct(TracePipeline, factory=build_trace_pipeline)
+
+
+def trace_preflight(payload: ReferenceMediaToVideoInput) -> ReferencePolicyFacts:
+    if payload.seed is None:
+        raise InvalidRequest("activation comparisons require an explicit seed", fields=["seed"])
+    return preflight_reference_media(payload)
+
+
+def save_trace(
+    trace: Any, ctx: Context, payload: ReferenceMediaToVideoInput, model: TraceModel, out: Outputs
+) -> FileAsset:
+    import importlib.metadata
+    import json
+
+    from h3 import AudioReference, ImageReference
+
+    references = []
+    for reference in payload.references:
+        asset = (
+            reference.image
+            if isinstance(reference, ImageReference)
+            else reference.audio
+            if isinstance(reference, AudioReference)
+            else reference.video
         )
-    # These are generated conditioning/latent values, not checkpoint weights.
-    stream = io.BytesIO()
-    np.savez_compressed(
-        stream,
-        prompt_embeds=prompt_embeds,
-        video_latents=state.latents.detach().float().cpu().numpy(),
-        audio_latents=state.audio_latents.detach().float().cpu().numpy(),
-        corrected_mlp_order=np.asarray(payload.correct_mlp_order),
-    )
-    with tel.stage("decode_video"):
-        video = model.decode_video("fl2va", state, checks=checks)
-    assert tuple(video.shape) == (1, 124, 3, 384, 672)
-    assert torch.isfinite(video).all()
-    ctx.raise_if_cancelled()
-    pixels = _rgb8(torch, video)
-    facts = output_integrity(pixels.numpy())
-    tel.log("short denoise diagnostic", grid_peak_ratio=facts.grid_peak_ratio)
-    return ShortResult(
-        video=out.save_video(pixels, fps=24),
-        frame=out.save_image(ImageFrame(672, 384, bytes(pixels[-1].numpy())), format="png"),
-        tensors=out.save_bytes(stream.getvalue(), media_type="application/octet-stream"),
-        grid_peak_ratio=float(facts.grid_peak_ratio),
-    )
+        references.append(
+            {"kind": asset.kind, "digest": asset.digest, "size_bytes": asset.size_bytes}
+        )
+    document = trace.document()
+    document["provenance"] = {
+        "request_id": ctx.request_id,
+        "checkpoint": model.checkpoint_ref,
+        "inference_package": "minimax-h3",
+        "inference_version": importlib.metadata.version("minimax-h3"),
+        "diagnostic_version": importlib.metadata.version("h3-vae-diagnostic"),
+        "torch_version": importlib.metadata.version("torch"),
+        "diffusers_version": importlib.metadata.version("diffusers"),
+        "runtime_version": importlib.metadata.version("cozy-runtime"),
+        "tensorfs_version": importlib.metadata.version("tensorfs"),
+        "prompt": payload.prompt,
+        "seed": payload.seed,
+        "references": references,
+        "reference_image_short_edge": payload.reference_image_short_edge,
+        "mute": payload.mute,
+    }
+    raw = json.dumps(document, allow_nan=False, separators=(",", ":")).encode()
+    if len(raw) > 1 << 20:
+        raise ValueError("activation samples exceed the 1 MiB diagnostic limit")
+    return out.save_bytes(raw, media_type="application/json")
 
 
-@app.entrypoint(preflight=preflight_reference_media)
-def reference_gate_first(
+@app.entrypoint(preflight=trace_preflight)
+def reference_trace(
     ctx: Context,
     payload: ReferenceMediaToVideoInput,
     facts: Preflight[ReferencePolicyFacts],
-    model: VaeModel,
+    model: TraceModel,
     decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
-) -> H3VideoOutput:
-    """Actual serving entrypoint with an explicit original-layout diagnostic model."""
-    return reference_media_to_video(ctx, payload, facts, model, decoder, out, tel)
+) -> TraceResult:
+    """Normal H3 video plus bounded activations and original-dtype final latents."""
+    from activation_trace import ActivationTrace
+    from safetensors.torch import save
+
+    trace = ActivationTrace(evaluations=TRANSFORMER_EVALUATIONS, first_step=False)
+    with trace.active():
+        result = reference_media_to_video(ctx, payload, facts, model, decoder, out, tel)
+    return TraceResult(
+        inference=result,
+        activations=save_trace(trace, ctx, payload, model, out),
+        final_latents=out.save_bytes(save(trace.latents), media_type="application/octet-stream"),
+    )
+
+
+@app.entrypoint(preflight=trace_preflight)
+def reference_activations(
+    ctx: Context,
+    payload: ReferenceMediaToVideoInput,
+    facts: Preflight[ReferencePolicyFacts],
+    model: TraceModel,
+    decoder: MediaDecoder,
+    out: Outputs,
+    tel: Telemetry,
+) -> ProbeResult:
+    """Normal preprocessing and first denoise step; no video or final latents."""
+    from activation_trace import ActivationTrace, FirstStepCaptured
+
+    trace = ActivationTrace(evaluations=TRANSFORMER_EVALUATIONS, first_step=True)
+    with trace.active():
+        try:
+            reference_media_to_video(ctx, payload, facts, model, decoder, out, tel)
+        except FirstStepCaptured:
+            pass
+        else:
+            raise RuntimeError("first-step diagnostic did not stop at its callback")
+    return ProbeResult(save_trace(trace, ctx, payload, model, out), trace.completed_steps)
