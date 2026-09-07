@@ -485,7 +485,7 @@ def arm_schedule() -> None:
     red("reversed anti-denoising sign", defective, correct)
 
 
-def arm_zero_reference_preparation() -> None:
+def meta_h3_pipeline() -> Any:
     import torch
     from cozy_runtime.author import Config, canonical_json
 
@@ -494,13 +494,105 @@ def arm_zero_reference_preparation() -> None:
 
     from official import OfficialH3Pipeline
 
-    print("\n== text-only request reaches the official denoise loop ==")
     assets = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
     config = canonical_json.decode(
         dual_full_config(parse_production_config((assets / "model-config.json").read_bytes()))
     )
     with torch.device("meta"):
-        pipe = OfficialH3Pipeline(Config(config))
+        return OfficialH3Pipeline(Config(config))
+
+
+def arm_reference_resolution() -> None:
+    from typing import get_type_hints
+
+    import msgspec
+    import numpy as np
+    import torch
+    from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference
+
+    print("\n== request-local reference resolution uses official preprocessing ==")
+    pipe = meta_h3_pipeline()
+    original_config = dict(pipe._pipes["ref2va"].config)
+    pixels = np.arange(1086 * 1448 * 3, dtype=np.uint8).reshape(1448, 1086, 3)
+    references = [MiniMaxH3ImageReference(image=pixels)]
+    normalized = {}
+    for edge in (768, 1024, 2048):
+        state = pipe.start_ref2va(
+            prompt="A person in a garden.",
+            references=references,
+            generator=torch.Generator().manual_seed(7),
+            reference_image_short_edge=edge,
+        )
+        image = state.normalized_references[0].image
+        normalized[edge] = np.asarray(image)
+        width, height = image.size
+        check(
+            f"{edge}px budget agrees with actual upstream image geometry",
+            reference_image_vision_tokens(1086, 1448, edge),
+            width * height // 1024,
+        )
+        check(
+            f"{edge}px request leaves shared config unchanged",
+            dict(pipe._pipes["ref2va"].config) == original_config,
+            True,
+        )
+    check("768px reference geometry", normalized[768].shape, (1024, 768, 3))
+    check("2048px reference geometry", normalized[2048].shape, (2720, 2048, 3))
+    default = pipe.start_ref2va(
+        prompt="A person in a garden.",
+        references=references,
+        generator=torch.Generator().manual_seed(7),
+    )
+    check(
+        "default pixels stay identical after smaller requests",
+        np.array_equal(np.asarray(default.normalized_references[0].image), normalized[2048]),
+        True,
+    )
+
+    before = pipe._blocks["ref2va"].sub_blocks["before_encode"]
+
+    def broken_setup(components: Any, state: Any) -> None:
+        check(
+            "failed request sees its own resolution",
+            components.config.reference_image_short_edge,
+            768,
+        )
+        raise ValueError("preprocessing failed")
+
+    pipe._blocks["ref2va"].sub_blocks["before_encode"] = broken_setup
+    try:
+        refusal(
+            "failed preprocessing does not mutate shared configuration",
+            lambda: pipe.start_ref2va(
+                prompt="A person in a garden.",
+                references=references,
+                generator=torch.Generator().manual_seed(7),
+                reference_image_short_edge=768,
+            ),
+        )
+    finally:
+        pipe._blocks["ref2va"].sub_blocks["before_encode"] = before
+    check(
+        "shared config survives preprocessing failure",
+        dict(pipe._pipes["ref2va"].config) == original_config,
+        True,
+    )
+    field = get_type_hints(package.ReferenceMediaToVideoInput, include_extras=True)[
+        "reference_image_short_edge"
+    ]
+    check("typed request accepts 768px", msgspec.convert(768, type=field), 768)
+    for invalid in (0, 255, 769, 2080):
+        refusal(
+            f"typed request refuses invalid edge {invalid}",
+            partial(msgspec.convert, invalid, type=field),
+        )
+
+
+def arm_zero_reference_preparation() -> None:
+    import torch
+
+    print("\n== text-only request reaches the official denoise loop ==")
+    pipe = meta_h3_pipeline()
     # Only preparation executes: synthetic text embeddings and a CPU scope stand
     # in for the preceding encoder and GPU. No model forward or weights are read.
     pipe.components["fl2va_dit"] = SimpleNamespace(device=torch.device("cpu"))
@@ -1745,7 +1837,7 @@ def arm_interface() -> None:
             "fl2va_dit",
         ),
         "reference_media_to_video": (
-            ["prompt", "references", "mute", "seed"],
+            ["prompt", "references", "mute", "seed", "reference_image_short_edge"],
             "ref2va_dit",
         ),
     }
@@ -1779,6 +1871,7 @@ ARMS = {
     "producer-construction-order": arm_producer_construction_order,
     "schedule": arm_schedule,
     "zero-reference": arm_zero_reference_preparation,
+    "reference-resolution": arm_reference_resolution,
     "graph": arm_graph_and_dtypes,
     "conditioner": arm_text_conditioner,
     "adaln-pruned": arm_adaln_pruned,
