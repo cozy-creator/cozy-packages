@@ -8,6 +8,7 @@ python_version = "3.12"
 files = [
     "anima", "minimax-h3", "quality-judge", "sdxl", "scripts",
     "h3-quality-gate/src", "minimax-h3-tools/src", "checkpoint-repair/src",
+    "diagnostics/h3-vae-roundtrip",
 ]
 strict = true
 warn_unreachable = true
@@ -38,6 +39,10 @@ module = ["anima", "quality_judge", "sdxl"]
 disallow_subclassing_any = false
 disallow_untyped_decorators = false
 warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = ["h3-activation-proof"]
+disallow_subclassing_any = false
 
 [tool.ruff]
 line-length = 100
