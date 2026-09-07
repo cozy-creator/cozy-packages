@@ -269,7 +269,7 @@ wheels = [
 
 [[package]]
 name = "h3-vae-diagnostic"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -278,8 +278,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], specifier = "==0.2.29" },
-    { name = "minimax-h3", directory = "../../minimax-h3" },
+    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.2.29,<1" },
+    { name = "minimax-h3", path = "dependencies/minimax_h3-1.1.9-py3-none-any.whl" },
 ]
 
 [[package]]
@@ -407,7 +407,7 @@ wheels = [
 [[package]]
 name = "minimax-h3"
 version = "1.1.9"
-source = { directory = "../../minimax-h3" }
+source = { path = "dependencies/minimax_h3-1.1.9-py3-none-any.whl" }
 dependencies = [
     { name = "cozy-eval" },
     { name = "cozy-runtime", extra = ["media"] },
@@ -425,6 +425,9 @@ dependencies = [
     { name = "torch" },
     { name = "torchvision" },
     { name = "transformers" },
+]
+wheels = [
+    { filename = "minimax_h3-1.1.9-py3-none-any.whl", hash = "sha256:999a2b203d513c97dc3775681c93188915535d6261b56ffcafe79aaff0aa1643" },
 ]
 
 [package.metadata]
