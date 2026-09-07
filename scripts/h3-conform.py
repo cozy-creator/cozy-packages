@@ -1619,6 +1619,7 @@ def arm_numerics() -> None:
     import torch
     from diffusers import MiniMaxH3Scheduler
     from diffusers.modular_pipelines.minimax_h3.denoise import MiniMaxH3LoopSchedulerStep
+    from torch.utils._python_dispatch import TorchDispatchMode
 
     print("\n== first non-finite numerical boundary ==")
     telemetry = _NumericalTelemetry()
@@ -1631,6 +1632,49 @@ def arm_numerics() -> None:
         torch.arange(12).reshape(3, 4).T.tolist(),
     )
     check("absmax names its source", telemetry.rows[-1]["absmax_tensor"], "prompt_embeds")
+
+    # Real stored FP8 supports conversion but not every observer reduction. Track
+    # actual casts so a whole-weight float32 copy cannot pass the bounded proof.
+    class CastSizes(TorchDispatchMode):  # type: ignore[misc]  # Torch is absent in static CI.
+        def __init__(self) -> None:
+            super().__init__()
+            self.elements: list[int] = []
+
+        def __torch_dispatch__(
+            self, func: Any, types: Any, args: Any = (), kwargs: Any = None
+        ) -> Any:
+            if func == torch.ops.aten._to_copy.default and args[0].dtype == torch.float8_e4m3fn:
+                self.elements.append(args[0].numel())
+            return func(*args, **(kwargs or {}))
+
+    fp8 = torch.ones((257, 4097), dtype=torch.float32).to(torch.float8_e4m3fn).T
+    original_bytes = fp8.view(torch.uint8).clone()
+    scalar = torch.tensor(-448.0).to(torch.float8_e4m3fn)
+    with CastSizes() as casts:
+        checks.tensors("fp8", [("encoded", fp8), ("scalar", scalar)], required=True)
+    check("FP8 finite scan names the scalar maximum", telemetry.rows[-1]["absmax_tensor"], "scalar")
+    check("FP8 finite scan preserves exact maximum", telemetry.rows[-1]["absmax"], 448.0)
+    check("FP8 finite scan counts all elements", telemetry.rows[-1]["elements"], fp8.numel() + 1)
+    check(
+        "FP8 observer does not mutate stored bytes",
+        torch.equal(fp8.view(torch.uint8), original_bytes),
+        True,
+    )
+    check("FP8 casts cover exactly the observed values", sum(casts.elements), fp8.numel() + 1)
+    check("FP8 float32 scratch is at most four MiB", max(casts.elements) <= 1024 * 1024, True)
+    poisoned = torch.tensor([1.0, float("nan")]).to(torch.float8_e4m3fn)
+    poisoned_bytes = poisoned.view(torch.uint8).clone()
+    refusal(
+        "FP8 NaN is refused by the numerical observer",
+        lambda: checks.tensors("fp8-nan", [("encoded", poisoned)], required=True),
+        "numerical_nonfinite",
+    )
+    check("FP8 NaN count is exact", telemetry.rows[-1]["chunk_nonfinite"], 1)
+    check(
+        "FP8 failed scan leaves stored bytes unchanged",
+        torch.equal(poisoned.view(torch.uint8), poisoned_bytes),
+        True,
+    )
     large = torch.zeros(16 * 1024 * 1024 + 1, dtype=torch.float32)
     large[-1] = float("nan")
     refusal(
