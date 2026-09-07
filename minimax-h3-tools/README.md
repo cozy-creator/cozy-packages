@@ -29,9 +29,11 @@ One attempt emits exactly four dual-task checkpoints:
 - `fp8-adaln-pruned`
 - `mxfp8-adaln-pruned`
 
-The v2 standalone `assemble_full`, `assemble_dual`, and two timestep-table jobs remain
-available for direct use. `four-lane` is available in the current v2 line, but it does not invoke or nest
-those jobs; it owns the same transformations directly inside one weight-production attempt.
+The standalone `assemble_full` job remains available for direct use; `four-lane` does not
+invoke or nest it and owns the same transformations directly inside one weight-production
+attempt. The former per-task table jobs and `assemble_dual` are gone: `retable` replaces
+their table pass over an existing pruned checkpoint, and two jobs with byte-identical
+descriptors cannot coexist under Runtime 0.4's immutable job plans.
 
 Each lane contains both FL2VA and Ref2VA DiTs plus the shared 902/703/1,087 components.
 Full assembly drops the native-only `rope.inv_freq` buffer, leaving the exact 638-row

@@ -43,7 +43,6 @@ from .model_config import (
     dual_adaln_pruned_config,
     dual_full_config,
     parse_production_config,
-    task_config_bytes,
 )
 from .order import current_order
 from .plans import TimestepPlan, parse_declared_plan
@@ -58,8 +57,6 @@ MXFP8_SPEC = "sha256:7e9b1ad8f2e5ddd236a4d4303042d632a96eadef4f25d44eb0fb63124ce
 SOURCE_READ_CHUNK = 32 << 20
 TARGET_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
 SOURCE_SECTION = {"fl2va": "transformer", "ref2va": "transformer_ref"}
-TASK_MARKER = "__cozy_task"
-TASK_VALUE = {"fl2va": b"\x00", "ref2va": b"\x01"}
 TORCH_DTYPE = {"bf16": torch.bfloat16, "f32": torch.float32}
 
 
@@ -74,19 +71,16 @@ def _production_plan(task: str) -> TimestepPlan:
     return plan
 
 
-def _table_budget() -> tuple[int, int]:
-    """Exact table bytes per task and the per-task config bytes the plans stamp."""
+def _table_budget() -> int:
+    """The exact table bytes one task's plan occupies, the larger task governing."""
     sections = parse_production_config(_asset("model-config.json"))
-    tables, configs = set(), set()
-    for task, section in SOURCE_SECTION.items():
-        plan = _production_plan(task)
-        tables.add(table_bytes(H3Topology.from_config(sections[section]), plan))
-        configs.add(len(task_config_bytes(sections, plan)))
-    return max(tables), max(configs)
+    return max(
+        table_bytes(H3Topology.from_config(sections[section]), _production_plan(task))
+        for task, section in SOURCE_SECTION.items()
+    )
 
 
-TABLE_BYTES, TASK_CONFIG_BYTES = _table_budget()
-MAX_NEW_BYTES = TABLE_BYTES + TASK_CONFIG_BYTES + 1
+TABLE_BYTES = _table_budget()
 MAX_FULL_BYTES = 64 << 10
 MAX_PRUNED_BYTES = 2 * TABLE_BYTES + (128 << 10)
 MAX_QUANTIZED_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_PRUNED_BYTES
@@ -116,17 +110,6 @@ class FourLaneResult(msgspec.Struct):
     source_bytes_read_this_run: int
     quantized_keys_this_run: int
     weight_fidelity_this_run: list[WeightFidelity]
-
-
-class TimestepTableResult(msgspec.Struct):
-    task: str
-    plan_digest: str
-    artifact_transaction_id: str
-    tensorfs_receipt_digest: str
-    replayed: bool
-    table_tensors: int
-    table_bytes_this_run: int
-    source_bytes_read_this_run: int
 
 
 class AssemblyResult(msgspec.Struct):
@@ -236,134 +219,6 @@ def _compute_table_parts(
     return source_bytes, written
 
 
-def _generate_timestep_table(
-    task: str,
-    ctx: Context,
-    payload: ProductionRequest,
-    source: H3FullTransformer,
-    artifacts: WeightsSink,
-    tel: Telemetry,
-) -> TimestepTableResult:
-    del payload
-    sections = parse_production_config(_asset("model-config.json"))
-    plan = _production_plan(task)
-    topology = H3Topology.from_config(sections[SOURCE_SECTION[task]])
-    source_component = TARGET_COMPONENT[task]
-    source_order = current_order(_asset("whole-order.json")).select(source_component)
-    table_additions = {
-        key: WeightsTensor(
-            logical_dtype="bf16",
-            shape=shape,
-            encoding=PLAIN_SPEC,
-            parts={"value": WeightsPart("bf16", shape)},
-        )
-        for key, shape in sorted(table_shapes(topology, plan).items())
-    }
-    additions = {
-        **table_additions,
-        TASK_MARKER: WeightsTensor(
-            logical_dtype="u8",
-            shape=(1,),
-            encoding=PLAIN_SPEC,
-            parts={"value": WeightsPart("u8", (1,))},
-        ),
-    }
-    config_bytes = task_config_bytes(sections, plan)
-    with artifacts.open(
-        "pruned_dit",
-        sources={"full": source},
-        targets={
-            "dit": WeightsTarget(
-                source="full",
-                source_component=source_component,
-                drop=tuple(sorted(removed_keys(topology))),
-                add=additions,
-            )
-        },
-        configs={
-            "model": WeightsConfig(
-                data=config_bytes,
-                length=len(config_bytes),
-            )
-        },
-        order=(
-            *(("dit", key) for _component, key in source_order.rows),
-            ("dit", TASK_MARKER),
-        ),
-    ) as transaction:
-        if transaction.replayed:
-            receipt = transaction.receipt
-            assert receipt is not None
-            return TimestepTableResult(
-                plan.task,
-                plan.digest,
-                receipt.weights_transaction_id,
-                receipt.tensorfs_receipt_digest,
-                True,
-                len(table_additions),
-                0,
-                0,
-            )
-        if not torch.cuda.is_available():
-            raise ValueError("H3 timestep-table precompute requires a CUDA worker")
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.set_float32_matmul_precision("highest")
-
-        def write_part(name: str, raw: bytes) -> None:
-            transaction.add_part("dit", name, "value", raw)
-
-        source_bytes, table_bytes = _compute_table_parts(
-            task,
-            plan,
-            topology,
-            ctx,
-            transaction,
-            "full",
-            source_component,
-            write_part,
-            tel,
-        )
-        transaction.add_part("dit", TASK_MARKER, "value", TASK_VALUE[task])
-        transaction.add_config("model", config_bytes)
-        receipt = transaction.commit()
-    return TimestepTableResult(
-        plan.task,
-        plan.digest,
-        receipt.weights_transaction_id,
-        receipt.tensorfs_receipt_digest,
-        False,
-        len(table_additions),
-        table_bytes,
-        source_bytes,
-    )
-
-
-@app.job(
-    weights=(WeightsOutput("pruned_dit", max_new_bytes=MAX_NEW_BYTES),),
-)
-def generate_timestep_table_fl2va(
-    ctx: Context,
-    payload: ProductionRequest,
-    source: H3FullTransformer,
-    artifacts: WeightsSink,
-    tel: Telemetry,
-) -> TimestepTableResult:
-    return _generate_timestep_table("fl2va", ctx, payload, source, artifacts, tel)
-
-
-@app.job(
-    weights=(WeightsOutput("pruned_dit", max_new_bytes=MAX_NEW_BYTES),),
-)
-def generate_timestep_table_ref2va(
-    ctx: Context,
-    payload: ProductionRequest,
-    source: H3FullTransformer,
-    artifacts: WeightsSink,
-    tel: Telemetry,
-) -> TimestepTableResult:
-    return _generate_timestep_table("ref2va", ctx, payload, source, artifacts, tel)
-
-
 def _full_order(
     sections: dict[str, dict[str, Any]], current: tuple[tuple[str, str], ...]
 ) -> tuple[tuple[str, str], ...]:
@@ -464,72 +319,6 @@ def assemble_full(
         },
         order=_full_order(sections, current.rows),
     )
-    return _assembly_result(receipt)
-
-
-def _dual_targets() -> dict[str, WeightsTarget]:
-    return {
-        "fl2va_dit": WeightsTarget(
-            source="fl2va", source_component="dit", drop=(TASK_MARKER,)
-        ),
-        "ref2va_dit": WeightsTarget(
-            source="ref2va", source_component="dit", drop=(TASK_MARKER,)
-        ),
-        **{
-            component: WeightsTarget(source="shared", source_component=component)
-            for component in ("text_encoder", "video_vae", "audio_vae")
-        },
-    }
-
-
-def _require_task_markers(markers: Mapping[str, bytes]) -> None:
-    for source, expected in TASK_VALUE.items():
-        if markers.get(source) != expected:
-            raise ValueError(
-                f"{source} input does not carry its exact task marker; "
-                "FL2VA and Ref2VA inputs may not be swapped"
-            )
-
-
-@app.job(
-    weights=(WeightsOutput("model", max_new_bytes=128 << 10),),
-)
-def assemble_dual(
-    payload: ProductionRequest,
-    fl2va: H3FullTransformer,
-    ref2va: H3FullTransformer,
-    shared: H3FullTransformer,
-    artifacts: WeightsSink,
-) -> AssemblyResult:
-    del payload
-    sections = parse_production_config(_asset("model-config.json"))
-    config = dual_adaln_pruned_config(
-        sections, _production_plan("fl2va"), _production_plan("ref2va")
-    )
-    order = current_order(_asset("whole-order.json"))
-    with artifacts.open(
-        "model",
-        sources={"fl2va": fl2va, "ref2va": ref2va, "shared": shared},
-        targets=_dual_targets(),
-        configs={
-            "model": WeightsConfig(data=config, length=len(config))
-        },
-        order=order.rows,
-    ) as transaction:
-        if transaction.replayed:
-            receipt = transaction.receipt
-            assert receipt is not None
-            return _assembly_result(receipt)
-        markers: dict[str, bytes] = {}
-        for source in TASK_VALUE:
-            observed = bytearray(1)
-            transaction.source_read_into(
-                source, "dit", TASK_MARKER, "value", 0, observed
-            )
-            markers[source] = bytes(observed)
-        _require_task_markers(markers)
-        transaction.add_config("model", config)
-        receipt = transaction.commit()
     return _assembly_result(receipt)
 
 
@@ -798,7 +587,7 @@ def _retable_targets(
     present = {(tensor.component, tensor.key): tensor for tensor in pruned.tensors}
     full_present = {(tensor.component, tensor.key): tensor for tensor in full.tensors}
     components = {tensor.component for tensor in pruned.tensors}
-    if components != set(_dual_targets()):
+    if components != set(_full_targets()):
         raise ValueError(f"retable source components are {sorted(components)}")
     bank: dict[str, WeightsTarget] = {}
     retabled = {
