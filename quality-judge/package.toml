@@ -1,28 +1,2 @@
-# The in-repo DEFAULT bindings — what a bare-venv run with no --model uses, and never a
-# source of truth (cozy-runtime.md §1.0). Production authority is the deploy binding alone.
-#
-# Code states CAPABILITY; bindings state SELECTION. Nothing in quality_judge.py names a
-# repo, release, checkpoint or revision — the judge and transcriber checkpoints, their
-# licences and their pinned revisions live here and in the catalog row, never in code.
-
-# One binding grammar, the slot path (model-code-fit §1): the three JudgeModel slots name
-# the judge checkpoint each, the transcriber slot names its own.
-
 [application]
 object = "quality_judge:app"
-
-[bindings."judge.models.model"]
-model = "cozy/quality-judge-judge"
-release = "ev-003"
-
-[bindings."pairwise.models.model"]
-model = "cozy/quality-judge-judge"
-release = "ev-003"
-
-[bindings."soft.models.model"]
-model = "cozy/quality-judge-judge"
-release = "ev-003"
-
-[bindings."transcribe.models.model"]
-model = "cozy/quality-judge-transcriber"
-release = "ev-003"

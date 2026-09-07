@@ -1,7 +1,2 @@
 [application]
 object = "vae_diagnostic:app"
-
-[bindings."roundtrip.models.model"]
-model = "paul/minimax-h3"
-release = "1.0.0-rc.1"
-lane = "profile=bf16-adaln-pruned"
