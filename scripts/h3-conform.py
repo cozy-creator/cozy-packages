@@ -485,6 +485,53 @@ def arm_schedule() -> None:
     red("reversed anti-denoising sign", defective, correct)
 
 
+def arm_zero_reference_preparation() -> None:
+    import torch
+    from cozy_runtime.author import Config, canonical_json
+
+    sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
+    from h3_tables.model_config import dual_full_config, parse_production_config
+
+    from official import OfficialH3Pipeline
+
+    print("\n== text-only request reaches the official denoise loop ==")
+    assets = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
+    config = canonical_json.decode(
+        dual_full_config(parse_production_config((assets / "model-config.json").read_bytes()))
+    )
+    with torch.device("meta"):
+        pipe = OfficialH3Pipeline(Config(config))
+    # Only preparation executes: synthetic text embeddings and a CPU scope stand
+    # in for the preceding encoder and GPU. No model forward or weights are read.
+    pipe.components["fl2va_dit"] = SimpleNamespace(device=torch.device("cpu"))
+    state = pipe.start_fl2va(
+        prompt="Three friends walk in a garden.",
+        first_frame=None,
+        last_frame=None,
+        generator=torch.Generator().manual_seed(7),
+    )
+    state.set("prompt_embeds", torch.zeros(1, 4, 5120))
+    state.set("text_token_tags", torch.ones(4, dtype=torch.long))
+
+    class ReachedDenoise(Exception):
+        pass
+
+    def stop_before_forward() -> None:
+        raise ReachedDenoise()
+
+    try:
+        pipe.denoise("fl2va", state, on_step=lambda _: None, cancel=stop_before_forward)
+    except ReachedDenoise:
+        observe("zero-reference request reaches first forward without keyframe-only inputs")
+    else:
+        check("zero-reference preparation must stop before any model forward", False, True)
+    check("text-only video rows", tuple(state.latents.shape), (102816, 96))
+    check("text-only audio rows", tuple(state.audio_latents.shape), (1150, 32))
+    check("text-only anchors", state.keyframe_anchors, ())
+    check("text-only rows remain finite", bool(torch.isfinite(state.latents).all()), True)
+    check("text-only sigma grid still means 29 forwards", len(state.timesteps), 29)
+
+
 def arm_graph_and_dtypes() -> None:
     import torch
     from diffusers import (
@@ -1731,6 +1778,7 @@ ARMS = {
     "producer-configs": arm_producer_configs,
     "producer-construction-order": arm_producer_construction_order,
     "schedule": arm_schedule,
+    "zero-reference": arm_zero_reference_preparation,
     "graph": arm_graph_and_dtypes,
     "conditioner": arm_text_conditioner,
     "adaln-pruned": arm_adaln_pruned,
