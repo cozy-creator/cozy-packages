@@ -39,6 +39,7 @@ from official import (
     FPS,
     FRAMES,
     MAX_CONDITIONER_VISION_TOKENS,
+    REFERENCE_IMAGE_SHORT_EDGE,
     SIGMA_GRID_POINTS,
     TRANSFORMER_EVALUATIONS,
     NumericalChecks,
@@ -92,6 +93,15 @@ class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     references: Annotated[list[Reference], msgspec.Meta(min_length=1, max_length=12)]
     mute: bool = False
     seed: int | None = None
+    reference_image_short_edge: Annotated[
+        int,
+        msgspec.Meta(
+            ge=256,
+            le=REFERENCE_IMAGE_SHORT_EDGE,
+            multiple_of=32,
+            description="Image-reference short edge in pixels; lower trades detail for speed.",
+        ),
+    ] = REFERENCE_IMAGE_SHORT_EDGE
 
 
 class H3VideoOutput(msgspec.Struct):
@@ -199,7 +209,11 @@ def _decode_keyframe(
 
 
 def _decode_references(
-    references: list[Reference], *, decoder: MediaDecoder, pipe: OfficialH3Pipeline
+    references: list[Reference],
+    *,
+    decoder: MediaDecoder,
+    pipe: OfficialH3Pipeline,
+    reference_image_short_edge: int = REFERENCE_IMAGE_SHORT_EDGE,
 ) -> list[Any]:
     prepared: list[Any] = []
     video_duration = Fraction(0)
@@ -211,7 +225,9 @@ def _decode_references(
         if isinstance(reference, ImageReference):
             image = decoder.decode_image(reference.image)
             _validate_ratio(image.width, image.height, field)
-            vision_tokens += reference_image_vision_tokens(image.width, image.height)
+            vision_tokens += reference_image_vision_tokens(
+                image.width, image.height, reference_image_short_edge
+            )
             _validate_vision_budget(vision_tokens)
             prepared.append(pipe.image_reference(image))
         elif isinstance(reference, VideoReference):
@@ -535,11 +551,17 @@ def reference_media_to_video(
     view = model.for_request(ctx, seed=payload.seed)
     checks = NumericalChecks(tel)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
-        references = _decode_references(payload.references, decoder=decoder, pipe=model.pipe)
+        references = _decode_references(
+            payload.references,
+            decoder=decoder,
+            pipe=model.pipe,
+            reference_image_short_edge=payload.reference_image_short_edge,
+        )
         state = model.pipe.start_ref2va(
             prompt=payload.prompt,
             references=references,
             generator=model.pipe.generator(view.generator),
+            reference_image_short_edge=payload.reference_image_short_edge,
         )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
         model.condition_text("ref2va", state, checks=checks)

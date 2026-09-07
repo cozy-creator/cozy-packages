@@ -48,6 +48,7 @@ MAX_VIDEO_REFERENCES = 3
 MAX_AUDIO_REFERENCES = 3
 MAX_REFERENCES = 12
 MAX_CONDITIONER_VISION_TOKENS = 32768
+REFERENCE_IMAGE_SHORT_EDGE = 2048
 _WEIGHTED_CONFIG_SECTIONS = {
     "audio_vae",
     "fl2va_dit",
@@ -311,9 +312,11 @@ def canonical_timestep_plan(task: Task) -> TimestepPlan:
     return plan
 
 
-def reference_image_vision_tokens(width: int, height: int) -> int:
-    """Exact official 2048-short-edge, 16-patch, 2x2-merge image demand."""
-    scale = 2048 / min(width, height)
+def reference_image_vision_tokens(
+    width: int, height: int, short_edge: int = REFERENCE_IMAGE_SHORT_EDGE
+) -> int:
+    """Official short-edge, 16-patch, 2x2-merge image demand."""
+    scale = short_edge / min(width, height)
     target_height = max(32, round(height * scale / 32) * 32)
     target_width = max(32, round(width * scale / 32) * 32)
     return target_height * target_width // (16 * 16 * 2 * 2)
@@ -468,7 +471,7 @@ class _ScopedPipeline:
     def __init__(
         self,
         pipe: Any,
-        component: Any,
+        component: Any = None,
         *,
         overrides: Mapping[str, Any] | None = None,
     ) -> None:
@@ -478,11 +481,11 @@ class _ScopedPipeline:
 
     @property
     def _execution_device(self) -> Any:
-        return self._component.device
+        return self._pipe._execution_device if self._component is None else self._component.device
 
     @property
     def device(self) -> Any:
-        return self._component.device
+        return self._pipe.device if self._component is None else self._component.device
 
     def __getattr__(self, name: str) -> Any:
         if name in self._overrides:
@@ -627,12 +630,32 @@ class OfficialH3Pipeline:
             width=width,
         )
 
-    def start_ref2va(self, *, prompt: str, references: Sequence[Any], generator: Any) -> Any:
+    def start_ref2va(
+        self,
+        *,
+        prompt: str,
+        references: Sequence[Any],
+        generator: Any,
+        reference_image_short_edge: int = REFERENCE_IMAGE_SHORT_EDGE,
+    ) -> Any:
         return self._start(
-            "ref2va", prompt=prompt, generator=generator, references=list(references)
+            "ref2va",
+            prompt=prompt,
+            generator=generator,
+            references=list(references),
+            reference_image_short_edge=reference_image_short_edge,
         )
 
-    def _start(self, task: Task, *, prompt: str, generator: Any, **values: Any) -> Any:
+    def _start(
+        self,
+        task: Task,
+        *,
+        prompt: str,
+        generator: Any,
+        reference_image_short_edge: int = REFERENCE_IMAGE_SHORT_EDGE,
+        **values: Any,
+    ) -> Any:
+        from diffusers.configuration_utils import FrozenDict
         from diffusers.modular_pipelines.modular_pipeline import PipelineState
 
         state = PipelineState()
@@ -646,8 +669,24 @@ class OfficialH3Pipeline:
         }
         for name, value in fixed.items():
             state.set(name, value)
-        if "before_encode" in self._blocks[self._workflow(task, state)].sub_blocks:
-            self._run(task, "before_encode", state)
+        workflow = self._workflow(task, state)
+        if "before_encode" in self._blocks[workflow].sub_blocks:
+            pipe = self._pipes[workflow]
+            if task == "ref2va":
+                # Only setup uses this per-request geometry. A view leaves the shared
+                # pipeline unchanged, even if preprocessing raises or calls overlap.
+                pipe = _ScopedPipeline(
+                    pipe,
+                    overrides={
+                        "config": FrozenDict(
+                            {
+                                **pipe.config,
+                                "reference_image_short_edge": reference_image_short_edge,
+                            }
+                        )
+                    },
+                )
+            self._run_with(task, pipe, "before_encode", state)
         return state
 
     def condition_text(
