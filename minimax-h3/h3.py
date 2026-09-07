@@ -98,7 +98,6 @@ class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
         msgspec.Meta(
             ge=256,
             le=REFERENCE_IMAGE_SHORT_EDGE,
-            multiple_of=32,
             description="Image-reference short edge in pixels; lower trades detail for speed.",
         ),
     ] = REFERENCE_IMAGE_SHORT_EDGE
