@@ -201,14 +201,7 @@ def main() -> None:
     if not isinstance(declared, list):
         raise TypeError("package jobs are not one interface list")
     jobs = {str(row["name"]): row for row in declared}
-    if set(jobs) != {
-        "assemble_dual",
-        "assemble_full",
-        "four-lane",
-        "generate_timestep_table_fl2va",
-        "generate_timestep_table_ref2va",
-        "retable",
-    }:
+    if set(jobs) != {"assemble_full", "four-lane", "retable"}:
         raise RuntimeError(f"package callable compatibility changed: {sorted(jobs)}")
     job = jobs["four-lane"]
     models = {row["path"]: row for row in job["models"]}
@@ -239,7 +232,7 @@ def main() -> None:
     }:
         raise RuntimeError("retable changed its two typed sources or two outputs")
     print(
-        "H3 FOUR-LANE CONTRACT PASS jobs=6 graphs=0 outputs=4 full_rows=3968 "
+        "H3 FOUR-LANE CONTRACT PASS jobs=3 graphs=0 outputs=4 full_rows=3968 "
         "task_rows=583 shared_text_drop=156 quantized_per_task=313 tables_per_task=51 "
         f"table_bytes_per_task={TABLE_BYTES} source_drop=rope dynamic_drops_per_task=106 "
         "direct_siblings=1 changed_plan=refused steps=30/40/50"

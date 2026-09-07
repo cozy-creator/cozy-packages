@@ -163,7 +163,3 @@ def dual_adaln_pruned_config(
             "dual AdaLN-pruned config is not the exact current H3 model config"
         )
     return raw
-
-
-def task_config_bytes(sections: dict[str, dict[str, Any]], plan: TimestepPlan) -> bytes:
-    return canonical_json.encode(task_config(sections, plan))
