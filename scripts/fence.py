@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Structural fences for the package sources. Static analysis, never a test suite.
 
-Eighteen properties CI must not let drift, each checked as a fact about the source rather
+Seventeen properties CI must not let drift, each checked as a fact about the source rather
 than as a convention someone remembers:
 
   1. author-surface-only  package code AND the repo's drivers import the PUBLIC
@@ -33,26 +33,26 @@ than as a convention someone remembers:
                           typed bindings and settings; the executor ERASES `COZY_*`/token
                           env anyway, so an env read is a channel that never works in
                           production.
-  9. h3-binding-identity  H3 releases describe content, never tracker issue numbers; every
-                          default model binding selects the same immutable release.
+  9. no-package-bindings  package.toml carries no [bindings]: model selection is the
+                          owner's hub binding (`cozy package bind`), never a default
+                          shipped in source.
 10. interface-minimality
                           committed interface/1 files carry no retired unused facts.
  11. h3-adaln-pruned-vocabulary
                           H3 source and contracts carry no retired modulation spelling.
-12. typed-model-bindings package.toml names selected model resources with `model` only.
-13. package-metadata-hardcut
+12. package-metadata-hardcut
                           package.toml and PackageInterface/1 are the only source metadata;
                           the retired source filenames and canonical namespace are absent.
-14. private-h3-shapes    H3 config, plan, and probe files are identified by their package
+13. private-h3-shapes    H3 config, plan, and probe files are identified by their package
                           member and strict shape, not another globally versioned schema tag.
-15. publication-metadata every publishable package declares its catalog organization and its
+14. publication-metadata every publishable package declares its catalog organization and its
                           distribution name carries no redundant `-package` suffix; its wheel
                           exposes exactly one `cozy.application` entry matching package.toml.
-16. native-publication-wheels
+15. native-publication-wheels
                           every reachable non-base dependency that Creator cannot mirror as an
                           exact `py3-none-any` registry wheel is one explicit local wheel whose
                           stored bytes match package-local provenance and the current lock.
-18. driver-boundary-armed  the driver rule FIRES. A boundary check nobody has watched go
+16. driver-boundary-armed  the driver rule FIRES. A boundary check nobody has watched go
                           red is a boundary check nobody knows works, so the private
                           spellings are run through the same predicate on every run.
 17. model-execution-ownership
@@ -298,7 +298,7 @@ IDENTIFIERS = (
 #: structural precompute (cr-071): its whole job is attesting the exact plan/config/
 #: topology bytes it derives from, so a `sha256:` there is a self-integrity pin over its
 #: own committed assets and expected outputs — never a model-selection binding, which
-#: still lives in package.toml. Scoped to the checkpoint-digest shape only; every other
+#: lives on the hub. Scoped to the checkpoint-digest shape only; every other
 #: identifier rule applies to these files unchanged.
 #: The repair package pins only its recorded bad source roots and their immutable
 #: encoding identities; native proof verifies the encoding IDs against TensorFS seeds.
@@ -543,71 +543,18 @@ def fence_no_env() -> Fence:
     return bad, f"{len(_ENV_ATTRS)} env-read spellings absent from {modules} modules"
 
 
-def fence_h3_binding_identity() -> Fence:
-    """A release name is product identity, not the issue that happened to cut it."""
-    binding = (ROOT / "minimax-h3" / "package.toml").read_text()
-    releases = re.findall(r'^release\s*=\s*"([^"]+)"\s*$', binding, flags=re.MULTILINE)
-    lanes = re.findall(r'^lane\s*=\s*"([^"]+)"\s*$', binding, flags=re.MULTILINE)
+def fence_no_package_bindings() -> Fence:
+    """Model selection is the owner's hub binding, never a default shipped in source."""
+
     bad: list[str] = []
-    if not releases:
-        bad.append("h3/package.toml: no default model release is bound")
-    if len(set(releases)) > 1:
-        bad.append(f"h3/package.toml: default model bindings disagree: {sorted(set(releases))}")
-    # One grammar, the slot path (model-code-fit §1): both H3 slots bind, and both name
-    # the same release and profile selector.
-    if len(releases) != 2 or set(releases) != {"1.0.0"}:
-        bad.append(f"h3/package.toml: default releases are {releases!r}, expected two of '1.0.0'")
-    for release in releases:
-        if re.search(r"(?:^|[-_.])se-\d+(?:$|[-_.])", release):
+    manifests = sorted(p for p in ROOT.rglob("package.toml") if ours(p))
+    for path in manifests:
+        if "bindings" in tomllib.loads(path.read_text()):
             bad.append(
-                f"h3/package.toml: release {release!r} contains a tracker issue, "
-                "not only content identity"
+                f"{rel(path)}: [bindings] is not package metadata; bind the slot on the hub with "
+                "`cozy package bind <package> <slot> org/model@release --gpu <gpu>=<lane> ...`"
             )
-    if len(lanes) != 2 or set(lanes) != {"profile=fp8-adaln-pruned"}:
-        bad.append(
-            "h3/package.toml: both slot bindings must use the exact "
-            f"profile selector, got {lanes!r}"
-        )
-    return bad, "H3 binds both slots to release 1.0.0 with the profile=fp8-adaln-pruned selector"
-
-
-def fence_typed_model_bindings() -> Fence:
-    """Every package default uses the typed model noun; the generic key is retired."""
-
-    bad: list[str] = []
-    count = 0
-    for project in projects():
-        path = project / "package.toml"
-        document = tomllib.loads(path.read_text())
-        bindings = document.get("bindings", {})
-        if not isinstance(bindings, dict):
-            bad.append(f"{rel(path)}: [bindings] is not a table")
-            continue
-        for name, value in bindings.items():
-            count += 1
-            if not isinstance(value, dict) or not isinstance(value.get("model"), str):
-                bad.append(f"{rel(path)}: binding {name!r} does not name its model")
-            if isinstance(value, dict) and "repo" in value:
-                bad.append(f"{rel(path)}: binding {name!r} uses the retired generic key")
-    return bad, f"{count} default bindings use the typed model key"
-
-
-def fence_sdxl_defaults() -> Fence:
-    """The bare local install selects one exact immutable model lane."""
-
-    manifest = tomllib.loads((ROOT / "sdxl" / "package.toml").read_text())
-    binding = manifest.get("bindings", {}).get("generate.models.model", {})
-    expected = {
-        "model": "paul/wai-illustrious",
-        "release": "17.0.0",
-        "lane": "bf16",
-    }
-    bad = (
-        []
-        if binding == expected
-        else [f"sdxl/package.toml: got {binding!r}, expected {expected!r}"]
-    )
-    return bad, "SDXL binds the exact paul/wai-illustrious@17.0.0/bf16 lane"
+    return bad, f"{len(manifests)} package.toml files carry no [bindings]"
 
 
 #: The Anima model card's negative prompt, spelled here independently of the package so a
@@ -628,28 +575,15 @@ ANIMA_PHASE_NAMES = ("encoding prompt", "conditioning", "denoise", "decoding", "
 
 
 def fence_anima_defaults() -> Fence:
-    """The bare local install selects one exact immutable model lane, and the request
-    default negative is the card string that carries this model's quality."""
+    """The request default negative is the card string that carries this model's quality."""
 
-    manifest = tomllib.loads((ROOT / "anima" / "package.toml").read_text())
-    binding = manifest.get("bindings", {}).get("generate.models.model", {})
-    expected = {
-        "model": "paul/anima",
-        "release": "1.0.0",
-        "lane": "bf16",
-    }
-    bad = (
-        []
-        if binding == expected
-        else [f"anima/package.toml: got {binding!r}, expected {expected!r}"]
-    )
-    bad += _anima_field_default("negative_prompt", ANIMA_CARD_NEGATIVE)
+    bad = _anima_field_default("negative_prompt", ANIMA_CARD_NEGATIVE)
     bad += _anima_field_default("quality_prefix", ANIMA_CARD_QUALITY_PREFIX)
     bad += _anima_no_rating_tag()
     bad += _anima_number_default("cfg_interval_start", "0.15")
     bad += _anima_number_default("cfg_interval_stop", "0.7")
     bad += _anima_number_default("first_block_cache", "0.0")
-    return bad, "Anima binds paul/anima@1.0.0/bf16 and defaults to the card prompt strings"
+    return bad, "Anima defaults to the card prompt strings"
 
 
 def _anima_generate_input() -> tuple[ast.Module, ast.ClassDef | None]:
@@ -932,9 +866,7 @@ FENCES = (
     ("h3-media-boundary", fence_h3_media_boundary),
     ("h3-official-hardcut", fence_h3_official_hardcut),
     ("env-free-packages", fence_no_env),
-    ("h3-binding-identity", fence_h3_binding_identity),
-    ("typed-model-bindings", fence_typed_model_bindings),
-    ("sdxl-defaults", fence_sdxl_defaults),
+    ("no-package-bindings", fence_no_package_bindings),
     ("anima-defaults", fence_anima_defaults),
     ("step-progress", fence_step_progress),
     ("interface-format", fence_interface_format),

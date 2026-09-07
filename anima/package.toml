@@ -1,14 +1,2 @@
 [application]
 object = "anima:app"
-
-[bindings."generate.models.model"]
-model = "paul/anima"
-release = "1.0.0"
-lane = "bf16"
-
-# The quantize job's DEFAULT source (se-009): the family's own checkpoint. The actual
-# source binds per invocation (--model / JobDirective).
-[bindings."quantize.models.source"]
-model = "paul/anima"
-release = "1.0.0"
-lane = "bf16"
