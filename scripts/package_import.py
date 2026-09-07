@@ -20,6 +20,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 #: package directory -> (module to import, compiled peers that must load beside it)
 PACKAGES = {
+    "checkpoint-repair": ("checkpoint_repair.job", ("msgspec",)),
     "anima": (
         "anima",
         (

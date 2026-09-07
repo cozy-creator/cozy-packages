@@ -31,7 +31,7 @@ jobs:
       - name: Lint
         run: >-
           uv run --no-project ruff check anima/ minimax-h3/ quality-judge/ scripts/ sdxl/
-          h3-quality-gate/ minimax-h3-tools/
+          h3-quality-gate/ minimax-h3-tools/ checkpoint-repair/
 
       - name: Types
         run: uv run --no-project mypy
@@ -43,20 +43,21 @@ jobs:
           test "$(uv run --no-project cozy-runtime --json --dir quality-judge describe)" = "$(cat quality-judge/metadata/package-interface.json)"
           test "$(uv run --no-project cozy-runtime --json --dir sdxl describe)" = "$(cat sdxl/metadata/package-interface.json)"
           test "$(uv run --no-project cozy-runtime --json --dir h3-quality-gate describe)" = "$(cat h3-quality-gate/metadata/package-interface.json)"
+          test "$(uv run --no-project cozy-runtime --json --dir checkpoint-repair describe)" = "$(cat checkpoint-repair/metadata/package-interface.json)"
 
       # A package with no `[project]` pyproject and no lock resolves no `ResolvedWheelSet`
       # and cannot publish at all, so a stale or absent lock is a release-blocking fact and
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          for package in anima minimax-h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools; do
+          for package in anima minimax-h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools checkpoint-repair; do
             uv lock --check --project "$package"
           done
 
       - name: Every package builds and imports from its wheel
         run: |
           mkdir -p dist/packages
-          for package in anima minimax-h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools; do
+          for package in anima minimax-h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools checkpoint-repair; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done
@@ -65,10 +66,11 @@ jobs:
           from pathlib import Path
 
           import anima, h3, h3_quality_gate, quality_judge, sdxl, video_assembly
+          import checkpoint_repair.job as checkpoint_repair
 
           # h3_tables (minimax-h3-tools) imports torch at module scope, so its wheel is
           # installed above but imported only in its own locked environment (package-locks).
-          for module in (anima, h3, h3_quality_gate, quality_judge, sdxl, video_assembly):
+          for module in (anima, h3, h3_quality_gate, quality_judge, sdxl, video_assembly, checkpoint_repair):
               assert "site-packages" in str(module.__file__)
               assert module.app._registry
           h3_root = Path(h3.__file__).parent
@@ -122,7 +124,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [anima, sdxl, quality-judge, h3-quality-gate, minimax-h3-tools]
+        package: [anima, sdxl, quality-judge, h3-quality-gate, minimax-h3-tools, checkpoint-repair]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -154,6 +156,10 @@ jobs:
           minimax-h3-tools/.venv/bin/python scripts/tensorfs_seeds.py
         env:
           PYTHONPATH: minimax-h3-tools/src
+
+      - name: Native checkpoint row repair and resume
+        if: matrix.package == 'checkpoint-repair'
+        run: checkpoint-repair/.venv/bin/python scripts/h3-repair-proof.py
 
   video-assembly:
     name: Video assembly
