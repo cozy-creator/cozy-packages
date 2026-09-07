@@ -12,13 +12,28 @@ from cozy_runtime.author import (
     ImageFrame,
     MediaDecoder,
     Outputs,
+    Preflight,
     Telemetry,
     VideoAsset,
     uses_components,
 )
 
-from h3 import H3Model, _rgb8
-from official import TRANSFORMER_EVALUATIONS, NumericalChecks
+from h3 import (
+    H3Model,
+    H3VideoOutput,
+    ReferenceMediaToVideoInput,
+    _rgb8,
+    preflight_reference_media,
+    reference_media_to_video,
+)
+from official import (
+    TRANSFORMER_EVALUATIONS,
+    NumericalChecks,
+    OfficialH3Pipeline,
+    ReferencePolicyFacts,
+    ScheduleFacts,
+    Task,
+)
 
 app = App()
 
@@ -45,7 +60,7 @@ class Result(msgspec.Struct):
 class ShortInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
     seed: int = 24680
-    correct_mlp_order: bool = True
+    correct_mlp_order: bool = False
 
 
 class ShortResult(msgspec.Struct):
@@ -89,6 +104,47 @@ def fingerprints(component: str, module: Any) -> dict[str, str]:
     return {**actual, **{"expected/" + key: value for key, value in expected.items()}}
 
 
+def sample_gate_first(
+    pipe: OfficialH3Pipeline,
+    task: Task,
+    state: Any,
+    *,
+    enabled: bool,
+    on_step: Any,
+    cancel: Any,
+    checks: NumericalChecks,
+) -> ScheduleFacts:
+    import types
+
+    import torch
+    from diffusers.models.activations import SwiGLU
+
+    component = f"{task}_dit"
+    root = pipe.components[component]
+    originals = []
+
+    def original_h3_swiglu(activation: Any, value: Any) -> Any:
+        gate, linear = activation.proj(value).chunk(2, dim=-1)
+        return torch.nn.functional.silu(gate) * linear
+
+    try:
+        if enabled:
+            # Diagnostic only: unchanged original gate/value weight bytes.
+            # Production repair belongs to conversion into Diffusers order.
+            for activation in root.modules():
+                if not isinstance(activation, SwiGLU):
+                    continue
+                originals.append((activation, activation.forward))
+                activation.forward = types.MethodType(original_h3_swiglu, activation)
+            assert len(originals) == 52, "expected 50 main and two token-refiner SwiGLUs"
+        checks.component(component, root)
+        with checks.forwards(root, component):
+            return pipe.denoise(task, state, on_step=on_step, cancel=cancel, checks=checks)
+    finally:
+        for activation, forward in originals:
+            activation.forward = forward
+
+
 class VaeModel(H3Model):
     @uses_components("fl2va_dit")
     def sample_short(
@@ -100,34 +156,28 @@ class VaeModel(H3Model):
         cancel: Any,
         checks: NumericalChecks,
     ) -> None:
-        import types
+        sample_gate_first(
+            self.pipe,
+            "fl2va",
+            state,
+            enabled=correct_mlp_order,
+            on_step=on_step,
+            cancel=cancel,
+            checks=checks,
+        )
 
-        import torch
-        from diffusers.models.activations import SwiGLU
-
-        root = self.pipe.components["fl2va_dit"]
-        originals = []
-
-        def original_h3_swiglu(activation: Any, value: Any) -> Any:
-            gate, linear = activation.proj(value).chunk(2, dim=-1)
-            return torch.nn.functional.silu(gate) * linear
-
-        try:
-            if correct_mlp_order:
-                # Diagnostic only: unchanged original gate/value weight bytes.
-                # Production repair belongs to conversion into Diffusers order.
-                for activation in root.modules():
-                    if not isinstance(activation, SwiGLU):
-                        continue
-                    originals.append((activation, activation.forward))
-                    activation.forward = types.MethodType(original_h3_swiglu, activation)
-                assert len(originals) == 52, "expected 50 main and two token-refiner SwiGLUs"
-            checks.component("fl2va_dit", root)
-            with checks.forwards(root, "fl2va_dit"):
-                self.pipe.denoise("fl2va", state, on_step=on_step, cancel=cancel, checks=checks)
-        finally:
-            for activation, forward in originals:
-                activation.forward = forward
+    @uses_components("ref2va_dit")
+    def sample_ref2va(
+        self,
+        state: Any,
+        *,
+        on_step: Any,
+        cancel: Any,
+        checks: NumericalChecks,
+    ) -> ScheduleFacts:
+        return sample_gate_first(
+            self.pipe, "ref2va", state, enabled=True, on_step=on_step, cancel=cancel, checks=checks
+        )
 
     @uses_components("video_vae")
     def encode_probe(self, pixels: Any, frames: int) -> tuple[Any, dict[str, str]]:
@@ -270,3 +320,17 @@ def short_denoise(
         tensors=out.save_bytes(stream.getvalue(), media_type="application/octet-stream"),
         grid_peak_ratio=float(facts.grid_peak_ratio),
     )
+
+
+@app.entrypoint(preflight=preflight_reference_media)
+def reference_gate_first(
+    ctx: Context,
+    payload: ReferenceMediaToVideoInput,
+    facts: Preflight[ReferencePolicyFacts],
+    model: VaeModel,
+    decoder: MediaDecoder,
+    out: Outputs,
+    tel: Telemetry,
+) -> H3VideoOutput:
+    """Actual serving entrypoint with an explicit original-layout diagnostic model."""
+    return reference_media_to_video(ctx, payload, facts, model, decoder, out, tel)
