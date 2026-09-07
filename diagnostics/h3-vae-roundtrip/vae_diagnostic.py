@@ -7,6 +7,7 @@ from cozy_runtime.author import (
     App,
     AssetBound,
     Context,
+    FileAsset,
     ImageAsset,
     ImageFrame,
     MediaDecoder,
@@ -17,6 +18,7 @@ from cozy_runtime.author import (
 )
 
 from h3 import H3Model, _rgb8
+from official import TRANSFORMER_EVALUATIONS, NumericalChecks
 
 app = App()
 
@@ -38,6 +40,18 @@ class Result(msgspec.Struct):
     reconstruction: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
     grid_peak_ratio: float
     hashes: list[TensorObservation]
+
+
+class ShortInput(msgspec.Struct, forbid_unknown_fields=True):
+    prompt: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
+    seed: int = 24680
+
+
+class ShortResult(msgspec.Struct):
+    video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",))]
+    frame: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
+    tensors: Annotated[FileAsset, AssetBound(media_types=("application/octet-stream",))]
+    grid_peak_ratio: float
 
 
 def encode(h3_pipe: Any, pixels: Any, frames: int) -> Any:
@@ -156,4 +170,61 @@ def roundtrip(
         reconstruction=out.save_image(ImageFrame(1344, 768, bytes(rgb[-1].numpy())), format="png"),
         grid_peak_ratio=float(facts.grid_peak_ratio),
         hashes=[TensorObservation(name, value) for name, value in hashes.items()],
+    )
+
+
+@app.entrypoint()
+def short_denoise(
+    ctx: Context, payload: ShortInput, model: H3Model, out: Outputs, tel: Telemetry
+) -> ShortResult:
+    """22-frame, 384p text-only control with actual conditioning and latent artifacts."""
+    import io
+
+    import numpy as np
+    import torch
+    from cozy_eval.integrity import output_integrity
+
+    ctx.raise_if_cancelled()
+    view = model.for_request(ctx, seed=payload.seed)
+    state = model.pipe.start_fl2va(
+        prompt=payload.prompt,
+        first_frame=None,
+        last_frame=None,
+        generator=model.pipe.generator(view.generator),
+    )
+    state.set("num_frames", 22)
+    state.set("height", 384)
+    state.set("width", 672)
+    checks = NumericalChecks(tel)
+    with tel.stage("condition_text"):
+        model.condition_text("fl2va", state, checks=checks)
+    prompt_embeds = state.prompt_embeds.detach().float().cpu().numpy().copy()
+    with tel.stage("denoise"):
+        model.sample_fl2va(
+            state,
+            on_step=tel.step_callback(TRANSFORMER_EVALUATIONS, stage="denoise"),
+            cancel=ctx.raise_if_cancelled,
+            checks=checks,
+        )
+    # These are generated conditioning/latent values, not checkpoint weights.
+    stream = io.BytesIO()
+    np.savez_compressed(
+        stream,
+        prompt_embeds=prompt_embeds,
+        video_latents=state.latents.detach().float().cpu().numpy(),
+        audio_latents=state.audio_latents.detach().float().cpu().numpy(),
+    )
+    with tel.stage("decode_video"):
+        video = model.decode_video("fl2va", state, checks=checks)
+    assert tuple(video.shape) == (1, 22, 3, 384, 672)
+    assert torch.isfinite(video).all()
+    ctx.raise_if_cancelled()
+    pixels = _rgb8(torch, video)
+    facts = output_integrity(pixels.numpy())
+    tel.log("short denoise diagnostic", grid_peak_ratio=facts.grid_peak_ratio)
+    return ShortResult(
+        video=out.save_video(pixels, fps=24),
+        frame=out.save_image(ImageFrame(672, 384, bytes(pixels[-1].numpy())), format="png"),
+        tensors=out.save_bytes(stream.getvalue(), media_type="application/octet-stream"),
+        grid_peak_ratio=float(facts.grid_peak_ratio),
     )
