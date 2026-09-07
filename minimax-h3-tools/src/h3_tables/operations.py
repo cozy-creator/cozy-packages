@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib.resources import files
 from typing import Literal
 
 import msgspec
@@ -25,7 +26,9 @@ from cozy_runtime.derive.quantization import (
     quantize_component_into,
 )
 
-from .job import TARGET_COMPONENT, H3FullTransformer
+from .model_config import parse_production_config
+from .order import current_order, full_order
+from .source import TARGET_COMPONENT, H3FullTransformer
 
 
 def _quantization_plan(structure: WeightsSource) -> ArtifactQuantizationPlan:
@@ -39,7 +42,7 @@ def _quantization_plan(structure: WeightsSource) -> ArtifactQuantizationPlan:
                 actual.logical_dtype != expected.logical_dtype
                 or actual.shape != expected.shape
                 or len(actual.parts) != 1
-                or actual.parts[0].role != "value"
+                or actual.parts[0].name != "value"
                 or actual.parts[0].dtype != expected.logical_dtype
                 or actual.parts[0].shape != expected.shape
             ):
@@ -50,8 +53,23 @@ def _quantization_plan(structure: WeightsSource) -> ArtifactQuantizationPlan:
     return plan
 
 
+def _quantization_order(structure: WeightsSource) -> tuple[tuple[str, str], ...]:
+    """Accept only the existing complete H3 construction contracts, in their exact order."""
+    assets = files(__package__).joinpath("assets")
+    pruned = current_order(assets.joinpath("whole-order.json").read_bytes()).rows
+    sections = parse_production_config(assets.joinpath("model-config.json").read_bytes())
+    actual = {(tensor.component, tensor.key) for tensor in structure.tensors}
+    for order in (pruned, full_order(sections, pruned)):
+        if actual == set(order):
+            return order
+    raise UnsupportedInput(
+        "H3 quantization requires one assembled full or AdaLN-pruned checkpoint",
+        code="quantization_source",
+    )
+
+
 @invocable(memoize=True)
-async def quantize_lane(
+async def quantize(
     ctx: Context,
     *,
     source: H3FullTransformer,
@@ -67,6 +85,7 @@ async def quantize_lane(
     """
     structure = weights.structure(source)
     plan = _quantization_plan(structure)
+    order = _quantization_order(structure)
     additions = quantization_additions(encoding, plan, "dit")
     targets = {
         component: WeightsTarget(source="source", source_component=component)
@@ -87,7 +106,7 @@ async def quantize_lane(
         configs={
             name: WeightsConfig(source="source", source_config=name) for name in structure.configs
         },
-        order=tuple((tensor.component, tensor.key) for tensor in structure.tensors),
+        order=order,
     ) as transaction:
         if transaction.replayed:
             assert transaction.receipt is not None
