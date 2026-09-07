@@ -516,7 +516,7 @@ def arm_reference_resolution() -> None:
     pixels = np.arange(1086 * 1448 * 3, dtype=np.uint8).reshape(1448, 1086, 3)
     references = [MiniMaxH3ImageReference(image=pixels)]
     normalized = {}
-    for edge in (768, 1024, 2048):
+    for edge in (768, 769, 1024, 2048):
         state = pipe.start_ref2va(
             prompt="A person in a garden.",
             references=references,
@@ -581,7 +581,8 @@ def arm_reference_resolution() -> None:
         "reference_image_short_edge"
     ]
     check("typed request accepts 768px", msgspec.convert(768, type=field), 768)
-    for invalid in (0, 255, 769, 2080):
+    check("typed request permits upstream rounding", msgspec.convert(769, type=field), 769)
+    for invalid in (0, 255, 2080):
         refusal(
             f"typed request refuses invalid edge {invalid}",
             partial(msgspec.convert, invalid, type=field),
