@@ -1,4 +1,4 @@
-"""One typed job producing the four exact MiniMax H3 checkpoint variants."""
+"""Typed jobs producing the exact MiniMax H3 checkpoint variants and their AdaLN tables."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from cozy_runtime.author import (
     WeightsPart,
     WeightsReceipt,
     WeightsSink,
+    WeightsSource,
     WeightsTarget,
     WeightsTensor,
     WeightsTransaction,
@@ -36,7 +37,7 @@ from cozy_runtime.derive.quantization import (
     quantize_component_into,
 )
 
-from .kernel import H3Topology, removed_keys, table_shapes
+from .kernel import H3Topology, removed_keys, source_shapes, table_bytes, table_shapes
 from .kernel import precompute_tables as compute_tables
 from .model_config import (
     dual_adaln_pruned_config,
@@ -45,7 +46,7 @@ from .model_config import (
     task_config_bytes,
 )
 from .order import current_order
-from .plans import TimestepPlan, parse_declared_plan, parse_plan
+from .plans import TimestepPlan, parse_declared_plan
 from .source import official_full_specs, source_only_keys, text_source_only_keys
 
 app = App()
@@ -54,15 +55,43 @@ PLAIN_SPEC = "sha256:1fb882a7e46d0aff520f9d8a28cefd643954c19371737443101ba3c5fcc
 FP8_SPEC = "sha256:c4be0120fb4548306b134f6ee07eb2545a363bc140a005af1ef6543c790cf890"
 MXFP8_SPEC = "sha256:7e9b1ad8f2e5ddd236a4d4303042d632a96eadef4f25d44eb0fb63124cec7cfd"
 
-TABLE_BYTES = 288_347_136
 SOURCE_READ_CHUNK = 32 << 20
 TARGET_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
+SOURCE_SECTION = {"fl2va": "transformer", "ref2va": "transformer_ref"}
 TASK_MARKER = "__cozy_task"
 TASK_VALUE = {"fl2va": b"\x00", "ref2va": b"\x01"}
-MAX_NEW_BYTES = TABLE_BYTES + 619
+TORCH_DTYPE = {"bf16": torch.bfloat16, "f32": torch.float32}
+
+
+def _asset(name: str) -> bytes:
+    return files(__package__).joinpath("assets", name).read_bytes()
+
+
+def _production_plan(task: str) -> TimestepPlan:
+    plan = parse_declared_plan(_asset(f"timestep-plan.{task}.json"))
+    if plan.task != task:
+        raise ValueError(f"package timestep plan is {plan.task!r}, expected {task!r}")
+    return plan
+
+
+def _table_budget() -> tuple[int, int]:
+    """Exact table bytes per task and the per-task config bytes the plans stamp."""
+    sections = parse_production_config(_asset("model-config.json"))
+    tables, configs = set(), set()
+    for task, section in SOURCE_SECTION.items():
+        plan = _production_plan(task)
+        tables.add(table_bytes(H3Topology.from_config(sections[section]), plan))
+        configs.add(len(task_config_bytes(sections, plan)))
+    return max(tables), max(configs)
+
+
+TABLE_BYTES, TASK_CONFIG_BYTES = _table_budget()
+MAX_NEW_BYTES = TABLE_BYTES + TASK_CONFIG_BYTES + 1
 MAX_FULL_BYTES = 64 << 10
 MAX_PRUNED_BYTES = 2 * TABLE_BYTES + (128 << 10)
 MAX_QUANTIZED_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_PRUNED_BYTES
+
+
 class H3FullTransformer(Model[object]):
     def load(self, loader: Any) -> None:
         del loader
@@ -106,8 +135,15 @@ class AssemblyResult(msgspec.Struct):
     replayed: bool
 
 
-def _asset(name: str) -> bytes:
-    return files(__package__).joinpath("assets", name).read_bytes()
+class RetableResult(msgspec.Struct):
+    source_checkpoint: str
+    steps: list[int]
+    tensorfs_receipt_digest: str
+    table_bank_receipt_digest: str
+    replayed: bool
+    table_tensors: int
+    table_bytes_this_run: int
+    source_bytes_read_this_run: int
 
 
 def _read_source(
@@ -146,7 +182,7 @@ def _compute_table_parts(
     overall_range: tuple[float, float] = (0.0, 1.0),
 ) -> tuple[int, int]:
     source_bytes = 0
-    table_bytes = 0
+    written = 0
 
     def read(name: str, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
         nonlocal source_bytes
@@ -157,7 +193,7 @@ def _compute_table_parts(
         return value
 
     def write(name: str, value: torch.Tensor) -> None:
-        nonlocal table_bytes
+        nonlocal written
         raw = (
             value.detach()
             .to(device="cpu")
@@ -167,7 +203,7 @@ def _compute_table_parts(
             .tobytes()
         )
         write_part(name, raw)
-        table_bytes += len(raw)
+        written += len(raw)
 
     def progress(done: int, total: int) -> None:
         ctx.raise_if_cancelled()
@@ -194,11 +230,10 @@ def _compute_table_parts(
         progress=progress,
         device=torch.device("cuda"),
     )
-    if table_bytes != TABLE_BYTES or len(table_shapes(topology, plan)) != 51:
-        raise ValueError(
-            f"{task} emitted {table_bytes} table bytes, expected {TABLE_BYTES}"
-        )
-    return source_bytes, table_bytes
+    expected = table_bytes(topology, plan)
+    if written != expected or len(table_shapes(topology, plan)) != topology.num_layers + 1:
+        raise ValueError(f"{task} emitted {written} table bytes, expected {expected}")
+    return source_bytes, written
 
 
 def _generate_timestep_table(
@@ -211,11 +246,8 @@ def _generate_timestep_table(
 ) -> TimestepTableResult:
     del payload
     sections = parse_production_config(_asset("model-config.json"))
-    plan = parse_declared_plan(_asset(f"timestep-plan.{task}.json"))
-    if plan.task != task:
-        raise ValueError(f"package timestep plan is {plan.task!r}, expected {task!r}")
-    source_section = "transformer" if task == "fl2va" else "transformer_ref"
-    topology = H3Topology.from_config(sections[source_section])
+    plan = _production_plan(task)
+    topology = H3Topology.from_config(sections[SOURCE_SECTION[task]])
     source_component = TARGET_COMPONENT[task]
     source_order = current_order(_asset("whole-order.json")).select(source_component)
     table_additions = {
@@ -471,9 +503,9 @@ def assemble_dual(
 ) -> AssemblyResult:
     del payload
     sections = parse_production_config(_asset("model-config.json"))
-    fl_plan = parse_plan(_asset("timestep-plan.fl2va.json"), task="fl2va")
-    ref_plan = parse_plan(_asset("timestep-plan.ref2va.json"), task="ref2va")
-    config = dual_adaln_pruned_config(sections, fl_plan, ref_plan)
+    config = dual_adaln_pruned_config(
+        sections, _production_plan("fl2va"), _production_plan("ref2va")
+    )
     order = current_order(_asset("whole-order.json"))
     with artifacts.open(
         "model",
@@ -505,8 +537,8 @@ def _table_additions(
     sections: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, WeightsTensor]]:
     additions: dict[str, dict[str, WeightsTensor]] = {}
-    for task, section in (("fl2va", "transformer"), ("ref2va", "transformer_ref")):
-        plan = parse_declared_plan(_asset(f"timestep-plan.{task}.json"))
+    for task, section in SOURCE_SECTION.items():
+        plan = _production_plan(task)
         topology = H3Topology.from_config(sections[section])
         additions[task] = {
             key: WeightsTensor(
@@ -555,32 +587,29 @@ def _write_tables(
     transactions: Mapping[str, WeightsTransaction],
     tel: Telemetry,
     overall_range: tuple[float, float],
-) -> int:
+    source: str = "dits",
+) -> tuple[int, int]:
     sections = parse_production_config(_asset("model-config.json"))
-    plan = parse_declared_plan(_asset(f"timestep-plan.{task}.json"))
-    if plan.task != task:
-        raise ValueError(f"package timestep plan is {plan.task!r}, expected {task!r}")
-    section = "transformer" if task == "fl2va" else "transformer_ref"
-    topology = H3Topology.from_config(sections[section])
+    plan = _production_plan(task)
+    topology = H3Topology.from_config(sections[SOURCE_SECTION[task]])
     component = TARGET_COMPONENT[task]
 
     def write_part(name: str, raw: bytes) -> None:
         for transaction in transactions.values():
             transaction.add_part(component, name, "value", raw)
 
-    source_bytes, _table_bytes = _compute_table_parts(
+    return _compute_table_parts(
         task,
         plan,
         topology,
         ctx,
         source_transaction,
-        "dits",
+        source,
         component,
         write_part,
         tel,
         overall_range,
     )
-    return source_bytes
 
 
 def _receipt(transaction: WeightsTransaction) -> WeightsReceipt:
@@ -634,9 +663,9 @@ def four_lane(
         )
     tel.progress(1.0, stage="bf16-full", overall_fraction=0.15)
 
-    fl_plan = parse_plan(_asset("timestep-plan.fl2va.json"), task="fl2va")
-    ref_plan = parse_plan(_asset("timestep-plan.ref2va.json"), task="ref2va")
-    pruned_config = dual_adaln_pruned_config(sections, fl_plan, ref_plan)
+    pruned_config = dual_adaln_pruned_config(
+        sections, _production_plan("fl2va"), _production_plan("ref2va")
+    )
     config = {
         "model": WeightsConfig(
             data=pruned_config,
@@ -689,7 +718,7 @@ def four_lane(
                 with tel.stage(f"timestep-table-{task}", overall_range=overall_range):
                     source_bytes += _write_tables(
                         task, ctx, source_transaction, active, tel, overall_range
-                    )
+                    )[0]
 
         quant_request = ArtifactQuantizationRequest()
         for name, encoding, overall_range in (
@@ -748,4 +777,151 @@ def four_lane(
         source_bytes_read_this_run=source_bytes,
         quantized_keys_this_run=sum(stat.encoded_keys for stat in measured),
         weight_fidelity_this_run=fidelity,
+    )
+
+
+def _retable_targets(
+    pruned: WeightsSource,
+    full: WeightsSource,
+    sections: dict[str, dict[str, Any]],
+    tables: Mapping[str, Mapping[str, WeightsTensor]],
+) -> tuple[dict[str, WeightsTarget], dict[str, WeightsTarget]]:
+    """Declare the table bank derived from `full` and the retabled checkpoint from `pruned`.
+
+    A transaction may read only the source components its targets derive from, so the
+    modulation weights are read through the bank transaction (both DiTs from `full`, every
+    other row dropped) while the retabled checkpoint inherits `pruned` by reference and
+    replaces exactly its table keys. Refuses before any read unless `pruned` carries table
+    rows and no dynamic modulation weights for both DiTs and `full` carries the exact
+    modulation weights those rows are computed from.
+    """
+    present = {(tensor.component, tensor.key): tensor for tensor in pruned.tensors}
+    full_present = {(tensor.component, tensor.key): tensor for tensor in full.tensors}
+    components = {tensor.component for tensor in pruned.tensors}
+    if components != set(_dual_targets()):
+        raise ValueError(f"retable source components are {sorted(components)}")
+    bank: dict[str, WeightsTarget] = {}
+    retabled = {
+        component: WeightsTarget(source="pruned", source_component=component)
+        for component in components - set(TARGET_COMPONENT.values())
+    }
+    for task, section in SOURCE_SECTION.items():
+        component = TARGET_COMPONENT[task]
+        topology = H3Topology.from_config(sections[section])
+        keys = {key for owner, key in present if owner == component}
+        if not set(tables[task]) <= keys or set(removed_keys(topology)) & keys:
+            raise ValueError(
+                f"{component} is not an AdaLN-pruned source carrying table rows only"
+            )
+        for key, (dtype, shape) in source_shapes(topology).items():
+            tensor = full_present.get((component, key))
+            if (
+                tensor is None
+                or tensor.shape != shape
+                or TORCH_DTYPE.get(tensor.logical_dtype) != dtype
+            ):
+                raise ValueError(f"full source lacks modulation weight {component}/{key}")
+        bank[component] = WeightsTarget(
+            source="full",
+            source_component=component,
+            drop=tuple(sorted(key for owner, key in full_present if owner == component)),
+            add=tables[task],
+        )
+        retabled[component] = WeightsTarget(
+            source="pruned",
+            source_component=component,
+            drop=tuple(sorted(tables[task])),
+            add=tables[task],
+        )
+    return bank, retabled
+
+
+@app.job(
+    name="retable",
+    weights=(
+        WeightsOutput("adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES),
+        WeightsOutput("tables", max_new_bytes=MAX_PRUNED_BYTES),
+    ),
+)
+def retable(
+    ctx: Context,
+    payload: ProductionRequest,
+    full: H3FullTransformer,
+    pruned: H3FullTransformer,
+    artifacts: WeightsSink,
+    tel: Telemetry,
+) -> RetableResult:
+    """Recompute one AdaLN-pruned checkpoint's tables for the current plans.
+
+    Every non-table tensor of `pruned` (BF16, FP8 or MXFP8 alike) is inherited by reference;
+    only the modulation rows are read from `full` and recomputed, so a plan that adds
+    schedules costs table bytes, never a requantization. The same rows also commit as a
+    two-DiT table bank, the transaction the modulation reads are scoped to.
+    """
+    del payload
+    sections = parse_production_config(_asset("model-config.json"))
+    plans = {task: _production_plan(task) for task in SOURCE_SECTION}
+    pruned_config = dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
+    config = {"model": WeightsConfig(data=pruned_config, length=len(pruned_config))}
+    tables = _table_additions(sections)
+    bank_targets, targets = _retable_targets(
+        artifacts.structure(pruned), artifacts.structure(full), sections, tables
+    )
+    order = current_order(_asset("whole-order.json"))
+    bank_order = tuple(
+        row
+        for row in order.rows
+        if row[0] in bank_targets and row[1] in bank_targets[row[0]].add
+    )
+    source_bytes = written = 0
+    receipts: dict[str, WeightsReceipt] = {}
+    with ExitStack() as stack:
+        bank = stack.enter_context(
+            artifacts.open(
+                "tables", sources={"full": full}, targets=bank_targets, configs=config,
+                order=bank_order,
+            )
+        )
+        retabled = stack.enter_context(
+            artifacts.open(
+                "adaln-pruned", sources={"pruned": pruned}, targets=targets, configs=config,
+                order=order.rows,
+            )
+        )
+        transactions = {"adaln-pruned": retabled, "tables": bank}
+        active = {name: t for name, t in transactions.items() if not t.replayed}
+        if active:
+            if bank.replayed:
+                raise ValueError(
+                    "the table bank was retained without its retabled checkpoint; "
+                    "rerun under a new request identity"
+                )
+            if not torch.cuda.is_available():
+                raise ValueError("H3 timestep-table precompute requires a CUDA worker")
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.set_float32_matmul_precision("highest")
+            for task, overall_range in (("fl2va", (0.0, 0.5)), ("ref2va", (0.5, 1.0))):
+                with tel.stage(f"timestep-table-{task}", overall_range=overall_range):
+                    read, emitted = _write_tables(
+                        task, ctx, bank, active, tel, overall_range, source="full"
+                    )
+                source_bytes += read
+                written += emitted
+            # The retabled checkpoint commits first: its retention never strands the bank.
+            for name, transaction in active.items():
+                transaction.add_config("model", pruned_config)
+                receipts[name] = transaction.commit()
+        for name, transaction in transactions.items():
+            if name not in receipts:
+                receipts[name] = _receipt(transaction)
+    tel.metric("h3.source_bytes", float(source_bytes), unit="bytes")
+    return RetableResult(
+        pruned.checkpoint_ref,
+        list(plans["fl2va"].steps),
+        receipts["adaln-pruned"].tensorfs_receipt_digest,
+        receipts["tables"].tensorfs_receipt_digest,
+        receipts["adaln-pruned"].replayed,
+        sum(len(rows) for rows in tables.values()),
+        written,
+        source_bytes,
     )

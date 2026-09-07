@@ -32,7 +32,6 @@ from h3 import (
     reference_media_to_video as reference_media_to_video,
 )
 from official import (
-    TRANSFORMER_EVALUATIONS,
     NumericalChecks,
     OfficialH3Pipeline,
     ReferencePolicyFacts,
@@ -293,7 +292,7 @@ def reference_trace(
     from activation_trace import ActivationTrace
     from safetensors.torch import save
 
-    trace = ActivationTrace(evaluations=TRANSFORMER_EVALUATIONS, first_step=False)
+    trace = ActivationTrace(evaluations=payload.steps, first_step=False)
     with trace.active():
         result = reference_media_to_video(ctx, payload, facts, model, decoder, out, tel)
     return TraceResult(
@@ -316,7 +315,7 @@ def reference_activations(
     """Normal preprocessing and first denoise step; no video or final latents."""
     from activation_trace import ActivationTrace, FirstStepCaptured
 
-    trace = ActivationTrace(evaluations=TRANSFORMER_EVALUATIONS, first_step=True)
+    trace = ActivationTrace(evaluations=payload.steps, first_step=True)
     with trace.active():
         try:
             reference_media_to_video(ctx, payload, facts, model, decoder, out, tel)

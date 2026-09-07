@@ -83,13 +83,13 @@ class Recorder:
 
     def tables(
         self, task: str, _ctx: Any, _source: Any, active: dict[str, Any], _tel: Any, _range: Any
-    ) -> int:
+    ) -> tuple[int, int]:
         event = "tables:" + task
         self.events.append(event)
         assert not self.committed.keys() & active.keys()
         if self.fail_at == event:
             raise Interrupted(event)
-        return 1
+        return 1, 1
 
     def quantize(self, transaction: Transaction, *_: Any, **kwargs: Any) -> QuantizationStats:
         event = "quantize:" + transaction.slot

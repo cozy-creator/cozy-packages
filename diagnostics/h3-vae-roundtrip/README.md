@@ -43,8 +43,8 @@ and `provenance`. Provenance records the request ID, Runtime-owned checkpoint re
 package/runtime/torch/diffusers versions, prompt, seed, reference kinds/digests/sizes
 and reference-image short edge. It contains no asset capability or local path.
 
-For the 50-block, 29-evaluation H3 model, complete mode observes blocks 0/24/49
-at steps 0/14/28; first-step mode observes the same blocks at step 0. Block
+For the 50-block H3 model at the request's `steps` (default 30), complete mode observes
+blocks 0/24/49 at steps 0/15/29; first-step mode observes the same blocks at step 0. Block
 positions are computed from the actual block count. Each forward selects up to
 eight evenly spaced packed rows **per modality**, sixteen evenly spaced channels,
 and all batches (at most two). Indices include both ends when there is more than

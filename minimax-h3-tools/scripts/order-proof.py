@@ -7,7 +7,12 @@ import copy
 import json
 from pathlib import Path
 
-from cozy_runtime.author import canonical_json
+from cozy_runtime.author import (
+    WeightsSource,
+    WeightsSourcePart,
+    WeightsSourceTensor,
+    canonical_json,
+)
 from cozy_runtime.derive.quantization import (
     h3_quantization_plan,
     prepare_quantization,
@@ -20,9 +25,10 @@ from h3_tables.job import (
     _full_order,
     _full_targets,
     _pruned_targets,
+    _retable_targets,
     _table_additions,
 )
-from h3_tables.kernel import H3Topology, removed_keys, table_shapes
+from h3_tables.kernel import H3Topology, removed_keys, source_shapes, table_shapes
 from h3_tables.model_config import parse_production_config
 from h3_tables.order import current_order
 from h3_tables.plans import parse_declared_plan, parse_plan
@@ -38,6 +44,68 @@ def refuse(raw: bytes, task: str) -> None:
     except ValueError:
         return
     raise RuntimeError(f"changed {task} TimestepPlan did not refuse")
+
+
+def structure(rows: list[tuple[str, str, str, tuple[int, ...]]]) -> WeightsSource:
+    return WeightsSource(
+        ("model",),
+        tuple(
+            WeightsSourceTensor(
+                component, key, dtype, shape, (WeightsSourcePart("value", dtype, shape),)
+            )
+            for component, key, dtype, shape in rows
+        ),
+    )
+
+
+def prove_retable(sections: dict[str, dict[str, object]]) -> None:
+    """The retable declarations edit only table keys and refuse the wrong sources."""
+    tables = _table_additions(sections)
+    shared = [(c, f"{c}.w", "f32", (1,)) for c in ("text_encoder", "video_vae", "audio_vae")]
+    pruned_rows, full_rows = list(shared), list(shared)
+    for task, section in (("fl2va", "transformer"), ("ref2va", "transformer_ref")):
+        component = f"{task}_dit"
+        topology = H3Topology.from_config(sections[section])
+        pruned_rows += [(component, "proj_in.weight", "bf16", (2, 2))]
+        pruned_rows += [(component, key, "bf16", (1, 6, 8)) for key in tables[task]]
+        full_rows += [(component, "proj_in.weight", "bf16", (2, 2))]
+        full_rows += [
+            (component, key, {"torch.float32": "f32", "torch.bfloat16": "bf16"}[str(dtype)], shape)
+            for key, (dtype, shape) in source_shapes(topology).items()
+        ]
+    bank, retabled = _retable_targets(
+        structure(pruned_rows), structure(full_rows), sections, tables
+    )
+    if set(bank) != {"fl2va_dit", "ref2va_dit"}:
+        raise RuntimeError("the table bank must hold exactly both DiTs")
+    for task in ("fl2va", "ref2va"):
+        component = f"{task}_dit"
+        target = retabled[component]
+        if (
+            target.source != "pruned"
+            or set(target.drop) != set(tables[task])
+            or target.add != tables[task]
+        ):
+            raise RuntimeError(f"retable {task} target is not the exact table replacement")
+        present = {key for owner, key, *_ in full_rows if owner == component}
+        if (
+            bank[component].source != "full"
+            or set(bank[component].drop) != present
+            or bank[component].add != tables[task]
+        ):
+            raise RuntimeError(f"table bank {task} target must drop every full row")
+    if any(retabled[c].source != "pruned" or retabled[c].drop for c, *_ in shared):
+        raise RuntimeError("retable shared components must derive unchanged from pruned")
+    for name, bad_pruned, bad_full in (
+        ("missing table", pruned_rows[:-1], full_rows),
+        ("dynamic weights kept", [*pruned_rows, full_rows[-1]], full_rows),
+        ("full lacks modulation", pruned_rows, full_rows[:-1]),
+    ):
+        try:
+            _retable_targets(structure(bad_pruned), structure(bad_full), sections, tables)
+        except ValueError:
+            continue
+        raise RuntimeError(f"retable accepted a source with {name}")
 
 
 def main() -> None:
@@ -61,6 +129,7 @@ def main() -> None:
             raise RuntimeError(f"{component} lost its direct full source mapping")
 
     tables = _table_additions(sections)
+    prove_retable(sections)
     quantization = prepare_quantization(h3_quantization_plan())
     if (
         quantization.components != ["dit"]
@@ -118,8 +187,10 @@ def main() -> None:
                 raise RuntimeError(f"{component} changed its exact {name} edit")
         refuse(raw, "ref2va" if task == "fl2va" else "fl2va")
         changed = copy.deepcopy(json.loads(raw))
-        changed["evaluations"][0]["video_sigma"] = (0.5).hex()
+        changed["schedules"][0]["evaluations"][0]["video_sigma"] = (0.5).hex()
         refuse(canonical_json.encode(changed), task)
+        if plan.steps != (30, 40, 50):
+            raise RuntimeError(f"{task} plan serves {plan.steps}, expected 30/40/50 steps")
 
     package_interface = json.loads(
         (PROJECT / "metadata" / "package-interface.json").read_bytes()
@@ -136,6 +207,7 @@ def main() -> None:
         "four-lane",
         "generate_timestep_table_fl2va",
         "generate_timestep_table_ref2va",
+        "retable",
     }:
         raise RuntimeError(f"package callable compatibility changed: {sorted(jobs)}")
     job = jobs["four-lane"]
@@ -157,11 +229,20 @@ def main() -> None:
         raise RuntimeError(
             "four-lane should derive and measure resources instead of authoring them"
         )
+    retable = jobs["retable"]
+    if {row["path"] for row in retable["models"]} != {
+        "retable.models.full",
+        "retable.models.pruned",
+    } or {output["output_id"] for output in retable["weights_outputs"]} != {
+        "adaln-pruned",
+        "tables",
+    }:
+        raise RuntimeError("retable changed its two typed sources or two outputs")
     print(
-        "H3 FOUR-LANE CONTRACT PASS jobs=5 graphs=0 outputs=4 full_rows=3968 "
+        "H3 FOUR-LANE CONTRACT PASS jobs=6 graphs=0 outputs=4 full_rows=3968 "
         "task_rows=583 shared_text_drop=156 quantized_per_task=313 tables_per_task=51 "
-        "table_bytes_per_task=288347136 source_drop=rope dynamic_drops_per_task=106 "
-        "direct_siblings=1 changed_plan=refused"
+        f"table_bytes_per_task={TABLE_BYTES} source_drop=rope dynamic_drops_per_task=106 "
+        "direct_siblings=1 changed_plan=refused steps=30/40/50"
     )
 
 

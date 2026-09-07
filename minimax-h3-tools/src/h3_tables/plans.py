@@ -1,7 +1,8 @@
 """Read the canonical MiniMax-H3 timestep-plan handoff.
 
 The plan, not a step-count label, is the numerical contract. Its exact bytes bind every
-sigma, forward evaluation, row class, and table order consumed by the producer.
+schedule's sigmas and forward evaluations, every row class, and the one union table order
+the producer emits so a single pruned checkpoint serves every listed step count.
 """
 
 from __future__ import annotations
@@ -17,8 +18,8 @@ from cozy_runtime.author import canonical_json
 Task = Literal["fl2va", "ref2va"]
 
 LAUNCH_PLAN_DIGESTS: dict[Task, str] = {
-    "fl2va": "sha256:8da103b9b09629f9f4bcc7c3311929a83c4bc76d5ac2a49fa8ad6c08a140d99b",
-    "ref2va": "sha256:f99dec0b673105a6b7cabdc57a62df9653afd943a9092eef6018aa48095a9487",
+    "fl2va": "sha256:8cd647f223acb56f864773e1a86bd8bcc0bb8d7a1c83ce2de33b7209844dd049",
+    "ref2va": "sha256:3ec1b8e59c8b5dc74a4656d299d25ae206249cbd2b3f90b3c2981f8123b1b4ac",
 }
 
 _TOP_LEVEL = {
@@ -26,19 +27,17 @@ _TOP_LEVEL = {
     "audio_shift",
     "table_keys",
     "table_order",
-    "evaluations",
     "final_norm_row_index",
     "fps",
     "frames",
     "row_timestep_reduction",
     "scalar_encoding",
     "scheduler_semantics",
-    "sigma_grid_points",
+    "schedules",
     "task",
-    "terminal",
-    "transformer_evaluations",
     "video_shift",
 }
+_SCHEDULE = {"transformer_evaluations", "sigma_grid_points", "evaluations", "terminal"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,8 +47,7 @@ class TimestepPlan:
     canonical_bytes: bytes
     timesteps: tuple[float, ...]
     block_rows: tuple[tuple[int, int], ...]
-    sigma_grid_points: int
-    transformer_evaluations: int
+    steps: tuple[int, ...]
 
 
 def _f32(value: float) -> float:
@@ -79,12 +77,93 @@ def _canonical(document: dict[str, Any]) -> bytes:
     return canonical_json.encode(document)
 
 
+_EXPECTED_CLASSES = (
+    ("target_video", "video", 0, "always"),
+    ("text", "text", 1, "always"),
+    ("target_audio", "audio", 2, "always"),
+    ("condition_video", "video", 0, "if_condition_video_rows"),
+    ("condition_audio", "audio", 2, "if_condition_audio_rows"),
+)
+
+
+def _parse_schedule(value: object, field: str, class_rows: list[dict[str, Any]]) -> int:
+    """Validate one schedule, append its row classes in order, return its step count."""
+    schedule = _closed(value, _SCHEDULE, field)
+    grid_points = schedule["sigma_grid_points"]
+    forwards = schedule["transformer_evaluations"]
+    evaluations = schedule["evaluations"]
+    if (
+        not isinstance(grid_points, int)
+        or not isinstance(forwards, int)
+        or forwards < 1
+        or forwards + 1 > grid_points
+        or not isinstance(evaluations, list)
+        or len(evaluations) != forwards
+    ):
+        raise ValueError(f"{field} needs N indexed evaluations under at least N+1 grid points")
+    terminal = _closed(
+        schedule["terminal"],
+        {"video_sigma", "audio_sigma", "transformer_evaluation"},
+        f"{field}.terminal",
+    )
+    if (
+        _hex_f32(terminal["video_sigma"], f"{field}.terminal.video_sigma") != 0.0
+        or _hex_f32(terminal["audio_sigma"], f"{field}.terminal.audio_sigma") != 0.0
+        or terminal["transformer_evaluation"] is not False
+    ):
+        raise ValueError("terminal sigma zero is not a transformer evaluation")
+    video_sigmas: list[float] = []
+    audio_sigmas: list[float] = []
+    clean_video = _f32(0.999)
+    for index, value in enumerate(evaluations):
+        name = f"{field}.evaluations[{index}]"
+        row = _closed(value, {"index", "video_sigma", "audio_sigma", "modulation_classes"}, name)
+        if row["index"] != index:
+            raise ValueError("evaluation indexes are not contiguous from zero")
+        video_sigma = _hex_f32(row["video_sigma"], f"{name}.video_sigma")
+        audio_sigma = _hex_f32(row["audio_sigma"], f"{name}.audio_sigma")
+        video_sigmas.append(video_sigma)
+        audio_sigmas.append(audio_sigma)
+        classes = row["modulation_classes"]
+        if not isinstance(classes, list) or len(classes) != len(_EXPECTED_CLASSES):
+            raise ValueError(f"{name} does not declare the five H3 row classes")
+        wanted_timesteps = (
+            _f32(1.0 - video_sigma),
+            _f32(1.0 - video_sigma),
+            _f32(1.0 - audio_sigma),
+            max(_f32(1.0 - video_sigma), clean_video),
+            _f32(1.0),
+        )
+        for position, (item_value, expected, timestep) in enumerate(
+            zip(classes, _EXPECTED_CLASSES, wanted_timesteps, strict=True)
+        ):
+            item = _closed(
+                item_value,
+                {"name", "modality", "modality_tag", "presence", "timestep"},
+                f"{name}.modulation_classes[{position}]",
+            )
+            if (
+                tuple(item[key] for key in ("name", "modality", "modality_tag", "presence"))
+                != expected
+            ):
+                raise ValueError(f"{name} row class {position} changed meaning")
+            if _hex_f32(item["timestep"], f"{name} timestep") != timestep:
+                raise ValueError(f"{name} row class {position} has the wrong timestep")
+            class_rows.append(item)
+    for modality, sigmas in (("video", video_sigmas), ("audio", audio_sigmas)):
+        if sigmas[0] != 1.0 or any(a <= b or b <= 0.0 for a, b in pairwise(sigmas)):
+            raise ValueError(
+                f"{field} {modality} sigmas are not strictly descending from one toward zero"
+            )
+    return forwards
+
+
 def parse_plan(raw: bytes, *, task: str, launch: bool = True) -> TimestepPlan:
     """Validate one complete plan and return its exact table selectors.
 
-    `launch=True` pins the currently approved 30-point oracle bytes. The structural
-    validator itself admits a future exact step bucket, so widening the approved digest set
-    does not require a second numerical implementation.
+    `launch=True` pins the currently approved oracle bytes. The structural validator itself
+    admits any exact schedule set, so widening the approved digest does not require a second
+    numerical implementation.
     """
     if task not in LAUNCH_PLAN_DIGESTS:
         raise ValueError(f"unknown MiniMax-H3 task {task!r}")
@@ -112,98 +191,19 @@ def parse_plan(raw: bytes, *, task: str, launch: bool = True) -> TimestepPlan:
             raise ValueError(
                 f"timestep plan {name} is {document[name]!r}, expected {expected!r}"
             )
-
-    grid_points = document["sigma_grid_points"]
-    forwards = document["transformer_evaluations"]
-    evaluations = document["evaluations"]
-    if (
-        not isinstance(grid_points, int)
-        or not isinstance(forwards, int)
-        or grid_points < 2
-        or forwards != grid_points - 1
-        or not isinstance(evaluations, list)
-        or len(evaluations) != forwards
-    ):
-        raise ValueError(
-            "the plan must have N sigma points, N-1 indexed forward evaluations"
-        )
     _hex_f32(document["video_shift"], "video_shift")
     _hex_f32(document["audio_shift"], "audio_shift")
-    terminal = _closed(
-        document["terminal"],
-        {"video_sigma", "audio_sigma", "transformer_evaluation"},
-        "terminal",
-    )
-    if (
-        _hex_f32(terminal["video_sigma"], "terminal.video_sigma") != 0.0
-        or _hex_f32(terminal["audio_sigma"], "terminal.audio_sigma") != 0.0
-        or terminal["transformer_evaluation"] is not False
-    ):
-        raise ValueError("terminal sigma zero is not a transformer evaluation")
 
-    expected_classes = (
-        ("target_video", "video", 0, "always"),
-        ("text", "text", 1, "always"),
-        ("target_audio", "audio", 2, "always"),
-        ("condition_video", "video", 0, "if_condition_video_rows"),
-        ("condition_audio", "audio", 2, "if_condition_audio_rows"),
-    )
-    video_sigmas: list[float] = []
-    audio_sigmas: list[float] = []
+    schedules = document["schedules"]
+    if not isinstance(schedules, list) or not schedules:
+        raise ValueError("the plan must list at least one schedule")
     class_rows: list[dict[str, Any]] = []
-    clean_video = _f32(0.999)
-    for index, value in enumerate(evaluations):
-        row = _closed(
-            value,
-            {"index", "video_sigma", "audio_sigma", "modulation_classes"},
-            f"evaluations[{index}]",
-        )
-        if row["index"] != index:
-            raise ValueError("evaluation indexes are not contiguous from zero")
-        video_sigma = _hex_f32(row["video_sigma"], f"evaluations[{index}].video_sigma")
-        audio_sigma = _hex_f32(row["audio_sigma"], f"evaluations[{index}].audio_sigma")
-        video_sigmas.append(video_sigma)
-        audio_sigmas.append(audio_sigma)
-        classes = row["modulation_classes"]
-        if not isinstance(classes, list) or len(classes) != len(expected_classes):
-            raise ValueError(
-                f"evaluation {index} does not declare the five H3 row classes"
-            )
-        wanted_timesteps = (
-            _f32(1.0 - video_sigma),
-            _f32(1.0 - video_sigma),
-            _f32(1.0 - audio_sigma),
-            max(_f32(1.0 - video_sigma), clean_video),
-            _f32(1.0),
-        )
-        for position, (value, expected, timestep) in enumerate(
-            zip(classes, expected_classes, wanted_timesteps, strict=True)
-        ):
-            item = _closed(
-                value,
-                {"name", "modality", "modality_tag", "presence", "timestep"},
-                f"evaluations[{index}].modulation_classes[{position}]",
-            )
-            if (
-                tuple(
-                    item[name]
-                    for name in ("name", "modality", "modality_tag", "presence")
-                )
-                != expected
-            ):
-                raise ValueError(
-                    f"evaluation {index} row class {position} changed meaning"
-                )
-            if _hex_f32(item["timestep"], f"evaluation {index} timestep") != timestep:
-                raise ValueError(
-                    f"evaluation {index} row class {position} has the wrong timestep"
-                )
-            class_rows.append(item)
-    for name, sigmas in (("video", video_sigmas), ("audio", audio_sigmas)):
-        if sigmas[0] != 1.0 or any(a <= b or b <= 0.0 for a, b in pairwise(sigmas)):
-            raise ValueError(
-                f"{name} sigmas are not strictly descending from one toward zero"
-            )
+    steps = tuple(
+        _parse_schedule(value, f"schedules[{index}]", class_rows)
+        for index, value in enumerate(schedules)
+    )
+    if any(left >= right for left, right in pairwise(steps)):
+        raise ValueError("schedules must be listed by strictly ascending step count")
 
     keys = _closed(
         document["table_keys"],
@@ -255,15 +255,7 @@ def parse_plan(raw: bytes, *, task: str, launch: bool = True) -> TimestepPlan:
             f"{task} plan {digest} is structurally valid but is not the launch oracle "
             f"{LAUNCH_PLAN_DIGESTS[typed_task]}"
         )
-    return TimestepPlan(
-        typed_task,
-        digest,
-        canonical,
-        timesteps,
-        block_rows,
-        grid_points,
-        forwards,
-    )
+    return TimestepPlan(typed_task, digest, canonical, timesteps, block_rows, steps)
 
 
 def parse_declared_plan(raw: bytes) -> TimestepPlan:
