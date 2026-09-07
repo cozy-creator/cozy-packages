@@ -392,7 +392,7 @@ def _finish(
             code="output_integrity",
         )
 
-    with tel.stage("gate_pre_encode", overall_range=(0.97, 0.98)):
+    with tel.stage("check_output", overall_range=(0.97, 0.98)):
         warnings = pre_encode_gate(
             torch,
             pixels=pixels,

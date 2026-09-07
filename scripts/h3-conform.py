@@ -650,8 +650,9 @@ def arm_text_conditioner() -> None:
     upstream = {key: value for key, value in source.items() if key != "cozy_h3"}
 
     torch.manual_seed(7)
-    full = (
-        Qwen3VLForConditionalGeneration(Qwen3VLConfig(**upstream)).to(dtype=torch.bfloat16).eval()
+    initialized = Qwen3VLForConditionalGeneration(Qwen3VLConfig(**upstream)).eval()
+    full = Qwen3VLForConditionalGeneration.from_pretrained(
+        None, config=initialized.config, state_dict=initialized.state_dict(), dtype=torch.bfloat16
     )
     torch.manual_seed(7)
     truncated = build_text_conditioner(source)
@@ -692,6 +693,78 @@ def arm_text_conditioner() -> None:
     check(
         "truncation preserves every retained initialized weight",
         all(torch.equal(value, full.state_dict()[key]) for key, value in state.items()),
+        True,
+    )
+    upstream_buffers = dict(full.named_buffers())
+    for name, buffer in truncated.named_buffers():
+        check(
+            f"conditioner derived buffer matches upstream loader: {name}",
+            (buffer.dtype, torch.equal(buffer, upstream_buffers[name])),
+            (upstream_buffers[name].dtype, True),
+        )
+
+    # Exercise the release's actual rotary widths rather than the tiny fixture's
+    # one-frequency vision table, whose only value (1) survives a BF16 round trip.
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+        Qwen3VLTextRotaryEmbedding,
+        Qwen3VLVisionRotaryEmbedding,
+    )
+
+    rotary_source = tiny_text_config()
+    cast(dict[str, Any], rotary_source["text_config"]).update(
+        head_dim=128,
+        rope_theta=5000000.0,
+        rope_scaling={
+            "rope_type": "default",
+            "mrope_section": [24, 20, 20],
+            "mrope_interleaved": True,
+        },
+    )
+    cast(dict[str, Any], rotary_source["vision_config"]).update(hidden_size=72, num_heads=1)
+    rotary_model = build_text_conditioner(rotary_source)
+    expected_text = Qwen3VLTextRotaryEmbedding(rotary_model.config.text_config)
+    expected_vision = Qwen3VLVisionRotaryEmbedding(36)
+    for kind, actual_rotary, expected_rotary in (
+        ("text", rotary_model.model.language_model.rotary_emb, expected_text),
+        ("vision", rotary_model.model.visual.rotary_pos_emb, expected_vision),
+    ):
+        expected_buffers = dict(expected_rotary.named_buffers())
+        for name, buffer in actual_rotary.named_buffers():
+            check(
+                f"{kind} full-width rotary {name} retains constructor FP32 values",
+                (buffer.dtype, torch.equal(buffer, expected_buffers[name])),
+                (torch.float32, True),
+            )
+        check(
+            f"{kind} release rotary width",
+            actual_rotary.inv_freq.numel(),
+            64 if kind == "text" else 18,
+        )
+        red(
+            f"{kind} BF16 rotary round trip changes the frequency table",
+            torch.equal(actual_rotary.inv_freq, actual_rotary.inv_freq.bfloat16().float()),
+            True,
+        )
+    positions = torch.tensor([0, 31, 512, 2048, 16842]).reshape(1, 1, -1).expand(3, 1, -1)
+    rotary_input = torch.zeros(1, 5, 128, dtype=torch.bfloat16)
+    for name, actual, expected in zip(
+        ("cos", "sin"),
+        rotary_model.model.language_model.rotary_emb(rotary_input, positions),
+        expected_text(rotary_input, positions),
+        strict=True,
+    ):
+        check(
+            f"text {name} matches upstream at long reference positions",
+            torch.equal(actual, expected),
+            True,
+        )
+    vision_positions = torch.tensor([[0, 0], [31, 31], [68, 90]])
+    check(
+        "vision angles match upstream at reference image positions",
+        torch.equal(
+            rotary_model.model.visual.rotary_pos_emb(vision_positions),
+            expected_vision(vision_positions),
+        ),
         True,
     )
 
