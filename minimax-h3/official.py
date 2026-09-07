@@ -37,6 +37,7 @@ from conditioner import build_text_conditioner
 
 Task = Literal["fl2va", "ref2va"]
 _TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
+_WORKFLOW_TASKS: dict[str, Task] = {"t2va": "fl2va", "fl2va": "fl2va", "ref2va": "ref2va"}
 
 FPS = 24
 FRAMES = 345
@@ -514,8 +515,8 @@ class OfficialH3Pipeline:
         )
 
         mapping = _artifact_sections(config.mapping())
-        blocks = {task: MiniMaxH3Blocks().get_workflow(task) for task in _TASKS}
-        pipes = {task: MiniMaxH3ModularPipeline(blocks=blocks[task]) for task in _TASKS}
+        blocks = {name: MiniMaxH3Blocks().get_workflow(name) for name in _WORKFLOW_TASKS}
+        pipes = {name: MiniMaxH3ModularPipeline(blocks=block) for name, block in blocks.items()}
         dit_specs = _dit_specs(mapping)
         dits = {
             task: _build_dit(upstream, structure, plan)
@@ -529,8 +530,8 @@ class OfficialH3Pipeline:
             _validate_model_contract(pipes[task], dits[task], video_vae, audio_vae)
         tokenizer, processor = _processor()
 
-        for task in _TASKS:
-            pipes[task].register_components(
+        for workflow, task in _WORKFLOW_TASKS.items():
+            pipes[workflow].register_components(
                 text_encoder=text_encoder,
                 tokenizer=tokenizer,
                 processor=processor,
@@ -645,7 +646,8 @@ class OfficialH3Pipeline:
         }
         for name, value in fixed.items():
             state.set(name, value)
-        self._run(task, "before_encode", state)
+        if "before_encode" in self._blocks[self._workflow(task, state)].sub_blocks:
+            self._run(task, "before_encode", state)
         return state
 
     def condition_text(
@@ -656,7 +658,9 @@ class OfficialH3Pipeline:
             checks.outputs(
                 "condition_text",
                 state,
-                self._blocks[task].sub_blocks["text_encoder"].intermediate_outputs,
+                self._blocks[self._workflow(task, state)]
+                .sub_blocks["text_encoder"]
+                .intermediate_outputs,
                 required=True,
             )
 
@@ -668,7 +672,9 @@ class OfficialH3Pipeline:
             checks.outputs(
                 "condition_media",
                 state,
-                self._blocks[task].sub_blocks["vae_encoder"].intermediate_outputs,
+                self._blocks[self._workflow(task, state)]
+                .sub_blocks["vae_encoder"]
+                .intermediate_outputs,
                 required=True,
             )
 
@@ -683,37 +689,33 @@ class OfficialH3Pipeline:
     ) -> ScheduleFacts:
         from diffusers import MiniMaxH3Scheduler
 
+        blocks = self._blocks[self._workflow(task, state)].sub_blocks
         scoped = _ScopedPipeline(
-            self._pipes[task],
+            self._pipes[self._workflow(task, state)],
             self.components[_DIT_COMPONENT[task]],
             overrides={
                 "scheduler": MiniMaxH3Scheduler(shift=12.0),
                 "audio_scheduler": MiniMaxH3Scheduler(shift=3.0),
             },
         )
-        names = [
-            "denoise.prepare_layout",
-            "denoise.prepare_condition_latents",
-            "denoise.prepare_latents",
-            (
-                "denoise.prepare_latents_fl2va"
-                if task == "fl2va"
-                else "denoise.prepare_latents_ref2va"
-            ),
-            "denoise.set_timesteps",
-        ]
-        for name in names:
+        # The selected upstream workflow owns the ordered preparation steps.
+        # Text-only requests have no keyframe tensors to encode or concatenate.
+        for name in blocks:
+            if name == "denoise.denoise":
+                break
+            if not name.startswith("denoise."):
+                continue
             self._run_with(task, scoped, name, state)
             if checks is not None:
                 checks.outputs(
                     name,
                     state,
-                    self._blocks[task].sub_blocks[name].intermediate_outputs,
+                    blocks[name].intermediate_outputs,
                     required=name.startswith("denoise.prepare_latents"),
                 )
 
         facts = self._schedule_facts(task)
-        loop = self._blocks[task].sub_blocks["denoise.denoise"]
+        loop = blocks["denoise.denoise"]
         block_state = loop.get_block_state(state)
         for index, timestep in enumerate(block_state.timesteps):
             cancel()
@@ -741,16 +743,23 @@ class OfficialH3Pipeline:
         return state.videos
 
     def _run(self, task: Task, name: str, state: Any, *, component: str | None = None) -> None:
+        workflow = self._workflow(task, state)
         pipe = (
-            self._pipes[task]
+            self._pipes[workflow]
             if component is None
-            else _ScopedPipeline(self._pipes[task], self.components[component])
+            else _ScopedPipeline(self._pipes[workflow], self.components[component])
         )
         self._run_with(task, pipe, name, state)
 
     def _run_with(self, task: Task, pipe: Any, name: str, state: Any) -> None:
-        block = self._blocks[task].sub_blocks[name]
+        block = self._blocks[self._workflow(task, state)].sub_blocks[name]
         block(pipe, state)
+
+    @staticmethod
+    def _workflow(task: Task, state: Any) -> str:
+        if task == "fl2va" and state.get("image") is None and state.get("last_image") is None:
+            return "t2va"
+        return task
 
     def _schedule_facts(self, task: Task) -> ScheduleFacts:
         """The canonical schedule receipt for this task.
