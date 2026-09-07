@@ -1308,7 +1308,7 @@ def arm_media() -> None:
     telemetry = fake_telemetry(attempt)
     package_module = cast(Any, package)
     original_gate = package_module.pre_encode_gate
-    package_module.pre_encode_gate = lambda *args, **kwargs: None
+    package_module.pre_encode_gate = lambda *args, **kwargs: ["quality fixture warning"]
     try:
         finished = package._finish(
             cast(Any, FinishModel()),
@@ -1326,6 +1326,11 @@ def arm_media() -> None:
         "finish returns exactly two typed media assets",
         (type(finished.video), type(finished.continuation_frame)),
         (VideoAsset, ImageAsset),
+    )
+    check(
+        "finish retains quality warnings with encoded media",
+        finished.warnings,
+        ["quality fixture warning"],
     )
     check(
         "finish continuation preserves the final pre-encode pixel",
@@ -1543,7 +1548,7 @@ def arm_numerics() -> None:
 def arm_output_gates() -> None:
     import torch
 
-    print("\n== pre-encode output refusals ==")
+    print("\n== structural refusals and quality observations ==")
     requested = MediaFacts(width=1, height=1, frames=2, fps=24, sample_rate=24, mute=False)
     decoded = torch.zeros((1, 2, 3, 1, 1), dtype=torch.float32)
     pixels = torch.zeros((2, 1, 1, 3), dtype=torch.uint8)
@@ -1580,6 +1585,25 @@ def arm_output_gates() -> None:
             tel=cast(Any, _Telemetry()),
         ),
         "output_integrity",
+    )
+    # A real quality rejection must remain visible without suppressing an
+    # otherwise encodable inference result. Checkpoints are qualified separately.
+    requested = MediaFacts(width=512, height=512, frames=5, fps=24, sample_rate=240, mute=True)
+    pixels = torch.full((5, 512, 512, 3), 100, dtype=torch.uint8)
+    pixels[:, ::16] = 220
+    warnings = pre_encode_gate(
+        torch,
+        pixels=pixels,
+        waveform=torch.zeros((2, 50)),
+        video_nonfinite_fraction=0.0,
+        audio_nonfinite_fraction=0.0,
+        requested=requested,
+        tel=cast(Any, _Telemetry()),
+    )
+    check(
+        "periodic output is returned with its actual quality rejection",
+        len(warnings) == 1 and "GRID:" in warnings[0] and "REJECT" in warnings[0],
+        True,
     )
 
 
@@ -1629,7 +1653,7 @@ def arm_interface() -> None:
         check(
             f"{name} exact customer result fields",
             [field["name"] for field in entry["result"]["fields"]],
-            ["video", "continuation_frame"],
+            ["video", "continuation_frame", "warnings"],
         )
     check("H3 permits Runtime encoded linear leaves", package.H3Model.__encoded_leaves__, "accept")
 
