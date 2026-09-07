@@ -21,19 +21,23 @@ from cozy_runtime.internal.weights_sink import WeightsTransactionHost
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "checkpoint-repair" / "src"))
-from checkpoint_repair import job  # noqa: E402
+import checkpoint_repair.job as job  # noqa: E402
 
 repair: Any = importlib.import_module("checkpoint_repair.repair")
 ENCODINGS = repair.ENCODINGS
 
 
-def fixture(store: Any, variant: str) -> tuple[str, int, dict[tuple[str, str, str], bytes]]:
+def fixture(
+    store: Any, variant: str
+) -> tuple[str, int, dict[tuple[str, str, str], bytes], list[tuple[str, str]]]:
     targets: dict[str, Any] = {}
     values: dict[tuple[str, str, str], bytes] = {}
-    order = []
-    for component in repair.COMPONENTS:
+    order: list[tuple[str, str]] = []
+    keys = sorted(repair.FC1_KEYS)
+    keys = keys[1:] + keys[:1]  # Deliberately nonlexical within each component.
+    for component in reversed(repair.COMPONENTS):
         add: dict[str, Any] = {}
-        for i, key in enumerate(sorted(repair.FC1_KEYS)):
+        for i, key in enumerate(keys):
             # Mixed quantized/plain rows prove selection is per tensor, not per lane.
             plain = variant == "plain" or i == 0
             if plain:
@@ -84,12 +88,12 @@ def fixture(store: Any, variant: str) -> tuple[str, int, dict[tuple[str, str, st
     writer.add_config("model", io.BytesIO(b'{"preserve":"config"}'))
     receipt = writer.commit()
     store.derived_adopt(transaction, "source-" + variant)
-    return "sha256:" + receipt["manifest"]["sha256"], receipt["manifest"]["length"], values
+    return "sha256:" + receipt["manifest"]["sha256"], receipt["manifest"]["length"], values, order
 
 
 def exercise(root: Path, variant: str) -> None:
     store = tensorfs.Store.ensure(root)
-    source, length, values = fixture(store, variant)
+    source, length, values, source_order = fixture(store, variant)
     original = tensorfs.parse_header(bytes(store.manifest(source)["header"]))
     model = _derive_model(job.Checkpoint, source)
     # Ordinary new roots are refused; explicitly admit this tiny fixture only in
@@ -120,6 +124,8 @@ def exercise(root: Path, variant: str) -> None:
             output_bounds={"checkpoint": repair.MAX_NEW_BYTES},
             record_checkpoint=checkpoint,
         )
+        structure_order = [(row.component, row.key) for row in host.structure(source).tensors]
+        assert structure_order == source_order, "source structure changed construction order"
         attempt = fake_attempt("repair-" + variant, spool=root / f"spool-{epoch}")
         sink = WeightsSink(
             attempt,
@@ -147,6 +153,12 @@ def exercise(root: Path, variant: str) -> None:
     manifest = "sha256:" + facts["manifest"]["sha256"]
     produced = tensorfs.parse_header(bytes(store.manifest(manifest)["header"]))
     assert produced["configs"] == original["configs"]
+    before_plan = tensorfs.plan(bytes(store.manifest(source)["header"]), source_order)
+    after_plan = tensorfs.plan(bytes(store.manifest(manifest)["header"]), source_order)
+    assert before_plan.order == after_plan.order, "repair changed construction traversal"
+    assert [
+        (component, key) for component, rows in produced["components"].items() for key in rows
+    ] == source_order
     for component in repair.COMPONENTS:
         assert (
             produced["components"][component]["untouched"]
@@ -191,6 +203,7 @@ def exercise(root: Path, variant: str) -> None:
                 "verified_roles": len(values),
                 "replay_bytes_read": replayed.source_bytes_read_this_run,
                 "unchanged_tensor_refs_and_configs": True,
+                "nonlexical_order_preserved": True,
             }
         )
     )
