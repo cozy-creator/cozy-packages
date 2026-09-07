@@ -184,11 +184,13 @@ def arm_producer_construction_order() -> None:
         )
         check(
             f"{mode} producer order equals actual serving constructor ({len(actual)} rows)",
-            expected == actual, True,
+            expected == actual,
+            True,
         )
         if mode == "full":
             for component, section in (
-                ("fl2va_dit", "transformer"), ("ref2va_dit", "transformer_ref")
+                ("fl2va_dit", "transformer"),
+                ("ref2va_dit", "transformer_ref"),
             ):
                 state = pipeline.components[component].state_dict()
                 specs = official_full_specs(sections[section])
@@ -200,9 +202,10 @@ def arm_producer_construction_order() -> None:
                 )
                 for key, (dtype, shape) in specs.items():
                     value = state[key]
-                    if tuple(value.shape) != shape or value.dtype != {
-                        "bf16": torch.bfloat16, "f32": torch.float32
-                    }[dtype]:
+                    if (
+                        tuple(value.shape) != shape
+                        or value.dtype != {"bf16": torch.bfloat16, "f32": torch.float32}[dtype]
+                    ):
                         raise AssertionError(
                             f"ordered full spec geometry changed: {component}/{key}"
                         )
@@ -1203,12 +1206,12 @@ def arm_media() -> None:
         pipe = SimpleNamespace(sample_rate=32000)
 
         @staticmethod
-        def decode_audio(task: Any, state: Any) -> tuple[Any, int]:
+        def decode_audio(task: Any, state: Any, *, checks: Any = None) -> tuple[Any, int]:
             del task
             return state.audio, 32000
 
         @staticmethod
-        def decode_video(task: Any, state: Any) -> Any:
+        def decode_video(task: Any, state: Any, *, checks: Any = None) -> Any:
             del task
             return state.video
 
@@ -1430,8 +1433,6 @@ def arm_interface() -> None:
             ["video", "continuation_frame"],
         )
     check("H3 permits Runtime encoded linear leaves", package.H3Model.__encoded_leaves__, "accept")
-
-
 
 
 ARMS = {

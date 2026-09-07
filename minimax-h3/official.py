@@ -12,7 +12,8 @@ import hashlib
 import json
 import math
 import struct
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import lru_cache
@@ -27,6 +28,8 @@ from cozy_runtime.author import (
     DecodedAudio,
     DecodedImage,
     DecodedVideo,
+    OutputError,
+    Telemetry,
     canonical_json,
 )
 
@@ -328,6 +331,107 @@ def reference_video_vision_tokens(width: int, height: int, duration: Fraction) -
     return temporal_blocks * spatial_tokens
 
 
+class NumericalChecks:
+    """Request-local, bounded observations; no tensor is replaced or modified."""
+
+    def __init__(self, telemetry: Telemetry) -> None:
+        self.telemetry = telemetry
+        self.checked_components: set[str] = set()
+
+    def tensors(self, stage: str, values: Sequence[tuple[str, Any]]) -> None:
+        import torch
+        from torch.utils._pytree import keystr, tree_flatten_with_path
+
+        count, elements, parked = 0, 0, 0
+        maximum = 0.0
+        with torch.no_grad():
+            for name, value in values:
+                leaves, _ = tree_flatten_with_path(value)
+                for path, tensor in leaves:
+                    if not isinstance(tensor, torch.Tensor) or not (
+                        tensor.is_floating_point() or tensor.is_complex()
+                    ):
+                        continue
+                    if tensor.is_meta or (tensor.numel() and not tensor.untyped_storage().nbytes()):
+                        # Runtime may have parked a paged weight. This check only claims
+                        # the resident values counted below, never unread storage.
+                        parked += 1
+                        continue
+                    count += 1
+                    chunks = [tensor.detach()]
+                    while chunks:
+                        part = chunks.pop()
+                        if part.numel() > 16 * 1024 * 1024:
+                            axis = max(range(part.ndim), key=lambda dim: part.shape[dim])
+                            chunks.extend(part.split(max(1, part.shape[axis] // 2), dim=axis))
+                            continue
+                        size = part.numel()
+                        elements += size
+                        if not size:
+                            continue
+                        bad = int((~torch.isfinite(part)).sum().item())
+                        if bad:
+                            self.telemetry.log(
+                                "h3 non-finite tensor",
+                                stage=stage,
+                                tensor=(name + keystr(path))[:512],
+                                chunk_elements=size,
+                                chunk_nonfinite=bad,
+                            )
+                            raise OutputError(
+                                f"non-finite tensor at {stage}/{name}{keystr(path)}: "
+                                f"{bad} of {size} values in the checked chunk",
+                                code="numerical_nonfinite",
+                            )
+                        maximum = max(maximum, float(part.abs().amax().item()))
+        self.telemetry.log(
+            "h3 finite tensors",
+            stage=stage,
+            tensors=count,
+            elements=elements,
+            parked_tensors=parked,
+            absmax=maximum,
+        )
+
+    def component(self, name: str, module: Any) -> None:
+        if name in self.checked_components:
+            return
+        values = list(module.named_parameters())
+        # Derived rotary/config buffers are not checkpoint payloads, but can poison the
+        # same computation. Include nonpersistent buffers while naming exact tensors.
+        values.extend(module.named_buffers())
+        self.tensors(f"resident.{name}", values)
+        self.checked_components.add(name)
+
+    def outputs(self, stage: str, state: Any, outputs: Any) -> None:
+        self.tensors(
+            stage,
+            [(item.name, getattr(state, item.name, None)) for item in outputs if item.name],
+        )
+
+    @contextmanager
+    def forwards(self, module: Any, component: str) -> Iterator[None]:
+        handles: list[Any] = []
+        step = 0
+
+        def before(_module: Any, args: Any, kwargs: Any) -> None:
+            self.tensors(f"{component}.input.{step}", [("args", args), ("kwargs", kwargs)])
+
+        def after(_module: Any, _args: Any, _kwargs: Any, output: Any) -> None:
+            nonlocal step
+            if output is not None:
+                self.tensors(f"{component}.prediction.{step}", [("output", output)])
+                step += 1
+
+        try:
+            handles.append(module.register_forward_pre_hook(before, with_kwargs=True))
+            handles.append(module.register_forward_hook(after, with_kwargs=True, always_call=True))
+            yield
+        finally:
+            for handle in handles:
+                handle.remove()
+
+
 class _ScopedPipeline:
     """A request-local view whose execution device follows the admitted component.
 
@@ -388,10 +492,7 @@ class OfficialH3Pipeline:
 
         mapping = _artifact_sections(config.mapping())
         blocks = {task: MiniMaxH3Blocks().get_workflow(task) for task in _TASKS}
-        pipes = {
-            task: MiniMaxH3ModularPipeline(blocks=blocks[task])
-            for task in _TASKS
-        }
+        pipes = {task: MiniMaxH3ModularPipeline(blocks=blocks[task]) for task in _TASKS}
         dit_specs = _dit_specs(mapping)
         dits = {
             task: _build_dit(upstream, structure, plan)
@@ -461,9 +562,9 @@ class OfficialH3Pipeline:
         import numpy as np
 
         pixels = np.frombuffer(image.rgb, dtype=np.uint8).reshape(image.height, image.width, 3)
-        return self._pipes["fl2va"].image_processor.numpy_to_pil(
-            pixels.astype(np.float32) / 255.0
-        )[0]
+        return self._pipes["fl2va"].image_processor.numpy_to_pil(pixels.astype(np.float32) / 255.0)[
+            0
+        ]
 
     def audio_reference(self, audio: DecodedAudio) -> Any:
         from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3AudioReference
@@ -524,11 +625,27 @@ class OfficialH3Pipeline:
         self._run(task, "before_encode", state)
         return state
 
-    def condition_text(self, task: Task, state: Any) -> None:
+    def condition_text(
+        self, task: Task, state: Any, *, checks: NumericalChecks | None = None
+    ) -> None:
         self._run(task, "text_encoder", state, component="text_encoder")
+        if checks is not None:
+            checks.outputs(
+                "condition_text",
+                state,
+                self._blocks[task].sub_blocks["text_encoder"].intermediate_outputs,
+            )
 
-    def condition_media(self, task: Task, state: Any) -> None:
+    def condition_media(
+        self, task: Task, state: Any, *, checks: NumericalChecks | None = None
+    ) -> None:
         self._run(task, "vae_encoder", state, component="video_vae")
+        if checks is not None:
+            checks.outputs(
+                "condition_media",
+                state,
+                self._blocks[task].sub_blocks["vae_encoder"].intermediate_outputs,
+            )
 
     def denoise(
         self,
@@ -537,6 +654,7 @@ class OfficialH3Pipeline:
         *,
         on_step: Callable[[int], None],
         cancel: Callable[[], None],
+        checks: NumericalChecks | None = None,
     ) -> ScheduleFacts:
         from diffusers import MiniMaxH3Scheduler
 
@@ -561,6 +679,10 @@ class OfficialH3Pipeline:
         ]
         for name in names:
             self._run_with(task, scoped, name, state)
+            if checks is not None:
+                checks.outputs(
+                    name, state, self._blocks[task].sub_blocks[name].intermediate_outputs
+                )
 
         facts = self._schedule_facts(task)
         loop = self._blocks[task].sub_blocks["denoise.denoise"]
@@ -568,6 +690,14 @@ class OfficialH3Pipeline:
         for index, timestep in enumerate(block_state.timesteps):
             cancel()
             _, block_state = loop.loop_step(scoped, block_state, i=index, t=timestep)
+            if checks is not None:
+                checks.tensors(
+                    f"{_DIT_COMPONENT[task]}.updated.{index}",
+                    [
+                        ("latents", block_state.latents),
+                        ("audio_latents", block_state.audio_latents),
+                    ],
+                )
             on_step(index)
         loop.set_block_state(state, block_state)
         self._run_with(task, scoped, "denoise.after_denoise", state)
@@ -581,9 +711,7 @@ class OfficialH3Pipeline:
         self._run(task, "decode.video", state, component="video_vae")
         return state.videos
 
-    def _run(
-        self, task: Task, name: str, state: Any, *, component: str | None = None
-    ) -> None:
+    def _run(self, task: Task, name: str, state: Any, *, component: str | None = None) -> None:
         pipe = (
             self._pipes[task]
             if component is None
@@ -767,9 +895,7 @@ def _validate_row_timestep_plan(state: Any, expected: TimestepPlan) -> None:
 
     plans = state.row_timestep_plan
     if len(plans) != TRANSFORMER_EVALUATIONS:
-        raise ConformanceError(
-            "official H3 row plan has the wrong length", code="artifact_config"
-        )
+        raise ConformanceError("official H3 row plan has the wrong length", code="artifact_config")
     tags = state.token_tags.detach().long().cpu()
     video_indices = state.video_indices.detach().long().cpu()
     audio_indices = state.audio_indices.detach().long().cpu()

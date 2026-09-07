@@ -41,6 +41,7 @@ from official import (
     MAX_CONDITIONER_VISION_TOKENS,
     SIGMA_GRID_POINTS,
     TRANSFORMER_EVALUATIONS,
+    NumericalChecks,
     OfficialH3Pipeline,
     ReferencePolicyFacts,
     ScheduleFacts,
@@ -128,32 +129,58 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept"):
         return None
 
     @uses_components("text_encoder")
-    def condition_text(self, task: Task, state: Any) -> None:
-        self.pipe.condition_text(task, state)
+    def condition_text(self, task: Task, state: Any, *, checks: NumericalChecks) -> None:
+        checks.component("text_encoder", self.pipe.components["text_encoder"])
+        self.pipe.condition_text(task, state, checks=checks)
 
     @uses_components("audio_vae")
-    def decode_audio(self, task: Task, state: Any) -> tuple[Any, int]:
-        return self.pipe.decode_audio(task, state), int(state.sampling_rate)
+    def decode_audio(
+        self, task: Task, state: Any, *, checks: NumericalChecks | None = None
+    ) -> tuple[Any, int]:
+        if checks is not None:
+            checks.component("audio_vae", self.pipe.components["audio_vae"])
+        audio = self.pipe.decode_audio(task, state)
+        if checks is not None:
+            checks.tensors("decode_audio", [("audio", audio)])
+        return audio, int(state.sampling_rate)
 
     @uses_components("video_vae")
-    def decode_video(self, task: Task, state: Any) -> Any:
-        return self.pipe.decode_video(task, state)
+    def decode_video(self, task: Task, state: Any, *, checks: NumericalChecks | None = None) -> Any:
+        if checks is not None:
+            checks.component("video_vae", self.pipe.components["video_vae"])
+        video = self.pipe.decode_video(task, state)
+        if checks is not None:
+            checks.tensors("decode_video", [("video", video)])
+        return video
 
     @uses_components("video_vae")
-    def condition_fl2va_media(self, state: Any) -> None:
-        self.pipe.condition_media("fl2va", state)
+    def condition_fl2va_media(self, state: Any, *, checks: NumericalChecks) -> None:
+        checks.component("video_vae", self.pipe.components["video_vae"])
+        self.pipe.condition_media("fl2va", state, checks=checks)
 
     @uses_components("video_vae", "audio_vae")
-    def condition_ref2va_media(self, state: Any) -> None:
-        self.pipe.condition_media("ref2va", state)
+    def condition_ref2va_media(self, state: Any, *, checks: NumericalChecks) -> None:
+        for name in ("video_vae", "audio_vae"):
+            checks.component(name, self.pipe.components[name])
+        self.pipe.condition_media("ref2va", state, checks=checks)
 
     @uses_components("fl2va_dit")
-    def sample_fl2va(self, state: Any, *, on_step: Any, cancel: Any) -> ScheduleFacts:
-        return self.pipe.denoise("fl2va", state, on_step=on_step, cancel=cancel)
+    def sample_fl2va(
+        self, state: Any, *, on_step: Any, cancel: Any, checks: NumericalChecks
+    ) -> ScheduleFacts:
+        root = self.pipe.components["fl2va_dit"]
+        checks.component("fl2va_dit", root)
+        with checks.forwards(root, "fl2va_dit"):
+            return self.pipe.denoise("fl2va", state, on_step=on_step, cancel=cancel, checks=checks)
 
     @uses_components("ref2va_dit")
-    def sample_ref2va(self, state: Any, *, on_step: Any, cancel: Any) -> ScheduleFacts:
-        return self.pipe.denoise("ref2va", state, on_step=on_step, cancel=cancel)
+    def sample_ref2va(
+        self, state: Any, *, on_step: Any, cancel: Any, checks: NumericalChecks
+    ) -> ScheduleFacts:
+        root = self.pipe.components["ref2va_dit"]
+        checks.component("ref2va_dit", root)
+        with checks.forwards(root, "ref2va_dit"):
+            return self.pipe.denoise("ref2va", state, on_step=on_step, cancel=cancel, checks=checks)
 
 
 def _decode_keyframe(
@@ -320,12 +347,13 @@ def _finish(
     out: Outputs,
     tel: Telemetry,
     cancel: Any,
+    checks: NumericalChecks | None = None,
 ) -> H3VideoOutput:
     import torch
 
     cancel()
     with tel.stage("decode_audio", overall_range=(0.85, 0.90)):
-        audio, sample_rate = model.decode_audio(task, state)
+        audio, sample_rate = model.decode_audio(task, state, checks=checks)
         release_rate = model.pipe.sample_rate
         if audio.ndim != 3 or int(audio.shape[0]) != 1 or sample_rate != release_rate:
             raise OutputError(
@@ -336,7 +364,7 @@ def _finish(
         waveform = audio[0].to(torch.float32).contiguous().cpu()
     cancel()
     with tel.stage("decode_video", overall_range=(0.90, 0.97)):
-        decoded = model.decode_video(task, state)
+        decoded = model.decode_video(task, state, checks=checks)
         if decoded.ndim != 5 or int(decoded.shape[0]) != 1 or int(decoded.shape[2]) != 3:
             raise OutputError(
                 f"official H3 video decode returned shape {tuple(decoded.shape)}",
@@ -450,6 +478,7 @@ def first_last_frame_to_video(
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
+    checks = NumericalChecks(tel)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
         first = _decode_keyframe(
             payload.first_frame, field="first_frame", decoder=decoder, pipe=model.pipe
@@ -464,10 +493,10 @@ def first_last_frame_to_video(
             generator=model.pipe.generator(view.generator),
         )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
-        model.condition_text("fl2va", state)
+        model.condition_text("fl2va", state, checks=checks)
     if first is not None or last is not None:
         with tel.stage("condition_media", overall_range=(0.08, 0.15)):
-            model.condition_fl2va_media(state)
+            model.condition_fl2va_media(state, checks=checks)
     with tel.stage("denoise", overall_range=(0.15, 0.85)):
         schedule = model.sample_fl2va(
             state,
@@ -475,6 +504,7 @@ def first_last_frame_to_video(
                 TRANSFORMER_EVALUATIONS, stage="denoise", overall_range=(0.15, 0.85)
             ),
             cancel=ctx.raise_if_cancelled,
+            checks=checks,
         )
     return _finish(
         model,
@@ -485,6 +515,7 @@ def first_last_frame_to_video(
         out=out,
         tel=tel,
         cancel=ctx.raise_if_cancelled,
+        checks=checks,
     )
 
 
@@ -501,6 +532,7 @@ def reference_media_to_video(
     ctx.raise_if_cancelled()
     del facts
     view = model.for_request(ctx, seed=payload.seed)
+    checks = NumericalChecks(tel)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
         references = _decode_references(payload.references, decoder=decoder, pipe=model.pipe)
         state = model.pipe.start_ref2va(
@@ -509,9 +541,9 @@ def reference_media_to_video(
             generator=model.pipe.generator(view.generator),
         )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
-        model.condition_text("ref2va", state)
+        model.condition_text("ref2va", state, checks=checks)
     with tel.stage("condition_media", overall_range=(0.08, 0.15)):
-        model.condition_ref2va_media(state)
+        model.condition_ref2va_media(state, checks=checks)
     with tel.stage("denoise", overall_range=(0.15, 0.85)):
         schedule = model.sample_ref2va(
             state,
@@ -519,6 +551,7 @@ def reference_media_to_video(
                 TRANSFORMER_EVALUATIONS, stage="denoise", overall_range=(0.15, 0.85)
             ),
             cancel=ctx.raise_if_cancelled,
+            checks=checks,
         )
     return _finish(
         model,
@@ -529,4 +562,5 @@ def reference_media_to_video(
         out=out,
         tel=tel,
         cancel=ctx.raise_if_cancelled,
+        checks=checks,
     )
