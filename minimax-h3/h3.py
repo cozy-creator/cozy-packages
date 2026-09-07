@@ -100,6 +100,7 @@ class H3VideoOutput(msgspec.Struct):
 
     video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",))]
     continuation_frame: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
+    warnings: list[str] = msgspec.field(default_factory=list)
 
 
 def preflight_reference_media(payload: ReferenceMediaToVideoInput) -> ReferencePolicyFacts:
@@ -391,8 +392,8 @@ def _finish(
             code="output_integrity",
         )
 
-    with tel.stage("gate_pre_encode", overall_range=(0.97, 0.98)):
-        pre_encode_gate(
+    with tel.stage("check_output", overall_range=(0.97, 0.98)):
+        warnings = pre_encode_gate(
             torch,
             pixels=pixels,
             waveform=waveform,
@@ -439,7 +440,7 @@ def _finish(
         audio_sample_digest=hashlib.sha256(audio_array).hexdigest(),
         continuation_pixel_digest=hashlib.sha256(frame_bytes).hexdigest(),
     )
-    return H3VideoOutput(video=video, continuation_frame=continuation)
+    return H3VideoOutput(video=video, continuation_frame=continuation, warnings=warnings)
 
 
 def _rgb8(torch: Any, decoded: Any) -> Any:
