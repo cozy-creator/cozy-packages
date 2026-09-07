@@ -7,7 +7,7 @@
 python_version = "3.12"
 files = [
     "anima", "minimax-h3", "quality-judge", "sdxl", "scripts",
-    "h3-quality-gate/src", "minimax-h3-tools/src",
+    "h3-quality-gate/src", "minimax-h3-tools/src", "checkpoint-repair/src",
 ]
 strict = true
 warn_unreachable = true

@@ -98,6 +98,14 @@ Ref2VA preserves request order and enforces the official product bounds: at most
 3 standalone audio clips, and 12 entries total. Video and audio clips are 2–15 seconds, with at most
 15 seconds per modality in aggregate. A video's embedded soundtrack belongs to that video and does
 not consume the standalone-audio count. Standalone audio cannot be the only reference modality.
+The optional `reference_image_short_edge` selects the image-reference resolution in pixels,
+from 256 to 2048. Diffusers rounds the resulting dimensions to its 32-pixel grid. The default remains 2048. Lower values such as 768 reduce
+reference detail and attention work while preserving the generated video's resolution. For
+example, pass `reference_image_short_edge=768` to `reference_media_to_video`.
+Video and audio references keep their
+existing presentation. The selected value drives both official Diffusers preprocessing and
+the vision-token budget through a request-local configuration view; it never changes the shared
+model configuration. Output fidelity and speed at a smaller size still require measurement.
 Prompts are bounded to 4,096 characters. After generic decode, exact official presentation
 arithmetic also refuses more than 32,768 Qwen vision tokens before entering a component scope; this
 is a conservative capacity fence, not yet the required measured maximum-cell H200 fit proof.
