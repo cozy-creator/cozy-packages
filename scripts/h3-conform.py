@@ -1635,7 +1635,7 @@ def arm_numerics() -> None:
 
     # Real stored FP8 supports conversion but not every observer reduction. Track
     # actual casts so a whole-weight float32 copy cannot pass the bounded proof.
-    class CastSizes(TorchDispatchMode):
+    class CastSizes(TorchDispatchMode):  # type: ignore[misc]  # Torch is absent in static CI.
         def __init__(self) -> None:
             super().__init__()
             self.elements: list[int] = []
