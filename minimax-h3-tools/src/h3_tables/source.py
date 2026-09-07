@@ -8,10 +8,20 @@ from importlib.resources import files
 from typing import Any, Protocol
 
 import msgspec
-from cozy_runtime.author import canonical_json
+from cozy_runtime.author import Loader, Model, canonical_json
 
 from .kernel import H3Topology, removed_keys, table_shapes
 from .plans import TimestepPlan
+
+TARGET_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
+
+
+class H3FullTransformer(Model[object]):
+    """Native H3 source used only for derivation, never inference construction."""
+
+    def load(self, loader: Loader) -> None:
+        del loader
+
 
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _FULL_SPECS_DIGEST = (

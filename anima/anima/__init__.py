@@ -578,7 +578,10 @@ def quantize(
     return QuantizedLanes(fp8=results.get("fp8"), mxfp8=results.get("mxfp8"))
 
 
-# Register after the family Model is defined; operations also imports that capability.
-from .operations import quantize_lane  # noqa: E402
+# The managed export has its own derive-only input; legacy job schemas stay unchanged.
+from . import operations  # noqa: E402
 
-app.job(quantize_lane, weights=(WeightsOutput("model", max_new_bytes=_LANE_BYTES),))
+app.job(
+    operations.quantize, name="quantize-artifact",
+    weights=(WeightsOutput("model", max_new_bytes=_LANE_BYTES),),
+)
