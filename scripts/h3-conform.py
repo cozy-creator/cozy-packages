@@ -517,10 +517,33 @@ def arm_graph_and_dtypes() -> None:
         check(f"{task} omits sibling transformer", absent in components, False)
 
     with torch.device("meta"):
-        transformer = _apply_transformer_dtype(MiniMaxH3Transformer3DModel())
+        transformer = MiniMaxH3Transformer3DModel()
         video_vae = AutoencoderKLMiniMaxH3()
         audio_vae = AutoencoderKLMiniMaxH3Audio()
         wrong_audio_vae = AutoencoderKLMiniMaxH3Audio(sampling_rate=44100)
+    # Serving constructs nonpersistent buffers on CPU while parameters stay meta.
+    # The tiny forward fixture has one frequency (exactly 1), which cannot expose
+    # a lossy BF16 round trip. Exercise the actual 16-frequency release here.
+    transformer.rope = type(transformer.rope)()
+    frequencies = transformer.rope.inv_freq.clone()
+    positions = torch.tensor([[0, 1, 2], [17420, 31, 568]], dtype=torch.float64)
+    expected_rotary = transformer.rope(positions)
+    _apply_transformer_dtype(transformer)
+    check(
+        "all 16 derived RoPE frequencies preserve FP32 values",
+        torch.equal(transformer.rope.inv_freq, frequencies),
+        True,
+    )
+    for name, actual, expected in zip(
+        ("cos", "sin"), transformer.rope(positions), expected_rotary, strict=True
+    ):
+        check(f"{name} preserves long-reference coordinates", torch.equal(actual, expected), True)
+    rounded = frequencies.bfloat16().float()
+    red(
+        "BF16 round trip changes the actual frequency table",
+        torch.equal(rounded, frequencies),
+        True,
+    )
     fl_pipe = MiniMaxH3ModularPipeline(blocks=MiniMaxH3Blocks().get_workflow("fl2va"))
     _validate_model_contract(fl_pipe, transformer, video_vae, audio_vae)
     observe("official scalar model contract")

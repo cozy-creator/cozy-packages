@@ -904,17 +904,13 @@ def _validate_dual_dit_topology(dits: Mapping[Task, Any]) -> None:
 
 def _apply_transformer_dtype(transformer: Any) -> Any:
     """Reproduce Diffusers' mixed FULL compute policy on Runtime destinations."""
-    import warnings
-
     import torch
 
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", message="There are modules in MiniMaxH3Transformer3DModel.*"
-        )
-        transformer.to(dtype=torch.bfloat16)
-    for name in transformer._keep_in_fp32_modules:
-        getattr(transformer, name).to(dtype=torch.float32)
+    # Cast each root directly to its final dtype. In particular, RoPE frequencies
+    # are real config-derived buffers: BF16 followed by FP32 cannot restore them.
+    for name, component in transformer.named_children():
+        dtype = torch.float32 if name in transformer._keep_in_fp32_modules else torch.bfloat16
+        component.to(dtype=dtype)
     return transformer.eval()
 
 
