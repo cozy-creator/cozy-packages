@@ -27,12 +27,17 @@ class Input(msgspec.Struct, forbid_unknown_fields=True):
     cycle: bool = True
 
 
+class TensorObservation(msgspec.Struct):
+    name: str
+    value: str
+
+
 class Result(msgspec.Struct):
     video: VideoAsset
     source: ImageAsset
     reconstruction: ImageAsset
     grid_peak_ratio: float
-    hashes: dict[str, str]
+    hashes: list[TensorObservation]
 
 
 def encode(vae: Any, pixels: Any, frames: int) -> Any:
@@ -148,5 +153,5 @@ def roundtrip(
         source=out.save_image(ImageFrame(1344, 768, canvas.tobytes()), format="png"),
         reconstruction=out.save_image(ImageFrame(1344, 768, bytes(rgb[-1].numpy())), format="png"),
         grid_peak_ratio=float(facts.grid_peak_ratio),
-        hashes=hashes,
+        hashes=[TensorObservation(name, value) for name, value in hashes.items()],
     )
