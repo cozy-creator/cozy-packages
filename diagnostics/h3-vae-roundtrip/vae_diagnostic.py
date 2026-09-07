@@ -33,9 +33,9 @@ class TensorObservation(msgspec.Struct):
 
 
 class Result(msgspec.Struct):
-    video: VideoAsset
-    source: ImageAsset
-    reconstruction: ImageAsset
+    video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",))]
+    source: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
+    reconstruction: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
     grid_peak_ratio: float
     hashes: list[TensorObservation]
 
