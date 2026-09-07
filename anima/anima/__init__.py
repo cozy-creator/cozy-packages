@@ -576,3 +576,9 @@ def quantize(
         for lane in payload.lanes
     }
     return QuantizedLanes(fp8=results.get("fp8"), mxfp8=results.get("mxfp8"))
+
+
+# Register after the family Model is defined; operations also imports that capability.
+from .operations import quantize_lane  # noqa: E402
+
+app.job(quantize_lane, weights=(WeightsOutput("model", max_new_bytes=_LANE_BYTES),))
