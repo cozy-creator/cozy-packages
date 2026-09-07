@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from importlib.resources import files
-from typing import Literal
+from typing import Literal, cast
 
 import msgspec
 from cozy_runtime.author import (
@@ -126,3 +126,62 @@ async def quantize(
             )
             tel.log("quantization measurement", component=component, **msgspec.to_builtins(stats))
         return transaction.commit().artifact
+
+
+@invocable(memoize=True)
+async def precompute_adaln(
+    ctx: Context,
+    *,
+    model: ModelArtifact,
+    timesteps: int = 50,
+    generating_model: ModelArtifact | None = None,
+) -> ModelArtifact:
+    """Return the pruned H3 model using shared tables for approved 30/40/50-step schedules.
+
+    This orchestration job has inert artifact inputs and owns no GPU while children run.
+    Retabling an already pruned model requires its full generating model. The current
+    approved union bank supports all three schedules and is shared across body encodings.
+    """
+    from .adaln_operations import _plan, apply_adaln, compute_adaln_tables, select_adaln_weights
+
+    ctx.raise_if_cancelled()
+    if (
+        type(timesteps) is not int
+        or timesteps not in _plan("fl2va").steps
+        or timesteps not in _plan("ref2va").steps
+    ):
+        raise UnsupportedInput(
+            "H3 currently supports approved 30, 40 and 50 step schedules", code="adaln_plan"
+        )
+    # Managed proxies carry exact ModelArtifact values; the owner injects the bound
+    # model only into each child implementation. Generated caller interfaces express this.
+    generator = cast(H3FullTransformer, generating_model or model)
+    selected_fl = await select_adaln_weights(source=generator, task="fl2va")
+    selected_ref = await select_adaln_weights(source=generator, task="ref2va")
+    if selected_fl.ready and selected_ref.ready:
+        if generating_model is not None:
+            raise UnsupportedInput(
+                "generating_model must contain the original dynamic AdaLN weights",
+                code="adaln_generating_weights",
+            )
+        return model
+    if selected_fl.projection is None or selected_ref.projection is None:
+        raise UnsupportedInput(
+            "H3 source does not contain both tasks' generating weights",
+            code="adaln_generating_weights",
+        )
+    fl = await compute_adaln_tables(
+        source=cast(H3FullTransformer, selected_fl.projection),
+        task="fl2va",
+        plan_digest=_plan("fl2va").digest,
+    )
+    ref = await compute_adaln_tables(
+        source=cast(H3FullTransformer, selected_ref.projection),
+        task="ref2va",
+        plan_digest=_plan("ref2va").digest,
+    )
+    return await apply_adaln(
+        source=cast(H3FullTransformer, model),
+        fl2va=cast(H3FullTransformer, fl),
+        ref2va=cast(H3FullTransformer, ref),
+    )

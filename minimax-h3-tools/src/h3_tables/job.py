@@ -36,6 +36,7 @@ from cozy_runtime.derive.quantization import (
     quantize_component_into,
 )
 
+from . import adaln_operations as _adaln_operations
 from .kernel import H3Topology, removed_keys, source_shapes, table_bytes, table_shapes
 from .kernel import precompute_tables as compute_tables
 from .model_config import (
@@ -43,6 +44,7 @@ from .model_config import (
     dual_full_config,
     parse_production_config,
 )
+from .operations import precompute_adaln
 from .order import current_order
 from .order import full_order as _full_order
 from .plans import TimestepPlan, parse_declared_plan
@@ -168,22 +170,13 @@ def _compute_table_parts(
 
     def read(name: str, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
         nonlocal source_bytes
-        value, length = _read_source(
-            transaction, source, source_component, name, dtype, shape
-        )
+        value, length = _read_source(transaction, source, source_component, name, dtype, shape)
         source_bytes += length
         return value
 
     def write(name: str, value: torch.Tensor) -> None:
         nonlocal written
-        raw = (
-            value.detach()
-            .to(device="cpu")
-            .contiguous()
-            .view(torch.uint16)
-            .numpy()
-            .tobytes()
-        )
+        raw = value.detach().to(device="cpu").contiguous().view(torch.uint16).numpy().tobytes()
         write_part(name, raw)
         written += len(raw)
 
@@ -235,12 +228,8 @@ def _full_targets() -> dict[str, WeightsTarget]:
             source_component="text_encoder",
             drop=text_source_only_keys(),
         ),
-        "video_vae": WeightsTarget(
-            source="shared", source_component="video_vae"
-        ),
-        "audio_vae": WeightsTarget(
-            source="shared", source_component="audio_vae"
-        ),
+        "video_vae": WeightsTarget(source="shared", source_component="video_vae"),
+        "audio_vae": WeightsTarget(source="shared", source_component="audio_vae"),
     }
 
 
@@ -266,7 +255,6 @@ def _select_full_targets(
         )
         for component, target in targets.items()
     }
-
 
 
 def _assembly_result(receipt: WeightsReceipt) -> AssemblyResult:
@@ -295,9 +283,7 @@ def assemble_full(
         "model",
         sources=sources,
         targets=_select_full_targets(artifacts, sources),
-        configs={
-            "model": WeightsConfig(data=config, length=len(config))
-        },
+        configs={"model": WeightsConfig(data=config, length=len(config))},
         order=_full_order(sections, current.rows),
     )
     return _assembly_result(receipt)
@@ -580,9 +566,7 @@ def _retable_targets(
         topology = H3Topology.from_config(sections[section])
         keys = {key for owner, key in present if owner == component}
         if not set(tables[task]) <= keys or set(removed_keys(topology)) & keys:
-            raise ValueError(
-                f"{component} is not an AdaLN-pruned source carrying table rows only"
-            )
+            raise ValueError(f"{component} is not an AdaLN-pruned source carrying table rows only")
         for key, (dtype, shape) in source_shapes(topology).items():
             tensor = full_present.get((component, key))
             if (
@@ -639,22 +623,26 @@ def retable(
     )
     order = current_order(_asset("whole-order.json"))
     bank_order = tuple(
-        row
-        for row in order.rows
-        if row[0] in bank_targets and row[1] in bank_targets[row[0]].add
+        row for row in order.rows if row[0] in bank_targets and row[1] in bank_targets[row[0]].add
     )
     source_bytes = written = 0
     receipts: dict[str, WeightsReceipt] = {}
     with ExitStack() as stack:
         bank = stack.enter_context(
             artifacts.open(
-                "tables", sources={"full": full}, targets=bank_targets, configs=config,
+                "tables",
+                sources={"full": full},
+                targets=bank_targets,
+                configs=config,
                 order=bank_order,
             )
         )
         retabled = stack.enter_context(
             artifacts.open(
-                "adaln-pruned", sources={"pruned": pruned}, targets=targets, configs=config,
+                "adaln-pruned",
+                sources={"pruned": pruned},
+                targets=targets,
+                configs=config,
                 order=order.rows,
             )
         )
@@ -701,6 +689,30 @@ def retable(
 from . import operations  # noqa: E402
 
 app.job(
-    operations.quantize, name="quantize-artifact",
+    operations.quantize,
+    name="quantize-artifact",
     weights=(WeightsOutput("model", max_new_bytes=MAX_QUANTIZED_BYTES),),
+)
+
+
+
+app.job(precompute_adaln, name="precompute-adaln")
+app.job(
+    _adaln_operations.select_adaln_weights,
+    name="select-adaln-weights",
+    weights=(WeightsOutput("model", 0),),
+)
+app.job(
+    _adaln_operations.compute_adaln_tables,
+    name="compute-adaln-tables",
+    weights=(WeightsOutput("model", TABLE_BYTES),),
+)
+app.job(
+    _adaln_operations.apply_adaln,
+    name="apply-adaln",
+    weights=(
+        WeightsOutput("model", 0),
+        WeightsOutput("fl2va-weights", 0),
+        WeightsOutput("ref2va-weights", 0),
+    ),
 )
