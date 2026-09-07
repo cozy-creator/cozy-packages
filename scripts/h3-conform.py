@@ -36,6 +36,7 @@ from official import (  # noqa: E402
     FRAMES,
     MAX_CONDITIONER_VISION_TOKENS,
     SIGMA_GRID_POINTS,
+    NumericalChecks,
     ScheduleFacts,
     _aligned_soundtrack,
     _apply_transformer_dtype,
@@ -184,11 +185,13 @@ def arm_producer_construction_order() -> None:
         )
         check(
             f"{mode} producer order equals actual serving constructor ({len(actual)} rows)",
-            expected == actual, True,
+            expected == actual,
+            True,
         )
         if mode == "full":
             for component, section in (
-                ("fl2va_dit", "transformer"), ("ref2va_dit", "transformer_ref")
+                ("fl2va_dit", "transformer"),
+                ("ref2va_dit", "transformer_ref"),
             ):
                 state = pipeline.components[component].state_dict()
                 specs = official_full_specs(sections[section])
@@ -200,9 +203,10 @@ def arm_producer_construction_order() -> None:
                 )
                 for key, (dtype, shape) in specs.items():
                     value = state[key]
-                    if tuple(value.shape) != shape or value.dtype != {
-                        "bf16": torch.bfloat16, "f32": torch.float32
-                    }[dtype]:
+                    if (
+                        tuple(value.shape) != shape
+                        or value.dtype != {"bf16": torch.bfloat16, "f32": torch.float32}[dtype]
+                    ):
                         raise AssertionError(
                             f"ordered full spec geometry changed: {component}/{key}"
                         )
@@ -947,6 +951,35 @@ def arm_adaln_pruned() -> None:
         "return_dict": False,
     }
     full_output = full(**forward)
+    numerical = _NumericalTelemetry()
+    checks = NumericalChecks(cast(Any, numerical))
+    checks.component("actual_h3", full)
+    with checks.forwards(full, "actual_h3"):
+        checked_output = full(**forward)
+        check(
+            "actual Diffusers H3 output PyTree is checked without changing values",
+            all(torch.equal(a, b) for a, b in zip(full_output, checked_output, strict=True)),
+            True,
+        )
+        first = next(row for row in numerical.rows if row.get("stage") == "actual_h3.prediction.0")
+        check("actual H3 tuple exposes both predictions", first["tensors"], 2)
+        saved = full.proj_in.bias.detach().clone()
+        try:
+            with torch.no_grad():
+                full.proj_in.bias.fill_(float("nan"))
+            refusal(
+                "a later actual H3 prediction refuses immediately",
+                lambda: full(**forward),
+                "numerical_nonfinite",
+            )
+        finally:
+            with torch.no_grad():
+                full.proj_in.bias.copy_(saved)
+    check(
+        "actual H3 diagnostic hooks close after refusal",
+        (len(full._forward_pre_hooks), len(full._forward_hooks)),
+        (0, 0),
+    )
     pruned_output = pruned(**forward)
     check(
         "the inherited forward changes only the AdaLN-pruned modulation source",
@@ -1203,12 +1236,12 @@ def arm_media() -> None:
         pipe = SimpleNamespace(sample_rate=32000)
 
         @staticmethod
-        def decode_audio(task: Any, state: Any) -> tuple[Any, int]:
+        def decode_audio(task: Any, state: Any, *, checks: Any = None) -> tuple[Any, int]:
             del task
             return state.audio, 32000
 
         @staticmethod
-        def decode_video(task: Any, state: Any) -> Any:
+        def decode_video(task: Any, state: Any, *, checks: Any = None) -> Any:
             del task
             return state.video
 
@@ -1338,6 +1371,152 @@ class _Telemetry:
         del name, value
 
 
+class _NumericalTelemetry:
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+
+    def log(self, message: str, **fields: Any) -> None:
+        self.rows.append({"message": message, **fields})
+
+
+def arm_numerics() -> None:
+    import torch
+    from diffusers import MiniMaxH3Scheduler
+    from diffusers.modular_pipelines.minimax_h3.denoise import MiniMaxH3LoopSchedulerStep
+
+    print("\n== first non-finite numerical boundary ==")
+    telemetry = _NumericalTelemetry()
+    checks = NumericalChecks(cast(Any, telemetry))
+    original = torch.arange(12, dtype=torch.float32).reshape(3, 4).T
+    checks.tensors("condition_text", [("prompt_embeds", original)], required=True)
+    check(
+        "noncontiguous conditioning stays unchanged",
+        original.tolist(),
+        torch.arange(12).reshape(3, 4).T.tolist(),
+    )
+    check("absmax names its source", telemetry.rows[-1]["absmax_tensor"], "prompt_embeds")
+    large = torch.zeros(16 * 1024 * 1024 + 1, dtype=torch.float32)
+    large[-1] = float("nan")
+    refusal(
+        "large tensors are checked in bounded chunks",
+        lambda: checks.tensors("large", [("weight", large)], required=True),
+        "numerical_nonfinite",
+    )
+    check(
+        "observed scan chunk is bounded",
+        telemetry.rows[-1]["chunk_elements"] <= 16 * 1024 * 1024,
+        True,
+    )
+    refusal(
+        "empty output is not called validated",
+        lambda: checks.tensors("empty", [("x", None)], required=True),
+        "numerical_uninspectable",
+    )
+    refusal(
+        "opaque output cannot hide tensors",
+        lambda: checks.tensors("opaque", [("x", SimpleNamespace(tensor=original))], required=True),
+        "numerical_uninspectable",
+    )
+
+    module = torch.nn.Linear(4, 4)
+    module.register_buffer("derived_rotary", torch.tensor([float("nan")]), persistent=False)
+    refusal(
+        "nonpersistent resident buffer is inspected",
+        lambda: checks.component("rotary", module),
+        "numerical_nonfinite",
+    )
+    check("bad resident buffer is named", telemetry.rows[-1]["tensor"], "derived_rotary")
+    module.derived_rotary.fill_(1)
+    checks.component("rotary", module)
+
+    value = torch.ones(1, 4)
+    baseline = module(value)
+    with checks.forwards(module, "linear"):
+        check("first checked forward is exact", torch.equal(module(value), baseline), True)
+        check("second checked forward is exact", torch.equal(module(value), baseline), True)
+    check(
+        "each forward is checked",
+        [
+            r["stage"]
+            for r in telemetry.rows
+            if str(r.get("stage", "")).startswith("linear.prediction")
+        ],
+        ["linear.prediction.0", "linear.prediction.1"],
+    )
+
+    def bad_input() -> None:
+        with checks.forwards(module, "bad_input"):
+            module(torch.full((1, 4), float("inf")))
+
+    refusal("invalid input refuses before forward", bad_input, "numerical_nonfinite")
+    check(
+        "input refusal removes both hooks",
+        (len(module._forward_pre_hooks), len(module._forward_hooks)),
+        (0, 0),
+    )
+
+    def fail_forward(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("existing forward refusal")
+
+    foreign = module.register_forward_pre_hook(fail_forward)
+    try:
+        refusal("original forward exception survives", bad_input, "RuntimeError")
+        check(
+            "only pre-existing hook remains",
+            (len(module._forward_pre_hooks), len(module._forward_hooks)),
+            (1, 0),
+        )
+    finally:
+        foreign.remove()
+
+    original_register = module.register_forward_hook
+    module.register_forward_hook = fail_forward
+    try:
+        refusal("second hook registration failure cleans first", bad_input, "RuntimeError")
+        check(
+            "registration failure leaves no diagnostic hooks",
+            (len(module._forward_pre_hooks), len(module._forward_hooks)),
+            (0, 0),
+        )
+    finally:
+        module.register_forward_hook = original_register
+
+    # Execute the real official scheduler with finite extremes: its update overflows.
+    video_scheduler, audio_scheduler = MiniMaxH3Scheduler(), MiniMaxH3Scheduler()
+    for scheduler in (video_scheduler, audio_scheduler):
+        scheduler.set_timesteps(30)
+    maximum = torch.finfo(torch.float32).max
+    state = SimpleNamespace(
+        num_condition_video_rows=0,
+        num_condition_audio_rows=0,
+        noise_pred=torch.full((1, 1, 1), maximum),
+        audio_noise_pred=torch.zeros((1, 1, 1)),
+        latents=torch.full((1, 1), maximum),
+        audio_latents=torch.zeros((1, 1)),
+        audio_timesteps=audio_scheduler.timesteps,
+    )
+    checks.tensors(
+        "scheduler.predictions",
+        [("video", state.noise_pred), ("audio", state.audio_noise_pred)],
+        required=True,
+    )
+    MiniMaxH3LoopSchedulerStep()(
+        SimpleNamespace(scheduler=video_scheduler, audio_scheduler=audio_scheduler),
+        state,
+        i=0,
+        t=video_scheduler.timesteps[0],
+    )
+    refusal(
+        "actual scheduler overflow stops at updated latents",
+        lambda: checks.tensors(
+            "ref2va_dit.updated.0",
+            [("latents", state.latents), ("audio_latents", state.audio_latents)],
+            required=True,
+        ),
+        "numerical_nonfinite",
+    )
+
+
 def arm_output_gates() -> None:
     import torch
 
@@ -1432,8 +1611,6 @@ def arm_interface() -> None:
     check("H3 permits Runtime encoded linear leaves", package.H3Model.__encoded_leaves__, "accept")
 
 
-
-
 ARMS = {
     "producer-configs": arm_producer_configs,
     "producer-construction-order": arm_producer_construction_order,
@@ -1444,6 +1621,7 @@ ARMS = {
     "processor": arm_processor,
     "media": arm_media,
     "gates": arm_output_gates,
+    "numerics": arm_numerics,
     "interface": arm_interface,
 }
 
