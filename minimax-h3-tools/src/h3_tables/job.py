@@ -714,3 +714,9 @@ def retable(
         written,
         source_bytes,
     )
+
+
+# Register after defining the source capability used by the managed operation.
+from .operations import quantize_lane  # noqa: E402
+
+app.job(quantize_lane, weights=(WeightsOutput("model", max_new_bytes=MAX_QUANTIZED_BYTES),))
