@@ -12,9 +12,10 @@ import hashlib
 import json
 import math
 import struct
+import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from functools import lru_cache
 from itertools import pairwise
@@ -408,21 +409,101 @@ def reference_video_vision_tokens(width: int, height: int, duration: Fraction) -
     return temporal_blocks * spatial_tokens
 
 
-class NumericalChecks:
-    """Request-local, bounded observations; no tensor is replaced or modified."""
+def _parked(tensor: Any) -> bool:
+    """Runtime parks an evicted or paged-out weight on ``meta`` or in a zero-byte storage.
+    A check claims only the resident values it counted, never unread storage."""
+    return bool(tensor.is_meta or (tensor.numel() and not tensor.untyped_storage().nbytes()))
 
-    def __init__(self, telemetry: Telemetry) -> None:
+
+def _inspectable(tensor: Any) -> bool:
+    return bool((tensor.is_floating_point() or tensor.is_complex()) and not _parked(tensor))
+
+
+class ResidentWeights:
+    """Finite-weight verdicts that live exactly as long as the bytes they describe.
+
+    Weights are immutable once filled, so their scan runs once per fill rather than once
+    per request (h3a-016). A verdict is keyed on the storage object itself, held weakly:
+    eviction frees the storage and its verdict with it, and a re-stage fills a fresh
+    storage that has none. The fill writes in place, which bumps the tensor's version
+    counter, so a paged block refilled into a storage that was resized rather than
+    replaced is rescanned too. Nothing here holds a strong reference to a weight.
+    """
+
+    def __init__(self) -> None:
+        self._verdicts: weakref.WeakKeyDictionary[Any, tuple[int, int, int]] = (
+            weakref.WeakKeyDictionary()
+        )
+
+    @staticmethod
+    def _fill(tensor: Any) -> tuple[Any, tuple[int, int, int]]:
+        storage = tensor.untyped_storage()
+        return storage, (storage.data_ptr(), storage.nbytes(), tensor._version)
+
+    def verified(self, tensor: Any) -> bool:
+        storage, fill = self._fill(tensor)
+        return self._verdicts.get(storage) == fill
+
+    def record(self, tensor: Any) -> None:
+        storage, fill = self._fill(tensor)
+        self._verdicts[storage] = fill
+
+
+@dataclass
+class _Observation:
+    """One stage's queued device reductions; nothing is read until it settles."""
+
+    stage: str
+    tensors: int = 0
+    elements: int = 0
+    parked: int = 0
+    chunks: list[tuple[str, int]] = field(default_factory=list)
+    nonfinite: list[Any] = field(default_factory=list)
+    absmax: list[Any] = field(default_factory=list)
+
+
+class NumericalChecks:
+    """Request-local, bounded observations; no tensor is replaced or modified.
+
+    A check queues its reductions on the device and reads them in one sync: at once for
+    conditioning, decode and resident weights, and once after the denoise loop for the
+    per-step hooks (``defer=True``), which used to drain the stream on every chunk of every
+    step. Deferral changes nothing the customer can see: every step's tensors are still
+    inspected, the verdict is read before any decode, and the first non-finite stage in
+    step order is the one named.
+    """
+
+    def __init__(self, telemetry: Telemetry, resident: ResidentWeights | None = None) -> None:
         self.telemetry = telemetry
-        self.checked_components: set[str] = set()
+        self.resident = ResidentWeights() if resident is None else resident
+        self._pending: list[_Observation] = []
 
     def tensors(
-        self, stage: str, values: Sequence[tuple[str, Any]], *, required: bool = False
+        self,
+        stage: str,
+        values: Sequence[tuple[str, Any]],
+        *,
+        required: bool = False,
+        defer: bool = False,
     ) -> None:
+        observation = self._observe(stage, values, required=required)
+        if defer:
+            self._pending.append(observation)
+        else:
+            self._settle([observation])
+
+    def settle(self) -> None:
+        """Read every deferred observation in order: one sync for a whole denoise loop."""
+        pending, self._pending = self._pending, []
+        self._settle(pending)
+
+    def _observe(
+        self, stage: str, values: Sequence[tuple[str, Any]], *, required: bool
+    ) -> _Observation:
         import torch
         from torch.utils._pytree import keystr, tree_flatten_with_path
 
-        count, elements, parked = 0, 0, 0
-        maximum, maximum_name = -1.0, ""
+        observation = _Observation(stage)
         with torch.no_grad():
             for name, value in values:
                 leaves, _ = tree_flatten_with_path(value)
@@ -440,12 +521,10 @@ class NumericalChecks:
                         continue
                     if not (tensor.is_floating_point() or tensor.is_complex()):
                         continue
-                    if tensor.is_meta or (tensor.numel() and not tensor.untyped_storage().nbytes()):
-                        # Runtime may have parked a paged weight. This check only claims
-                        # the resident values counted below, never unread storage.
-                        parked += 1
+                    if _parked(tensor):
+                        observation.parked += 1
                         continue
-                    count += 1
+                    observation.tensors += 1
                     # Stored FP8 reductions are not supported on every backend.
                     # Widen only this bounded observation, never the weight itself.
                     widen = tensor.element_size() == 1
@@ -458,53 +537,92 @@ class NumericalChecks:
                             chunks.extend(part.split(max(1, part.shape[axis] // 2), dim=axis))
                             continue
                         size = part.numel()
-                        elements += size
+                        observation.elements += size
                         if not size:
                             continue
                         if widen:
                             part = part.float()
-                        bad = int((~torch.isfinite(part)).sum().item())
-                        if bad:
-                            self.telemetry.log(
-                                "h3 non-finite tensor",
-                                stage=stage,
-                                tensor=label[:512],
-                                chunk_elements=size,
-                                chunk_nonfinite=bad,
-                            )
-                            raise OutputError(
-                                f"non-finite tensor at {stage}/{label}: "
-                                f"{bad} of {size} values in the checked chunk",
-                                code="numerical_nonfinite",
-                            )
-                        observed = float(part.abs().amax().item())
-                        if observed > maximum:
-                            maximum, maximum_name = observed, label
-        if required and not elements:
+                        observation.chunks.append((label, size))
+                        observation.nonfinite.append((~torch.isfinite(part)).sum())
+                        observation.absmax.append(part.abs().amax().float())
+        if required and not observation.elements:
             raise OutputError(
                 f"no resident floating tensor values to inspect at {stage}",
                 code="numerical_uninspectable",
             )
-        self.telemetry.log(
-            "h3 numerical check",
-            stage=stage,
-            status="finite_resident" if elements else "no_resident_float_values",
-            tensors=count,
-            elements=elements,
-            parked_tensors=parked,
-            absmax=max(maximum, 0.0),
-            absmax_tensor=maximum_name[:512],
-        )
+        return observation
+
+    def _settle(self, observations: list[_Observation]) -> None:
+        counts = self._read([count for o in observations for count in o.nonfinite])
+        maxima = self._read([maximum for o in observations for maximum in o.absmax])
+        position = 0
+        for observation in observations:
+            maximum, maximum_name = -1.0, ""
+            for label, size in observation.chunks:
+                bad, observed = int(counts[position]), float(maxima[position])
+                position += 1
+                if bad:
+                    self.telemetry.log(
+                        "h3 non-finite tensor",
+                        stage=observation.stage,
+                        tensor=label[:512],
+                        chunk_elements=size,
+                        chunk_nonfinite=bad,
+                    )
+                    raise OutputError(
+                        f"non-finite tensor at {observation.stage}/{label}: "
+                        f"{bad} of {size} values in the checked chunk",
+                        code="numerical_nonfinite",
+                    )
+                if observed > maximum:
+                    maximum, maximum_name = observed, label
+            self.telemetry.log(
+                "h3 numerical check",
+                stage=observation.stage,
+                status="finite_resident" if observation.elements else "no_resident_float_values",
+                tensors=observation.tensors,
+                elements=observation.elements,
+                parked_tensors=observation.parked,
+                absmax=max(maximum, 0.0),
+                absmax_tensor=maximum_name[:512],
+            )
+
+    @staticmethod
+    def _read(scalars: list[Any]) -> list[float]:
+        """Copy queued scalars back in one sync per device, whatever mix they sit on."""
+        import torch
+
+        values: dict[int, float] = {}
+        by_device: dict[Any, list[int]] = {}
+        for index, scalar in enumerate(scalars):
+            by_device.setdefault(scalar.device, []).append(index)
+        for indices in by_device.values():
+            read = torch.stack([scalars[index] for index in indices]).tolist()
+            values.update(zip(indices, read, strict=True))
+        return [values[index] for index in range(len(scalars))]
 
     def component(self, name: str, module: Any) -> None:
-        if name in self.checked_components:
+        """Refuse non-finite resident weights before the first forward after a fill.
+
+        Derived rotary/config buffers are not checkpoint payloads but can poison the same
+        computation, so nonpersistent buffers are inspected under their exact names.
+        """
+        values = [*module.named_parameters(), *module.named_buffers()]
+        resident = [(label, tensor) for label, tensor in values if _inspectable(tensor)]
+        pending = [
+            (label, tensor) for label, tensor in resident if not self.resident.verified(tensor)
+        ]
+        if resident and not pending:
+            self.telemetry.log(
+                "h3 numerical check",
+                stage=f"resident.{name}",
+                status="verified_fill",
+                tensors=len(resident),
+            )
             return
-        values = list(module.named_parameters())
-        # Derived rotary/config buffers are not checkpoint payloads, but can poison the
-        # same computation. Include nonpersistent buffers while naming exact tensors.
-        values.extend(module.named_buffers())
-        self.tensors(f"resident.{name}", values)
-        self.checked_components.add(name)
+        self.tensors(f"resident.{name}", values if len(pending) == len(resident) else pending)
+        for _, tensor in pending:
+            self.resident.record(tensor)
 
     def outputs(self, stage: str, state: Any, outputs: Any, *, required: bool = False) -> None:
         self.tensors(
@@ -515,27 +633,43 @@ class NumericalChecks:
 
     @contextmanager
     def forwards(self, module: Any, component: str) -> Iterator[None]:
+        """Observe every forward of one module; the verdicts are read when the block closes.
+
+        A body that raises discards its pending observations with the attempt.
+        """
         handles: list[Any] = []
         step = 0
 
         def before(_module: Any, args: Any, kwargs: Any) -> None:
             self.tensors(
-                f"{component}.input.{step}", [("args", args), ("kwargs", kwargs)], required=True
+                f"{component}.input.{step}",
+                [("args", args), ("kwargs", kwargs)],
+                required=True,
+                defer=True,
             )
 
         def after(_module: Any, _args: Any, _kwargs: Any, output: Any) -> None:
             nonlocal step
             if output is not None:
-                self.tensors(f"{component}.prediction.{step}", [("output", output)], required=True)
+                self.tensors(
+                    f"{component}.prediction.{step}",
+                    [("output", output)],
+                    required=True,
+                    defer=True,
+                )
                 step += 1
 
         try:
             handles.append(module.register_forward_pre_hook(before, with_kwargs=True))
             handles.append(module.register_forward_hook(after, with_kwargs=True, always_call=True))
             yield
+        except BaseException:
+            self._pending.clear()
+            raise
         finally:
             for handle in handles:
                 handle.remove()
+        self.settle()
 
 
 class _ScopedPipeline:
@@ -635,6 +769,8 @@ class OfficialH3Pipeline:
             "video_vae": video_vae,
             "audio_vae": audio_vae,
         }
+        # Finite-weight verdicts outlive requests exactly as the resident bytes do.
+        self.resident = ResidentWeights()
         # The one release audio clock, read off the contract-checked artifact config
         # rather than respelled by callers.
         self.sample_rate = int(audio_vae.config.sampling_rate)
@@ -861,8 +997,15 @@ class OfficialH3Pipeline:
                         ("audio_latents", block_state.audio_latents),
                     ],
                     required=True,
+                    defer=True,
                 )
             on_step(index)
+        if checks is not None:
+            # One read for every step's inputs, predictions and updates, before any decode.
+            # Waiting loses nothing: the official update is an affine blend of the current
+            # latents and the prediction with no clamp, so a non-finite value that enters at
+            # step k is in every later latent, and the first offending stage is still named.
+            checks.settle()
         loop.set_block_state(state, block_state)
         self._run_with(task, scoped, "denoise.after_denoise", state)
         return facts

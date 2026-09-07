@@ -503,7 +503,7 @@ def first_last_frame_to_video(
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
-    checks = NumericalChecks(tel)
+    checks = NumericalChecks(tel, model.pipe.resident)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
         first = _decode_keyframe(
             payload.first_frame, field="first_frame", decoder=decoder, pipe=model.pipe
@@ -558,7 +558,7 @@ def reference_media_to_video(
     ctx.raise_if_cancelled()
     del facts
     view = model.for_request(ctx, seed=payload.seed)
-    checks = NumericalChecks(tel)
+    checks = NumericalChecks(tel, model.pipe.resident)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
         references = _decode_references(
             payload.references,
