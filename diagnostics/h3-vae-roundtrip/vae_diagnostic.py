@@ -40,15 +40,13 @@ class Result(msgspec.Struct):
     hashes: list[TensorObservation]
 
 
-def encode(vae: Any, pixels: Any, frames: int) -> Any:
+def encode(h3_pipe: Any, pixels: Any, frames: int) -> Any:
     import torch
-    from diffusers import MiniMaxH3ModularPipeline
-    from diffusers.modular_pipelines.minimax_h3.decoders import MiniMaxH3VideoDecodeStep
     from diffusers.modular_pipelines.minimax_h3.encoders import encode_vae_condition
 
+    vae = h3_pipe.components["video_vae"]
+    pipe = h3_pipe._pipes["t2va"]
     assert all(p.dtype == torch.float32 for p in vae.parameters())
-    pipe = MiniMaxH3ModularPipeline(blocks=MiniMaxH3VideoDecodeStep())
-    pipe.update_components(vae=vae)
     clip = pixels.permute(2, 0, 1)[None, :, None].expand(-1, -1, frames, -1, -1)
     with torch.no_grad():
         latents = encode_vae_condition(
@@ -58,15 +56,15 @@ def encode(vae: Any, pixels: Any, frames: int) -> Any:
     return latents
 
 
-def decode(vae: Any, latents: Any) -> Any:
+def decode(h3_pipe: Any, latents: Any) -> Any:
     import torch
-    from diffusers import MiniMaxH3ModularPipeline
-    from diffusers.modular_pipelines.minimax_h3.decoders import MiniMaxH3VideoDecodeStep
+    from diffusers.modular_pipelines.modular_pipeline import PipelineState
 
-    pipe = MiniMaxH3ModularPipeline(blocks=MiniMaxH3VideoDecodeStep())
-    pipe.update_components(vae=vae)
+    state = PipelineState()
+    state.set("latents", latents.to(h3_pipe.components["video_vae"].device))
+    state.set("output_type", "pt")
     with torch.no_grad():
-        return pipe(latents=latents, output_type="pt", output="videos")
+        return h3_pipe.decode_video("fl2va", state)
 
 
 def fingerprints(component: str, module: Any) -> dict[str, str]:
@@ -81,7 +79,7 @@ class VaeModel(H3Model):
     def encode_probe(self, pixels: Any, frames: int) -> tuple[Any, dict[str, str]]:
         vae = self.pipe.components["video_vae"]
         hashes = fingerprints("video_vae", vae)
-        return encode(vae, pixels, frames), hashes
+        return encode(self.pipe, pixels, frames), hashes
 
     @uses_components("ref2va_dit")
     def inspect_dit(self) -> dict[str, str]:
@@ -90,13 +88,13 @@ class VaeModel(H3Model):
     @uses_components("video_vae")
     def decode_probe(self, latents: Any) -> tuple[Any, dict[str, str]]:
         vae = self.pipe.components["video_vae"]
-        return decode(vae, latents), fingerprints("video_vae", vae)
+        return decode(self.pipe, latents), fingerprints("video_vae", vae)
 
     @uses_components("video_vae")
     def resident_probe(self, pixels: Any, frames: int) -> tuple[Any, dict[str, str]]:
         vae = self.pipe.components["video_vae"]
         before = fingerprints("video_vae", vae)
-        video = decode(vae, encode(vae, pixels, frames))
+        video = decode(self.pipe, encode(self.pipe, pixels, frames))
         after = fingerprints("video_vae", vae)
         return video, {
             **{"before/" + k: v for k, v in before.items()},
@@ -128,9 +126,13 @@ def roundtrip(
     if payload.cycle:
         with tel.stage("vae_encode"):
             latents, before = model.encode_probe(pixels, payload.frames)
+        for name, value in before.items():
+            tel.log("resident tensor fingerprint", phase="before", tensor=name, sha256=value)
         ctx.raise_if_cancelled()
         with tel.stage("resident_dit_hashes"):
             dit = model.inspect_dit()
+        for name, value in dit.items():
+            tel.log("resident tensor fingerprint", phase="dit", tensor=name, sha256=value)
         ctx.raise_if_cancelled()
         with tel.stage("vae_decode_after_staging"):
             video, after = model.decode_probe(latents)
