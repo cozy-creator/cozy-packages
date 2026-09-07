@@ -172,15 +172,19 @@ def arm_producer_construction_order() -> None:
     from official import OfficialH3Pipeline
 
     sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
-    from h3_tables.job import _asset, _full_order
+    from importlib.resources import files
+
     from h3_tables.model_config import (
         dual_adaln_pruned_config,
         dual_full_config,
         parse_production_config,
     )
-    from h3_tables.order import current_order
+    from h3_tables.order import current_order, full_order
     from h3_tables.plans import parse_plan
     from h3_tables.source import official_full_specs
+
+    def _asset(name: str) -> bytes:
+        return files("h3_tables").joinpath("assets", name).read_bytes()
 
     sections = parse_production_config(_asset("model-config.json"))
     current = current_order(_asset("whole-order.json"))
@@ -189,7 +193,7 @@ def arm_producer_construction_order() -> None:
         for task in ("fl2va", "ref2va")
     }
     for mode, raw, expected in (
-        ("full", dual_full_config(sections), _full_order(sections, current.rows)),
+        ("full", dual_full_config(sections), full_order(sections, current.rows)),
         (
             "adaln-pruned",
             dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"]),
