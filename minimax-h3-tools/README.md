@@ -38,10 +38,19 @@ Full assembly drops the native-only `rope.inv_freq` buffer, leaving the exact 63
 Diffusers DiTs. It also drops the official text model's layers 50–63, final norm, and
 language-model head—156 inherited refs—to produce the reviewed 902-row, 50-layer
 pre-norm conditioner without rewriting any retained payload. Each pruned task then
-replaces 106 dynamic AdaLN rows with 51 BF16
-timestep-table rows, adding exactly 288,347,136 table bytes. FP8 and MXFP8 are
-independent children of those pruned BF16 task components and never derive from each
-other.
+replaces 106 dynamic AdaLN rows with 51 BF16 timestep-table rows carrying the union of
+every schedule in the task plan (30, 40 and 50 evaluations: 315 block rows and 207
+final-normalization rows, 1,020,515,328 table bytes), so one pruned checkpoint serves every
+served step count. FP8 and MXFP8 are independent children of those pruned BF16 task
+components and never derive from each other.
+
+The ordinary `retable` job recomputes only those tables for an existing AdaLN-pruned
+checkpoint of any encoding: `pruned` (the checkpoint to inherit, BF16, FP8 or MXFP8) and
+`full` (the complete BF16 checkpoint whose modulation weights the rows are computed from).
+Every non-table tensor is inherited by reference and nothing is requantized, so widening the
+plan's schedule set costs table bytes only. It refuses before any read unless `pruned`
+carries table rows and no dynamic modulation weights for both DiTs and `full` carries the
+exact modulation weights.
 
 The package declares no GPU, SM, VRAM, or host-RAM guess. Creator derives accelerator-class work
 from the typed model inputs; exact artifact residency and measured request/scratch envelopes drive

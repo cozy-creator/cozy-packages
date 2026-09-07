@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from fractions import Fraction
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import msgspec
 from cozy_runtime.author import (
@@ -40,8 +40,6 @@ from official import (
     FRAMES,
     MAX_CONDITIONER_VISION_TOKENS,
     REFERENCE_IMAGE_SHORT_EDGE,
-    SIGMA_GRID_POINTS,
-    TRANSFORMER_EVALUATIONS,
     NumericalChecks,
     OfficialH3Pipeline,
     ReferencePolicyFacts,
@@ -50,6 +48,7 @@ from official import (
     build_h3_pipeline,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
+    supported_steps,
     validate_reference_policy,
 )
 
@@ -78,6 +77,14 @@ class AudioReference(msgspec.Struct, tag="audio", tag_field="type", forbid_unkno
 
 Reference = ImageReference | VideoReference | AudioReference
 Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
+# The wire enum is the committed plans' step counts; a bound lane serves exactly these
+# and the fastest is the default.
+SUPPORTED_STEPS = supported_steps()
+DEFAULT_STEPS = min(SUPPORTED_STEPS)
+Steps = Annotated[
+    Literal[SUPPORTED_STEPS],  # type: ignore[valid-type]
+    msgspec.Meta(description="Denoise steps (transformer evaluations); fewer is faster."),
+]
 
 
 class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -86,6 +93,7 @@ class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     last_frame: Annotated[ImageAsset | None, _IMAGE_BOUND] = None
     mute: bool = False
     seed: int | None = None
+    steps: Steps = DEFAULT_STEPS
 
 
 class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -101,6 +109,7 @@ class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
             description="Image-reference short edge in pixels; lower trades detail for speed.",
         ),
     ] = REFERENCE_IMAGE_SHORT_EDGE
+    steps: Steps = DEFAULT_STEPS
 
 
 class H3VideoOutput(msgspec.Struct):
@@ -446,8 +455,8 @@ def _finish(
         audio_sigma_digest=schedule.audio_sigma_digest,
         video_timestep_digest=schedule.video_timestep_digest,
         audio_timestep_digest=schedule.audio_timestep_digest,
-        sigma_grid_points=SIGMA_GRID_POINTS,
-        transformer_evaluations=TRANSFORMER_EVALUATIONS,
+        sigma_grid_points=schedule.sigma_grid_points,
+        transformer_evaluations=schedule.transformer_evaluations,
     )
     tel.log(
         "h3 source digests",
@@ -507,6 +516,7 @@ def first_last_frame_to_video(
             first_frame=first,
             last_frame=last,
             generator=model.pipe.generator(view.generator),
+            steps=payload.steps,
         )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
         model.condition_text("fl2va", state, checks=checks)
@@ -517,7 +527,7 @@ def first_last_frame_to_video(
         schedule = model.sample_fl2va(
             state,
             on_step=tel.step_callback(
-                TRANSFORMER_EVALUATIONS, stage="denoise", overall_range=(0.15, 0.85)
+                payload.steps, stage="denoise", overall_range=(0.15, 0.85)
             ),
             cancel=ctx.raise_if_cancelled,
             checks=checks,
@@ -560,6 +570,7 @@ def reference_media_to_video(
             prompt=payload.prompt,
             references=references,
             generator=model.pipe.generator(view.generator),
+            steps=payload.steps,
             reference_image_short_edge=payload.reference_image_short_edge,
         )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
@@ -570,7 +581,7 @@ def reference_media_to_video(
         schedule = model.sample_ref2va(
             state,
             on_step=tel.step_callback(
-                TRANSFORMER_EVALUATIONS, stage="denoise", overall_range=(0.15, 0.85)
+                payload.steps, stage="denoise", overall_range=(0.15, 0.85)
             ),
             cancel=ctx.raise_if_cancelled,
             checks=checks,

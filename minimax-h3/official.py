@@ -28,6 +28,7 @@ from cozy_runtime.author import (
     DecodedAudio,
     DecodedImage,
     DecodedVideo,
+    InvalidRequest,
     OutputError,
     Telemetry,
     canonical_json,
@@ -41,8 +42,6 @@ _WORKFLOW_TASKS: dict[str, Task] = {"t2va": "fl2va", "fl2va": "fl2va", "ref2va":
 
 FPS = 24
 FRAMES = 345
-SIGMA_GRID_POINTS = 30
-TRANSFORMER_EVALUATIONS = 29
 MAX_IMAGE_REFERENCES = 9
 MAX_VIDEO_REFERENCES = 3
 MAX_AUDIO_REFERENCES = 3
@@ -62,25 +61,86 @@ _ASSETS = Path(__file__).resolve().parent
 
 
 @dataclass(frozen=True, slots=True)
+class Schedule:
+    """One official sigma grid per modality: `MiniMaxH3Scheduler.set_timesteps(points)`.
+
+    `linspace(1, 0, sigma_grid_points)` through each modality's exponential shift, float32
+    collisions collapsed; the terminal zero is a grid point with no transformer evaluation.
+    """
+
+    sigma_grid_points: int
+    video_sigmas: tuple[float, ...]
+    audio_sigmas: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        points = len(self.video_sigmas)
+        if points < 2 or len(self.audio_sigmas) != points or points > self.sigma_grid_points:
+            raise ValueError(
+                "a MiniMax-H3 schedule holds equally many video and audio sigmas, "
+                "at most one per grid point"
+            )
+        for sigmas in (self.video_sigmas, self.audio_sigmas):
+            if (
+                sigmas[0] != 1.0
+                or sigmas[-1] != 0.0
+                or any(not math.isfinite(value) or value != _as_float32(value) for value in sigmas)
+                or any(left <= right for left, right in pairwise(sigmas))
+            ):
+                raise ValueError(
+                    "MiniMax-H3 sigmas must be exact float32 values descending from one to zero"
+                )
+
+    @property
+    def transformer_evaluations(self) -> int:
+        return len(self.video_sigmas) - 1
+
+    @property
+    def video_timesteps(self) -> tuple[float, ...]:
+        return tuple(_as_float32(1.0 - sigma) for sigma in self.video_sigmas[:-1])
+
+    @property
+    def audio_timesteps(self) -> tuple[float, ...]:
+        return tuple(_as_float32(1.0 - sigma) for sigma in self.audio_sigmas[:-1])
+
+
+@dataclass(frozen=True, slots=True)
 class ScheduleFacts:
+    """The receipt of the one schedule an attempt executed, under its plan identity."""
+
     timestep_plan_digest: str
+    transformer_evaluations: int
+    sigma_grid_points: int
     video_sigma_digest: str
     audio_sigma_digest: str
     video_timestep_digest: str
     audio_timestep_digest: str
 
+    @classmethod
+    def of(cls, plan: TimestepPlan, schedule: Schedule) -> ScheduleFacts:
+        return cls(
+            timestep_plan_digest=plan.digest,
+            transformer_evaluations=schedule.transformer_evaluations,
+            sigma_grid_points=schedule.sigma_grid_points,
+            video_sigma_digest=_float32_digest(schedule.video_sigmas),
+            audio_sigma_digest=_float32_digest(schedule.audio_sigmas),
+            video_timestep_digest=_float32_digest(schedule.video_timesteps),
+            audio_timestep_digest=_float32_digest(schedule.audio_timesteps),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class TimestepPlan:
-    """The exact official 30-point, two-modality schedule; no weights required."""
+    """The exact official two-modality schedules one task serves; no weights required.
+
+    An AdaLN-pruned checkpoint carries modulation rows for the union of these schedules,
+    so the plan identity names both the step choices a request may make and the table
+    layout the checkpoint must contain.
+    """
 
     task: Task
     video_shift: float
     audio_shift: float
-    video_sigmas: tuple[float, ...]
-    audio_sigmas: tuple[float, ...]
-    video_timesteps: tuple[float, ...]
-    audio_timesteps: tuple[float, ...]
+    schedules: tuple[Schedule, ...]
 
     def __post_init__(self) -> None:
         if self.task not in ("fl2va", "ref2va"):
@@ -90,47 +150,43 @@ class TimestepPlan:
             for shift in (self.video_shift, self.audio_shift)
         ):
             raise ValueError("MiniMax-H3 shifts must be finite positive float32 values")
-        if (
-            len(self.video_sigmas) != SIGMA_GRID_POINTS
-            or len(self.audio_sigmas) != SIGMA_GRID_POINTS
+        if not self.schedules or any(
+            left.transformer_evaluations >= right.transformer_evaluations
+            for left, right in pairwise(self.schedules)
         ):
-            raise ValueError("a MiniMax-H3 plan must contain exactly 30 video and audio sigmas")
-        if (
-            len(self.video_timesteps) != TRANSFORMER_EVALUATIONS
-            or len(self.audio_timesteps) != TRANSFORMER_EVALUATIONS
-        ):
-            raise ValueError("a MiniMax-H3 plan must contain exactly 29 video and audio timesteps")
-        if self.video_sigmas[-1] != 0.0 or self.audio_sigmas[-1] != 0.0:
-            raise ValueError("the terminal video and audio sigmas must both be zero")
-        for sigmas, timesteps in (
-            (self.video_sigmas, self.video_timesteps),
-            (self.audio_sigmas, self.audio_timesteps),
-        ):
+            raise ValueError(
+                "a MiniMax-H3 plan lists its schedules by strictly ascending evaluation count"
+            )
+
+    @property
+    def steps(self) -> tuple[int, ...]:
+        """The denoise step counts (transformer evaluations) this plan serves."""
+        return tuple(schedule.transformer_evaluations for schedule in self.schedules)
+
+    def schedule(self, steps: int) -> Schedule:
+        for schedule in self.schedules:
+            if schedule.transformer_evaluations == steps:
+                return schedule
+        raise InvalidRequest(
+            f"this release serves {', '.join(map(str, self.steps))} denoise steps, not {steps}",
+            code="steps",
+            fields=["steps"],
+        )
+
+    def executed(
+        self, video_timesteps: Sequence[float], audio_timesteps: Sequence[float]
+    ) -> Schedule:
+        """The one schedule whose exact timesteps the official pipeline just built."""
+        for schedule in self.schedules:
             if (
-                sigmas[0] != 1.0
-                or any(not math.isfinite(value) or value != _as_float32(value) for value in sigmas)
-                or any(left <= right for left, right in pairwise(sigmas))
+                tuple(video_timesteps) == schedule.video_timesteps
+                and tuple(audio_timesteps) == schedule.audio_timesteps
             ):
-                raise ValueError("MiniMax-H3 sigmas must be finite descending float32 values")
-            expected = tuple(_as_float32(1.0 - sigma) for sigma in sigmas[:-1])
-            if timesteps != expected:
-                raise ValueError("MiniMax-H3 timesteps must be float32 one-minus-sigma values")
-
-    @property
-    def video_sigma_digest(self) -> str:
-        return _float32_digest(self.video_sigmas)
-
-    @property
-    def audio_sigma_digest(self) -> str:
-        return _float32_digest(self.audio_sigmas)
-
-    @property
-    def video_timestep_digest(self) -> str:
-        return _float32_digest(self.video_timesteps)
-
-    @property
-    def audio_timestep_digest(self) -> str:
-        return _float32_digest(self.audio_timesteps)
+                return schedule
+        raise ConformanceError(
+            f"the official {self.task} schedule differs from every plan schedule",
+            code="artifact_config",
+        )
 
     @property
     def digest(self) -> str:
@@ -155,59 +211,72 @@ class TimestepPlan:
     def _document(self) -> dict[str, Any]:
         clean_video = _as_float32(0.999)
         condition_audio = _as_float32(1.0)
-        evaluations: list[dict[str, Any]] = []
-        for index, (video_timestep, audio_timestep) in enumerate(
-            zip(self.video_timesteps, self.audio_timesteps, strict=True)
-        ):
-            classes = [
-                _modulation_class("target_video", video_timestep, "video", 0, "always"),
-                _modulation_class("text", video_timestep, "text", 1, "always"),
-                _modulation_class("target_audio", audio_timestep, "audio", 2, "always"),
-                _modulation_class(
-                    "condition_video",
-                    max(video_timestep, clean_video),
-                    "video",
-                    0,
-                    "if_condition_video_rows",
-                ),
-                _modulation_class(
-                    "condition_audio",
-                    condition_audio,
-                    "audio",
-                    2,
-                    "if_condition_audio_rows",
-                ),
-            ]
-            evaluations.append(
-                {
-                    "index": index,
-                    "video_sigma": _float_hex(self.video_sigmas[index]),
-                    "audio_sigma": _float_hex(self.audio_sigmas[index]),
-                    "modulation_classes": classes,
-                }
-            )
+        schedules: list[dict[str, Any]] = []
         block_keys: list[dict[str, Any]] = []
         final_keys: list[dict[str, Any]] = []
         seen_blocks: set[tuple[str, int]] = set()
         seen_final: set[str] = set()
-        for evaluation in evaluations:
-            for modulation in evaluation["modulation_classes"]:
-                timestep = modulation["timestep"]
-                block_key = (timestep, modulation["modality_tag"])
-                if block_key not in seen_blocks:
-                    seen_blocks.add(block_key)
-                    block_keys.append(
-                        {
-                            "index": len(block_keys),
-                            "timestep": timestep,
-                            "modality": modulation["modality"],
-                            "modality_tag": modulation["modality_tag"],
-                        }
-                    )
-                if timestep not in seen_final:
-                    seen_final.add(timestep)
-                    final_keys.append({"index": len(final_keys), "timestep": timestep})
-        document = {
+        for schedule in self.schedules:
+            evaluations: list[dict[str, Any]] = []
+            for index, (video_timestep, audio_timestep) in enumerate(
+                zip(schedule.video_timesteps, schedule.audio_timesteps, strict=True)
+            ):
+                classes = [
+                    _modulation_class("target_video", video_timestep, "video", 0, "always"),
+                    _modulation_class("text", video_timestep, "text", 1, "always"),
+                    _modulation_class("target_audio", audio_timestep, "audio", 2, "always"),
+                    _modulation_class(
+                        "condition_video",
+                        max(video_timestep, clean_video),
+                        "video",
+                        0,
+                        "if_condition_video_rows",
+                    ),
+                    _modulation_class(
+                        "condition_audio",
+                        condition_audio,
+                        "audio",
+                        2,
+                        "if_condition_audio_rows",
+                    ),
+                ]
+                evaluations.append(
+                    {
+                        "index": index,
+                        "video_sigma": _float_hex(schedule.video_sigmas[index]),
+                        "audio_sigma": _float_hex(schedule.audio_sigmas[index]),
+                        "modulation_classes": classes,
+                    }
+                )
+                for modulation in classes:
+                    timestep = modulation["timestep"]
+                    block_key = (timestep, modulation["modality_tag"])
+                    if block_key not in seen_blocks:
+                        seen_blocks.add(block_key)
+                        block_keys.append(
+                            {
+                                "index": len(block_keys),
+                                "timestep": timestep,
+                                "modality": modulation["modality"],
+                                "modality_tag": modulation["modality_tag"],
+                            }
+                        )
+                    if timestep not in seen_final:
+                        seen_final.add(timestep)
+                        final_keys.append({"index": len(final_keys), "timestep": timestep})
+            schedules.append(
+                {
+                    "transformer_evaluations": schedule.transformer_evaluations,
+                    "sigma_grid_points": schedule.sigma_grid_points,
+                    "evaluations": evaluations,
+                    "terminal": {
+                        "video_sigma": _float_hex(schedule.video_sigmas[-1]),
+                        "audio_sigma": _float_hex(schedule.audio_sigmas[-1]),
+                        "transformer_evaluation": False,
+                    },
+                }
+            )
+        return {
             "task": self.task,
             "scalar_encoding": "ieee754-binary32-hex",
             "scheduler_semantics": "minimax-h3-data-ward-rf-euler/1",
@@ -217,22 +286,14 @@ class TimestepPlan:
             "table_order": "first-distinct-evaluation-class-occurrence",
             "frames": FRAMES,
             "fps": FPS,
-            "sigma_grid_points": SIGMA_GRID_POINTS,
-            "transformer_evaluations": TRANSFORMER_EVALUATIONS,
             "video_shift": _float_hex(self.video_shift),
             "audio_shift": _float_hex(self.audio_shift),
-            "evaluations": evaluations,
+            "schedules": schedules,
             "table_keys": {
                 "block_modulation": block_keys,
                 "final_normalization": final_keys,
             },
-            "terminal": {
-                "video_sigma": _float_hex(self.video_sigmas[-1]),
-                "audio_sigma": _float_hex(self.audio_sigmas[-1]),
-                "transformer_evaluation": False,
-            },
         }
-        return document
 
 
 def timestep_plan_digest(raw: bytes) -> str:
@@ -287,29 +348,41 @@ def canonical_timestep_plan(task: Task) -> TimestepPlan:
         document = canonical_json.decode(raw)
         if not isinstance(document, dict):
             raise TypeError("timestep plan is not an object")
-        evaluations = document["evaluations"]
-        video_sigmas = tuple(
-            [float.fromhex(row["video_sigma"]) for row in evaluations]
-            + [float.fromhex(document["terminal"]["video_sigma"])]
-        )
-        audio_sigmas = tuple(
-            [float.fromhex(row["audio_sigma"]) for row in evaluations]
-            + [float.fromhex(document["terminal"]["audio_sigma"])]
-        )
+        schedules = []
+        for row in document["schedules"]:
+            evaluations = row["evaluations"]
+            schedules.append(
+                Schedule(
+                    sigma_grid_points=int(row["sigma_grid_points"]),
+                    video_sigmas=tuple(
+                        [float.fromhex(entry["video_sigma"]) for entry in evaluations]
+                        + [float.fromhex(row["terminal"]["video_sigma"])]
+                    ),
+                    audio_sigmas=tuple(
+                        [float.fromhex(entry["audio_sigma"]) for entry in evaluations]
+                        + [float.fromhex(row["terminal"]["audio_sigma"])]
+                    ),
+                )
+            )
         plan = TimestepPlan(
             task=task,
             video_shift=float.fromhex(document["video_shift"]),
             audio_shift=float.fromhex(document["audio_shift"]),
-            video_sigmas=video_sigmas,
-            audio_sigmas=audio_sigmas,
-            video_timesteps=tuple(_as_float32(1.0 - value) for value in video_sigmas[:-1]),
-            audio_timesteps=tuple(_as_float32(1.0 - value) for value in audio_sigmas[:-1]),
+            schedules=tuple(schedules),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"committed MiniMax-H3 {task} TimestepPlan is malformed") from exc
     if plan.canonical_bytes() != canonical_json.encode(document):
         raise ValueError(f"committed MiniMax-H3 {task} TimestepPlan has unexpected semantics")
     return plan
+
+
+def supported_steps() -> tuple[int, ...]:
+    """The denoise step counts both committed plans serve."""
+    steps = {task: canonical_timestep_plan(task).steps for task in _TASKS}
+    if len(set(steps.values())) != 1:
+        raise ValueError("the FL2VA and Ref2VA plans must serve the same denoise step counts")
+    return steps["fl2va"]
 
 
 def reference_image_vision_tokens(
@@ -567,6 +640,7 @@ class OfficialH3Pipeline:
         self.sample_rate = int(audio_vae.config.sampling_rate)
         self._blocks = blocks
         self._pipes = pipes
+        self._plans = {task: spec[2] for task, spec in dit_specs.items()}
 
     def generator(self, source: object) -> Any:
         """Adapt Runtime's public request generator to Diffusers' torch generator."""
@@ -622,6 +696,7 @@ class OfficialH3Pipeline:
         first_frame: Any | None,
         last_frame: Any | None,
         generator: Any,
+        steps: int,
     ) -> Any:
         # With no anchor, state the official default canvas. With an anchor, leaving the
         # dimensions absent makes the first supplied keyframe the geometry authority.
@@ -630,6 +705,7 @@ class OfficialH3Pipeline:
             "fl2va",
             prompt=prompt,
             generator=generator,
+            steps=steps,
             image=first_frame,
             last_image=last_frame,
             height=height,
@@ -642,12 +718,14 @@ class OfficialH3Pipeline:
         prompt: str,
         references: Sequence[Any],
         generator: Any,
+        steps: int,
         reference_image_short_edge: int = REFERENCE_IMAGE_SHORT_EDGE,
     ) -> Any:
         return self._start(
             "ref2va",
             prompt=prompt,
             generator=generator,
+            steps=steps,
             references=list(references),
             reference_image_short_edge=reference_image_short_edge,
         )
@@ -658,18 +736,22 @@ class OfficialH3Pipeline:
         *,
         prompt: str,
         generator: Any,
+        steps: int,
         reference_image_short_edge: int = REFERENCE_IMAGE_SHORT_EDGE,
         **values: Any,
     ) -> Any:
         from diffusers.configuration_utils import FrozenDict
         from diffusers.modular_pipelines.modular_pipeline import PipelineState
 
+        # The plan, not the request, spells the official grid: `steps` transformer
+        # evaluations are the schedule's grid points less the terminal zero.
+        schedule = self._plans[task].schedule(steps)
         state = PipelineState()
         fixed = {
             "prompt": prompt,
             "generator": generator,
             "num_frames": FRAMES,
-            "num_inference_steps": SIGMA_GRID_POINTS,
+            "num_inference_steps": schedule.sigma_grid_points,
             "output_type": "pt",
             **values,
         }
@@ -759,7 +841,13 @@ class OfficialH3Pipeline:
                     required=name.startswith("denoise.prepare_latents"),
                 )
 
-        facts = self._schedule_facts(task)
+        # The receipt names the schedule the official blocks actually built, proven
+        # against the plan by exact float32 equality of both modality vectors.
+        plan = self._plans[task]
+        facts = ScheduleFacts.of(
+            plan,
+            plan.executed(_float_tuple(state.timesteps), _float_tuple(state.audio_timesteps)),
+        )
         loop = blocks["denoise.denoise"]
         block_state = loop.get_block_state(state)
         for index, timestep in enumerate(block_state.timesteps):
@@ -805,25 +893,6 @@ class OfficialH3Pipeline:
         if task == "fl2va" and state.get("image") is None and state.get("last_image") is None:
             return "t2va"
         return task
-
-    def _schedule_facts(self, task: Task) -> ScheduleFacts:
-        """The canonical schedule receipt for this task.
-
-        The 30-sigma/29-forward plan is a property of `diffusers==0.40.0`, pinned exactly
-        in `pyproject.toml` from a committed `uv.lock` that `uv lock --check` verifies in
-        two CI jobs, and `scripts/h3-conform.py:arm_schedule` proves it against that exact
-        wheel on every run. Re-deriving it on every paid denoise — pulling token tags and
-        29 row plans to CPU for 29 `torch.equal` calls — re-proved a pinned dependency
-        against itself at the customer's expense.
-        """
-        expected = canonical_timestep_plan(task)
-        return ScheduleFacts(
-            timestep_plan_digest=expected.digest,
-            video_sigma_digest=expected.video_sigma_digest,
-            audio_sigma_digest=expected.audio_sigma_digest,
-            video_timestep_digest=expected.video_timestep_digest,
-            audio_timestep_digest=expected.audio_timestep_digest,
-        )
 
 
 def build_h3_pipeline(config: Config) -> OfficialH3Pipeline:
@@ -966,47 +1035,6 @@ def _apply_transformer_dtype(transformer: Any) -> Any:
         dtype = torch.float32 if name in transformer._keep_in_fp32_modules else torch.bfloat16
         component.to(dtype=dtype)
     return transformer.eval()
-
-
-def _validate_row_timestep_plan(state: Any, expected: TimestepPlan) -> None:
-    """Prove the live packed rows consume exactly the classes named by the receipt."""
-    import torch
-
-    plans = state.row_timestep_plan
-    if len(plans) != TRANSFORMER_EVALUATIONS:
-        raise ConformanceError("official H3 row plan has the wrong length", code="artifact_config")
-    tags = state.token_tags.detach().long().cpu()
-    video_indices = state.video_indices.detach().long().cpu()
-    audio_indices = state.audio_indices.detach().long().cpu()
-    text_indices = state.text_indices.detach().long().cpu()
-    expected_tags = torch.full_like(tags, -1)
-    expected_tags[video_indices] = 0
-    expected_tags[audio_indices] = 2
-    text_tags = state.text_token_tags.detach().long().cpu()
-    if text_tags.shape != text_indices.shape or bool(((text_tags != 0) & (text_tags != 1)).any()):
-        raise ConformanceError(
-            "official H3 presentation tags are not the canonical vision/text 0/1 convention",
-            code="artifact_config",
-        )
-    expected_tags[text_indices] = text_tags
-    if not torch.equal(tags, expected_tags):
-        raise ConformanceError(
-            "official H3 packed-row modality tags differ from the canonical 0/1/2 convention",
-            code="artifact_config",
-        )
-    for index, (unique, inverse) in enumerate(plans):
-        row_timesteps = unique.detach().float().cpu().index_select(0, inverse.detach().long().cpu())
-        want = torch.full_like(row_timesteps, expected.video_timesteps[index])
-        want[video_indices[: state.num_condition_video_rows]] = max(
-            expected.video_timesteps[index], _as_float32(0.999)
-        )
-        want[audio_indices[state.num_condition_audio_rows :]] = expected.audio_timesteps[index]
-        want[audio_indices[: state.num_condition_audio_rows]] = _as_float32(1.0)
-        if not torch.equal(row_timesteps, want):
-            raise ConformanceError(
-                f"official H3 packed-row timestep assignment differs at evaluation {index}",
-                code="artifact_config",
-            )
 
 
 def _validate_model_contract(pipe: Any, transformer: Any, video_vae: Any, audio_vae: Any) -> None:
@@ -1237,21 +1265,6 @@ def _video_at_24fps(video: DecodedVideo) -> Any:
 
 def _round_fraction(value: Fraction) -> int:
     return math.floor(value + Fraction(1, 2))
-
-
-def _shifted_sigmas(shift: float) -> tuple[float, ...]:
-    import torch
-
-    base = torch.linspace(1.0, 0.0, SIGMA_GRID_POINTS, dtype=torch.float32)
-    sigmas = shift * base / (1 + (shift - 1) * base)
-    return _float_tuple(torch.unique_consecutive(sigmas))
-
-
-def _timesteps(sigmas: Sequence[float]) -> tuple[float, ...]:
-    import torch
-
-    values = torch.tensor(sigmas, dtype=torch.float32)
-    return _float_tuple(1.0 - values[:-1])
 
 
 def _float_tuple(tensor: Any) -> tuple[float, ...]:

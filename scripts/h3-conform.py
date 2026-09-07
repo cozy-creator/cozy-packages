@@ -35,7 +35,6 @@ from official import (  # noqa: E402
     FPS,
     FRAMES,
     MAX_CONDITIONER_VISION_TOKENS,
-    SIGMA_GRID_POINTS,
     NumericalChecks,
     ScheduleFacts,
     _aligned_soundtrack,
@@ -47,29 +46,49 @@ from official import (  # noqa: E402
     _ScopedPipeline,
     _validate_dual_dit_topology,
     _validate_model_contract,
-    _validate_row_timestep_plan,
     _video_at_24fps,
     canonical_timestep_plan,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
+    supported_steps,
     timestep_plan_digest,
     validate_reference_policy,
 )
+
+STEPS = supported_steps()
+DEFAULT_STEPS = min(STEPS)
 
 PASS = "  ok   "
 FAIL = "  FAIL "
 _failures = 0
 
 PLAN_DIGESTS = {
-    "fl2va": "8da103b9b09629f9f4bcc7c3311929a83c4bc76d5ac2a49fa8ad6c08a140d99b",
-    "ref2va": "f99dec0b673105a6b7cabdc57a62df9653afd943a9092eef6018aa48095a9487",
+    "fl2va": "8cd647f223acb56f864773e1a86bd8bcc0bb8d7a1c83ce2de33b7209844dd049",
+    "ref2va": "3ec1b8e59c8b5dc74a4656d299d25ae206249cbd2b3f90b3c2981f8123b1b4ac",
 }
+# Exact float32 vectors per served step count, banked against Diffusers 0.40.
 VECTOR_DIGESTS = {
-    "video_sigmas": "9908cdf87605da6006148af6e7ef8be63e806d40bf750efcaae24386c4eb4e86",
-    "audio_sigmas": "120d46f5ce12fcbeb24f50707cc9f045a0fe283a5b35ad16dbd86f4810fb58e9",
-    "video_timesteps": "0aa2dd3bd6d296de7b0ede70932f8cd89a9f21fb10b3ac0144d18738fd0db3c9",
-    "audio_timesteps": "10ca44b527cfe2fa7f711d42772654f830037b92c8276e6e4e3bed9df00d4ea7",
+    30: {
+        "video_sigmas": "8d29489d97d06bd9f229ff45051cfd259e59832cf61574d0f0b71d99b28b466a",
+        "audio_sigmas": "0b8bf82a517ac3d9c2eef697ccddfd8ab5c8a18ea1136efc1ad94e9deb7f015b",
+        "video_timesteps": "3f87bbb7cc44a4a6f87e0c77192fd3a73e936cb649497b1cce77472ce6e27b25",
+        "audio_timesteps": "c8d95fe92d06fdb69c90eb9f42aba1e7c318f339960ef8950b012e32156caa85",
+    },
+    40: {
+        "video_sigmas": "0d7ed9c26b4419707c2f495c9f447c0b74ac2576081d701891e9908c822c0fc8",
+        "audio_sigmas": "9a009908dbf1f190a30469f65811401d9a6de226366466a792301db5bf104b4d",
+        "video_timesteps": "e5895cca43994ec051ca9fe2bc5ad74ab230f3b3d54c3be169ef2e2f7af87bd8",
+        "audio_timesteps": "eb389eb4785d0a202fca946c1b92320b5cbd29298f9bdc9717e7b4666dd32df5",
+    },
+    50: {
+        "video_sigmas": "9f5aed90908ca1571d5d00365722d83dbf5b37c02c7e9782ec6bfb9c32361f53",
+        "audio_sigmas": "acef7cee872f06e6f2a8f88c092e9d5b827ea91f33ed2f9c37636b61aa5b5643",
+        "video_timesteps": "aa35beaa105f51a70a66f66dc8ad63641c9c517e4a66e0de63fb67ee18c87667",
+        "audio_timesteps": "1d5b28a96440166682182782de94ba8e538a8970be3e5a67c0891c504346daec",
+    },
 }
+BLOCK_ROWS = 315
+FINAL_ROWS = 207
 ASSET_DIGESTS = {
     "tokenizer/merges.txt": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
     "tokenizer/tokenizer_config.json": (
@@ -344,42 +363,58 @@ def arm_schedule() -> None:
             "ValueError",
         )
         document = json.loads(plan.canonical_bytes())
-        check(f"{task} evaluation count", len(document["evaluations"]), 29)
+        check(f"{task} served step counts", plan.steps, STEPS)
+        check(
+            f"{task} schedule evaluation counts",
+            [len(row["evaluations"]) for row in document["schedules"]],
+            list(STEPS),
+        )
         check(
             f"{task} complete class names",
-            [entry["name"] for entry in document["evaluations"][0]["modulation_classes"]],
+            [
+                entry["name"]
+                for entry in document["schedules"][0]["evaluations"][0]["modulation_classes"]
+            ],
             ["target_video", "text", "target_audio", "condition_video", "condition_audio"],
         )
         check(
-            f"{task} canonical block-table rows",
+            f"{task} union block-table rows",
             len(document["table_keys"]["block_modulation"]),
-            89,
+            BLOCK_ROWS,
         )
         check(
-            f"{task} canonical final-normalization rows",
+            f"{task} union final-normalization rows",
             len(document["table_keys"]["final_normalization"]),
-            59,
+            FINAL_ROWS,
         )
         check(
-            f"{task} terminal has no forward",
-            document["terminal"]["transformer_evaluation"],
-            False,
+            f"{task} no terminal forward",
+            [row["terminal"]["transformer_evaluation"] for row in document["schedules"]],
+            [False] * len(STEPS),
         )
     red("task cannot collide in the plan identity", plans["fl2va"].digest, plans["ref2va"].digest)
+    first = plans["fl2va"].schedules[0]
     refusal(
         "an extra penultimate sigma cannot hide outside canonical bytes",
-        lambda: replace(
-            plans["fl2va"],
-            video_sigmas=(*plans["fl2va"].video_sigmas[:-1], 0.125, 0.0),
-        ),
+        lambda: replace(first, video_sigmas=(*first.video_sigmas[:-1], 0.125, 0.0)),
     )
+    refusal(
+        "schedules cannot repeat a step count",
+        lambda: replace(plans["fl2va"], schedules=(first, first)),
+    )
+    refusal(
+        "an unserved step count refuses typed before any work",
+        lambda: plans["fl2va"].schedule(DEFAULT_STEPS - 1),
+        "steps",
+    )
+    red("the retired 30-point/29-forward grid is not a served schedule", 29 in STEPS, True)
 
     document = json.loads(plans["fl2va"].canonical_bytes())
     for index, offsets, final_rows in (
         (0, [0, 1, 2, 3, 8], 3),
         (1, [0, 1, 5, 6, 11], 4),
     ):
-        classes = document["evaluations"][index]["modulation_classes"]
+        classes = document["schedules"][0]["evaluations"][index]["modulation_classes"]
         unique = sorted({float.fromhex(entry["timestep"]) for entry in classes})
         got = [
             unique.index(float.fromhex(entry["timestep"])) * 3 + entry["modality_tag"]
@@ -388,29 +423,32 @@ def arm_schedule() -> None:
         check(f"evaluation {index} exact AdaLN row offsets", got, offsets)
         check(f"evaluation {index} final-normalization row count", len(unique), final_rows)
 
-    for name, shift, ours in (
-        ("video", 12.0, plans["fl2va"].video_sigmas),
-        ("audio", 3.0, plans["fl2va"].audio_sigmas),
-    ):
-        scheduler = MiniMaxH3Scheduler(shift=shift)
-        scheduler.set_timesteps(SIGMA_GRID_POINTS)
-        official_sigmas = tuple(float(value) for value in scheduler.sigmas.float().cpu())
-        official_timesteps = tuple(float(value) for value in scheduler.timesteps.float().cpu())
-        check(f"{name} sigmas equal Diffusers", ours, official_sigmas)
-        check(f"{name} has 30 sigma points", len(official_sigmas), 30)
-        check(f"{name} has 29 forwards", len(official_timesteps), 29)
-        check(
-            f"{name} sigma digest",
-            float_digest(official_sigmas),
-            VECTOR_DIGESTS[f"{name}_sigmas"],
-        )
-        check(
-            f"{name} timestep digest",
-            float_digest(official_timesteps),
-            VECTOR_DIGESTS[f"{name}_timesteps"],
-        )
-        red(f"{name} 31-point interpretation", len(official_sigmas), 31)
-        red(f"{name} 30-forward interpretation", len(official_timesteps), 30)
+    for schedule in plans["fl2va"].schedules:
+        steps = schedule.transformer_evaluations
+        check(f"{steps} steps use {steps + 1} grid points", schedule.sigma_grid_points, steps + 1)
+        for name, shift, sigmas, timesteps in (
+            ("video", 12.0, schedule.video_sigmas, schedule.video_timesteps),
+            ("audio", 3.0, schedule.audio_sigmas, schedule.audio_timesteps),
+        ):
+            scheduler = MiniMaxH3Scheduler(shift=shift)
+            scheduler.set_timesteps(schedule.sigma_grid_points)
+            official_sigmas = tuple(float(value) for value in scheduler.sigmas.float().cpu())
+            official_timesteps = tuple(
+                float(value) for value in scheduler.timesteps.float().cpu()
+            )
+            check(f"{steps}-step {name} sigmas equal Diffusers", sigmas, official_sigmas)
+            check(f"{steps}-step {name} timesteps equal Diffusers", timesteps, official_timesteps)
+            check(f"{steps}-step {name} forwards", len(official_timesteps), steps)
+            check(
+                f"{steps}-step {name} sigma digest",
+                float_digest(official_sigmas),
+                VECTOR_DIGESTS[steps][f"{name}_sigmas"],
+            )
+            check(
+                f"{steps}-step {name} timestep digest",
+                float_digest(official_timesteps),
+                VECTOR_DIGESTS[steps][f"{name}_timesteps"],
+            )
 
     unique, inverse = MiniMaxH3SetTimestepsStep.build_row_timesteps(
         video_indices=torch.tensor([2, 3]),
@@ -431,50 +469,36 @@ def arm_schedule() -> None:
     check("text inherits target-video timestep", inverse[:2].tolist(), [0, 0])
     check("condition and target rows remain distinct", inverse.tolist(), [0, 0, 2, 0, 3, 1])
 
-    video_indices = torch.tensor([2, 3])
-    audio_indices = torch.tensor([4, 5])
-    row_plans = [
-        MiniMaxH3SetTimestepsStep.build_row_timesteps(
-            video_indices=video_indices,
-            audio_indices=audio_indices,
-            num_condition_video_rows=1,
-            num_condition_audio_rows=1,
-            num_text_tokens=2,
-            video_timestep=video_timestep,
-            audio_timestep=audio_timestep,
-            condition_video_timestep=max(video_timestep, _as_float32(0.999)),
-            condition_audio_timestep=1.0,
-        )
+    # Every (timestep, modality) pair the official row builder can present under any
+    # served schedule is a row of the one union table; an off-grid level is not.
+    table_timesteps, block_keys = plans["fl2va"].table_layout()
+    covered = {(table_timesteps[row], tag) for row, tag in block_keys}
+    tags = torch.tensor([1, 0, 0, 0, 2, 2])
+    presented: set[tuple[float, int]] = set()
+    for schedule in plans["fl2va"].schedules:
         for video_timestep, audio_timestep in zip(
-            plans["fl2va"].video_timesteps,
-            plans["fl2va"].audio_timesteps,
-            strict=True,
-        )
-    ]
-    state = SimpleNamespace(
-        row_timestep_plan=row_plans,
-        token_tags=torch.tensor([1, 0, 0, 0, 2, 2]),
-        text_token_tags=torch.tensor([1, 0]),
-        video_indices=video_indices,
-        audio_indices=audio_indices,
-        text_indices=torch.tensor([0, 1]),
-        num_condition_video_rows=1,
-        num_condition_audio_rows=1,
-    )
-    _validate_row_timestep_plan(state, plans["fl2va"])
-    observe("mixed ordinary-text and vision-text tags validate")
-    wrong_tags = state.token_tags.clone()
-    wrong_tags[1] = 1
-    refusal(
-        "a vision token mislabeled as ordinary text refuses",
-        lambda: _validate_row_timestep_plan(
-            SimpleNamespace(**{**vars(state), "token_tags": wrong_tags}), plans["fl2va"]
-        ),
-        "artifact_config",
-    )
+            schedule.video_timesteps, schedule.audio_timesteps, strict=True
+        ):
+            unique, inverse = MiniMaxH3SetTimestepsStep.build_row_timesteps(
+                video_indices=torch.tensor([2, 3]),
+                audio_indices=torch.tensor([4, 5]),
+                num_condition_video_rows=1,
+                num_condition_audio_rows=1,
+                num_text_tokens=2,
+                video_timestep=video_timestep,
+                audio_timestep=audio_timestep,
+                condition_video_timestep=max(video_timestep, _as_float32(0.999)),
+                condition_audio_timestep=1.0,
+            )
+            presented |= {
+                (float(unique[row]), int(tag)) for row, tag in zip(inverse, tags, strict=True)
+            }
+    check("official row classes of every schedule are table rows", presented <= covered, True)
+    check("the union table carries no unpresented row", covered <= presented, True)
+    red("an off-grid level is not a table row", (0.5, 0) in covered, True)
 
     scheduler = MiniMaxH3Scheduler(shift=12.0)
-    scheduler.set_timesteps(30)
+    scheduler.set_timesteps(DEFAULT_STEPS + 1)
     sample = torch.tensor([-1.0])
     velocity = torch.tensor([2.0])
     actual = float(scheduler.step(velocity, scheduler.timesteps[0], sample, return_dict=False)[0])
@@ -521,6 +545,7 @@ def arm_reference_resolution() -> None:
             prompt="A person in a garden.",
             references=references,
             generator=torch.Generator().manual_seed(7),
+            steps=DEFAULT_STEPS,
             reference_image_short_edge=edge,
         )
         image = state.normalized_references[0].image
@@ -542,6 +567,7 @@ def arm_reference_resolution() -> None:
         prompt="A person in a garden.",
         references=references,
         generator=torch.Generator().manual_seed(7),
+        steps=DEFAULT_STEPS,
     )
     check(
         "default pixels stay identical after smaller requests",
@@ -567,6 +593,7 @@ def arm_reference_resolution() -> None:
                 prompt="A person in a garden.",
                 references=references,
                 generator=torch.Generator().manual_seed(7),
+                steps=DEFAULT_STEPS,
                 reference_image_short_edge=768,
             ),
         )
@@ -597,12 +624,23 @@ def arm_zero_reference_preparation() -> None:
     # Only preparation executes: synthetic text embeddings and a CPU scope stand
     # in for the preceding encoder and GPU. No model forward or weights are read.
     pipe.components["fl2va_dit"] = SimpleNamespace(device=torch.device("cpu"))
-    state = pipe.start_fl2va(
-        prompt="Three friends walk in a garden.",
-        first_frame=None,
-        last_frame=None,
-        generator=torch.Generator().manual_seed(7),
+
+    def start(steps: int) -> Any:
+        return pipe.start_fl2va(
+            prompt="Three friends walk in a garden.",
+            first_frame=None,
+            last_frame=None,
+            generator=torch.Generator().manual_seed(7),
+            steps=steps,
+        )
+
+    refusal("an unserved step count refuses before preparation", lambda: start(29), "steps")
+    check(
+        "every served step count states its official grid",
+        [start(steps).num_inference_steps for steps in STEPS],
+        [steps + 1 for steps in STEPS],
     )
+    state = start(DEFAULT_STEPS)
     state.set("prompt_embeds", torch.zeros(1, 4, 5120))
     state.set("text_token_tags", torch.ones(4, dtype=torch.long))
 
@@ -622,7 +660,17 @@ def arm_zero_reference_preparation() -> None:
     check("text-only audio rows", tuple(state.audio_latents.shape), (1150, 32))
     check("text-only anchors", state.keyframe_anchors, ())
     check("text-only rows remain finite", bool(torch.isfinite(state.latents).all()), True)
-    check("text-only sigma grid still means 29 forwards", len(state.timesteps), 29)
+    check("text-only default grid means the default forwards", len(state.timesteps), DEFAULT_STEPS)
+    check(
+        "the executed schedule is the plan's default",
+        pipe._plans["fl2va"].executed(state.timesteps.tolist(), state.audio_timesteps.tolist()),
+        pipe._plans["fl2va"].schedule(DEFAULT_STEPS),
+    )
+    refusal(
+        "an off-plan executed schedule refuses",
+        lambda: pipe._plans["fl2va"].executed(state.timesteps.tolist()[:-1], []),
+        "artifact_config",
+    )
 
 
 def arm_graph_and_dtypes() -> None:
@@ -1131,7 +1179,8 @@ def arm_adaln_pruned() -> None:
         pruned.norm_out.table.copy_(final)
 
     document = json.loads(plan.canonical_bytes())
-    for evaluation in document["evaluations"]:
+    evaluations = [row for schedule in document["schedules"] for row in schedule["evaluations"]]
+    for evaluation in evaluations:
         classes = evaluation["modulation_classes"]
         local = sorted({float.fromhex(row["timestep"]) for row in classes})
         local_tensor = torch.tensor(local, dtype=torch.float32)
@@ -1153,7 +1202,7 @@ def arm_adaln_pruned() -> None:
                             f"evaluation={evaluation['index']} row={row['name']}",
                         )
                         return
-    observe("all canonical block rows equal the dynamic fixture", "29 evaluations")
+    observe("all canonical block rows equal the dynamic fixture", f"{len(evaluations)} evaluations")
 
     local = torch.tensor([0.0, _as_float32(0.999)], dtype=torch.float32)
     full_temb = full.time_embedder(full.time_proj(local))
@@ -1515,7 +1564,7 @@ def arm_media() -> None:
         [255, 128, 64, 0, 255, 128, 64, 0, 255, 128, 64, 0, 191, 191, 191, 0, 255, 128]
     )
     finish_audio = torch.tensor([[[0.0, 0.25, -0.25, 0.5]]], dtype=torch.float32)
-    schedule = ScheduleFacts(*[character * 64 for character in "abcde"])
+    schedule = ScheduleFacts("a" * 64, 30, 31, *[character * 64 for character in "bcde"])
     finish_outputs = FinishOutputs()
     attempt = fake_attempt("h3-finish-receipt")
     telemetry = fake_telemetry(attempt)
@@ -1581,8 +1630,8 @@ def arm_media() -> None:
             "audio_sigma_digest": "c" * 64,
             "video_timestep_digest": "d" * 64,
             "audio_timestep_digest": "e" * 64,
-            "sigma_grid_points": SIGMA_GRID_POINTS,
-            "transformer_evaluations": 29,
+            "sigma_grid_points": 31,
+            "transformer_evaluations": 30,
         },
     )
     expected_pixels = finish_outputs.video_pixels
@@ -1878,11 +1927,11 @@ def arm_interface() -> None:
     )
     expected = {
         "first_last_frame_to_video": (
-            ["prompt", "first_frame", "last_frame", "mute", "seed"],
+            ["prompt", "first_frame", "last_frame", "mute", "seed", "steps"],
             "fl2va_dit",
         ),
         "reference_media_to_video": (
-            ["prompt", "references", "mute", "seed", "reference_image_short_edge"],
+            ["prompt", "references", "mute", "seed", "reference_image_short_edge", "steps"],
             "ref2va_dit",
         ),
     }
@@ -1892,6 +1941,11 @@ def arm_interface() -> None:
             f"{name} request fields",
             [field["name"] for field in entry["request"]["fields"]],
             fields,
+        )
+        check(
+            f"{name} steps wire enum is the plan's step set",
+            entry["request"]["fields"][-1]["type"],
+            {"literal": list(STEPS)},
         )
         check(f"{name} shared model", entry["models"][0]["class"], "H3Model")
         check(f"{name} carries no retired stamps member", "stamps" in entry["models"][0], False)

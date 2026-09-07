@@ -79,6 +79,11 @@ def table_shapes(
     return shapes
 
 
+def table_bytes(topology: H3Topology, plan: TimestepPlan) -> int:
+    """The exact BF16 bytes one task's tables occupy under this plan."""
+    return sum(2 * math.prod(shape) for shape in table_shapes(topology, plan).values())
+
+
 def source_shapes(
     topology: H3Topology,
 ) -> dict[str, tuple[torch.dtype, tuple[int, ...]]]:

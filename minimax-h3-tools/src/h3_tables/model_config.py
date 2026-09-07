@@ -7,7 +7,7 @@ from typing import Any, cast
 from cozy_runtime.author import canonical_json
 
 from .kernel import H3Topology
-from .plans import TimestepPlan
+from .plans import LAUNCH_PLAN_DIGESTS, Task, TimestepPlan
 
 _SOURCE_SECTIONS = {
     "transformer",
@@ -24,7 +24,7 @@ _TEXT_CONDITIONER_CONFIG = {
     "language_model_head": False,
 }
 _CURRENT_MODEL_CONFIG = (
-    "sha256:fb1e67283fe244f56369673e686065279902c65f8a7fd33930a05309f67c2c3a"
+    "sha256:f587d48a97661ce51dbdddb54b334981d9400c0b2467717a3445bb4108c50571"
 )
 _CURRENT_MODEL_CONFIG_LENGTH = 5817
 
@@ -88,24 +88,20 @@ def parse_production_config(raw: bytes) -> dict[str, dict[str, Any]]:
     ):
         raise ValueError("model config is not the exact current dual-task H3 config")
     sections: dict[str, dict[str, Any]] = {}
-    for target, source in (
-        ("fl2va_dit", "transformer"),
-        ("ref2va_dit", "transformer_ref"),
-    ):
+    stamps: tuple[tuple[str, str, Task], ...] = (
+        ("fl2va_dit", "transformer", "fl2va"),
+        ("ref2va_dit", "transformer_ref", "ref2va"),
+    )
+    for target, source, expected_task in stamps:
         row = value[target]
         if not isinstance(row, dict):
             raise TypeError(f"model config {target!r} is not a mapping")
         config = dict(row)
         stamp = config.pop("cozy_h3", None)
-        expected_task = "fl2va" if target == "fl2va_dit" else "ref2va"
         if stamp != {
             "task": expected_task,
             "modulation": "adaln-pruned",
-            "timestep_plan_digest": (
-                "sha256:8da103b9b09629f9f4bcc7c3311929a83c4bc76d5ac2a49fa8ad6c08a140d99b"
-                if expected_task == "fl2va"
-                else "sha256:f99dec0b673105a6b7cabdc57a62df9653afd943a9092eef6018aa48095a9487"
-            ),
+            "timestep_plan_digest": LAUNCH_PLAN_DIGESTS[expected_task],
         }:
             raise ValueError(f"model config {target!r} changed its task/plan stamp")
         sections[source] = config
@@ -164,7 +160,7 @@ def dual_adaln_pruned_config(
         or canonical_json.digest(document) != _CURRENT_MODEL_CONFIG
     ):
         raise ValueError(
-            "dual AdaLN-pruned config is not the exact post-se018 H3 model config"
+            "dual AdaLN-pruned config is not the exact current H3 model config"
         )
     return raw
 

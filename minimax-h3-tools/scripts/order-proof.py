@@ -118,8 +118,10 @@ def main() -> None:
                 raise RuntimeError(f"{component} changed its exact {name} edit")
         refuse(raw, "ref2va" if task == "fl2va" else "fl2va")
         changed = copy.deepcopy(json.loads(raw))
-        changed["evaluations"][0]["video_sigma"] = (0.5).hex()
+        changed["schedules"][0]["evaluations"][0]["video_sigma"] = (0.5).hex()
         refuse(canonical_json.encode(changed), task)
+        if plan.steps != (30, 40, 50):
+            raise RuntimeError(f"{task} plan serves {plan.steps}, expected 30/40/50 steps")
 
     package_interface = json.loads(
         (PROJECT / "metadata" / "package-interface.json").read_bytes()
@@ -136,6 +138,7 @@ def main() -> None:
         "four-lane",
         "generate_timestep_table_fl2va",
         "generate_timestep_table_ref2va",
+        "retable",
     }:
         raise RuntimeError(f"package callable compatibility changed: {sorted(jobs)}")
     job = jobs["four-lane"]
@@ -157,11 +160,17 @@ def main() -> None:
         raise RuntimeError(
             "four-lane should derive and measure resources instead of authoring them"
         )
+    retable = jobs["retable"]
+    if {row["path"] for row in retable["models"]} != {
+        "retable.models.full",
+        "retable.models.pruned",
+    } or [output["output_id"] for output in retable["weights_outputs"]] != ["adaln-pruned"]:
+        raise RuntimeError("retable changed its two typed sources or one output")
     print(
-        "H3 FOUR-LANE CONTRACT PASS jobs=5 graphs=0 outputs=4 full_rows=3968 "
+        "H3 FOUR-LANE CONTRACT PASS jobs=6 graphs=0 outputs=4 full_rows=3968 "
         "task_rows=583 shared_text_drop=156 quantized_per_task=313 tables_per_task=51 "
-        "table_bytes_per_task=288347136 source_drop=rope dynamic_drops_per_task=106 "
-        "direct_siblings=1 changed_plan=refused"
+        f"table_bytes_per_task={TABLE_BYTES} source_drop=rope dynamic_drops_per_task=106 "
+        "direct_siblings=1 changed_plan=refused steps=30/40/50"
     )
 
 

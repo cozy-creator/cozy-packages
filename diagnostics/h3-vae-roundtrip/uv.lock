@@ -269,7 +269,7 @@ wheels = [
 
 [[package]]
 name = "h3-vae-diagnostic"
-version = "1.0.11"
+version = "1.0.12"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-eval" },
@@ -288,7 +288,7 @@ requires-dist = [
     { name = "cozy-eval", specifier = ">=0.3.2,<1" },
     { name = "cozy-runtime", extras = ["media"], specifier = ">=0.2.34,<1" },
     { name = "diffusers", specifier = "==0.40.0" },
-    { name = "minimax-h3", path = "dependencies/minimax_h3-1.1.12-py3-none-any.whl" },
+    { name = "minimax-h3", path = "dependencies/minimax_h3-1.2.0-py3-none-any.whl" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=12" },
@@ -420,8 +420,8 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.1.12"
-source = { path = "dependencies/minimax_h3-1.1.12-py3-none-any.whl" }
+version = "1.2.0"
+source = { path = "dependencies/minimax_h3-1.2.0-py3-none-any.whl" }
 dependencies = [
     { name = "cozy-eval" },
     { name = "cozy-runtime", extra = ["media"] },
@@ -441,7 +441,7 @@ dependencies = [
     { name = "transformers" },
 ]
 wheels = [
-    { filename = "minimax_h3-1.1.12-py3-none-any.whl", hash = "sha256:12d0f473a44220d44f52772c1901b72e1979e97b5a4ed081eef7ea360d134d1c" },
+    { filename = "minimax_h3-1.2.0-py3-none-any.whl", hash = "sha256:6194704e565a9568f6b8e31c51c9eaa87030fbd54e35d8a6e313ff355570aa8d" },
 ]
 
 [package.metadata]

@@ -48,9 +48,9 @@ is an owner action on the hub, never a default in `package.toml`. A freshly publ
 unbound until the owner binds it:
 
 ```sh
-cozy package bind paul/minimax-h3 first_last_frame_to_video.models.model paul/minimax-h3@1.0.0-rc.1 \
+cozy package bind paul/minimax-h3 first_last_frame_to_video.models.model paul/minimax-h3@1.0.0-rc.2 \
   --gpu H100=fp8-adaln-pruned --gpu B200=fp8-adaln-pruned --gpu 5090=fp8-adaln-pruned
-cozy package bind paul/minimax-h3 reference_media_to_video.models.model paul/minimax-h3@1.0.0-rc.1 \
+cozy package bind paul/minimax-h3 reference_media_to_video.models.model paul/minimax-h3@1.0.0-rc.2 \
   --gpu H100=fp8-adaln-pruned --gpu B200=fp8-adaln-pruned --gpu 5090=fp8-adaln-pruned
 ```
 
@@ -97,19 +97,25 @@ an alias would let the second checkpoint fill overwrite the first and an evictio
 name invalidate both. Artifact config equality and the constructed destination topology are both
 checked before fill; only checkpoint contents and the task-specific upstream interface differ.
 
-The launch cell is part of the release, not request policy: 345 frames at 24 fps, with the official
-30-point sigma grid including terminal zero and exactly 29 transformer evaluations. Duration,
-frame-count, step-count, task-selector, graph-selector, and AdaLN-mode request fields are absent.
+The frame cell is part of the release, not request policy: 345 frames at 24 fps. The one request
+knob is `steps`, the number of transformer evaluations, from the committed plans' set (30, 40 or
+50; the fastest is the default). Each step count is the official grid
+`MiniMaxH3Scheduler.set_timesteps(steps + 1)` per modality (video shift 12, audio shift 3): the
+terminal zero is a grid point with no evaluation, so `steps` evaluations run and the progress
+callback counts exactly them. Duration, frame-count, task-selector, graph-selector, and AdaLN-mode
+request fields are absent.
 The artifact config fixes both DiTs to one modulation structure before construction: reference
 artifacts use the official FULL AdaLN path, while production artifacts use exact table rows for the
-two committed TimestepPlans and contain no replaced timestep/AdaLN projection destinations. The
+two committed TimestepPlans and contain no replaced timestep/AdaLN projection destinations. A
+pruned lane carries the union of every served schedule's rows, so one checkpoint serves every
+`steps` value; a lane whose plan identity differs from the package's refuses at construction. The
 AdaLN-pruned extension inherits Diffusers' forward and changes only those projection modules; it
 does not interpolate a curve or carry a second model port. The hub selects the lane before fetch
 from the owner's binding (Model bindings above); package source and environment variables cannot
 choose one.
 
 The release has exactly four lanes: `bf16-full`, `bf16-adaln-pruned`, `fp8-adaln-pruned`, and
-`mxfp8-adaln-pruned`. The production binding is `paul/minimax-h3@1.0.0-rc.1` on
+`mxfp8-adaln-pruned`. The production binding is `paul/minimax-h3@1.0.0-rc.2` on
 `fp8-adaln-pruned` for H100, B200 and 5090, in that order. `adaln-curve` is reserved for
 approximate community curve artifacts and is not a lane in this release.
 
@@ -129,11 +135,13 @@ Prompts are bounded to 4,096 characters. After generic decode, exact official pr
 arithmetic also refuses more than 32,768 Qwen vision tokens before entering a component scope; this
 is a conservative capacity fence, not yet the required measured maximum-cell H200 fit proof.
 
-The task-stamped canonical plans live in `h3/timestep-plans/`. Each contains the exact 30 video and
-audio sigmas, 29 timesteps, all five finite modulation classes (including optional clean video and
-audio), and a deduplicated order of 89 block-modulation keys plus 59 final-normalization keys. These
-documents are the input boundary for `h3_precompute_timestep_tables`; that job must not import
-package code. Each task has one table bank for this fixed 30-point plan.
+The task-stamped canonical plans live in `minimax-h3/timestep-plans/`, derived from the official
+scheduler by `python scripts/h3_plans.py 30 40 50` (which also restamps the producer's copies and
+model config). Each plan lists one schedule per step count — its exact 31/41/51 video and audio
+sigmas, 30/40/50 timesteps, and all five finite modulation classes (including the 0.999 clean-video
+and 1.0 clean-audio anchors) — plus one deduplicated union order of 315 block-modulation keys and 207
+final-normalization keys. These documents are the input boundary for `minimax-h3-tools`; that
+producer must not import package code. Each task has one table bank for the whole plan.
 
 Both actions return exactly one muxed MP4 and one lossless PNG continuation frame — the customer
 result carries nothing else. The continuation frame is captured from the final decoded RGB8 frame
