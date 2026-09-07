@@ -177,7 +177,7 @@ def roundtrip(
 def short_denoise(
     ctx: Context, payload: ShortInput, model: H3Model, out: Outputs, tel: Telemetry
 ) -> ShortResult:
-    """22-frame, 384p text-only control with actual conditioning and latent artifacts."""
+    """124-frame, 384p text-only control with actual conditioning and latent artifacts."""
     import io
 
     import numpy as np
@@ -192,7 +192,7 @@ def short_denoise(
         last_frame=None,
         generator=model.pipe.generator(view.generator),
     )
-    state.set("num_frames", 22)
+    state.set("num_frames", 124)
     state.set("height", 384)
     state.set("width", 672)
     checks = NumericalChecks(tel)
@@ -216,7 +216,7 @@ def short_denoise(
     )
     with tel.stage("decode_video"):
         video = model.decode_video("fl2va", state, checks=checks)
-    assert tuple(video.shape) == (1, 22, 3, 384, 672)
+    assert tuple(video.shape) == (1, 124, 3, 384, 672)
     assert torch.isfinite(video).all()
     ctx.raise_if_cancelled()
     pixels = _rgb8(torch, video)
