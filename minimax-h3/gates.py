@@ -52,10 +52,11 @@ def pre_encode_gate(
     audio_nonfinite_fraction: float,
     requested: MediaFacts,
     tel: Telemetry,
-) -> None:
-    """Refuse malformed, non-finite or blank/noisy generated tensors.
+) -> list[str]:
+    """Refuse malformed/non-finite tensors and report quality without discarding media.
 
-    Audio defect metrics are emitted as telemetry and never refused.
+    Quality acceptance belongs to explicit checkpoint validation. An inference
+    result retains its video and warnings so the caller can inspect it.
     """
     ce_audio, ce_integrity, ce_metrics_audio = _cozy_eval()
 
@@ -99,11 +100,8 @@ def pre_encode_gate(
     tel.metric("frame_std_min", round(integrity.frame_std_min or -1.0, 5))
     tel.metric("grid_peak_ratio", round(integrity.grid_peak_ratio or -1.0, 3))
     tel.metric("grid_period_px", round(integrity.grid_period_px or -1.0, 1))
-    if not integrity.ok:
-        raise OutputError(
-            f"the generated video fails cozy-eval's integrity floor: {integrity.summary()}",
-            code="output_integrity",
-        )
+    tel.log("h3 output integrity", verdict=integrity.verdict, summary=integrity.summary())
+    warnings = [] if integrity.ok else [integrity.summary()]
 
     stats = ce_metrics_audio.signal_stats(
         waveform.to(torch.float32).cpu().numpy().T, requested.sample_rate
@@ -129,3 +127,4 @@ def pre_encode_gate(
         value = stats.get(defect.metric)
         if value is not None and defect.breached(value):
             tel.metric(f"{defect.metric}_breached", 1)
+    return warnings
