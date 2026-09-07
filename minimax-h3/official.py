@@ -338,19 +338,30 @@ class NumericalChecks:
         self.telemetry = telemetry
         self.checked_components: set[str] = set()
 
-    def tensors(self, stage: str, values: Sequence[tuple[str, Any]]) -> None:
+    def tensors(
+        self, stage: str, values: Sequence[tuple[str, Any]], *, required: bool = False
+    ) -> None:
         import torch
         from torch.utils._pytree import keystr, tree_flatten_with_path
 
         count, elements, parked = 0, 0, 0
-        maximum = 0.0
+        maximum, maximum_name = -1.0, ""
         with torch.no_grad():
             for name, value in values:
                 leaves, _ = tree_flatten_with_path(value)
                 for path, tensor in leaves:
-                    if not isinstance(tensor, torch.Tensor) or not (
-                        tensor.is_floating_point() or tensor.is_complex()
-                    ):
+                    label = name + keystr(path)
+                    if not isinstance(tensor, torch.Tensor):
+                        if required and not isinstance(
+                            tensor, (bool, int, float, str, bytes, type(None))
+                        ):
+                            raise OutputError(
+                                f"uninspectable tensor output at {stage}/{label}: "
+                                f"{type(tensor).__name__} needs registered PyTree flattening",
+                                code="numerical_uninspectable",
+                            )
+                        continue
+                    if not (tensor.is_floating_point() or tensor.is_complex()):
                         continue
                     if tensor.is_meta or (tensor.numel() and not tensor.untyped_storage().nbytes()):
                         # Runtime may have parked a paged weight. This check only claims
@@ -374,23 +385,32 @@ class NumericalChecks:
                             self.telemetry.log(
                                 "h3 non-finite tensor",
                                 stage=stage,
-                                tensor=(name + keystr(path))[:512],
+                                tensor=label[:512],
                                 chunk_elements=size,
                                 chunk_nonfinite=bad,
                             )
                             raise OutputError(
-                                f"non-finite tensor at {stage}/{name}{keystr(path)}: "
+                                f"non-finite tensor at {stage}/{label}: "
                                 f"{bad} of {size} values in the checked chunk",
                                 code="numerical_nonfinite",
                             )
-                        maximum = max(maximum, float(part.abs().amax().item()))
+                        observed = float(part.abs().amax().item())
+                        if observed > maximum:
+                            maximum, maximum_name = observed, label
+        if required and not elements:
+            raise OutputError(
+                f"no resident floating tensor values to inspect at {stage}",
+                code="numerical_uninspectable",
+            )
         self.telemetry.log(
-            "h3 finite tensors",
+            "h3 numerical check",
             stage=stage,
+            status="finite_resident" if elements else "no_resident_float_values",
             tensors=count,
             elements=elements,
             parked_tensors=parked,
-            absmax=maximum,
+            absmax=max(maximum, 0.0),
+            absmax_tensor=maximum_name[:512],
         )
 
     def component(self, name: str, module: Any) -> None:
@@ -403,10 +423,11 @@ class NumericalChecks:
         self.tensors(f"resident.{name}", values)
         self.checked_components.add(name)
 
-    def outputs(self, stage: str, state: Any, outputs: Any) -> None:
+    def outputs(self, stage: str, state: Any, outputs: Any, *, required: bool = False) -> None:
         self.tensors(
             stage,
             [(item.name, getattr(state, item.name, None)) for item in outputs if item.name],
+            required=required,
         )
 
     @contextmanager
@@ -415,12 +436,14 @@ class NumericalChecks:
         step = 0
 
         def before(_module: Any, args: Any, kwargs: Any) -> None:
-            self.tensors(f"{component}.input.{step}", [("args", args), ("kwargs", kwargs)])
+            self.tensors(
+                f"{component}.input.{step}", [("args", args), ("kwargs", kwargs)], required=True
+            )
 
         def after(_module: Any, _args: Any, _kwargs: Any, output: Any) -> None:
             nonlocal step
             if output is not None:
-                self.tensors(f"{component}.prediction.{step}", [("output", output)])
+                self.tensors(f"{component}.prediction.{step}", [("output", output)], required=True)
                 step += 1
 
         try:
@@ -634,6 +657,7 @@ class OfficialH3Pipeline:
                 "condition_text",
                 state,
                 self._blocks[task].sub_blocks["text_encoder"].intermediate_outputs,
+                required=True,
             )
 
     def condition_media(
@@ -645,6 +669,7 @@ class OfficialH3Pipeline:
                 "condition_media",
                 state,
                 self._blocks[task].sub_blocks["vae_encoder"].intermediate_outputs,
+                required=True,
             )
 
     def denoise(
@@ -681,7 +706,10 @@ class OfficialH3Pipeline:
             self._run_with(task, scoped, name, state)
             if checks is not None:
                 checks.outputs(
-                    name, state, self._blocks[task].sub_blocks[name].intermediate_outputs
+                    name,
+                    state,
+                    self._blocks[task].sub_blocks[name].intermediate_outputs,
+                    required=name.startswith("denoise.prepare_latents"),
                 )
 
         facts = self._schedule_facts(task)
@@ -697,6 +725,7 @@ class OfficialH3Pipeline:
                         ("latents", block_state.latents),
                         ("audio_latents", block_state.audio_latents),
                     ],
+                    required=True,
                 )
             on_step(index)
         loop.set_block_state(state, block_state)
