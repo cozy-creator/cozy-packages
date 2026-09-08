@@ -27,6 +27,14 @@ from cozy_runtime.derive.quantization import (
     quantize_component_into,
 )
 
+from .adaln_operations import (
+    Selection,
+    _plan,
+    apply_adaln,
+    compute_adaln_tables,
+    retable_adaln,
+    select_adaln_weights,
+)
 from .model_config import dual_full_config, parse_production_config
 from .order import current_order, full_order
 from .source import TARGET_COMPONENT, H3FullTransformer, select_full_targets
@@ -143,15 +151,6 @@ async def precompute_adaln(
     Retabling an already pruned model requires its full generating model. The current
     approved union bank supports all three schedules and is shared across body encodings.
     """
-    from .adaln_operations import (
-        Selection,
-        _plan,
-        apply_adaln,
-        compute_adaln_tables,
-        retable_adaln,
-        select_adaln_weights,
-    )
-
     # The generated interfaces remove injected services and replace bound Model
     # parameters with ModelArtifact. These remain the same admitted call proxies.
     select = cast(Callable[..., Awaitable[Selection]], select_adaln_weights)
