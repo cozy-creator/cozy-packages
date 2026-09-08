@@ -94,6 +94,13 @@ code can use `assets["alice"]` or `assets.info("alice")`; unlabelled references 
 preserves the supplied order when building its references. A label does not change
 the model's positional prompt syntax or rewrite the prompt.
 
+Ref2VA declares a conservative preparation cap of 8192 pixels on the longest edge
+and 16,777,216 pixels in total. This preserves room for a high-fidelity 2048px short
+edge at the allowed 4:1 aspect ratio. Creator can fit oversized originals before
+upload; Runtime applies the same preparation when it receives an original. The
+package then performs its normal per-reference sizing below. FL2VA keeps its
+canvas-dependent preprocessing.
+
 Reference-image fidelity is an optional per-occurrence hint:
 
 ```sh

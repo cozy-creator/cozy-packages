@@ -27,6 +27,7 @@ from cozy_runtime.author import (
     Image,
     ImageAsset,
     ImageFrame,
+    ImagePreparation,
     InvalidRequest,
     Loader,
     Mixed,
@@ -79,6 +80,7 @@ ReferenceAssets = Annotated[
         audio=MAX_AUDIO_REFERENCES,
         total=MAX_REFERENCES,
     ),
+    ImagePreparation(max_edge=8192, max_pixels=16_777_216),
     msgspec.Meta(min_length=1),
 ]
 KeyframeAssets = Annotated[Assets[Image], AssetLimits(images=2)]
