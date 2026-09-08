@@ -38,11 +38,8 @@ PACKAGES = {
         ),
     ),
     "sdxl": ("sdxl", ("torch", "triton", "transformers", "diffusers", "av")),
-    "quality-judge": ("quality_judge", ("torch", "triton", "transformers", "tokenizers",
-                                        "numpy", "PIL.Image", "tensorfs", "av")),
     "minimax-h3": ("h3", ("torch", "torchvision", "torchvision.ops", "triton", "transformers",
                   "diffusers", "tensorfs", "av")),
-    "h3-quality-gate": ("h3_quality_gate", ("cozy_eval", "numpy", "msgspec")),
     "minimax-h3-tools": ("h3_tables.job", ("torch", "triton", "numpy", "msgspec")),
 }
 

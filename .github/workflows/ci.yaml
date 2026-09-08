@@ -34,8 +34,8 @@ jobs:
 
       - name: Lint
         run: >-
-          uv run --no-project ruff check anima/ minimax-h3/ quality-judge/ scripts/ sdxl/
-          h3-quality-gate/ minimax-h3-tools/ checkpoint-repair/ diagnostics/h3-vae-roundtrip/
+          uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/
+          minimax-h3-tools/ checkpoint-repair/ diagnostics/h3-vae-roundtrip/
 
       - name: Types
         run: uv run --no-project mypy
@@ -45,14 +45,14 @@ jobs:
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          for package in anima minimax-h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools checkpoint-repair; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools checkpoint-repair; do
             uv lock --check --project "$package"
           done
 
       - name: Every package builds a wheel
         run: |
           mkdir -p dist/packages
-          for package in anima minimax-h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools checkpoint-repair; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools checkpoint-repair; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done
@@ -121,13 +121,13 @@ jobs:
   package-locks:
     # Independent so a failure to materialize an exact dependency environment cannot hide
     # behind static analysis. The checks job separately builds and imports every project wheel.
-    name: SDXL and quality-judge exact locked environments
+    name: Package exact locked environments
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        package: [anima, sdxl, quality-judge, h3-quality-gate, minimax-h3-tools, checkpoint-repair]
+        package: [anima, sdxl, minimax-h3-tools, checkpoint-repair]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -180,20 +180,3 @@ jobs:
           uv build --project ${{ matrix.package }} --wheel --out-dir dist/packages/${{ matrix.package }}
           uv pip install --python ${{ matrix.package }}/.venv/bin/python --no-deps dist/packages/${{ matrix.package }}/*.whl
           ${{ matrix.package }}/.venv/bin/python -P scripts/package_import.py ${{ matrix.package }} --installed
-
-  video-assembly:
-    name: Video assembly
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-        with:
-          version: "0.12.7"
-      - run: uv python install 3.12
-      - run: uv sync --project video-assembly --locked --group dev
-      - run: uv run --project video-assembly ruff check video-assembly
-      - run: uv run --project video-assembly ruff format --check video-assembly
-      - run: cd video-assembly && uv run mypy
-      - run: test "$(uv run --project video-assembly cozy-runtime --json --dir video-assembly describe)" = "$(cat video-assembly/metadata/package-interface.json)"
-      - run: uv run --project video-assembly python video-assembly/live.py

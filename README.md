@@ -11,9 +11,6 @@ conformance drivers. Model selection lives on the hub, never in source (see Mode
 | `minimax-h3/` | MiniMax H3 dual-task package; the owner's hub binding selects FULL or AdaLN-pruned weights |
 | `sdxl/` | SDXL text-to-image package plus the family's lane-selecting quantize job (se-008, cr-073, se-023) |
 | `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
-| `quality-judge/` | evaluation actions (ev-003) |
-| `video-assembly/` | fixed CPU-only 2-8-shot streaming assembler (se-014) |
-| `h3-quality-gate/` | metric-only H3 release gate; owns its quality application and its cozy-eval dependency (cr-071) |
 | `minimax-h3-tools/` | H3 timestep-table and structural precompute jobs (cr-071) |
 | `*/package.toml` | the `[application]` entry point only; it carries no model bindings |
 | `*/pyproject.toml` | release metadata; its one `cozy.application` entry point matches `package.toml` |
@@ -165,17 +162,8 @@ the uniform dual FULL model snapshot, and output proof on the admitted provider 
 
 H3 remains a single-shot package. A roughly two-minute result is eight durable ordinary H3 shots:
 one Ref2VA shot followed by seven FL2VA shots whose first frame is the prior shot's exact
-`continuation_frame`. A separate weightless assembler removes the seven replayed handoff frames and
-performs one Runtime-owned streaming encode/mux. Creator owns the durable nine-step workflow.
-
-`video-assembly/` exposes exactly one action, `assemble_video`. It accepts ordered stored videos
-and optional exclusive master audio, removes one replayed first frame from every later shot,
-derives audio boundaries from cumulative rational frame time, applies the fixed segment-level ride,
-and commits one fragmented H.264/AAC MP4. One bounded scan derives fixed seam windows and scalar
-peak facts; one second pass selects and encodes events. Memory does not grow with soundtrack
-duration, and there is no third peak decode. Its receipt records selected RGB identities, source
-ranges, trim/pad/gain facts, exact clocks, and Runtime-probed codec facts. It imports no media
-library or Runtime internals.
+`continuation_frame`. Creator owns the durable nine-step workflow; the weightless assembler that removed the seven
+replayed handoff frames is deleted with the retired projects (se-043).
 
 This keeps model inference, media transformation, and lifecycle recovery separate. There is no
 `generate_long`, package loop, hidden child invocation, community interpolation path, or second
@@ -287,26 +275,10 @@ uv pip install --python .venv-check/bin/python \
 
 .venv-check/bin/python scripts/fence.py
 .venv-check/bin/python -m mypy
-.venv-check/bin/ruff check h3/ quality-judge/ sdxl/ scripts/
+.venv-check/bin/ruff check h3/ sdxl/ scripts/
 test "$(.venv-check/bin/cozy-runtime --json --dir h3 describe)" = "$(cat h3/metadata/package-interface.json)"
-test "$(.venv-check/bin/cozy-runtime --json --dir quality-judge describe)" = "$(cat quality-judge/metadata/package-interface.json)"
 test "$(.venv-check/bin/cozy-runtime --json --dir sdxl describe)" = "$(cat sdxl/metadata/package-interface.json)"
 ```
-
-The independent weightless assembly closure runs with its own current Runtime wheel:
-
-```bash
-uv sync --project video-assembly --locked
-uv run --project video-assembly ruff check video-assembly
-uv run --project video-assembly mypy
-test "$(uv run --project video-assembly cozy-runtime --json --dir video-assembly describe)" = "$(cat video-assembly/metadata/package-interface.json)"
-uv run --project video-assembly python video-assembly/live.py
-```
-
-That live closure includes a real low-resolution eight-shot launch-cell clock (8 x 345 source
-frames at 24 fps and 32 kHz), requiring exactly 2,753 output frames and 3,670,667 submitted audio
-samples. It also runs segment/master determinism, late-corruption and cancellation cleanup,
-peak-guard engagement, and fresh-process two/eight-shot RSS against a retained-snapshot poison.
 
 The H3 project environment is reproduced only from its committed lock:
 
