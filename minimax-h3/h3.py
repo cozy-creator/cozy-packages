@@ -674,7 +674,14 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
     return float(bad / int(value.numel()))
 
 
-@app.entrypoint()
+_DEFAULT_MODEL_LADDER = [
+    {"gpu": "H100", "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-adaln-pruned"},
+    {"gpu": "B200", "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-adaln-pruned"},
+    {"gpu": "5090", "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-adaln-pruned"},
+]
+
+
+@app.entrypoint(defaults={"model": _DEFAULT_MODEL_LADDER})
 def fl2va(
     ctx: Context,
     payload: FirstLastFrameToVideoInput,
@@ -724,7 +731,7 @@ def fl2va(
     )
 
 
-@app.entrypoint(preflight=preflight_reference_media)
+@app.entrypoint(preflight=preflight_reference_media, defaults={"model": _DEFAULT_MODEL_LADDER})
 def ref2va(
     ctx: Context,
     payload: ReferenceMediaToVideoInput,

@@ -190,13 +190,17 @@ def main() -> None:
         assert len(resumed["transformed_roles"]) == 4
         assert "vae/attention" not in resumed["transformed_roles"]
         assert replayed["replayed"] and replayed["transformed_roles"] == []
-        produced = tensorfs.parse_header(bytes(store.manifest(resumed["manifest"])["header"]))
+        produced_header = store.manifest(resumed["manifest"])["header"]
+        assert produced_header is not None, "normalized model has no CozyTensors header"
+        produced = tensorfs.parse_header(produced_header)
         expected_order = [(r.component, r.key) for r in plan.targets]
         assert [
             (c, k) for c, rows in produced["components"].items() for k in rows
         ] == expected_order
         assert produced["configs"]["model"] == canonical_json.encode(plan.configs["model"])
-        original = tensorfs.parse_header(bytes(store.manifest(manifest)["header"]))
+        original_header = store.manifest(manifest)["header"]
+        assert original_header is not None, "model fixture has no CozyTensors header"
+        original = tensorfs.parse_header(original_header)
         assert (
             produced["components"]["unet"]["weight"] == original["components"]["unet"]["raw.weight"]
         )
