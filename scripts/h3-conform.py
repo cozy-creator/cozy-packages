@@ -1382,7 +1382,7 @@ def _video(seconds: int, *, soundtrack: Any | None = None) -> Any:
 
 def arm_media() -> None:
     import torch
-    from cozy_runtime.author import AudioAsset, ImageAsset, VideoAsset
+    from cozy_runtime.author import Assets, AudioAsset, ImageAsset, ImageFrame, VideoAsset
     from cozy_runtime.author.fakes import fake_attempt, fake_telemetry
 
     print("\n== ordered mixed references, exact clocks, and continuation identity ==")
@@ -1432,6 +1432,10 @@ def arm_media() -> None:
 
     class Pipe:
         @staticmethod
+        def image_reference(value: Any) -> Any:
+            return value
+
+        @staticmethod
         def video_reference(value: Any) -> Any:
             return value
 
@@ -1440,9 +1444,14 @@ def arm_media() -> None:
             return value
 
     class Decoder:
-        def __init__(self, videos: list[Any], audios: list[Any]) -> None:
+        def __init__(self, videos: list[Any], audios: list[Any], images: list[Any]) -> None:
             self._videos = list(videos)
             self._audios = list(audios)
+            self._images = list(images)
+
+        def decode_image(self, asset: Any) -> Any:
+            del asset
+            return self._images.pop(0)
 
         def decode_video(self, asset: Any) -> Any:
             del asset
@@ -1452,15 +1461,63 @@ def arm_media() -> None:
             del asset
             return self._audios.pop(0)
 
-    def decode(references: list[Any], videos: list[Any], audios: list[Any]) -> list[Any]:
+    def decode(
+        references: list[Any],
+        videos: list[Any],
+        audios: list[Any],
+        images: list[Any] | None = None,
+    ) -> list[Any]:
         return package._decode_references(
-            cast(Any, references),
-            decoder=cast(Any, Decoder(videos, audios)),
+            Assets(references),
+            decoder=cast(Any, Decoder(videos, audios, images or [])),
             pipe=cast(Any, Pipe()),
         )
 
-    video_ref = package.VideoReference(VideoAsset("sha256:" + "1" * 64))
-    audio_ref = package.AudioReference(AudioAsset("sha256:" + "2" * 64))
+    video_ref = VideoAsset("sha256:" + "1" * 64)
+    audio_ref = AudioAsset("sha256:" + "2" * 64)
+    image_ref = ImageAsset("sha256:" + "3" * 64)
+    image = ImageFrame(32, 32, bytes(32 * 32 * 3))
+    mixed_video, mixed_audio = _video(2), _audio(2)
+    mixed = Assets[ImageAsset | VideoAsset | AudioAsset](
+        [image_ref.with_label("Alice"), video_ref, audio_ref, image_ref.with_label("アリス")]
+    )
+    policy = package.preflight_reference_media(
+        package.ReferenceMediaToVideoInput(prompt="The two characters meet."), mixed
+    )
+    check("metadata preflight counts duplicate image occurrences", policy.total, 4)
+    check(
+        "reference labels preserve arbitrary caller text", mixed.by_label("アリス").label, "アリス"
+    )
+    check("naming an occurrence preserves the source handle", image_ref.label, "")
+    check(
+        "duplicate image references keep separate positions",
+        [asset.position for asset in mixed],
+        [0, 1, 2, 3],
+    )
+    prepared = decode(
+        [image_ref, video_ref, audio_ref, image_ref],
+        videos=[mixed_video],
+        audios=[mixed_audio],
+        images=[image, image],
+    )
+    check(
+        "model adapter preserves mixed order and both uses of one image",
+        all(
+            actual is expected
+            for actual, expected in zip(
+                prepared, [image, mixed_video, mixed_audio, image], strict=True
+            )
+        ),
+        True,
+    )
+    refusal(
+        "metadata preflight refuses audio-only before decoding",
+        lambda: package.preflight_reference_media(
+            package.ReferenceMediaToVideoInput(prompt="An audio-only reference."),
+            Assets([audio_ref]),
+        ),
+        "reference_policy",
+    )
     check(
         "14s of soundtracked video plus 2s standalone audio fit their separate caps",
         len(
@@ -2096,7 +2153,7 @@ def arm_interface() -> None:
             "fl2va_dit",
         ),
         "ref2va": (
-            ["prompt", "references", "mute", "seed", "reference_image_short_edge", "steps"],
+            ["prompt", "mute", "seed", "reference_image_short_edge", "steps", "assets"],
             "ref2va_dit",
         ),
     }
@@ -2109,7 +2166,7 @@ def arm_interface() -> None:
         )
         check(
             f"{name} steps wire enum is the plan's step set",
-            entry["request"]["fields"][-1]["type"],
+            next(field["type"] for field in entry["request"]["fields"] if field["name"] == "steps"),
             {"literal": list(STEPS)},
         )
         check(f"{name} shared model", entry["models"][0]["class"], "H3Model")
@@ -2128,6 +2185,13 @@ def arm_interface() -> None:
             ["video", "continuation_frame", "warnings"],
         )
     check("H3 permits Runtime encoded linear leaves", package.H3Model.__encoded_leaves__, "accept")
+    check("reference files bind to the explicit Assets parameter",
+          entries["ref2va"]["assets"]["parameter"], "assets")
+    check("reference collection admits only the three H3 media kinds",
+          {kind["kind"] for kind in entries["ref2va"]["assets"]["kinds"]},
+          {"image", "video", "audio"})
+    check("keyframe endpoint preserves its explicit first/last roles",
+          "assets" in entries["fl2va"], False)
 
 
 ARMS = {

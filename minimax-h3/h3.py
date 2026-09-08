@@ -15,6 +15,7 @@ import msgspec
 from cozy_runtime.author import (
     App,
     AssetBound,
+    Assets,
     AudioAsset,
     Context,
     DecodedAudio,
@@ -63,19 +64,14 @@ _MIN_REFERENCE_DURATION = Fraction(2, 1)
 _MAX_REFERENCE_DURATION = Fraction(15, 1)
 
 
-class ImageReference(msgspec.Struct, tag="image", tag_field="type", forbid_unknown_fields=True):
-    image: Annotated[ImageAsset, _IMAGE_BOUND]
-
-
-class VideoReference(msgspec.Struct, tag="video", tag_field="type", forbid_unknown_fields=True):
-    video: Annotated[VideoAsset, _VIDEO_BOUND]
-
-
-class AudioReference(msgspec.Struct, tag="audio", tag_field="type", forbid_unknown_fields=True):
-    audio: Annotated[AudioAsset, _AUDIO_BOUND]
-
-
-Reference = ImageReference | VideoReference | AudioReference
+ReferenceAssets = Annotated[
+    Assets[
+        Annotated[ImageAsset, _IMAGE_BOUND]
+        | Annotated[VideoAsset, _VIDEO_BOUND]
+        | Annotated[AudioAsset, _AUDIO_BOUND]
+    ],
+    msgspec.Meta(min_length=1, max_length=12),
+]
 Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
 # The wire enum is the committed plans' step counts; a bound lane serves exactly these
 # and the fastest is the default.
@@ -98,7 +94,6 @@ class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
 
 class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Prompt
-    references: Annotated[list[Reference], msgspec.Meta(min_length=1, max_length=12)]
     mute: bool = False
     seed: int | None = None
     reference_image_short_edge: Annotated[
@@ -121,19 +116,22 @@ class H3VideoOutput(msgspec.Struct):
     warnings: list[str] = msgspec.field(default_factory=list)
 
 
-def preflight_reference_media(payload: ReferenceMediaToVideoInput) -> ReferencePolicyFacts:
+def preflight_reference_media(
+    payload: ReferenceMediaToVideoInput, assets: ReferenceAssets
+) -> ReferencePolicyFacts:
     """Refuse cross-field count errors before Runtime hydrates a single asset."""
-    kinds = [_reference_kind(reference) for reference in payload.references]
+    del payload
+    kinds = [_reference_kind(asset) for asset in assets]
     try:
         return validate_reference_policy(kinds)
     except ValueError as exc:
-        raise UnsupportedInput(str(exc), code="reference_policy", fields=["references"]) from exc
+        raise UnsupportedInput(str(exc), code="reference_policy", fields=["assets"]) from exc
 
 
-def _reference_kind(reference: Reference) -> str:
-    if isinstance(reference, ImageReference):
+def _reference_kind(reference: ImageAsset | VideoAsset | AudioAsset) -> str:
+    if isinstance(reference, ImageAsset):
         return "image"
-    if isinstance(reference, VideoReference):
+    if isinstance(reference, VideoAsset):
         return "video"
     return "audio"
 
@@ -217,7 +215,7 @@ def _decode_keyframe(
 
 
 def _decode_references(
-    references: list[Reference],
+    references: ReferenceAssets,
     *,
     decoder: MediaDecoder,
     pipe: OfficialH3Pipeline,
@@ -229,24 +227,24 @@ def _decode_references(
     vision_tokens = 0
 
     for index, reference in enumerate(references):
-        field = f"references.{index}"
-        if isinstance(reference, ImageReference):
-            image = decoder.decode_image(reference.image)
+        field = f"assets.{index}"
+        if isinstance(reference, ImageAsset):
+            image = decoder.decode_image(reference)
             _validate_ratio(image.width, image.height, field)
             vision_tokens += reference_image_vision_tokens(
                 image.width, image.height, reference_image_short_edge
             )
             _validate_vision_budget(vision_tokens)
             prepared.append(pipe.image_reference(image))
-        elif isinstance(reference, VideoReference):
-            video = decoder.decode_video(reference.video)
+        elif isinstance(reference, VideoAsset):
+            video = decoder.decode_video(reference)
             _validate_video(video, field)
             video_duration += video.duration
             if video_duration > _MAX_REFERENCE_DURATION:
                 raise InvalidRequest(
                     "reference videos total more than 15 seconds",
                     code="reference_policy",
-                    fields=["references"],
+                    fields=["assets"],
                 )
             vision_tokens += reference_video_vision_tokens(
                 video.width, video.height, video.duration
@@ -254,7 +252,7 @@ def _decode_references(
             _validate_vision_budget(vision_tokens)
             prepared.append(pipe.video_reference(video))
         else:
-            audio = decoder.decode_audio(reference.audio)
+            audio = decoder.decode_audio(reference)
             _validate_audio(audio, field)
             audio_duration += audio.duration
             _validate_audio_aggregate(audio_duration)
@@ -268,7 +266,7 @@ def _validate_vision_budget(tokens: int) -> None:
             f"reference vision presentation needs {tokens} tokens; this release admits at most "
             f"{MAX_CONDITIONER_VISION_TOKENS}",
             code="reference_policy",
-            fields=["references"],
+            fields=["assets"],
         )
 
 
@@ -340,7 +338,7 @@ def _validate_audio_aggregate(duration: Fraction) -> None:
         raise InvalidRequest(
             "standalone audio references total more than 15 seconds",
             code="reference_policy",
-            fields=["references"],
+            fields=["assets"],
         )
 
 
@@ -549,6 +547,7 @@ def fl2va(
 def ref2va(
     ctx: Context,
     payload: ReferenceMediaToVideoInput,
+    assets: ReferenceAssets,
     facts: Preflight[ReferencePolicyFacts],
     model: H3Model,
     decoder: MediaDecoder,
@@ -561,7 +560,7 @@ def ref2va(
     checks = NumericalChecks(tel, model.pipe.resident)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
         references = _decode_references(
-            payload.references,
+            assets,
             decoder=decoder,
             pipe=model.pipe,
             reference_image_short_edge=payload.reference_image_short_edge,

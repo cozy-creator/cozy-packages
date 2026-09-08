@@ -68,8 +68,31 @@ cozy package bind paul/minimax-h3 ref2va.models.model paul/minimax-h3@1.0.0-rc.2
 The H3 package exposes both official actions from one model generation:
 
 - `fl2va` accepts zero, first, last, or first-and-last keyframes.
-- `ref2va` accepts one ordered tagged list of image,
-  video, and standalone-audio references.
+- `ref2va` accepts an ordered Runtime `Assets` input containing image, video,
+  and standalone-audio references. Repeated CLI `--asset` arguments preserve this order;
+  callers do not construct tagged reference JSON.
+
+For a reference call, the package adapts the supplied assets through Runtime's existing
+media decoder. File delivery works the same locally and on a rental:
+
+```sh
+cozy run paul/minimax-h3/ref2va \
+  'prompt=<your H3 prompt>' \
+  --asset="~/Pictures/character-1.png" \
+  --asset="~/Pictures/character-2.png" \
+  seed=24680 --rental-only --await
+```
+
+The Hub binding supplies the default model. `--model.model=...` overrides it for
+one call. FL2VA keeps explicit `first_frame` and `last_frame` image roles, including
+last-frame-only requests. The generated interface declares the supported input
+shapes and bounds; the CLI does not infer roles from filenames.
+
+Assets may have caller-supplied labels, such as `--asset="alice=~/Pictures/alice.png"`.
+Labels are unique within the collection and preserve their exact spelling. Package
+code can use `assets.by_label("alice")`; unlabelled references remain valid. H3
+preserves the supplied order when building its references. A label does not change
+the model's positional prompt syntax or rewrite the prompt.
 
 Both actions use the official Diffusers MiniMax H3 implementation and share one exact BF16
 Qwen3-VL conditioner, one video VAE and one audio VAE at their official FP32 destination dtypes,
