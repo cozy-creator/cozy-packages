@@ -99,7 +99,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.5.1"
+version = "0.5.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -110,10 +110,10 @@ dependencies = [
     { name = "protobuf" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/00/69/a981acc49261dd2e12d5775e0479b63598165a6df45fe3da784c4113f1de/cozy_runtime-0.5.1.tar.gz", hash = "sha256:38080d2945cad299ecfb770355fb6a4f72ee4ea66bdc09aa15e74b35e02a29b4", size = 1414030, upload-time = "2026-09-08T01:51:37.893Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/53/4f/be1f57fd84e283b4e858a26740143ddddaf6de39286dc244634246124c74/cozy_runtime-0.5.4.tar.gz", hash = "sha256:a31bce3b1009ea8b75c96a7741628b262f3cfabcd0b80a6434d456f46d959f40", size = 1443010, upload-time = "2026-09-08T03:53:13.544Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f8/a2/e7d20b781ddd61656b2f71162890b53be49ca15819abed94629198c23e06/cozy_runtime-0.5.1-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:2cf6df93067d3b4ad050a532a94af78ba74e77c6c76fa82e4fcae279baaf76ba", size = 13510660, upload-time = "2026-09-08T01:51:34.764Z" },
-    { url = "https://files.pythonhosted.org/packages/55/50/a7a68c620727dec3bb69d50ffdb6a1ce6da50f2be871500d5b8aadea08ea/cozy_runtime-0.5.1-py3-none-any.whl", hash = "sha256:35ed6e4c5e9f3128ac9e5c16505e2d1b508b7c74b8523ddc25bfe6c29cebc05f", size = 1043238, upload-time = "2026-09-08T01:51:36.687Z" },
+    { url = "https://files.pythonhosted.org/packages/39/d3/fb0d150e9aefdd3fa1a45666c71862f0e076affda82977e06bfdc74350ca/cozy_runtime-0.5.4-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:87a52020014c16ace5cda5ba8cada9432b68a64b194c2c4bc943d684556827ef", size = 13530540, upload-time = "2026-09-08T03:53:09.799Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/96/d7cdb6e5d8201a5b34a20e2dbf75ec11f3d26335ea03d8707356646d8f6f/cozy_runtime-0.5.4-py3-none-any.whl", hash = "sha256:469a40960c6e6b174c7d85e587e6f92b5de74f45d9799c2805df5bd8d46deb5f", size = 1063121, upload-time = "2026-09-08T03:53:12.067Z" },
 ]
 
 [package.optional-dependencies]
