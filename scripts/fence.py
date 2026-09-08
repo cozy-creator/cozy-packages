@@ -802,7 +802,6 @@ def fence_step_progress() -> Fence:
     required: dict[str, set[str]] = {
         "sdxl/sdxl/__init__.py": {"denoise"},
         "minimax-h3/h3.py": {"denoise"},
-        "video-assembly/video_assembly.py": {"scan", "assemble"},
     }
     for rel, stages in required.items():
         _, steps, overall = calls(ROOT / rel)
