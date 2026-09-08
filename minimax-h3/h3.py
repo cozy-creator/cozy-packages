@@ -55,12 +55,12 @@ from official import (
     ReferencePolicyFacts,
     ScheduleFacts,
     Task,
+    assert_duration_envelope,
     build_h3_pipeline,
     denoise_rows,
     frames_for,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
-    supported_durations,
     validate_reference_policy,
 )
 
@@ -100,13 +100,19 @@ Steps = Annotated[
 # rows scale with the frame count, and attention is quadratic in it. Every whole second in
 # the envelope is served, and the SHORTEST is the default — a caller that says nothing pays
 # the cheapest clip, not the longest (se-047).
-SUPPORTED_DURATIONS = supported_durations()
-DEFAULT_DURATION_S = min(SUPPORTED_DURATIONS)
+# Declared, because the wire IS the declaration: `describe` reads this file and runs none of
+# it (#713). `assert_duration_envelope` refuses unless the official 17n+5 snap and the
+# official envelope serve exactly these whole seconds, so the pair below cannot drift from
+# the geometry it advertises.
+MIN_DURATION_S = 5
+MAX_DURATION_S = 14
+assert_duration_envelope((MIN_DURATION_S, MAX_DURATION_S))
+DEFAULT_DURATION_S = MIN_DURATION_S
 DurationSeconds = Annotated[
     int,
     msgspec.Meta(
-        ge=min(SUPPORTED_DURATIONS),
-        le=max(SUPPORTED_DURATIONS),
+        ge=MIN_DURATION_S,
+        le=MAX_DURATION_S,
         description=(
             "Clip length in whole seconds, snapped up to the video VAE's own 17n+5 frame "
             "grid; shorter is quadratically faster."

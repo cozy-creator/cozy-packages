@@ -131,6 +131,24 @@ def supported_durations() -> tuple[int, ...]:
     )
 
 
+def assert_duration_envelope(served: tuple[int, int]) -> None:
+    """Refuse unless the official geometry serves exactly the whole seconds on the wire.
+
+    The wire states its own bounds, because `describe` reads this package's source and
+    never runs it (#713). This is what holds those two numbers to the 17n+5 snap and the
+    official envelope, so the pair cannot drift from the geometry it advertises.
+    """
+    durations = supported_durations()
+    if (durations[0], durations[-1]) != served or durations != tuple(
+        range(served[0], served[1] + 1)
+    ):
+        raise ConformanceError(
+            f"the official MiniMax-H3 geometry serves {durations} whole seconds, not the "
+            f"contiguous {served[0]}..{served[1]} this release admits",
+            code="artifact_config",
+        )
+
+
 #: The longest clip this release generates; the geometry the committed plans are stamped with.
 MAX_FRAMES = frames_for(max(supported_durations()))
 
