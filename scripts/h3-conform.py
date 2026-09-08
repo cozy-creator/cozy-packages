@@ -26,7 +26,15 @@ ROOT = Path(__file__).resolve().parent.parent
 H3 = ROOT / "minimax-h3"
 sys.path.insert(0, str(H3))
 
-from cozy_runtime.author import canonical_json, describe  # noqa: E402
+from cozy_runtime.author import (  # noqa: E402
+    AudioAsset,
+    DecodedVideo,
+    ImageAsset,
+    UnsupportedInput,
+    VideoAsset,
+    canonical_json,
+    describe,
+)
 
 import h3 as package  # noqa: E402
 from conditioner import build_text_conditioner, text_conditioner_config  # noqa: E402
@@ -532,7 +540,6 @@ def arm_reference_resolution() -> None:
     import msgspec
     import numpy as np
     import torch
-    from cozy_runtime.author import ImageAsset
     from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference
 
     print("\n== request-local reference resolution uses official preprocessing ==")
@@ -1431,8 +1438,6 @@ def _audio(seconds: int, *, rate: int = 4, start: Fraction = Fraction(0)) -> Any
 
 
 def _video(seconds: int, *, soundtrack: Any | None = None, width: int = 1, height: int = 1) -> Any:
-    from cozy_runtime.author import DecodedVideo
-
     frames = tuple(bytes([index, 0, 0]) for index in range(seconds))
     return DecodedVideo(
         width=width,
@@ -1449,7 +1454,6 @@ def _video(seconds: int, *, soundtrack: Any | None = None, width: int = 1, heigh
 
 def arm_media() -> None:
     import torch
-    from cozy_runtime.author import AudioAsset, ImageAsset, UnsupportedInput, VideoAsset
     from cozy_runtime.author.fakes import fake_attempt, fake_telemetry
 
     print("\n== ordered mixed references, exact clocks, and continuation identity ==")
