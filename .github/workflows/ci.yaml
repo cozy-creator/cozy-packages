@@ -32,6 +32,11 @@ jobs:
       - name: Fences
         run: uv run --no-project python scripts/fence.py
 
+      # The contract schema is Runtime's, so the committed assets are proven against the
+      # CURRENT release here rather than the package's own locked floor (se-037).
+      - name: H3 execution contract proof
+        run: uv run --no-project python scripts/h3-contract-proof.py
+
       - name: Lint
         run: >-
           uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/

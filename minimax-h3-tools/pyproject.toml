@@ -1,9 +1,13 @@
 [project]
 name = "minimax-h3-tools"
-version = "2.4.0"
+version = "2.4.1"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "cozy-runtime>=0.5.2,<1",
+    # Upper bound, not taste: cr-114's static interface reader (0.5.2) reads the package
+    # TREE, and Creator's published install re-derives the interface from a source directory
+    # holding only package.toml, pyproject.toml and uv.lock — so a 0.5.2 lock cannot install.
+    # Lift it when Creator describes an install from its committed interface.
+    "cozy-runtime>=0.5.1,<0.5.2",
     "msgspec>=0.19",
     "numpy>=1.26",
     "torch>=2.13,<3",
