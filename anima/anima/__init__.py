@@ -260,6 +260,25 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
     def load(self, loader: Loader) -> None:
         self.pipe = loader.construct(AnimaPipeline, factory=build_pipeline)
 
+    def warm(self, ctx: Context) -> None:
+        """One 512px, one-step render at the card's defaults, so no request pays a
+        first-call cost. The runtime calls it once per fill, before the placement serves;
+        there is no attempt to meter, so the phases stay silent."""
+        card = GenerateInput(prompt="")
+        ctx.raise_if_cancelled()
+        self.render(
+            card.quality_prefix,
+            card.negative_prompt,
+            512,
+            512,
+            1,
+            card.guidance,
+            (card.cfg_interval_start, card.cfg_interval_stop),
+            card.first_block_cache,
+            card.seed,
+            _Phases(),
+        )
+
     @uses_components("text_encoder", "text_conditioner", "transformer", "vae")
     def render(
         self,
@@ -272,7 +291,6 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         cfg_interval: tuple[float, float],
         first_block_cache: float,
         seed: int,
-        tel: Telemetry,
         phases: _Phases,
     ) -> Any:
         import torch
@@ -280,7 +298,7 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
 
         device = next(self.pipe.components["transformer"].parameters()).device
         generator = torch.Generator(device=device).manual_seed(seed)
-        pipeline: Any = _text2image_pipeline(device, tel, phases)
+        pipeline: Any = _text2image_pipeline(device, phases)
         pipeline.register_components(
             **self.pipe.components,
             scheduler=FlowMatchEulerDiscreteScheduler.from_config(self.pipe.scheduler_config),
@@ -310,7 +328,7 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         return result
 
 
-def _text2image_pipeline(device: Any, tel: Telemetry, phases: _Phases) -> Any:
+def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
     """The text2image pipeline, instrumented on the blocks it will actually run.
 
     `ModularPipeline.blocks` is a property returning a DEEPCOPY, so a hook installed through
@@ -343,7 +361,7 @@ def _text2image_pipeline(device: Any, tel: Telemetry, phases: _Phases) -> Any:
     order = list(blocks.sub_blocks)
     if not {"denoise.denoise", "denoise.text_conditioning"} <= set(order):
         raise RuntimeError(f"Diffusers Anima text2image blocks changed: {order}")
-    blocks.sub_blocks["denoise.denoise"].progress_bar = _progress_bar(tel, phases)
+    blocks.sub_blocks["denoise.denoise"].progress_bar = _progress_bar(phases)
     blocks.sub_blocks.insert("conditioning", Announce(), order.index("denoise.text_conditioning"))
     return RuntimeAnimaPipeline(blocks=blocks)
 
@@ -353,17 +371,26 @@ class _Phases:
 
     `pipeline(...)` runs text encoding, conditioning, denoise and decode behind a single
     call, so the brackets are opened and closed by the blocks themselves rather than by
-    `with` statements around them.
+    `with` statements around them. Without a `tel` — `warm` has no attempt — it is silent.
     """
 
-    def __init__(self, tel: Telemetry) -> None:
+    def __init__(self, tel: Telemetry | None = None) -> None:
         self.tel = tel
         self.open: AbstractContextManager[None] | None = None
 
     def enter(self, phase: _Phase) -> None:
         self.close()
+        if self.tel is None:
+            return
         self.open = self.tel.stage(phase.stage, overall_range=phase.bounds)
         self.open.__enter__()
+
+    def steps(self, total: int) -> Callable[[int], None]:
+        if self.tel is None:
+            return lambda position: None
+        return self.tel.step_callback(  # type: ignore[no-any-return]
+            total, stage=_DENOISE.stage, overall_range=_DENOISE.bounds
+        )
 
     def close(self) -> None:
         self.__exit__(None, None, None)
@@ -385,18 +412,15 @@ class _Phases:
 class _DenoiseProgress:
     """Diffusers' denoise-loop progress bar projected onto Runtime telemetry."""
 
-    def __init__(self, total: int, tel: Telemetry, phases: _Phases) -> None:
+    def __init__(self, total: int, phases: _Phases) -> None:
         self.total = total
-        self.tel = tel
         self.phases = phases
         self.position = 0
         self.step: Callable[[int], None] | None = None
 
     def __enter__(self) -> _DenoiseProgress:
         self.phases.enter(_DENOISE)
-        self.step = self.tel.step_callback(
-            self.total, stage=_DENOISE.stage, overall_range=_DENOISE.bounds
-        )
+        self.step = self.phases.steps(self.total)
         return self
 
     def update(self, count: int = 1) -> None:
@@ -411,11 +435,11 @@ class _DenoiseProgress:
             self.phases.enter(_DECODE)
 
 
-def _progress_bar(tel: Telemetry, phases: _Phases) -> Callable[..., _DenoiseProgress]:
+def _progress_bar(phases: _Phases) -> Callable[..., _DenoiseProgress]:
     def progress_bar(iterable: object = None, total: int | None = None) -> _DenoiseProgress:
         if iterable is not None or total is None or total < 1:
             raise RuntimeError("Anima denoise progress requires one positive total")
-        return _DenoiseProgress(total, tel, phases)
+        return _DenoiseProgress(total, phases)
 
     return progress_bar
 
@@ -433,9 +457,6 @@ def generate(
 
     width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
     steps = payload.steps
-    if ctx.boot_warmup:
-        width = height = 512
-        steps = 1
     if payload.cfg_interval_start > payload.cfg_interval_stop:
         raise UnsupportedInput(
             "cfg_interval_start must not exceed cfg_interval_stop", code="cfg_interval"
@@ -451,7 +472,6 @@ def generate(
             (payload.cfg_interval_start, payload.cfg_interval_stop),
             payload.first_block_cache,
             payload.seed,
-            tel,
             phases,
         )
         # Still `decoding`: the pipeline left that bracket open and the host copy below is

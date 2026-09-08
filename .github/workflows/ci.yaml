@@ -16,13 +16,14 @@ jobs:
           version: "0.12.7"
       - run: uv python install 3.12
 
-      # Runtime installs from PyPI like any dependency. CI therefore sees the real author
-      # types and media capability on every run; there is no secret-gated skipped-green path.
+      # Runtime installs from PyPI like any dependency, at the packages' own floor (0.4.3:
+      # `Model.warm`, `fakes.warm_with_fakes`). CI therefore sees the real author types and
+      # media capability on every run; there is no secret-gated skipped-green path.
       - name: Environment
         run: |
           uv venv --python 3.12
           uv pip install \
-            "cozy-runtime>=0.4.2,<1" \
+            "cozy-runtime>=0.4.3,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences
@@ -158,6 +159,12 @@ jobs:
       - name: Anima progress arms
         if: matrix.package == 'anima'
         run: anima/.venv/bin/python scripts/anima-conform.py
+
+      # `Model.warm` is only observable by RUNNING it: the package's own constructors at
+      # toy widths, under the author harness the executor's warm path is built from.
+      - name: Warm arms
+        if: matrix.package == 'anima' || matrix.package == 'sdxl'
+        run: ${{ matrix.package }}/.venv/bin/python scripts/warm-conform.py ${{ matrix.package }}
 
       - name: H3 table construction order proof
         if: matrix.package == 'minimax-h3-tools'
