@@ -2584,7 +2584,7 @@ def arm_warm() -> None:
 
     # A DiT THE FILL PARKED. Warming is offered per entrypoint, and a card that cannot
     # admit the second one refuses typed; the construction still serves both entrypoints,
-    # so a shortfall here must not fault the placement (se-045).
+    # so a shortfall here must not fault the placement (se-046).
     print("\n== warm: a parked DiT is skipped, not a construction failure ==")
     plane = ShortfallPlane("ref2va_dit", PARKED_DIT_SHORTFALL)
     model, recorded = warm_under(plane)
