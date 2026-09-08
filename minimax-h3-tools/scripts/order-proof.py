@@ -201,7 +201,7 @@ def main() -> None:
     if not isinstance(declared, list):
         raise TypeError("package jobs are not one interface list")
     jobs = {str(row["name"]): row for row in declared}
-    if set(jobs) != {"assemble_full", "four-lane", "retable"}:
+    if set(jobs) != {"assemble_full", "attention-lane", "four-lane", "retable"}:
         raise RuntimeError(f"package callable compatibility changed: {sorted(jobs)}")
     job = jobs["four-lane"]
     models = {row["path"]: row for row in job["models"]}
