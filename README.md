@@ -2,7 +2,7 @@
 
 First-party package sources authored against `cozy_runtime.author`. The tracker is the design
 authority; this repository contains package schemas, model-specific computation, and deterministic
-conformance drivers. Published package model selection lives on the hub (see Model bindings). Private scripts
+conformance drivers. Functions declare model defaults; explicit owner overrides live on the hub (see Model bindings). Private scripts
 select their inputs explicitly and run without publishing code to the hub.
 
 ## Layout
@@ -23,9 +23,9 @@ select their inputs explicitly and run without publishing code to the hub.
 
 ## Boundaries
 
-- Code states capability; bindings state selection. Neither package modules nor `package.toml`
-  name a repository, checkpoint, release, lane, or download identity; the owner binds slots on
-  the hub.
+- Code states capability and can declare default model ladders beside a callable.
+  Runtime validates and publishes that metadata; the host resolves it before execution.
+  Owner overrides live on the hub. `package.toml` contains no binding copy.
 - Runtime alone hydrates and decodes request assets, places model components, and encodes outputs.
   Package code receives public decoded values and never opens a request path, URL, container, or
   packet. The model package does read its own five immutable tokenizer/processor data files.
@@ -43,9 +43,13 @@ select their inputs explicitly and run without publishing code to the hub.
 
 ## Model bindings
 
-A package publishes model slots (`<callable>.models.<param>`); which release and lane a slot loads
-is an owner action on the hub, never a default in `package.toml`. A freshly published package is
-unbound until the owner binds it:
+A package publishes model slots (`<callable>.models.<param>`) and optional function-authored
+default ladders. H3 declares one shared ladder beside its `fl2va` and `ref2va` decorators.
+Publishing stores those defaults in the immutable package interface, without creating mutable
+Hub binding rows. Selection precedence is per-run override, owner Hub override, then the selected
+package release's authored default. All rungs for one model argument select lanes in one release.
+
+Use `cozy package bind` to set an explicit owner override:
 
 ```sh
 cozy package bind paul/minimax-h3 fl2va.models.model paul/minimax-h3@1.0.0-rc.2 \
@@ -53,6 +57,9 @@ cozy package bind paul/minimax-h3 fl2va.models.model paul/minimax-h3@1.0.0-rc.2 
 cozy package bind paul/minimax-h3 ref2va.models.model paul/minimax-h3@1.0.0-rc.2 \
   --gpu H100=fp8-adaln-pruned --gpu B200=fp8-adaln-pruned --gpu 5090=fp8-adaln-pruned
 ```
+
+Use `cozy package unbind paul/minimax-h3 ref2va.models.model` to remove that override and
+return to the published function default. Existing valid owner overrides survive package updates.
 
 - Each `--gpu <gpu>=<lane>` is one rung and order is preference: at serve time the hub walks the
   rungs top-down and takes the first whose `<gpu>` matches the SKU.
@@ -146,13 +153,13 @@ media decoder. File delivery works the same locally and on a rental:
 ```sh
 cozy run paul/minimax-h3/ref2va \
   'prompt=<your H3 prompt>' \
-  --asset="~/Pictures/character-1.png" \
-  --asset="~/Pictures/character-2.png" \
-  duration_s:=10 seed=24680 --rental-only --await
+  --asset="$HOME/Pictures/character-1.png" \
+  --asset="$HOME/Pictures/character-2.png" \
+  duration_s=14 steps=30 seed=24680 --rental-only --await
 ```
 
-The Hub binding supplies the default model. `--model.model=...` overrides it for
-one call. FL2VA accepts up to two images through the same Assets input. Images
+The published function supplies the default model unless an owner Hub override exists.
+`--model.model=...` overrides either for one call. FL2VA accepts up to two images through the same Assets input. Images
 fill the first and last frame roles in order; labels `first` and `last` select those
 roles explicitly. For example, `--asset="last=ending.png"` supplies only a last frame.
 Other labels retain positional meaning. An empty collection generates without
@@ -248,8 +255,8 @@ pruned lane carries the union of every served schedule's rows, so one checkpoint
 `steps` value; a lane whose plan identity differs from the package's refuses at construction. The
 AdaLN-pruned extension inherits Diffusers' forward and changes only those projection modules; it
 does not interpolate a curve or carry a second model port. The hub selects the lane before fetch
-from the owner's binding (Model bindings above); package source and environment variables cannot
-choose one.
+from the resolved default or explicit override (Model bindings above); model computation
+and environment variables do not choose one.
 
 The release has exactly four lanes: `bf16-full`, `bf16-adaln-pruned`, `fp8-adaln-pruned`, and
 `mxfp8-adaln-pruned`. The production binding is `paul/minimax-h3@1.0.0-rc.2` on
@@ -260,10 +267,11 @@ Ref2VA preserves request order and enforces the official product bounds: at most
 3 standalone audio clips, and 12 entries total. Video and audio clips are 2–15 seconds, with at most
 15 seconds per modality in aggregate. A video's embedded soundtrack belongs to that video and does
 not consume the standalone-audio count. Standalone audio cannot be the only reference modality.
-The optional `reference_image_short_edge` sets the default short edge from 256 to 2048
-pixels (default 1024). Diffusers rounds both axes to its 32-pixel grid. Explicit fidelity
-hints keep their sizes; automatic images step down together through 2048, 1536, 1024,
-768, 512 and 256, starting no higher than the request default, until the combined
+The package selects reference-image sizes automatically. Images with `auto` fidelity
+start at a 1024-pixel short edge; `low`, `medium`, and `high` fidelity select 256, 1024,
+and 2048 pixels respectively. Diffusers rounds both axes to its 32-pixel grid. Explicit
+fidelity hints keep their sizes; automatic images step down together through 1024,
+768, 512 and 256 until the combined
 32,768-token vision budget fits. A set that still exceeds the budget refuses with the
 arithmetic before entering a component scope. Video and audio presentation is unchanged.
 The resolved sizes are request-local and appear in telemetry. Smaller references reduce

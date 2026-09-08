@@ -12,9 +12,9 @@ than as a convention someone remembers:
                           prevent — and a driver reaching past it breaks exactly as
                           silently, so the scan covers drivers too. `DRIVER_INTERNALS`
                           enumerates the exceptions a driver has EARNED, with the reason.
-  2. no-identifiers       code states CAPABILITY, bindings state SELECTION (§1.0/§1.1).
-                          A model, release, checkpoint digest or model revision spelled in
-                          package code is a binding hard-coded into a build.
+  2. no-direct-artifact-loading
+                          Runtime validates source-authored default ladders. Package code
+                          still cannot fetch weights or bypass the verified model loader.
   3. top-level-imports    every import is at module scope (Paul, 2026-09-08): an import
                           under a def or class hides a dependency from the file's head.
                           Until se-041 that was how package code kept torch off CI's
@@ -33,9 +33,8 @@ than as a convention someone remembers:
                           typed bindings and settings; the executor ERASES `COZY_*`/token
                           env anyway, so an env read is a channel that never works in
                           production.
-  9. no-package-bindings  package.toml carries no [bindings]: model selection is the
-                          owner's hub binding (`cozy package bind`), never a default
-                          shipped in source.
+  9. no-package-bindings  package.toml carries no [bindings]: callable decorators own
+                          authored defaults; explicit owner overrides live on the hub.
 10. interface-minimality
                           committed interface/1 files carry no retired unused facts.
  11. h3-adaln-pruned-vocabulary
@@ -399,11 +398,10 @@ def fence_top_level_imports() -> Fence:
     )
 
 
-#: Things that identify an ARTIFACT rather than a capability. Deliberately literal: this
-#: catches the spelling a hurried edit actually uses.
+#: Direct artifact-loading spellings. Release references are allowed declarative data;
+#: Runtime's descriptor validation owns their default-ladder shape and argument binding.
 IDENTIFIERS = (
     (re.compile(r"\bsha256:[0-9a-f]{16}"), "a checkpoint digest"),
-    (re.compile(r"\b[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+"), "a pinned release ref"),
     (re.compile(r"\bfrom_pretrained\b"), "a from_pretrained call (the loader constructs)"),
     (re.compile(r"\bhf_hub_download\b|\bsnapshot_download\b"), "a weight fetch"),
 )
@@ -422,11 +420,7 @@ def fence_identifiers() -> Fence:
     bad: list[str] = []
     for path in package_modules():
         source = path.read_text()
-        # DOCSTRINGS AND COMMENTS ONLY are blanked, and the distinction is load-bearing:
-        # prose names the runtime's own docs and the pinned upstream revision this port
-        # was read from, while an ORDINARY string literal is the only way anyone would
-        # actually hard-code a ref. Blanking every string (the first cut) made this fence
-        # blind to its own subject — a planted `_pin = "cozy/minimax-h3@se-001"` passed.
+        # Prose may discuss loaders and digests; executable source stays checked.
         code = _strip_docs(source)
         for line_no, line in enumerate(code.splitlines(), 1):
             for pattern, what in IDENTIFIERS:
@@ -992,7 +986,7 @@ FENCES = (
     ("author-surface-only", fence_author_surface),
     ("driver-boundary-armed", fence_driver_arm),
     ("top-level-imports", fence_top_level_imports),
-    ("no-identifiers-in-code", fence_identifiers),
+    ("no-direct-artifact-loading", fence_identifiers),
     ("no-memory-choreography", fence_no_choreography),
     ("no-test-suite", fence_no_tests),
     ("h3-media-boundary", fence_h3_media_boundary),

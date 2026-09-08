@@ -237,7 +237,7 @@ def main() -> None:
     saved = h3_diagnostics.save_trace(full, fake_context(), request, assets, observed_model, output)
     provenance = json.loads(saved.read_bytes())["provenance"]
     assert [reference["fidelity"] for reference in provenance["references"]] == ["low", "auto"]
-    assert provenance["reference_image_short_edge"] == request.reference_image_short_edge
+    assert "reference_image_short_edge" not in provenance
     seen.clear()
     partial = ActivationTrace(evaluations=3, first_step=True)
     try:

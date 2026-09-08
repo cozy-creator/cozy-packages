@@ -141,14 +141,6 @@ class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Prompt
     mute: bool = False
     seed: int | None = None
-    reference_image_short_edge: Annotated[
-        int,
-        msgspec.Meta(
-            ge=256,
-            le=REFERENCE_IMAGE_SHORT_EDGE,
-            description="Image-reference short edge in pixels; lower trades detail for speed.",
-        ),
-    ] = DEFAULT_REFERENCE_IMAGE_SHORT_EDGE
     steps: Steps = DEFAULT_STEPS
     duration_s: DurationSeconds = DEFAULT_DURATION_S
 
@@ -362,7 +354,7 @@ class ReferenceSizing(msgspec.Struct, frozen=True):
 def resolve_reference_sizing(
     images: Sequence[ImageSizing], *, default: int, video_tokens: int
 ) -> ReferenceSizing:
-    """An explicit short edge is never changed. The images without one share the request
+    """An explicit fidelity is never changed. The images without one share the package
     default and step down the ladder together until the total fits the budget; auto-sizing
     never rises above the default."""
 
@@ -392,7 +384,6 @@ def assets_to_h3_refs(
     references: ReferenceAssets,
     *,
     pipe: OfficialH3Pipeline,
-    reference_image_short_edge: int = DEFAULT_REFERENCE_IMAGE_SHORT_EDGE,
 ) -> tuple[list[Any], ReferenceSizing]:
     prepared: list[Any] = []
     video_duration = Fraction(0)
@@ -430,7 +421,7 @@ def assets_to_h3_refs(
             _validate_audio_aggregate(audio_duration)
             prepared.append(pipe.audio_reference(audio))
     return prepared, resolve_reference_sizing(
-        images, default=reference_image_short_edge, video_tokens=video_tokens
+        images, default=DEFAULT_REFERENCE_IMAGE_SHORT_EDGE, video_tokens=video_tokens
     )
 
 
@@ -674,7 +665,14 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
     return float(bad / int(value.numel()))
 
 
-@app.entrypoint()
+_DEFAULT_MODEL_LADDER = [
+    {"gpu": "H100", "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-adaln-pruned"},
+    {"gpu": "B200", "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-adaln-pruned"},
+    {"gpu": "5090", "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-adaln-pruned"},
+]
+
+
+@app.entrypoint(defaults={"model": _DEFAULT_MODEL_LADDER})
 def fl2va(
     ctx: Context,
     payload: FirstLastFrameToVideoInput,
@@ -724,7 +722,7 @@ def fl2va(
     )
 
 
-@app.entrypoint(preflight=preflight_reference_media)
+@app.entrypoint(preflight=preflight_reference_media, defaults={"model": _DEFAULT_MODEL_LADDER})
 def ref2va(
     ctx: Context,
     payload: ReferenceMediaToVideoInput,
@@ -739,11 +737,7 @@ def ref2va(
     view = model.for_request(ctx, seed=payload.seed)
     checks = NumericalChecks(tel, model.pipe.resident)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
-        references, sizing = assets_to_h3_refs(
-            assets,
-            pipe=model.pipe,
-            reference_image_short_edge=payload.reference_image_short_edge,
-        )
+        references, sizing = assets_to_h3_refs(assets, pipe=model.pipe)
         tel.log(
             "h3 reference sizing",
             images=sizing.summary,

@@ -100,7 +100,9 @@ def fixture(
 def exercise(root: Path, variant: str) -> None:
     store = tensorfs.Store.ensure(root)
     source, length, values, source_order = fixture(store, variant)
-    original = tensorfs.parse_header(bytes(store.manifest(source)["header"]))
+    source_header = store.manifest(source)["header"]
+    assert source_header is not None, "model fixture has no CozyTensors header"
+    original = tensorfs.parse_header(source_header)
     model = _derive_model(Checkpoint, source)
     # Ordinary new roots are refused; explicitly admit this tiny fixture only in
     # this diagnostic process. Production keeps its four immutable source IDs.
@@ -173,10 +175,12 @@ def exercise(root: Path, variant: str) -> None:
     assert replayed == resumed
     facts = store.derived_lookup(resumed_receipt.weights_transaction_id)["receipt"]
     manifest = "sha256:" + facts["manifest"]["sha256"]
-    produced = tensorfs.parse_header(bytes(store.manifest(manifest)["header"]))
+    produced_header = store.manifest(manifest)["header"]
+    assert produced_header is not None, "repaired model has no CozyTensors header"
+    produced = tensorfs.parse_header(produced_header)
     assert produced["configs"] == original["configs"]
-    before_plan = tensorfs.plan(bytes(store.manifest(source)["header"]), source_order)
-    after_plan = tensorfs.plan(bytes(store.manifest(manifest)["header"]), source_order)
+    before_plan = tensorfs.plan(source_header, source_order)
+    after_plan = tensorfs.plan(produced_header, source_order)
     assert before_plan.order == after_plan.order, "repair changed construction traversal"
     assert [
         (component, key) for component, rows in produced["components"].items() for key in rows
