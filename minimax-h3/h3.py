@@ -50,10 +50,10 @@ from official import (
     ReferencePolicyFacts,
     ScheduleFacts,
     Task,
+    assert_supported_steps,
     build_h3_pipeline,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
-    assert_supported_steps,
     validate_reference_policy,
 )
 
