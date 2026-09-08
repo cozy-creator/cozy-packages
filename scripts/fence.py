@@ -217,20 +217,6 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "host and TensorFS writer, including interrupted resume and exact receipt replay. "
         "Retire when the public fake weights service can construct this native host."
     ),
-    ("scripts/h3-attention-lane-proof.py", "cozy_runtime.author._model"): (
-        "the attention-lane driver derives the exact-checkpoint job source the way Runtime "
-        "does; for_test admits test:// identities only. Retire with the repair entry above."
-    ),
-    ("scripts/h3-attention-lane-proof.py", "cozy_runtime.internal.weights_sink"): (
-        "the attention-lane driver runs the public job against the real Runtime host and "
-        "TensorFS writer so the produced header, its object refs and its replay are native "
-        "facts. Retire when the public fake weights service can construct this host."
-    ),
-    ("scripts/h3-contract-proof.py", "cozy_runtime.internal.execution_contract"): (
-        "the committed contract assets are proven through the reader that applies them "
-        "(cr-109/cr-114) at the digest the runtime banks in triage. Retire when the author "
-        "surface exposes the contract reader."
-    ),
     ("scripts/h3-conform.py", "cozy_runtime.internal.residency"): (
         "the warm arms raise Runtime's OWN `ResidencyRefusal` — the class, the typed "
         "`device_shortfall` code and the verbatim detail an H100 produced — so the "

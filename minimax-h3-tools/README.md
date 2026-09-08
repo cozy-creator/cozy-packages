@@ -58,17 +58,6 @@ transaction is where the modulation weights are read. The retabled checkpoint co
 first. It refuses before any read unless `pruned` carries table rows and no dynamic
 modulation weights for both DiTs and `full` carries the exact modulation weights.
 
-The ordinary `attention-lane` job binds each declared execution contract to an existing
-AdaLN-pruned checkpoint (`pruned`) and emits one lane checkpoint per contract —
-`fp8-attn8-adaln-pruned` (SageAttention2 sm90, `class: quantized`) and `fp8-fa3-adaln-pruned`
-(the image's baked FlashAttention-3 bf16, `class: same`, h3a-012). Every tensor and config is
-inherited by reference and each lane adds one inline header config `execution`, the verbatim
-package asset `assets/execution.<contract>.json` (attention-quantization.md §2), so a lane
-costs one manifest and no tensor byte is read or written; the result prints each config's
-canonical digest. It refuses typed (`attention_lane_source`) when the source already carries
-`execution` or does not store every quantization-plan row in the encoding a contract's
-`weights.route` names. The hub releases a `class: quantized` lane only past a PASS assessment.
-
 The package declares no GPU, SM, VRAM, or host-RAM guess. Creator derives accelerator-class work
 from the typed model inputs; exact artifact residency and measured request/scratch envelopes drive
 fit. The job opens the three pruned-output transactions together, computes each task's timestep tables once,

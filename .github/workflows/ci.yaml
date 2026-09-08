@@ -30,11 +30,6 @@ jobs:
       - name: Fences
         run: uv run --no-project python scripts/fence.py
 
-      # The contract schema is Runtime's, so the committed assets are proven against the
-      # CURRENT release here rather than the package's own locked floor (se-037).
-      - name: H3 execution contract proof
-        run: uv run --no-project python scripts/h3-contract-proof.py
-
       - name: Lint
         run: >-
           uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ examples/
@@ -64,8 +59,6 @@ jobs:
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/job.py'
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/whole-order.json'
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/dit-full-specs.json'
-          unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/execution.sm90-attn8.json'
-          unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/execution.sm90-fa3.json'
 
       # The torch family is ABI-coupled — torchvision's compiled ops link against torch's
       # C++ ABI — and #633 gives one PlatformTarget exactly ONE family. A package that
@@ -184,7 +177,7 @@ jobs:
         if: matrix.package == 'anima' || matrix.package == 'sdxl'
         run: ${{ matrix.package }}/.venv/bin/python scripts/warm-conform.py ${{ matrix.package }}
 
-      - name: H3 table construction order and attention-lane proofs
+      - name: H3 table construction order proofs
         if: matrix.package == 'minimax-h3-tools'
         run: |
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/order-proof.py
@@ -194,7 +187,6 @@ jobs:
           minimax-h3-tools/.venv/bin/python scripts/h3-adaln-binding-proof.py
           minimax-h3-tools/.venv/bin/python scripts/h3-adaln-interface-proof.py
           minimax-h3-tools/.venv/bin/python scripts/tensorfs_seeds.py
-          minimax-h3-tools/.venv/bin/python scripts/h3-attention-lane-proof.py
         env:
           PYTHONPATH: minimax-h3-tools/src
 
