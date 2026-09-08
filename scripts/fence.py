@@ -193,7 +193,7 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "the warm arms raise Runtime's OWN `ResidencyRefusal` — the class, the typed "
         "`device_shortfall` code and the verbatim detail an H100 produced — so the "
         "package's tolerance of a parked component is proven against what actually "
-        "raises it rather than a local look-alike (se-045). Retire when the author "
+        "raises it rather than a local look-alike (se-046). Retire when the author "
         "surface names the capacity refusal a `warm` body must tolerate."
     ),
     ("scripts/h3-conform.py", "cozy_runtime.internal.derive"): (
