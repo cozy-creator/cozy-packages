@@ -35,7 +35,6 @@ from h3_tables.model_config import dual_full_config, parse_production_config  # 
 from official import (  # noqa: E402
     REFERENCE_IMAGE_SHORT_EDGE,
     OfficialH3Pipeline,
-    _ReferenceImageProcessor,
     _ScopedPipeline,
     reference_image_size,
     reference_image_vision_tokens,
@@ -80,13 +79,19 @@ def digest(image: Image) -> str:
     return hashlib.sha256(image.tobytes()).hexdigest()
 
 
-def start(pipe: OfficialH3Pipeline, references: list[Any], edge: int = 2048) -> Any:
+def start(
+    pipe: OfficialH3Pipeline, references: list[Any], edges: int | tuple[int, ...] = 2048
+) -> Any:
+    if isinstance(edges, int):
+        edges = tuple(
+            edges for reference in references if isinstance(reference, MiniMaxH3ImageReference)
+        )
     return pipe.start_ref2va(
         prompt="<Picture 1> and <Picture 2> beside <Picture 3>.",
         references=references,
         generator=torch.Generator().manual_seed(7),
         steps=min(supported_steps()),
-        reference_image_short_edge=edge,
+        reference_image_short_edges=edges,
     )
 
 
@@ -103,13 +108,9 @@ def main() -> None:
     source_images = [picture(381, 509, rgba=True), picture(960, 640), picture(513, 513)]
     original_sources = [(image.mode, image.size, digest(image)) for image in source_images]
     edges = (256, 1024, 2048)
-    references = [
-        pipe.image_reference(image, short_edge=edge)
-        for image, edge in zip(source_images, edges, strict=True)
-    ]
+    references = [pipe.image_reference(image) for image in source_images]
     assert all(isinstance(reference, MiniMaxH3ImageReference) for reference in references)
-    assert [reference.short_edge for reference in references] == list(edges)
-    state = start(pipe, references)
+    state = start(pipe, references, edges)
     actual_sizes = [entry.image.size for entry in state.normalized_references]
     assert actual_sizes == [(256, 352), (1536, 1024), (2048, 2048)]
     for source, edge, reference, normalized in zip(
@@ -152,19 +153,12 @@ def main() -> None:
     assert min(unmarked.normalized_references[0].image.size) == 2048
     assert unmarked.normalized_references[0].image.size != actual_sizes[0]
 
-    # The official processor handles unmarked images and other attributes unchanged.
-    view = _ReferenceImageProcessor(processor, [references[0].image])
-    delegated = view.resize(source_images[1], height=128, width=192)
-    expected = processor.resize(source_images[1], height=128, width=192)
-    assert delegated.size == expected.size and delegated.tobytes() == expected.tobytes()
-    assert view.config is processor.config
-
     # Default auto and request-global overrides match the previous NumPy input path exactly.
     baseline_pixels = np.asarray(source_images[0].convert("RGB"))
     defaults = []
     for edge in (256, 769, 1024, REFERENCE_IMAGE_SHORT_EDGE):
         baseline = start(pipe, [MiniMaxH3ImageReference(image=baseline_pixels)], edge)
-        explicit = start(pipe, [pipe.image_reference(source_images[0], short_edge=edge)], edge)
+        explicit = start(pipe, [pipe.image_reference(source_images[0])], edge)
         actual = explicit.normalized_references[0].image
         assert actual.size == baseline.normalized_references[0].image.size
         assert actual.tobytes() == baseline.normalized_references[0].image.tobytes()
@@ -174,7 +168,7 @@ def main() -> None:
     boundary = picture(400, 100)
     boundary_baseline = start(pipe, [MiniMaxH3ImageReference(image=boundary)], 784)
     boundary_auto = start(
-        pipe, [pipe.image_reference(boundary, short_edge=edge) for edge in (784, 256, 2048)], 784
+        pipe, [pipe.image_reference(boundary) for _ in range(3)], (784, 256, 2048)
     )
     assert boundary_auto.normalized_references[0].image.size == (3136, 768)
     boundary_sizes = [entry.image.size for entry in boundary_auto.normalized_references]
@@ -182,31 +176,25 @@ def main() -> None:
     assert boundary_auto.normalized_references[0].image.tobytes() == (
         boundary_baseline.normalized_references[0].image.tobytes()
     )
-    try:
-        start(pipe, [pipe.image_reference(boundary, short_edge=784)])
-    except ValueError as exc:
-        assert "32-pixel-aligned" in str(exc)
-    else:
-        raise AssertionError("unsupported private edge combination did not refuse")
-
     # The same underlying source can occur twice with different edges and separate pixels.
     repeated = start(
         pipe,
-        [pipe.image_reference(source_images[2], short_edge=edge) for edge in (256, 2048)],
+        [pipe.image_reference(source_images[2]) for _ in range(2)],
+        (256, 2048),
     )
     assert [entry.image.size for entry in repeated.normalized_references] == [
         (256, 256),
         (2048, 2048),
     ]
     assert repeated.normalized_references[0].image is not repeated.normalized_references[1].image
-    assert [entry.image.size for entry in start(pipe, references, 768).normalized_references] == (
+    assert [entry.image.size for entry in start(pipe, references, edges).normalized_references] == (
         actual_sizes
     )
 
     # Actual setup errors after a sized reference must not leave an override behind.
     malformed = MiniMaxH3ImageReference(image=np.zeros((2, 2, 4), dtype=np.uint8))
     try:
-        start(pipe, [references[0], malformed])
+        start(pipe, [references[0], malformed], (256, 1024))
     except ValueError as exc:
         assert "RGB pixels" in str(exc)
     else:
@@ -222,7 +210,7 @@ def main() -> None:
     pipe._blocks["ref2va"].sub_blocks["before_encode"] = cancelled_setup
     try:
         try:
-            start(pipe, [references[0]])
+            start(pipe, [references[0]], 256)
         except Cancelled:
             pass
         else:
@@ -240,7 +228,7 @@ def main() -> None:
         audio=torch.arange(3200).float()[None],
         sample_rate=32000,
     )
-    mixed = start(pipe, [references[0], video, audio, references[1]])
+    mixed = start(pipe, [references[0], video, audio, references[1]], (256, 1024))
     previous = start(
         pipe,
         [
@@ -296,8 +284,7 @@ def main() -> None:
                 "vae_posterior": "synthetic boundary recorder; no weighted VAE forward",
                 "upstream_default_parity": defaults,
                 "non_grid_global_edge_aspect_boundary_parity": True,
-                "auto_784_low_high_boundary_sizes": boundary_sizes,
-                "unsupported_private_rounding_refuses": True,
+                "mixed_784_low_high_boundary_sizes": boundary_sizes,
                 "mixed_video_frames": normalized[1].frames.shape[0],
                 "mixed_video_fps": normalized[1].fps,
                 "mixed_audio_sample_rate": normalized[2].sample_rate,

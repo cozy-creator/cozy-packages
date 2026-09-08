@@ -16,7 +16,8 @@ disallow_any_generics = true
 implicit_reexport = false
 
 # Static checks install the typed Runtime distribution from PyPI. Heavy model libraries remain
-# absent because module-scope imports are forbidden and descriptor analysis must stay light.
+# absent to check the package-facing contracts without their large third-party stub trees.
+# Runtime behavior and imported descriptors use the full locked dependency environment.
 [[tool.mypy.overrides]]
 module = [
     "torch.*", "torchvision.*", "transformers.*", "tokenizers.*", "numpy.*", "PIL.*",

@@ -8,6 +8,7 @@ stages weighted roots, and joins those two boundaries.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 from typing import Annotated, Any, Literal
@@ -37,6 +38,7 @@ from cozy_runtime.author import (
     VideoAsset,
     uses_components,
 )
+from msgspec.structs import replace
 
 from gates import MediaFacts, pre_encode_gate
 from official import (
@@ -78,6 +80,8 @@ ReferenceAssets = Annotated[
     msgspec.Meta(min_length=1),
 ]
 KeyframeAssets = Annotated[Assets[Image], AssetLimits(images=2)]
+DEFAULT_REFERENCE_IMAGE_SHORT_EDGE = 1024
+_SHORT_EDGE_LADDER = (2048, 1536, 1024, 768, 512, 256)
 _REFERENCE_FIDELITY_EDGES = {"low": 256, "medium": 1024, "high": REFERENCE_IMAGE_SHORT_EDGE}
 Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
 # The wire enum is the committed plans' step counts; a bound lane serves exactly these
@@ -108,7 +112,7 @@ class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
             le=REFERENCE_IMAGE_SHORT_EDGE,
             description="Image-reference short edge in pixels; lower trades detail for speed.",
         ),
-    ] = REFERENCE_IMAGE_SHORT_EDGE
+    ] = DEFAULT_REFERENCE_IMAGE_SHORT_EDGE
     steps: Steps = DEFAULT_STEPS
 
 
@@ -227,16 +231,82 @@ def _keyframe_image(
     return image
 
 
+class ImageSizing(msgspec.Struct, frozen=True):
+    """One image reference's fidelity: its explicit short edge, or the auto-sized default."""
+
+    field: str
+    width: int
+    height: int
+    requested: int | None
+    resolved: int = 0
+
+    @property
+    def tokens(self) -> int:
+        return reference_image_vision_tokens(self.width, self.height, self.resolved)
+
+
+class ReferenceSizing(msgspec.Struct, frozen=True):
+    images: tuple[ImageSizing, ...]
+    video_tokens: int
+    default: int
+
+    @property
+    def edges(self) -> list[int]:
+        return [image.resolved for image in self.images]
+
+    @property
+    def total(self) -> int:
+        return self.video_tokens + sum(image.tokens for image in self.images)
+
+    @property
+    def summary(self) -> str:
+        """Per image: field, requested (or ``default``) -> resolved short edge, tokens."""
+        return "; ".join(
+            f"{image.field} {image.requested or 'default'}->{image.resolved} {image.tokens} tokens"
+            for image in self.images
+        )
+
+
+def resolve_reference_sizing(
+    images: Sequence[ImageSizing], *, default: int, video_tokens: int
+) -> ReferenceSizing:
+    """An explicit short edge is never changed. The images without one share the request
+    default and step down the ladder together until the total fits the budget; auto-sizing
+    never rises above the default."""
+
+    def sized(edge: int) -> ReferenceSizing:
+        resolved = tuple(replace(image, resolved=image.requested or edge) for image in images)
+        return ReferenceSizing(resolved, video_tokens, default)
+
+    ladder = [default, *(rung for rung in _SHORT_EDGE_LADDER if rung < default)]
+    for edge in ladder:
+        sizing = sized(edge)
+        if sizing.total <= MAX_CONDITIONER_VISION_TOKENS:
+            return sizing
+    floor = sized(ladder[-1])
+    explicit = [image for image in floor.images if image.requested]
+    raise UnsupportedInput(
+        f"reference vision presentation needs {floor.total} tokens even with every default-sized "
+        f"image at {ladder[-1]} px ({video_tokens} from videos, "
+        f"{sum(image.tokens for image in explicit)} from the explicit short edges "
+        f"{[image.requested for image in explicit]}); this release admits at most "
+        f"{MAX_CONDITIONER_VISION_TOKENS}",
+        code="reference_policy",
+        fields=["assets"],
+    )
+
+
 def assets_to_h3_refs(
     references: ReferenceAssets,
     *,
     pipe: OfficialH3Pipeline,
-    reference_image_short_edge: int = REFERENCE_IMAGE_SHORT_EDGE,
-) -> list[Any]:
+    reference_image_short_edge: int = DEFAULT_REFERENCE_IMAGE_SHORT_EDGE,
+) -> tuple[list[Any], ReferenceSizing]:
     prepared: list[Any] = []
     video_duration = Fraction(0)
     audio_duration = Fraction(0)
-    vision_tokens = 0
+    video_tokens = 0
+    images: list[ImageSizing] = []
 
     for index, reference in enumerate(references):
         info = references.info(index)
@@ -244,14 +314,11 @@ def assets_to_h3_refs(
         if isinstance(reference, Image):
             image = reference
             _validate_ratio(image.width, image.height, field)
-            short_edge = (
-                reference_image_short_edge
-                if info.fidelity == "auto"
-                else _REFERENCE_FIDELITY_EDGES[info.fidelity]
+            requested = (
+                None if info.fidelity == "auto" else _REFERENCE_FIDELITY_EDGES[info.fidelity]
             )
-            vision_tokens += reference_image_vision_tokens(image.width, image.height, short_edge)
-            _validate_vision_budget(vision_tokens)
-            prepared.append(pipe.image_reference(image, short_edge=short_edge))
+            images.append(ImageSizing(field, image.width, image.height, requested))
+            prepared.append(pipe.image_reference(image))
         elif isinstance(reference, DecodedVideo):
             video = reference
             _validate_video(video, field)
@@ -262,10 +329,7 @@ def assets_to_h3_refs(
                     code="reference_policy",
                     fields=["assets"],
                 )
-            vision_tokens += reference_video_vision_tokens(
-                video.width, video.height, video.duration
-            )
-            _validate_vision_budget(vision_tokens)
+            video_tokens += reference_video_vision_tokens(video.width, video.height, video.duration)
             prepared.append(pipe.video_reference(video))
         else:
             audio = reference
@@ -273,17 +337,9 @@ def assets_to_h3_refs(
             audio_duration += audio.duration
             _validate_audio_aggregate(audio_duration)
             prepared.append(pipe.audio_reference(audio))
-    return prepared
-
-
-def _validate_vision_budget(tokens: int) -> None:
-    if tokens > MAX_CONDITIONER_VISION_TOKENS:
-        raise UnsupportedInput(
-            f"reference vision presentation needs {tokens} tokens; this release admits at most "
-            f"{MAX_CONDITIONER_VISION_TOKENS}",
-            code="reference_policy",
-            fields=["assets"],
-        )
+    return prepared, resolve_reference_sizing(
+        images, default=reference_image_short_edge, video_tokens=video_tokens
+    )
 
 
 def _validate_ratio(width: int, height: int, field: str) -> None:
@@ -584,17 +640,25 @@ def ref2va(
     view = model.for_request(ctx, seed=payload.seed)
     checks = NumericalChecks(tel, model.pipe.resident)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
-        references = assets_to_h3_refs(
+        references, sizing = assets_to_h3_refs(
             assets,
             pipe=model.pipe,
             reference_image_short_edge=payload.reference_image_short_edge,
+        )
+        tel.log(
+            "h3 reference sizing",
+            images=sizing.summary,
+            video_tokens=sizing.video_tokens,
+            default=sizing.default,
+            total=sizing.total,
+            budget=MAX_CONDITIONER_VISION_TOKENS,
         )
         state = model.pipe.start_ref2va(
             prompt=payload.prompt,
             references=references,
             generator=model.pipe.generator(view.generator),
             steps=payload.steps,
-            reference_image_short_edge=payload.reference_image_short_edge,
+            reference_image_short_edges=sizing.edges,
         )
         for index, reference in enumerate(state.normalized_references):
             if reference.kind == "image":

@@ -17,7 +17,12 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "diagnostics/h3-vae-roundtrip"))
+import vae_diagnostic  # noqa: E402
 from activation_trace import ACTIVE_TRACE, ActivationTrace, FirstStepCaptured  # noqa: E402
+from safetensors.torch import load, save  # noqa: E402
+
+import h3  # noqa: E402
+from official import OfficialH3Pipeline  # noqa: E402
 
 
 class Block(torch.nn.Module):
@@ -180,12 +185,6 @@ def main() -> None:
     failing.fail = False
 
     # Exercise the diagnostic override and unchanged H3 parent method.
-    import vae_diagnostic
-    from safetensors.torch import load, save
-
-    import h3
-    from official import OfficialH3Pipeline
-
     assert vae_diagnostic.ref2va is h3.ref2va
     assert vae_diagnostic.TraceModel.sample_ref2va is h3.H3Model.sample_ref2va
     seen: list[int] = []

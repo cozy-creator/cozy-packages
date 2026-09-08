@@ -1,8 +1,14 @@
 """Optional H3 observations over the unchanged inference dependency and Runtime scopes."""
 
+import importlib.metadata
+import json
 from typing import Annotated, Any, Literal
 
 import msgspec
+import numpy as np
+import torch
+from activation_trace import ACTIVE_TRACE, ActivationTrace, FirstStepCaptured
+from cozy_eval.integrity import output_integrity
 from cozy_runtime.author import (
     App,
     AssetBound,
@@ -20,6 +26,11 @@ from cozy_runtime.author import (
     VideoAsset,
     uses_components,
 )
+from diffusers.modular_pipelines.minimax_h3.encoders import encode_vae_condition
+from diffusers.modular_pipelines.modular_pipeline import PipelineState
+from PIL import Image
+from resident_samples import resident_hashes
+from safetensors.torch import save
 
 from h3 import (
     H3Model,
@@ -63,9 +74,6 @@ class Result(msgspec.Struct):
 
 
 def encode(h3_pipe: Any, pixels: Any, frames: int) -> Any:
-    import torch
-    from diffusers.modular_pipelines.minimax_h3.encoders import encode_vae_condition
-
     vae = h3_pipe.components["video_vae"]
     pipe = h3_pipe._pipes["t2va"]
     assert all(p.dtype == torch.float32 for p in vae.parameters())
@@ -79,9 +87,6 @@ def encode(h3_pipe: Any, pixels: Any, frames: int) -> Any:
 
 
 def decode(h3_pipe: Any, latents: Any) -> Any:
-    import torch
-    from diffusers.modular_pipelines.modular_pipeline import PipelineState
-
     state = PipelineState()
     state.set("latents", latents.to(h3_pipe.components["video_vae"].device))
     state.set("output_type", "pt")
@@ -90,8 +95,6 @@ def decode(h3_pipe: Any, latents: Any) -> Any:
 
 
 def fingerprints(component: str, module: Any) -> dict[str, str]:
-    from resident_samples import resident_hashes
-
     actual, expected = resident_hashes(component, module)
     return {**actual, **{"expected/" + key: value for key, value in expected.items()}}
 
@@ -133,11 +136,6 @@ def roundtrip(
     out: Outputs,
     tel: Telemetry,
 ) -> Result:
-    import numpy as np
-    import torch
-    from cozy_eval.integrity import output_integrity
-    from PIL import Image
-
     ctx.raise_if_cancelled()
     decoded = decoder.decode_image(payload.image)
     image = Image.frombytes("RGB", (decoded.width, decoded.height), decoded.rgb)
@@ -208,8 +206,6 @@ class TracePipeline(OfficialH3Pipeline):
         cancel: Any,
         checks: NumericalChecks | None = None,
     ) -> ScheduleFacts:
-        from activation_trace import ACTIVE_TRACE
-
         trace = ACTIVE_TRACE.get()
         if trace is None:
             raise RuntimeError("diagnostic capture context is absent")
@@ -246,9 +242,6 @@ def save_trace(
     model: TraceModel,
     out: Outputs,
 ) -> FileAsset:
-    import importlib.metadata
-    import json
-
     references = []
     for index in range(len(assets)):
         info = assets.info(index)
@@ -295,9 +288,6 @@ def reference_trace(
     tel: Telemetry,
 ) -> TraceResult:
     """Normal H3 video plus bounded activations and original-dtype final latents."""
-    from activation_trace import ActivationTrace
-    from safetensors.torch import save
-
     trace = ActivationTrace(evaluations=payload.steps, first_step=False)
     with trace.active():
         result = ref2va(ctx, payload, assets, facts, model, out, tel)
@@ -319,8 +309,6 @@ def reference_activations(
     tel: Telemetry,
 ) -> ProbeResult:
     """Normal preprocessing and first denoise step; no video or final latents."""
-    from activation_trace import ActivationTrace, FirstStepCaptured
-
     trace = ActivationTrace(evaluations=payload.steps, first_step=True)
     with trace.active():
         try:

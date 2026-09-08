@@ -108,10 +108,11 @@ cozy run paul/minimax-h3/ref2va \
 ```
 
 For Ref2VA, `low`, `medium`, and `high` select a 256, 1024, or 2048 pixel short edge,
-respectively; `auto` uses `reference_image_short_edge` (default 2048). These are H3's
+respectively; `auto` starts at `reference_image_short_edge` (default 1024) and steps down
+if needed to fit the combined reference budget. These are H3's
 package rules. Runtime preserves source resolution and the original file. The H3
-adapter preserves aspect ratio and the upstream grid, prevents a later setup resize
-from undoing the selected image size, and reports actual normalized dimensions through
+adapter supplies each resolved size to the official preprocessing step, preserves aspect
+ratio and the upstream grid, and reports actual normalized dimensions through
 telemetry. Keyframes in FL2VA still follow the generated canvas. These input-resolution
 choices do not change reference conditioning strength.
 
@@ -167,17 +168,16 @@ Ref2VA preserves request order and enforces the official product bounds: at most
 3 standalone audio clips, and 12 entries total. Video and audio clips are 2–15 seconds, with at most
 15 seconds per modality in aggregate. A video's embedded soundtrack belongs to that video and does
 not consume the standalone-audio count. Standalone audio cannot be the only reference modality.
-The optional `reference_image_short_edge` selects the image-reference resolution in pixels,
-from 256 to 2048. Diffusers rounds the resulting dimensions to its 32-pixel grid. The default remains 2048. Lower values such as 768 reduce
-reference detail and attention work while preserving the generated video's resolution. For
-example, pass `reference_image_short_edge=768` to `ref2va`.
-Video and audio references keep their
-existing presentation. The selected value drives both official Diffusers preprocessing and
-the vision-token budget through a request-local configuration view; it never changes the shared
-model configuration. Output fidelity and speed at a smaller size still require measurement.
-Prompts are bounded to 4,096 characters. After generic decode, exact official presentation
-arithmetic also refuses more than 32,768 Qwen vision tokens before entering a component scope; this
-is a conservative capacity fence, not yet the required measured maximum-cell H200 fit proof.
+The optional `reference_image_short_edge` sets the default short edge from 256 to 2048
+pixels (default 1024). Diffusers rounds both axes to its 32-pixel grid. Explicit fidelity
+hints keep their sizes; automatic images step down together through 2048, 1536, 1024,
+768, 512 and 256, starting no higher than the request default, until the combined
+32,768-token vision budget fits. A set that still exceeds the budget refuses with the
+arithmetic before entering a component scope. Video and audio presentation is unchanged.
+The resolved sizes are request-local and appear in telemetry. Smaller references reduce
+attention work while the generated video retains its resolution; output quality and speed
+still require measurement. Prompts are bounded to 4,096 characters. The token budget is a
+conservative capacity limit, not a measured maximum-size GPU fit guarantee.
 
 The task-stamped canonical plans live in `minimax-h3/timestep-plans/`, derived from the official
 scheduler by `python scripts/h3_plans.py 30 40 50` (which also restamps the producer's copies and
