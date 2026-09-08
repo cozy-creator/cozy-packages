@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from dataclasses import replace
 from importlib.resources import files
-from typing import Any
+from typing import Annotated, Any, Literal, get_args
 
 import msgspec
 import torch
@@ -15,6 +15,7 @@ from cozy_runtime.author import (
     App,
     Context,
     Telemetry,
+    UnsupportedInput,
     WeightsConfig,
     WeightsOutput,
     WeightsPart,
@@ -27,18 +28,17 @@ from cozy_runtime.author import (
 )
 from cozy_runtime.derive.quantization import (
     MAX_OUTPUT_BYTES,
-    ArtifactQuantizationPlan,
     ArtifactQuantizationRequest,
-    QuantizationStats,
     h3_quantization_plan,
     prepare_quantization,
-    quantization_additions,
     quantize_component_into,
 )
 
 from . import adaln_operations as _adaln_operations
+from . import lanes as _lanes
 from .kernel import H3Topology, removed_keys, source_shapes, table_bytes, table_shapes
 from .kernel import precompute_tables as compute_tables
+from .lanes import LANES, Lane, Selection, lane_max_new_bytes, write_cast
 from .model_config import (
     dual_adaln_pruned_config,
     dual_full_config,
@@ -55,6 +55,7 @@ from .source import (
 )
 from .source import full_targets as _full_targets
 from .source import select_full_targets as _select_full_targets
+from .source import structures as _structures
 
 app = App()
 
@@ -101,25 +102,98 @@ MAX_QUANTIZED_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_PRUNED_BYTES
 
 _check_table_budget(MAX_TABLE_BYTES)
 
+#: The declared output slots. cr-114 reads this decorator statically from source over a
+#: closed literal vocabulary, so it cannot be a comprehension over the catalogue and every
+#: lane spells its own slot here. Drift is impossible rather than merely discouraged:
+#: `_check_lane_outputs` proves this tuple IS the catalogue, name for name, with each
+#: ceiling equal to what the lane's own treatments imply. Adding a lane is one catalogue
+#: row, one line here and one `LaneName` member; getting any of the three wrong refuses at
+#: import, before a worker is ever asked to produce anything.
+LANE_OUTPUTS = (
+    WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES),
+    WeightsOutput("bf16-adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES),
+    WeightsOutput("fp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES),
+    WeightsOutput("mxfp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES),
+)
+LaneName = Literal["bf16-full", "bf16-adaln-pruned", "fp8-adaln-pruned", "mxfp8-adaln-pruned"]
+
+
+def _check_lane_outputs() -> None:
+    declared = {output.name: output.max_new_bytes for output in LANE_OUTPUTS}
+    if set(declared) != set(LANES) or set(get_args(LaneName)) != set(LANES):
+        raise ValueError(
+            f"declared outputs {sorted(declared)} and request literal "
+            f"{sorted(get_args(LaneName))} are not the catalogue {sorted(LANES)}"
+        )
+    for name, lane in LANES.items():
+        needed = lane_max_new_bytes(
+            lane, full_bytes=MAX_FULL_BYTES, pruned_bytes=MAX_PRUNED_BYTES
+        )
+        if declared[name] != needed:
+            raise ValueError(
+                f"lane {name!r} declares {declared[name]} new bytes, but its treatments "
+                f"need {needed}"
+            )
+
+
+_check_lane_outputs()
+
 
 class ProductionRequest(msgspec.Struct, forbid_unknown_fields=True):
     pass
 
 
+class LaneRequest(msgspec.Struct, forbid_unknown_fields=True):
+    """Which reviewed lanes this attempt produces. The recipes are code, not request.
+
+    ``max_relative_frobenius`` is the caller's tier-1 threshold over the worst per-tensor
+    round trip of any treatment in any requested lane; each encoding's and each carrier's
+    own representational bound is enforced underneath it regardless.
+    """
+
+    lanes: Annotated[tuple[LaneName, ...], msgspec.Meta(min_length=1)] = get_args(LaneName)
+    max_relative_frobenius: float | None = None
+
+
+class TreatmentStats(msgspec.Struct):
+    """What one treatment of one component recorded on this attempt.
+
+    The cast and the encoding keep separate round-trip numbers: they measure different
+    carriers against different bounds, and a maximum over both would hide which one moved.
+    """
+
+    cast_keys: int = 0
+    cast_worst_relative_frobenius: float | None = None
+    encoded_keys: int = 0
+    saturated_elements: int = 0
+    worst_relative_frobenius: float | None = None
+    reused_keys: int = 0
+    source_bytes_read: int = 0
+    new_bytes_written: int = 0
+
+
 class WeightFidelity(msgspec.Struct):
     output_slot: str
     component: str
-    stats: QuantizationStats
+    treatment: str
+    stats: TreatmentStats
 
 
-class FourLaneResult(msgspec.Struct):
-    bf16_full_receipt_digest: str
-    bf16_adaln_pruned_receipt_digest: str
-    fp8_adaln_pruned_receipt_digest: str
-    mxfp8_adaln_pruned_receipt_digest: str
+class LaneReceipt(msgspec.Struct):
+    lane: str
+    modulation: str
+    treated_components: list[str]
+    tensorfs_receipt_digest: str
+    weights_transaction_id: str
+    replayed: bool
+
+
+class LanesResult(msgspec.Struct):
+    lanes: list[LaneReceipt]
     replayed_outputs: int
     source_bytes_read_this_run: int
     quantized_keys_this_run: int
+    cast_keys_this_run: int
     weight_fidelity_this_run: list[WeightFidelity]
 
 
@@ -272,31 +346,35 @@ def _table_additions(
     return additions
 
 
-def _pruned_targets(
+def _lane_targets(
+    lane: Lane,
     sections: dict[str, dict[str, Any]],
     tables: Mapping[str, Mapping[str, WeightsTensor]],
     full_targets: Mapping[str, WeightsTarget],
-    quantization: ArtifactQuantizationPlan | None = None,
-    encoding: str | None = None,
+    selections: Mapping[str, Selection],
 ) -> dict[str, WeightsTarget]:
-    encoded = (
-        quantization_additions(encoding, quantization, "dit")
-        if encoding is not None and quantization is not None
-        else {}
-    )
+    """The five component targets of one lane.
+
+    Every component starts as the FULL inheriting target: TensorFS copies its tensor
+    metadata and ObjectRefs unchanged, so a component this lane neither prunes nor treats
+    costs zero new bytes and stays byte-shared with every other lane. AdaLN pruning
+    replaces 106 modulation rows per DiT with the computed table rows; each resolved
+    treatment then drops exactly the keys it rewrites.
+    """
     targets = dict(full_targets)
-    for task, section in (("fl2va", "transformer"), ("ref2va", "transformer_ref")):
-        topology = H3Topology.from_config(sections[section])
-        component = TARGET_COMPONENT[task]
-        additions = {**tables[task], **encoded}
-        drop = tuple(
-            sorted(set(full_targets[component].drop) | set(removed_keys(topology)) | set(encoded))
-        )
-        targets[component] = replace(
-            full_targets[component],
-            drop=drop,
-            add=additions,
-        )
+    if lane.modulation == "adaln-pruned":
+        for task, section in SOURCE_SECTION.items():
+            topology = H3Topology.from_config(sections[section])
+            component = TARGET_COMPONENT[task]
+            targets[component] = replace(
+                full_targets[component],
+                drop=tuple(
+                    sorted(set(full_targets[component].drop) | set(removed_keys(topology)))
+                ),
+                add=dict(tables[task]),
+            )
+    for component, selection in selections.items():
+        targets[component] = _lanes.apply(targets[component], selection)
     return targets
 
 
@@ -338,74 +416,149 @@ def _receipt(transaction: WeightsTransaction) -> WeightsReceipt:
     return receipt
 
 
+def _requested(payload: LaneRequest) -> tuple[str, ...]:
+    """The requested lanes in catalogue order, so commit order never depends on argv."""
+    selected = set(payload.lanes)
+    if len(selected) != len(payload.lanes):
+        raise UnsupportedInput("requested lanes must be unique", code="h3_lanes_repeated")
+    return tuple(name for name in LANES if name in selected)
+
+
+def _computes(lane: Lane) -> bool:
+    """Whether the lane needs a table pass or a treatment pass before it can commit."""
+    return lane.modulation == "adaln-pruned" or bool(lane.components)
+
+
+def _bands(count: int, start: float, stop: float) -> list[tuple[float, float]]:
+    width = (stop - start) / count if count else 0.0
+    return [(start + index * width, start + (index + 1) * width) for index in range(count)]
+
+
+def _treat(
+    transaction: WeightsTransaction,
+    ctx: Context,
+    tel: Telemetry,
+    request: ArtifactQuantizationRequest,
+    *,
+    selection: Selection,
+    source: str,
+) -> TreatmentStats:
+    """Run one component's resolved treatment inside an already-open lane transaction.
+
+    The cast runs first: the encoding reads the source at source precision either way, so
+    ordering costs nothing, and a component that both casts and encodes then has exactly
+    one pass over each of its two disjoint key sets.
+    """
+    component = selection.component
+    cast = write_cast(
+        transaction,
+        ctx,
+        tel,
+        selection=selection,
+        source=source,
+        source_component=component,
+        target_component=component,
+    )
+    stats = TreatmentStats(
+        cast_keys=cast.converted_keys,
+        cast_worst_relative_frobenius=cast.worst_relative_frobenius,
+        reused_keys=cast.reused_keys,
+        source_bytes_read=cast.source_bytes_read,
+        new_bytes_written=cast.new_bytes_written,
+    )
+    if selection.plan is None or selection.treatment.encode is None:
+        return stats
+    encoded = quantize_component_into(
+        transaction,
+        ctx,
+        request,
+        tel,
+        encoding=selection.treatment.encode,
+        plan=selection.plan,
+        component=selection.plan_component,
+        source=source,
+        source_component=component,
+        target_component=component,
+    )
+    return msgspec.structs.replace(
+        stats,
+        encoded_keys=encoded.encoded_keys,
+        saturated_elements=encoded.saturated_elements,
+        worst_relative_frobenius=encoded.worst_relative_frobenius,
+        reused_keys=stats.reused_keys + encoded.reused_keys,
+        source_bytes_read=stats.source_bytes_read + encoded.source_bytes_read,
+        new_bytes_written=stats.new_bytes_written + encoded.new_bytes_written,
+    )
+
+
 @app.job(
-    name="four-lane",
-    weights=(
-        WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES),
-        WeightsOutput("bf16-adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES),
-        WeightsOutput("fp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES),
-        WeightsOutput("mxfp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES),
-    ),
+    name="lanes",
+    weights=LANE_OUTPUTS,
     # Default [bindings] for these slots arrive once the minimax-h3 model repo
     # exists on the hub (H3 ingest, se-022/th-109 residue); until then no slot
     # facts derive at publish (cr-077) and these slots bind per-invocation like
     # this package's other jobs.
 )
-def four_lane(
+def lanes(
     ctx: Context,
-    payload: ProductionRequest,
+    payload: LaneRequest,
     dits: H3FullTransformer,
     shared: H3FullTransformer,
     artifacts: WeightsSink,
     tel: Telemetry,
-) -> FourLaneResult:
-    """Produce full, AdaLN-pruned, FP8, and MXFP8 checkpoints in one attempt."""
-    del payload
+) -> LanesResult:
+    """Produce the requested reviewed lanes from one pinned BF16 source, in one attempt.
+
+    Every lane is a row of ``lanes.LANES``: a modulation plus, per component, what this
+    producer does to it. A component no lane names is inherited by reference, so the
+    conditioner and both VAEs stay byte-shared across every lane that leaves them alone.
+    Outputs stay declared for the whole catalogue — the descriptor is static — and an
+    unrequested lane is simply never opened.
+    """
+    requested = _requested(payload)
     sources = {"dits": dits, "shared": shared}
-    full_targets = _select_full_targets(artifacts, sources)
+    granted = _structures(artifacts, sources)
+    full_targets = _select_full_targets(artifacts, sources, granted)
     sections = parse_production_config(_asset("model-config.json"))
     current = current_order(_asset("whole-order.json"))
-
-    full_config = dual_full_config(sections)
-    tel.progress(0.0, stage="bf16-full", overall_fraction=0.0)
-    with tel.stage("bf16-full", overall_range=(0.00, 0.15)):
-        full = artifacts.derive(
-            "bf16-full",
-            sources=sources,
-            targets=full_targets,
-            configs={
-                "model": WeightsConfig(
-                    data=full_config,
-                    length=len(full_config),
-                )
-            },
-            order=_full_order(sections, current.rows),
-        )
-    tel.progress(1.0, stage="bf16-full", overall_fraction=0.15)
-
-    pruned_config = dual_adaln_pruned_config(
-        sections, _production_plan("fl2va"), _production_plan("ref2va")
-    )
-    config = {
-        "model": WeightsConfig(
-            data=pruned_config,
-            length=len(pruned_config),
-        )
-    }
     tables = _table_additions(sections)
-    quantization = prepare_quantization(h3_quantization_plan())
-    targets = {
-        "bf16-adaln-pruned": _pruned_targets(sections, tables, full_targets),
-        "fp8-adaln-pruned": _pruned_targets(
-            sections, tables, full_targets, quantization, "fp8-rowwise/1"
-        ),
-        "mxfp8-adaln-pruned": _pruned_targets(
-            sections, tables, full_targets, quantization, "mxfp8/1"
+    dit_plan = prepare_quantization(h3_quantization_plan())
+
+    # Resolve every treatment against the granted structure BEFORE opening anything: a
+    # refused component, an unmatched keep entry or an inert treatment must cost no
+    # transaction and no byte.
+    selections = {
+        name: {
+            component: _lanes.select(
+                component,
+                treatment,
+                _lanes.carried(
+                    full_targets[component],
+                    granted[full_targets[component].source].tensors,
+                ),
+                dit_plan=dit_plan,
+            )
+            for component, treatment in LANES[name].components.items()
+        }
+        for name in requested
+    }
+
+    configs = {
+        "full": dual_full_config(sections),
+        "adaln-pruned": dual_adaln_pruned_config(
+            sections, _production_plan("fl2va"), _production_plan("ref2va")
         ),
     }
-    receipts: dict[str, WeightsReceipt] = {"bf16-full": full}
+    orders = {
+        "full": _full_order(sections, current.rows),
+        "adaln-pruned": current.rows,
+    }
+    receipts: dict[str, WeightsReceipt] = {}
     fidelity: list[WeightFidelity] = []
     source_bytes = 0
+    quant_request = ArtifactQuantizationRequest(
+        max_relative_frobenius=payload.max_relative_frobenius
+    )
 
     with ExitStack() as stack:
         transactions = {
@@ -413,67 +566,82 @@ def four_lane(
                 artifacts.open(
                     name,
                     sources=sources,
-                    targets=target,
-                    configs=config,
-                    order=current.rows,
+                    targets=_lane_targets(
+                        LANES[name], sections, tables, full_targets, selections[name]
+                    ),
+                    configs={
+                        "model": WeightsConfig(
+                            data=configs[LANES[name].modulation],
+                            length=len(configs[LANES[name].modulation]),
+                        )
+                    },
+                    order=orders[LANES[name].modulation],
                 )
             )
-            for name, target in targets.items()
+            for name in requested
         }
         active = {
             name: transaction
             for name, transaction in transactions.items()
             if not transaction.replayed
         }
-        if active:
+        # A lane that computes nothing is a pure declaration; it settles first so its
+        # retention never depends on a later lane's table or encoding pass.
+        for name in [n for n in active if not _computes(LANES[n])]:
+            transaction = active.pop(name)
+            transaction.add_config("model", configs[LANES[name].modulation])
+            receipts[name] = transaction.commit()
+
+        pruned = {
+            name: transaction
+            for name, transaction in active.items()
+            if LANES[name].modulation == "adaln-pruned"
+        }
+        computed = 0.35 if pruned else 0.0
+        if pruned:
             if not torch.cuda.is_available():
-                raise ValueError("H3 four-lane production requires a CUDA worker")
+                raise ValueError("H3 AdaLN timestep-table precompute requires a CUDA worker")
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.set_float32_matmul_precision("highest")
-            source_transaction = next(iter(active.values()))
-            for task, overall_range in (
-                ("fl2va", (0.15, 0.25)),
-                ("ref2va", (0.25, 0.35)),
+            source_transaction = next(iter(pruned.values()))
+            for task, overall_range in zip(
+                SOURCE_SECTION, _bands(len(SOURCE_SECTION), 0.0, computed), strict=True
             ):
                 with tel.stage(f"timestep-table-{task}", overall_range=overall_range):
                     source_bytes += _write_tables(
-                        task, ctx, source_transaction, active, tel, overall_range
+                        task, ctx, source_transaction, pruned, tel, overall_range
                     )[0]
 
-        quant_request = ArtifactQuantizationRequest()
-        for name, encoding, overall_range in (
-            ("bf16-adaln-pruned", None, (0.35, 0.40)),
-            ("fp8-adaln-pruned", "fp8-rowwise/1", (0.40, 0.70)),
-            ("mxfp8-adaln-pruned", "mxfp8/1", (0.70, 1.00)),
+        for name, overall_range in zip(
+            list(active), _bands(len(active), computed, 1.0), strict=True
         ):
-            transaction = active.get(name)
-            if transaction is None:
-                continue
+            transaction = active[name]
             with tel.stage(name, overall_range=overall_range):
-                if encoding is not None:
-                    for component in TARGET_COMPONENT.values():
-                        stats = quantize_component_into(
-                            transaction,
-                            ctx,
-                            quant_request,
-                            tel,
-                            encoding=encoding,
-                            plan=quantization,
-                            component="dit",
-                            source="dits",
-                            source_component=component,
-                            target_component=component,
+                for component, selection in selections[name].items():
+                    stats = _treat(
+                        transaction,
+                        ctx,
+                        tel,
+                        quant_request,
+                        selection=selection,
+                        source=full_targets[component].source,
+                    )
+                    source_bytes += stats.source_bytes_read
+                    fidelity.append(
+                        WeightFidelity(
+                            name, component, selection.treatment.describe(), stats
                         )
-                        fidelity.append(WeightFidelity(name, component, stats))
-                        tel.log(
-                            "weight fidelity",
-                            level="info",
-                            output_slot=name,
-                            component=component,
-                            **msgspec.to_builtins(stats),
-                        )
+                    )
+                    tel.log(
+                        "weight fidelity",
+                        level="info",
+                        output_slot=name,
+                        component=component,
+                        treatment=selection.treatment.describe(),
+                        **msgspec.to_builtins(stats),
+                    )
                 # Keep a finished checkpoint replayable if a later lane fails.
-                transaction.add_config("model", pruned_config)
+                transaction.add_config("model", configs[LANES[name].modulation])
                 receipts[name] = transaction.commit()
             tel.progress(1.0, stage=f"commit-{name}", overall_fraction=overall_range[1])
         for name, transaction in transactions.items():
@@ -481,23 +649,32 @@ def four_lane(
                 receipts[name] = _receipt(transaction)
 
     measured = [row.stats for row in fidelity]
-    source_bytes += sum(stat.source_bytes_read for stat in measured)
     tel.metric("h3.source_bytes", float(source_bytes), unit="bytes")
     tel.metric(
-        "h3.quantized_bytes",
+        "h3.new_bytes",
         float(sum(stat.new_bytes_written for stat in measured)),
         unit="bytes",
     )
-    return FourLaneResult(
-        bf16_full_receipt_digest=receipts["bf16-full"].tensorfs_receipt_digest,
-        bf16_adaln_pruned_receipt_digest=receipts["bf16-adaln-pruned"].tensorfs_receipt_digest,
-        fp8_adaln_pruned_receipt_digest=receipts["fp8-adaln-pruned"].tensorfs_receipt_digest,
-        mxfp8_adaln_pruned_receipt_digest=receipts["mxfp8-adaln-pruned"].tensorfs_receipt_digest,
+    return LanesResult(
+        lanes=[
+            LaneReceipt(
+                lane=name,
+                modulation=LANES[name].modulation,
+                treated_components=sorted(LANES[name].components),
+                tensorfs_receipt_digest=receipts[name].tensorfs_receipt_digest,
+                weights_transaction_id=receipts[name].weights_transaction_id,
+                replayed=receipts[name].replayed,
+            )
+            for name in requested
+        ],
         replayed_outputs=sum(receipt.replayed for receipt in receipts.values()),
         source_bytes_read_this_run=source_bytes,
         quantized_keys_this_run=sum(stat.encoded_keys for stat in measured),
+        cast_keys_this_run=sum(stat.cast_keys for stat in measured),
         weight_fidelity_this_run=fidelity,
     )
+
+
 
 
 def _retable_targets(
