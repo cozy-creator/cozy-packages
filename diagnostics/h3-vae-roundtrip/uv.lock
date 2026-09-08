@@ -99,7 +99,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.4.2"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -110,10 +110,10 @@ dependencies = [
     { name = "protobuf" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/69/ee/6f6aaac43a692cb41d73257c3e7160264c585c1431e47050c7b0b350f40e/cozy_runtime-0.4.2.tar.gz", hash = "sha256:b2f2ca1df75d8c5abcbf38e05717dc07fad60734044b72d3c6773f1ee885dfba", size = 1399052, upload-time = "2026-09-08T00:39:37.513Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/76/42/3919d68b76dd6afe127b4db2e0c643c882236c43fe33861071f13e618a88/cozy_runtime-0.5.0.tar.gz", hash = "sha256:88a40ec5fb873f25df398ea231d078a676f26e5d2ad536bc092a4945cc447dc6", size = 1413825, upload-time = "2026-09-08T01:30:32.974Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/05/aa/bd91676edfe3ff6b4da6c91027cc5da212092ae382d499e3685c662c0278/cozy_runtime-0.4.2-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:532d2e51e93f1545f1ceed23d6436c79decb93e4fcb926d94c4d6faa5d538c26", size = 13507340, upload-time = "2026-09-08T00:39:33.436Z" },
-    { url = "https://files.pythonhosted.org/packages/fd/b8/f4ada48abb5c864a0a5625eb0026a409e0b61600997c2be847f1985afa9b/cozy_runtime-0.4.2-py3-none-any.whl", hash = "sha256:6488e924a0b643fe36e5f66ef983c191b505c2deaa89859253e29ae32c202a50", size = 1039926, upload-time = "2026-09-08T00:39:36.014Z" },
+    { url = "https://files.pythonhosted.org/packages/80/78/bf524e70514d4307bd0cc0593d5c7e39f565d951f7ae916b386948a0cc19/cozy_runtime-0.5.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:264de477e2ed82f21196e803c730877d64ed86b4f275ebd8113671a5a2cbfbf8", size = 13510586, upload-time = "2026-09-08T01:30:29.256Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/93/16cd12eaf413fac9336d55c17fd9801ea6407cadcc71521e6731ee3c40c0/cozy_runtime-0.5.0-py3-none-any.whl", hash = "sha256:8b015b4eed15ccca1abf7697e247d02e5ecff8d5e0084444ee512247992be72e", size = 1043166, upload-time = "2026-09-08T01:30:31.608Z" },
 ]
 
 [package.optional-dependencies]
@@ -270,7 +270,7 @@ wheels = [
 
 [[package]]
 name = "h3-vae-diagnostic"
-version = "1.0.14"
+version = "1.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-eval" },
@@ -287,9 +287,9 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cozy-eval", specifier = ">=0.3.2,<1" },
-    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.2.34,<1" },
+    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.5.0,<1" },
     { name = "diffusers", specifier = "==0.40.0" },
-    { name = "minimax-h3", path = "dependencies/minimax_h3-1.2.2-py3-none-any.whl" },
+    { name = "minimax-h3", path = "dependencies/minimax_h3-1.3.0-py3-none-any.whl" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=12" },
@@ -421,8 +421,8 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.2.2"
-source = { path = "dependencies/minimax_h3-1.2.2-py3-none-any.whl" }
+version = "1.3.0"
+source = { path = "dependencies/minimax_h3-1.3.0-py3-none-any.whl" }
 dependencies = [
     { name = "cozy-eval" },
     { name = "cozy-runtime", extra = ["media"] },
@@ -442,13 +442,13 @@ dependencies = [
     { name = "transformers" },
 ]
 wheels = [
-    { filename = "minimax_h3-1.2.2-py3-none-any.whl", hash = "sha256:3e27e468e39c6254a893c7a37c388372a55b9ddd0b9a3e86afae39352e422e0e" },
+    { filename = "minimax_h3-1.3.0-py3-none-any.whl", hash = "sha256:be6aa8c28f27bbfe33da4f29c26eb4c67f083730fb3824194e04a42c9c0996ef" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "cozy-eval", specifier = ">=0.3.2,<1" },
-    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.4.2,<1" },
+    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.5.0,<1" },
     { name = "diffusers", specifier = "==0.40.0" },
     { name = "hf-xet", specifier = "==1.6.0" },
     { name = "msgspec", specifier = ">=0.19" },

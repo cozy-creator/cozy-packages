@@ -93,9 +93,27 @@ the endpoint selects roles.
 
 Assets may have caller-supplied labels, such as `--asset="alice=~/Pictures/alice.png"`.
 Labels are unique within the collection and preserve their exact spelling. Package
-code can use `assets.by_label("alice")`; unlabelled references remain valid. H3
+code can use `assets["alice"]` or `assets.info("alice")`; unlabelled references remain valid. H3
 preserves the supplied order when building its references. A label does not change
 the model's positional prompt syntax or rewrite the prompt.
+
+Reference-image fidelity is an optional per-occurrence hint:
+
+```sh
+cozy run paul/minimax-h3/ref2va \
+  'prompt=<your H3 prompt>' \
+  --asset="woman=~/Pictures/woman.png" --asset-fidelity=woman=high \
+  --asset="scene=~/Pictures/scene.png" --asset-fidelity=scene=low \
+  --rental-only --await
+```
+
+For Ref2VA, `low`, `medium`, and `high` select a 256, 1024, or 2048 pixel short edge,
+respectively; `auto` uses `reference_image_short_edge` (default 2048). These are H3's
+package rules. Runtime preserves source resolution and the original file. The H3
+adapter preserves aspect ratio and the upstream grid, prevents a later setup resize
+from undoing the selected image size, and reports actual normalized dimensions through
+telemetry. Keyframes in FL2VA still follow the generated canvas. These input-resolution
+choices do not change reference conditioning strength.
 
 Both actions use the official Diffusers MiniMax H3 implementation and share one exact BF16
 Qwen3-VL conditioner, one video VAE and one audio VAE at their official FP32 destination dtypes,
