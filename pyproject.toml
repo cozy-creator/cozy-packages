@@ -15,8 +15,9 @@ warn_unreachable = true
 disallow_any_generics = true
 implicit_reexport = false
 
-# Static checks install the typed Runtime distribution from PyPI. Heavy model libraries remain
-# absent because module-scope imports are forbidden and descriptor analysis must stay light.
+# Static checks install the typed Runtime distribution from PyPI. Heavy model libraries stay
+# absent from this light environment (mypy reads them as Any): every import is at module scope
+# (se-041), so `describe` and the installed-wheel import run in each package's locked environment.
 [[tool.mypy.overrides]]
 module = [
     "torch.*", "torchvision.*", "transformers.*", "tokenizers.*", "numpy.*", "PIL.*",

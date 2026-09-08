@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from diffusers import AnimaModularPipeline
+from diffusers.modular_pipelines import PipelineState
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "anima"))
@@ -84,8 +86,6 @@ def pipeline(recorder: Recorder) -> Any:
 
 def loop_state(loop: Any, steps: int) -> Any:
     """Every input the real loop block declares, so its own `get_block_state` is satisfied."""
-    from diffusers.modular_pipelines import PipelineState
-
     state = PipelineState()
     for param in loop.inputs:
         if param.name:
@@ -212,8 +212,6 @@ def arm_deepcopy_trap() -> None:
     this arm goes red and `_text2image_pipeline`'s `blocks=` seam can be retired
     deliberately rather than by accident.
     """
-    from diffusers import AnimaModularPipeline
-
     recorder = Recorder()
     shipped = AnimaModularPipeline(workflow="text2image")
     shipped.blocks.sub_blocks["denoise.denoise"].progress_bar = package._progress_bar(

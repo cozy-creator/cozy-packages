@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
+import torch
+
 ROWS_PER_MODALITY = 8
 CHANNELS = 16
 MAX_BATCHES = 2
@@ -68,8 +70,6 @@ class ActivationTrace:
 
     @contextmanager
     def observe(self, module: Any) -> Iterator[None]:
-        import torch
-
         blocks = module.transformer_blocks
         if not 1 <= len(blocks) <= 128:
             raise ValueError("unsupported diagnostic block count")
@@ -167,8 +167,6 @@ class ActivationTrace:
             self.forward = None
 
     def final_latents(self, state: Any) -> None:
-        import torch
-
         tensors = {"video_latents": state.latents, "audio_latents": state.audio_latents}
         if self.first_step or self.completed_steps != self.evaluations:
             raise ValueError("final latents require every denoise step to complete")

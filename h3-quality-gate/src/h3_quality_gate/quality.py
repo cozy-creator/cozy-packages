@@ -34,7 +34,11 @@ import os
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import cozy_eval
 import msgspec
+from cozy_eval.audio import read_audio
+from cozy_eval.metrics import audio as audio_metrics
+from cozy_eval.metrics.signal import score
 from cozy_runtime.author import (
     App,
     Context,
@@ -219,8 +223,6 @@ class GateResult(msgspec.Struct):
 
 def _metric_build() -> str:
     """The exact metric implementation this verdict binds to."""
-    import cozy_eval
-
     return f"cozy-eval/{cozy_eval.__version__}"
 
 
@@ -230,8 +232,6 @@ def _score(path: Path) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     A metric that raises is UNMEASURED and is recorded as such. It is never a zero: a
     zero compares, and an unanswered question must not.
     """
-    from cozy_eval.metrics.signal import score
-
     unmeasured: list[str] = []
     clip = score(str(path))
     video = {
@@ -250,9 +250,6 @@ def _score(path: Path) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
 
 def _score_audio(path: Path) -> tuple[dict[str, Any], list[str]]:
     """Audio statistics of one file (a soundtrack or a standalone audio asset)."""
-    from cozy_eval.audio import read_audio
-    from cozy_eval.metrics import audio as audio_metrics
-
     try:
         stats = audio_metrics.signal_stats(read_audio(str(path)))
         return {k: float(v) for k, v in stats.items()}, []

@@ -37,11 +37,16 @@ which is the whole of cozy-eval's honesty contract. A default answer is never in
 
 from __future__ import annotations
 
+import base64
 import io
 import time
+import zlib
 from typing import Annotated, Any
 
 import msgspec
+import numpy as np
+import torch
+import transformers
 from cozy_runtime.author import (
     App,
     AudioAsset,
@@ -55,6 +60,15 @@ from cozy_runtime.author import (
     Telemetry,
     UnsupportedInput,
     uses_components,
+)
+from PIL import Image, UnidentifiedImageError
+from tokenizers import Tokenizer
+from transformers import (
+    AutoConfig,
+    AutoModelForImageTextToText,
+    AutoModelForSpeechSeq2Seq,
+    GenerationConfig,
+    PreTrainedTokenizerFast,
 )
 
 app = App()
@@ -267,8 +281,6 @@ def preflight_audio(payload: AudioRequest) -> BatchFacts:
 def decode_images(blobs: list[Frame], *, where: str) -> list[Any]:
     """Hydrated image assets -> RGB images. An asset that is not a decodable image is a
     typed REQUEST refusal, not a backend fault: the caller sent it."""
-    from PIL import Image, UnidentifiedImageError
-
     out = []
     for i, blob in enumerate(blobs):
         try:
@@ -290,8 +302,6 @@ def resample_mono(samples: Any, rate: int, target: int) -> Any:
     front end is a 16 kHz mel filterbank and the judge lane's inputs are already
     band-limited generator output, so a polyphase kernel would buy accuracy nothing here
     can read — and it would need a dependency this package does not otherwise have."""
-    import numpy as np
-
     if rate == target or samples.size == 0:
         return samples
     n = round(samples.size * target / rate)
@@ -334,9 +344,6 @@ class JudgePipeline:
     """
 
     def __init__(self, config: Config) -> None:
-        import torch
-        from transformers import AutoConfig, AutoModelForImageTextToText
-
         mapping = config.mapping()
         model_config = AutoConfig.for_model(**_sub(mapping, "model_config"))
         model = AutoModelForImageTextToText.from_config(model_config, dtype=torch.bfloat16)
@@ -347,9 +354,6 @@ class JudgePipeline:
 
 class TranscriberPipeline:
     def __init__(self, config: Config) -> None:
-        import torch
-        from transformers import AutoConfig, AutoModelForSpeechSeq2Seq, GenerationConfig
-
         mapping = config.mapping()
         model_config = AutoConfig.for_model(**_sub(mapping, "model_config"))
         model = AutoModelForSpeechSeq2Seq.from_config(model_config, dtype=torch.float16)
@@ -378,8 +382,6 @@ def _sub(mapping: dict[str, object], name: str) -> dict[str, Any]:
 def _named(mapping: dict[str, object], key: str) -> Any:
     """The transformers class the ARTIFACT names. Config data selects the class; this
     module hard-codes no model family, exactly as it names no checkpoint."""
-    import transformers
-
     name = str(mapping[key])
     cls = getattr(transformers, name, None)
     if cls is None:
@@ -402,16 +404,10 @@ def _blob(mapping: dict[str, object], key: str) -> str:
     string the carrier check has to interpret, and url-safe base64 additionally cannot
     begin with `/`.
     """
-    import base64
-    import zlib
-
     return zlib.decompress(base64.urlsafe_b64decode(str(mapping[key]))).decode()
 
 
 def _tokenizer(mapping: dict[str, object]) -> Any:
-    from tokenizers import Tokenizer
-    from transformers import PreTrainedTokenizerFast
-
     named = str(mapping.get("tokenizer_class") or "")
     cls = _named(mapping, "tokenizer_class") if named else PreTrainedTokenizerFast
     return cls(
@@ -496,8 +492,6 @@ class JudgeModel(Model[JudgePipeline]):
         self, images: list[Any], text: str, *, max_new_tokens: int
     ) -> tuple[str, int, int]:
         """One greedy generation. Returns (reply, prompt tokens, generated tokens)."""
-        import torch
-
         model = self.pipe.components["judge"]
         inputs = self._inputs(images, text).to(model.device)
         with torch.inference_mode():
@@ -511,8 +505,6 @@ class JudgeModel(Model[JudgePipeline]):
     @uses_components("judge")
     def p_yes(self, images: list[Any], question: str) -> float:
         """p(yes) / (p(yes) + p(no)) at the FIRST answer position — one prefill, no decode."""
-        import torch
-
         model = self.pipe.components["judge"]
         inputs = self._inputs(images, question).to(model.device)
         with torch.inference_mode():
@@ -548,8 +540,6 @@ class TranscriberModel(Model[TranscriberPipeline]):
 
     @uses_components("asr")
     def transcribe(self, samples: Any, *, language: str) -> str:
-        import torch
-
         model = self.pipe.components["asr"]
         features = self.pipe.processor.feature_extractor(
             samples, sampling_rate=ASR_RATE, return_tensors="pt"
@@ -715,8 +705,6 @@ def transcribe(
     tel: Telemetry,
 ) -> AudioResponse:
     del facts
-    import numpy as np
-
     replies: list[AudioReply] = []
     total = 0.0
     step = tel.step_callback(len(payload.calls), stage="transcribe", overall_range=(0.0, 1.0))

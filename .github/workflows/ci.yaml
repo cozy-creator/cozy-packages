@@ -19,6 +19,9 @@ jobs:
       # Runtime installs from PyPI like any dependency, at the packages' own floor (0.4.3:
       # `Model.warm`, `fakes.warm_with_fakes`). CI therefore sees the real author types and
       # media capability on every run; there is no secret-gated skipped-green path.
+      # No model library is installed here: every import is at module scope (se-041), so
+      # `describe` and the installed-wheel import run in each package's LOCKED environment
+      # below — the one Creator describes in at publish and install.
       - name: Environment
         run: |
           uv venv --python 3.12
@@ -37,15 +40,6 @@ jobs:
       - name: Types
         run: uv run --no-project mypy
 
-      - name: Package interfaces are current
-        run: |
-          test "$(uv run --no-project cozy-runtime --json --dir minimax-h3 describe)" = "$(cat minimax-h3/metadata/package-interface.json)"
-          test "$(uv run --no-project cozy-runtime --json --dir anima describe)" = "$(cat anima/metadata/package-interface.json)"
-          test "$(uv run --no-project cozy-runtime --json --dir quality-judge describe)" = "$(cat quality-judge/metadata/package-interface.json)"
-          test "$(uv run --no-project cozy-runtime --json --dir sdxl describe)" = "$(cat sdxl/metadata/package-interface.json)"
-          test "$(uv run --no-project cozy-runtime --json --dir h3-quality-gate describe)" = "$(cat h3-quality-gate/metadata/package-interface.json)"
-          test "$(uv run --no-project cozy-runtime --json --dir checkpoint-repair describe)" = "$(cat checkpoint-repair/metadata/package-interface.json)"
-
       # A package with no `[project]` pyproject and no lock resolves no `ResolvedWheelSet`
       # and cannot publish at all, so a stale or absent lock is a release-blocking fact and
       # belongs in the cheap static job, not only in the heavy per-package ones.
@@ -55,37 +49,13 @@ jobs:
             uv lock --check --project "$package"
           done
 
-      - name: Every package builds and imports from its wheel
+      - name: Every package builds a wheel
         run: |
           mkdir -p dist/packages
           for package in anima minimax-h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools checkpoint-repair; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done
-          uv pip install --python .venv/bin/python --no-deps dist/packages/*/*.whl
-          .venv/bin/python -P - <<'PY'
-          from pathlib import Path
-
-          import anima, h3, h3_quality_gate, quality_judge, sdxl, video_assembly
-          import checkpoint_repair.job as checkpoint_repair
-
-          # h3_tables (minimax-h3-tools) imports torch at module scope, so its wheel is
-          # installed above but imported only in its own locked environment (package-locks).
-          for module in (anima, h3, h3_quality_gate, quality_judge, sdxl, video_assembly, checkpoint_repair):
-              assert "site-packages" in str(module.__file__)
-              assert module.app._registry
-          h3_root = Path(h3.__file__).parent
-          for asset in ("processor", "timestep-plans", "tokenizer"):
-              assert (h3_root / asset).is_dir()
-          PY
-      - name: Optional H3 diagnostics build and expose bounded assets
-        run: |
-          mkdir -p diagnostics/h3-vae-roundtrip/dependencies
-          cp dist/packages/minimax-h3/*.whl diagnostics/h3-vae-roundtrip/dependencies/
-          uv lock --check --project diagnostics/h3-vae-roundtrip
-          uv build --project diagnostics/h3-vae-roundtrip --wheel --out-dir dist/diagnostic
-          uv pip install --python .venv/bin/python --no-deps dist/diagnostic/*.whl
-          .venv/bin/cozy-runtime --json --dir diagnostics/h3-vae-roundtrip describe > dist/diagnostic/interface.json
 
       - name: The minimax-h3-tools wheel carries its job and assets
         run: |
@@ -128,6 +98,26 @@ jobs:
       - name: Diagnostic hooks preserve outputs and stop explicitly
         run: PYTHONPATH=minimax-h3 minimax-h3/.venv/bin/python scripts/h3-activation-proof.py
 
+      # `describe` reads the package through its module-scope imports, so it runs here, in
+      # the locked environment Creator describes in at publish and install (se-041).
+      - name: Package interface is current
+        run: test "$(minimax-h3/.venv/bin/cozy-runtime --json --dir minimax-h3 describe)" = "$(cat minimax-h3/metadata/package-interface.json)"
+
+      - name: The package builds and imports from its wheel
+        run: |
+          uv build --project minimax-h3 --wheel --out-dir dist/packages/minimax-h3
+          uv pip install --python minimax-h3/.venv/bin/python --no-deps dist/packages/minimax-h3/*.whl
+          minimax-h3/.venv/bin/python -P scripts/package_import.py minimax-h3 --installed
+
+      - name: Optional H3 diagnostics build and expose bounded assets
+        run: |
+          mkdir -p diagnostics/h3-vae-roundtrip/dependencies
+          cp dist/packages/minimax-h3/*.whl diagnostics/h3-vae-roundtrip/dependencies/
+          uv lock --check --project diagnostics/h3-vae-roundtrip
+          uv build --project diagnostics/h3-vae-roundtrip --wheel --out-dir dist/diagnostic
+          uv pip install --python minimax-h3/.venv/bin/python --no-deps dist/diagnostic/*.whl
+          minimax-h3/.venv/bin/cozy-runtime --json --dir diagnostics/h3-vae-roundtrip describe > dist/diagnostic/interface.json
+
   package-locks:
     # Independent so a failure to materialize an exact dependency environment cannot hide
     # behind static analysis. The checks job separately builds and imports every project wheel.
@@ -153,6 +143,11 @@ jobs:
       # against the wrong torch, and nothing cheaper observes that.
       - name: The locked stack imports
         run: ${{ matrix.package }}/.venv/bin/python scripts/package_import.py ${{ matrix.package }}
+
+      # `describe` reads the package through its module-scope imports, so it runs here, in
+      # the locked environment Creator describes in at publish and install (se-041).
+      - name: Package interface is current
+        run: test "$(${{ matrix.package }}/.venv/bin/cozy-runtime --json --dir ${{ matrix.package }} describe)" = "$(cat ${{ matrix.package }}/metadata/package-interface.json)"
       # The progress meter is only observable by RUNNING the seam: se-026's denoise hook was
       # installed on a deepcopy of the block tree, so every static check stayed green while
       # the meter sat frozen for the whole render. These arms execute Diffusers' own loop.
@@ -179,6 +174,12 @@ jobs:
       - name: Native checkpoint row repair and resume
         if: matrix.package == 'checkpoint-repair'
         run: checkpoint-repair/.venv/bin/python scripts/h3-repair-proof.py
+
+      - name: The package builds and imports from its wheel
+        run: |
+          uv build --project ${{ matrix.package }} --wheel --out-dir dist/packages/${{ matrix.package }}
+          uv pip install --python ${{ matrix.package }}/.venv/bin/python --no-deps dist/packages/${{ matrix.package }}/*.whl
+          ${{ matrix.package }}/.venv/bin/python -P scripts/package_import.py ${{ matrix.package }} --installed
 
   video-assembly:
     name: Video assembly
