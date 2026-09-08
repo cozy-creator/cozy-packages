@@ -43,7 +43,6 @@ from msgspec.structs import replace
 from gates import MediaFacts, pre_encode_gate
 from official import (
     FPS,
-    FRAMES,
     MAX_AUDIO_REFERENCES,
     MAX_CONDITIONER_VISION_TOKENS,
     MAX_IMAGE_REFERENCES,
@@ -56,8 +55,11 @@ from official import (
     ScheduleFacts,
     Task,
     build_h3_pipeline,
+    denoise_rows,
+    frames_for,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
+    supported_durations,
     validate_reference_policy,
 )
 
@@ -93,6 +95,23 @@ Steps = Annotated[
         description="Denoise steps (transformer evaluations), supported by the selected lane.",
     ),
 ]
+# Length is the request's largest cost lever: the DiT attends over ONE packed sequence whose
+# rows scale with the frame count, and attention is quadratic in it. Every whole second in
+# the envelope is served, and the SHORTEST is the default — a caller that says nothing pays
+# the cheapest clip, not the longest (se-045).
+SUPPORTED_DURATIONS = supported_durations()
+DEFAULT_DURATION_S = min(SUPPORTED_DURATIONS)
+DurationSeconds = Annotated[
+    int,
+    msgspec.Meta(
+        ge=min(SUPPORTED_DURATIONS),
+        le=max(SUPPORTED_DURATIONS),
+        description=(
+            "Clip length in whole seconds, snapped up to the video VAE's own 17n+5 frame "
+            "grid; shorter is quadratically faster."
+        ),
+    ),
+]
 
 
 class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -100,6 +119,7 @@ class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     mute: bool = False
     seed: int | None = None
     steps: Steps = DEFAULT_STEPS
+    duration_s: DurationSeconds = DEFAULT_DURATION_S
 
 
 class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -115,6 +135,7 @@ class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
         ),
     ] = DEFAULT_REFERENCE_IMAGE_SHORT_EDGE
     steps: Steps = DEFAULT_STEPS
+    duration_s: DurationSeconds = DEFAULT_DURATION_S
 
 
 class H3VideoOutput(msgspec.Struct):
@@ -460,6 +481,7 @@ def _finish(
     state: Any,
     schedule: ScheduleFacts,
     *,
+    duration_s: int,
     mute: bool,
     out: Outputs,
     tel: Telemetry,
@@ -501,9 +523,10 @@ def _finish(
         sample_rate=sample_rate,
         mute=mute,
     )
-    if frames != FRAMES or channels != 3:
+    if frames != frames_for(duration_s) or channels != 3:
         raise OutputError(
-            f"official H3 decode returned {frames} frames and {channels} channels",
+            f"official H3 decode returned {frames} frames and {channels} channels for a "
+            f"{duration_s}s request, expected {frames_for(duration_s)} frames and 3 channels",
             code="output_integrity",
         )
 
@@ -537,6 +560,9 @@ def _finish(
         height=height,
         frames=frames,
         fps=FPS,
+        requested_duration_s=duration_s,
+        duration_seconds=round(frames / FPS, 3),
+        denoise_rows=denoise_rows(frames, height, width),
         sample_rate=sample_rate,
     )
     tel.log(
@@ -621,6 +647,7 @@ def fl2va(
             last_frame=last,
             generator=model.pipe.generator(view.generator),
             steps=payload.steps,
+            frames=frames_for(payload.duration_s),
         )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
         model.condition_text("fl2va", state, checks=checks)
@@ -639,6 +666,7 @@ def fl2va(
         "fl2va",
         state,
         schedule,
+        duration_s=payload.duration_s,
         mute=payload.mute,
         out=out,
         tel=tel,
@@ -680,6 +708,7 @@ def ref2va(
             references=references,
             generator=model.pipe.generator(view.generator),
             steps=payload.steps,
+            frames=frames_for(payload.duration_s),
             reference_image_short_edges=sizing.edges,
         )
         for index, reference in enumerate(state.normalized_references):
@@ -710,6 +739,7 @@ def ref2va(
         "ref2va",
         state,
         schedule,
+        duration_s=payload.duration_s,
         mute=payload.mute,
         out=out,
         tel=tel,
