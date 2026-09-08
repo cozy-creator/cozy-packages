@@ -1,36 +1,41 @@
 """Optional H3 observations over the unchanged inference dependency and Runtime scopes."""
 
-from typing import Annotated, Any, Literal
+import importlib.metadata
+import json
+from typing import Annotated, Any
 
 import msgspec
+import torch
 from cozy_runtime.author import (
-    App,
     AssetBound,
     Config,
     Context,
     FileAsset,
-    ImageAsset,
-    ImageFrame,
     InvalidRequest,
     Loader,
     MediaDecoder,
     Outputs,
     Preflight,
     Telemetry,
-    VideoAsset,
     uses_components,
 )
+from diffusers.modular_pipelines.minimax_h3.encoders import encode_vae_condition
+from diffusers.modular_pipelines.modular_pipeline import PipelineState
+from safetensors.torch import save
 
 from h3 import (
+    AudioReference,
     H3Model,
     H3VideoOutput,
+    ImageReference,
     ReferenceMediaToVideoInput,
-    _rgb8,
     preflight_reference_media,
 )
 from h3 import (
     reference_media_to_video as reference_media_to_video,
 )
+from h3_activation_trace import ACTIVE_TRACE, ActivationTrace, FirstStepCaptured
+from h3_resident_samples import resident_hashes
 from official import (
     NumericalChecks,
     OfficialH3Pipeline,
@@ -39,31 +44,8 @@ from official import (
     Task,
 )
 
-app = App()
-
-
-class Input(msgspec.Struct, forbid_unknown_fields=True):
-    image: Annotated[ImageAsset, AssetBound(max_bytes=64 << 20, max_decoded_bytes=256 << 20)]
-    frames: Literal[22, 345] = 345
-    cycle: bool = True
-
-
-class TensorObservation(msgspec.Struct):
-    name: str
-    value: str
-
-
-class Result(msgspec.Struct):
-    video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",))]
-    source: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
-    reconstruction: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
-    grid_peak_ratio: float
-    hashes: list[TensorObservation]
-
 
 def encode(h3_pipe: Any, pixels: Any, frames: int) -> Any:
-    import torch
-    from diffusers.modular_pipelines.minimax_h3.encoders import encode_vae_condition
 
     vae = h3_pipe.components["video_vae"]
     pipe = h3_pipe._pipes["t2va"]
@@ -78,8 +60,6 @@ def encode(h3_pipe: Any, pixels: Any, frames: int) -> Any:
 
 
 def decode(h3_pipe: Any, latents: Any) -> Any:
-    import torch
-    from diffusers.modular_pipelines.modular_pipeline import PipelineState
 
     state = PipelineState()
     state.set("latents", latents.to(h3_pipe.components["video_vae"].device))
@@ -89,7 +69,6 @@ def decode(h3_pipe: Any, latents: Any) -> Any:
 
 
 def fingerprints(component: str, module: Any) -> dict[str, str]:
-    from resident_samples import resident_hashes
 
     actual, expected = resident_hashes(component, module)
     return {**actual, **{"expected/" + key: value for key, value in expected.items()}}
@@ -123,30 +102,22 @@ class VaeModel(H3Model):
         }
 
 
-@app.entrypoint()
 def roundtrip(
-    ctx: Context,
-    payload: Input,
     model: VaeModel,
-    decoder: MediaDecoder,
-    out: Outputs,
+    pixels: Any,
+    *,
+    frames: int,
+    cycle: bool,
+    ctx: Any,
     tel: Telemetry,
-) -> Result:
-    import numpy as np
-    import torch
-    from cozy_eval.integrity import output_integrity
-    from PIL import Image
-
+) -> tuple[Any, dict[str, str]]:
+    """Observe resident VAE data before and after normal component staging."""
+    if frames not in (22, 345):
+        raise ValueError("H3 VAE diagnostic supports 22 or 345 frames")
     ctx.raise_if_cancelled()
-    decoded = decoder.decode_image(payload.image)
-    image = Image.frombytes("RGB", (decoded.width, decoded.height), decoded.rgb)
-    image.thumbnail((1344, 768), Image.Resampling.LANCZOS)
-    canvas = Image.new("RGB", (1344, 768), (242, 234, 221))
-    canvas.paste(image, ((1344 - image.width) // 2, (768 - image.height) // 2))
-    pixels = torch.from_numpy(np.asarray(canvas).copy())
-    if payload.cycle:
+    if cycle:
         with tel.stage("vae_encode"):
-            latents, before = model.encode_probe(pixels, payload.frames)
+            latents, before = model.encode_probe(pixels, frames)
         for name, value in before.items():
             tel.log("resident tensor fingerprint", phase="before", tensor=name, sha256=value)
         ctx.raise_if_cancelled()
@@ -164,20 +135,8 @@ def roundtrip(
         }
     else:
         with tel.stage("vae_resident_roundtrip"):
-            video, hashes = model.resident_probe(pixels, payload.frames)
-    assert tuple(video.shape) == (1, payload.frames, 3, 768, 1344)
-    assert torch.isfinite(video).all()
-    ctx.raise_if_cancelled()
-    rgb, _ = _rgb8(torch, video)
-    facts = output_integrity(rgb.numpy())
-    tel.log("VAE diagnostic only", frames=payload.frames, grid_peak_ratio=facts.grid_peak_ratio)
-    return Result(
-        video=out.save_video(rgb, fps=24),
-        source=out.save_image(ImageFrame(1344, 768, canvas.tobytes()), format="png"),
-        reconstruction=out.save_image(ImageFrame(1344, 768, bytes(rgb[-1].numpy())), format="png"),
-        grid_peak_ratio=float(facts.grid_peak_ratio),
-        hashes=[TensorObservation(name, value) for name, value in hashes.items()],
-    )
+            video, hashes = model.resident_probe(pixels, frames)
+    return video, hashes
 
 
 class TraceResult(msgspec.Struct):
@@ -207,7 +166,6 @@ class TracePipeline(OfficialH3Pipeline):
         cancel: Any,
         checks: NumericalChecks | None = None,
     ) -> ScheduleFacts:
-        from activation_trace import ACTIVE_TRACE
 
         trace = ACTIVE_TRACE.get()
         if trace is None:
@@ -238,10 +196,6 @@ def trace_preflight(payload: ReferenceMediaToVideoInput) -> ReferencePolicyFacts
 def save_trace(
     trace: Any, ctx: Context, payload: ReferenceMediaToVideoInput, model: TraceModel, out: Outputs
 ) -> FileAsset:
-    import importlib.metadata
-    import json
-
-    from h3 import AudioReference, ImageReference
 
     references = []
     for reference in payload.references:
@@ -261,7 +215,7 @@ def save_trace(
         "checkpoint": model.checkpoint_ref,
         "inference_package": "minimax-h3",
         "inference_version": importlib.metadata.version("minimax-h3"),
-        "diagnostic_version": importlib.metadata.version("h3-vae-diagnostic"),
+        "diagnostic_module": "h3_diagnostics",
         "torch_version": importlib.metadata.version("torch"),
         "diffusers_version": importlib.metadata.version("diffusers"),
         "runtime_version": importlib.metadata.version("cozy-runtime"),
@@ -278,7 +232,6 @@ def save_trace(
     return out.save_bytes(raw, media_type="application/json")
 
 
-@app.entrypoint(preflight=trace_preflight)
 def reference_trace(
     ctx: Context,
     payload: ReferenceMediaToVideoInput,
@@ -289,8 +242,6 @@ def reference_trace(
     tel: Telemetry,
 ) -> TraceResult:
     """Normal H3 video plus bounded activations and original-dtype final latents."""
-    from activation_trace import ActivationTrace
-    from safetensors.torch import save
 
     trace = ActivationTrace(evaluations=payload.steps, first_step=False)
     with trace.active():
@@ -302,7 +253,6 @@ def reference_trace(
     )
 
 
-@app.entrypoint(preflight=trace_preflight)
 def reference_activations(
     ctx: Context,
     payload: ReferenceMediaToVideoInput,
@@ -313,7 +263,6 @@ def reference_activations(
     tel: Telemetry,
 ) -> ProbeResult:
     """Normal preprocessing and first denoise step; no video or final latents."""
-    from activation_trace import ActivationTrace, FirstStepCaptured
 
     trace = ActivationTrace(evaluations=payload.steps, first_step=True)
     with trace.active():
