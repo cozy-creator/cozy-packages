@@ -1512,7 +1512,7 @@ def arm_media() -> None:
             ]
         ]
     )
-    pixels = package._rgb8(torch, decoded)
+    pixels, _ = package._rgb8(torch, decoded)
     check("RGB8 conversion shape", tuple(pixels.shape), (2, 1, 2, 3))
     check("RGB8 clamp and round", pixels[0].flatten().tolist(), [0, 128, 0, 125, 255, 255])
     continuation = bytes(pixels[-1].numpy().tobytes())
@@ -2158,6 +2158,35 @@ def arm_vae_tiles() -> None:
     )
 
 
+def arm_rgb8_handoff() -> None:
+    """h3a-017: the chunked, digested-as-it-lands RGB8 handoff is byte-identical to a
+    whole-tensor quantize and its digest is the digest of the finished buffer."""
+    import torch
+
+    print("\n== chunked RGB8 handoff ==")
+    frames = 3 * package._RGB8_CHUNK_FRAMES + 1  # three full chunks and a ragged tail
+    decoded = torch.rand((1, frames, 3, 16, 32), generator=torch.Generator().manual_seed(2))
+    decoded = decoded * 1.2 - 0.1  # excursions past [0, 1] on both sides
+    whole = (decoded[0].clamp(0, 1) * 255).round().to(torch.uint8).permute(0, 2, 3, 1).contiguous()
+    pixels, digest = package._rgb8(torch, decoded.clone())
+    check("chunked RGB8 equals the whole-tensor quantize", torch.equal(pixels, whole), True)
+    check(
+        "chunked RGB8 lands in one contiguous host buffer",
+        (pixels.is_contiguous(), pixels.device.type),
+        (True, "cpu"),
+    )
+    check(
+        "the running digest is the finished buffer's sha256",
+        digest,
+        hashlib.sha256(pixels.numpy()).hexdigest(),
+    )
+    # Red arm: chunks hashed out of order are a different digest, so the check has teeth.
+    reordered = hashlib.sha256()
+    for start in reversed(range(0, frames, package._RGB8_CHUNK_FRAMES)):
+        reordered.update(pixels[start : start + package._RGB8_CHUNK_FRAMES].numpy())
+    red("chunks digested out of order still match", reordered.hexdigest(), digest)
+
+
 def arm_interface() -> None:
     print("\n== committed public surface ==")
     interface_path = H3 / "metadata" / "package-interface.json"
@@ -2229,6 +2258,7 @@ ARMS = {
     "numerics": arm_numerics,
     "resident-fill": arm_resident_fill,
     "vae-tiles": arm_vae_tiles,
+    "rgb8-handoff": arm_rgb8_handoff,
     "interface": arm_interface,
 }
 
