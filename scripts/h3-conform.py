@@ -26,7 +26,15 @@ ROOT = Path(__file__).resolve().parent.parent
 H3 = ROOT / "minimax-h3"
 sys.path.insert(0, str(H3))
 
-from cozy_runtime.author import canonical_json, describe  # noqa: E402
+from cozy_runtime.author import (  # noqa: E402
+    AudioAsset,
+    DecodedVideo,
+    ImageAsset,
+    UnsupportedInput,
+    VideoAsset,
+    canonical_json,
+    describe,
+)
 
 import h3 as package  # noqa: E402
 from conditioner import build_text_conditioner, text_conditioner_config  # noqa: E402
@@ -35,7 +43,7 @@ from h3_order import construction_order, encode_order  # noqa: E402
 from official import (  # noqa: E402
     FPS,
     FRAMES,
-    MAX_CONDITIONER_VISION_TOKENS,
+    REFERENCE_IMAGE_SHORT_EDGE,
     NumericalChecks,
     ResidentWeights,
     ScheduleFacts,
@@ -546,7 +554,7 @@ def arm_reference_resolution() -> None:
             references=references,
             generator=torch.Generator().manual_seed(7),
             steps=DEFAULT_STEPS,
-            reference_image_short_edge=edge,
+            reference_image_short_edges=[edge],
         )
         image = state.normalized_references[0].image
         normalized[edge] = np.asarray(image)
@@ -563,15 +571,39 @@ def arm_reference_resolution() -> None:
         )
     check("768px reference geometry", normalized[768].shape, (1024, 768, 3))
     check("2048px reference geometry", normalized[2048].shape, (2720, 2048, 3))
-    default = pipe.start_ref2va(
+    official = pipe.start_ref2va(
         prompt="A person in a garden.",
         references=references,
         generator=torch.Generator().manual_seed(7),
         steps=DEFAULT_STEPS,
+        reference_image_short_edges=[REFERENCE_IMAGE_SHORT_EDGE],
     )
     check(
-        "default pixels stay identical after smaller requests",
-        np.array_equal(np.asarray(default.normalized_references[0].image), normalized[2048]),
+        "official 2048px pixels stay identical after smaller requests",
+        np.array_equal(np.asarray(official.normalized_references[0].image), normalized[2048]),
+        True,
+    )
+    mixed = pipe.start_ref2va(
+        prompt="A person in a garden.",
+        references=references * 3,
+        generator=torch.Generator().manual_seed(7),
+        steps=DEFAULT_STEPS,
+        reference_image_short_edges=[512, 2048, 1024],
+    )
+    shapes = [np.asarray(entry.image).shape for entry in mixed.normalized_references]
+    check(
+        "mixed per-image edges reach official preprocessing in packed order",
+        shapes,
+        [(672, 512, 3), (2720, 2048, 3), (1376, 1024, 3)],
+    )
+    check(
+        "each image's budget agrees with its own upstream geometry",
+        [height * width // 1024 for height, width, _ in shapes],
+        [reference_image_vision_tokens(1086, 1448, edge) for edge in (512, 2048, 1024)],
+    )
+    check(
+        "mixed request leaves shared config unchanged",
+        dict(pipe._pipes["ref2va"].config) == original_config,
         True,
     )
 
@@ -594,7 +626,7 @@ def arm_reference_resolution() -> None:
                 references=references,
                 generator=torch.Generator().manual_seed(7),
                 steps=DEFAULT_STEPS,
-                reference_image_short_edge=768,
+                reference_image_short_edges=[768],
             ),
         )
     finally:
@@ -604,6 +636,33 @@ def arm_reference_resolution() -> None:
         dict(pipe._pipes["ref2va"].config) == original_config,
         True,
     )
+
+    def greedy_setup(components: Any, state: Any) -> None:
+        del state
+        first = components.config.reference_image_short_edge
+        second = components.config.reference_image_short_edge
+        fail("greedy setup read a second edge for one image", f"{first}, {second}")
+
+    def idle_setup(components: Any, state: Any) -> None:
+        del components, state
+
+    for drift, step in (("more", greedy_setup), ("fewer", idle_setup)):
+        pipe._blocks["ref2va"].sub_blocks["before_encode"] = step
+        try:
+            refusal(
+                f"a setup step reading {drift} edges than images refuses typed",
+                lambda: pipe.start_ref2va(
+                    prompt="A person in a garden.",
+                    references=references,
+                    generator=torch.Generator().manual_seed(7),
+                    steps=DEFAULT_STEPS,
+                    reference_image_short_edges=[768],
+                ),
+                "artifact_config",
+            )
+        finally:
+            pipe._blocks["ref2va"].sub_blocks["before_encode"] = before
+
     field = get_type_hints(package.ReferenceMediaToVideoInput, include_extras=True)[
         "reference_image_short_edge"
     ]
@@ -613,6 +672,22 @@ def arm_reference_resolution() -> None:
         refusal(
             f"typed request refuses invalid edge {invalid}",
             partial(msgspec.convert, invalid, type=field),
+        )
+    image_ref = package.ImageReference(ImageAsset("sha256:" + "3" * 64))
+    request = package.ReferenceMediaToVideoInput(
+        prompt="A person in a garden.", references=[image_ref]
+    )
+    check("request default short edge is 1024", request.reference_image_short_edge, 1024)
+    check("an image reference follows the request edge unless set", image_ref.short_edge, None)
+    edge_field = get_type_hints(package.ImageReference, include_extras=True)["short_edge"]
+    check(
+        "typed image reference accepts an explicit edge", msgspec.convert(512, type=edge_field), 512
+    )
+    check("typed image reference accepts none", msgspec.convert(None, type=edge_field), None)
+    for invalid in (255, 2049):
+        refusal(
+            f"typed image reference refuses edge {invalid}",
+            partial(msgspec.convert, invalid, type=edge_field),
         )
 
 
@@ -1362,13 +1437,11 @@ def _audio(seconds: int, *, rate: int = 4, start: Fraction = Fraction(0)) -> Any
     )
 
 
-def _video(seconds: int, *, soundtrack: Any | None = None) -> Any:
-    from cozy_runtime.author import DecodedVideo
-
+def _video(seconds: int, *, soundtrack: Any | None = None, width: int = 1, height: int = 1) -> Any:
     frames = tuple(bytes([index, 0, 0]) for index in range(seconds))
     return DecodedVideo(
-        width=1,
-        height=1,
+        width=width,
+        height=height,
         frame_count=seconds,
         frames_rgb=frames,
         frame_pts=tuple(range(seconds)),
@@ -1381,7 +1454,6 @@ def _video(seconds: int, *, soundtrack: Any | None = None) -> Any:
 
 def arm_media() -> None:
     import torch
-    from cozy_runtime.author import AudioAsset, ImageAsset, VideoAsset
     from cozy_runtime.author.fakes import fake_attempt, fake_telemetry
 
     print("\n== ordered mixed references, exact clocks, and continuation identity ==")
@@ -1409,14 +1481,6 @@ def arm_media() -> None:
         reference_video_vision_tokens(1920, 1080, Fraction(15)),
         15120,
     )
-    package._validate_vision_budget(32768)
-    observe("vision capacity boundary")
-    refusal(
-        "vision demand above the release budget refuses",
-        lambda: package._validate_vision_budget(MAX_CONDITIONER_VISION_TOKENS + 1),
-        "reference_policy",
-    )
-
     video = _video(2, soundtrack=_audio(1, start=Fraction(1, 2)))
     frames = _video_at_24fps(video)
     check("two exact seconds resample to 48 frames", tuple(frames.shape), (48, 3, 1, 1))
@@ -1431,6 +1495,10 @@ def arm_media() -> None:
 
     class Pipe:
         @staticmethod
+        def image_reference(value: Any) -> Any:
+            return value
+
+        @staticmethod
         def video_reference(value: Any) -> Any:
             return value
 
@@ -1439,9 +1507,14 @@ def arm_media() -> None:
             return value
 
     class Decoder:
-        def __init__(self, videos: list[Any], audios: list[Any]) -> None:
+        def __init__(self, videos: list[Any], audios: list[Any], images: list[Any]) -> None:
             self._videos = list(videos)
             self._audios = list(audios)
+            self._images = list(images)
+
+        def decode_image(self, asset: Any) -> Any:
+            del asset
+            return self._images.pop(0)
 
         def decode_video(self, asset: Any) -> Any:
             del asset
@@ -1451,11 +1524,18 @@ def arm_media() -> None:
             del asset
             return self._audios.pop(0)
 
-    def decode(references: list[Any], videos: list[Any], audios: list[Any]) -> list[Any]:
+    def decode(
+        references: list[Any],
+        videos: list[Any],
+        audios: list[Any],
+        images: list[Any] | None = None,
+        default: int = package.DEFAULT_REFERENCE_IMAGE_SHORT_EDGE,
+    ) -> tuple[list[Any], package.ReferenceSizing]:
         return package._decode_references(
             cast(Any, references),
-            decoder=cast(Any, Decoder(videos, audios)),
+            decoder=cast(Any, Decoder(videos, audios, images or [])),
             pipe=cast(Any, Pipe()),
+            reference_image_short_edge=default,
         )
 
     video_ref = package.VideoReference(VideoAsset("sha256:" + "1" * 64))
@@ -1467,7 +1547,7 @@ def arm_media() -> None:
                 [video_ref, video_ref, audio_ref],
                 videos=[_video(7, soundtrack=_audio(7)), _video(7, soundtrack=_audio(7))],
                 audios=[_audio(2)],
-            )
+            )[0]
         ),
         3,
     )
@@ -1481,7 +1561,7 @@ def arm_media() -> None:
                     _video(5, soundtrack=_audio(5)),
                 ],
                 audios=[_audio(10), _audio(5)],
-            )
+            )[0]
         ),
         4,
     )
@@ -1501,6 +1581,93 @@ def arm_media() -> None:
             videos=[_video(2)],
             audios=[_audio(6), _audio(6), _audio(4)],
         ),
+        "reference_policy",
+    )
+
+    print("\n== per-reference fidelity and the internal vision budget ==")
+    image_ref = package.ImageReference(ImageAsset("sha256:" + "3" * 64))
+    coarse = package.ImageReference(ImageAsset("sha256:" + "4" * 64), short_edge=512)
+    fine = package.ImageReference(ImageAsset("sha256:" + "5" * 64), short_edge=2048)
+    hd_video = _video(15, width=1920, height=1080)
+
+    def square(side: int = 1024) -> Any:
+        return SimpleNamespace(width=side, height=side)
+
+    def sizing(
+        references: list[Any],
+        images: list[Any],
+        default: int = package.DEFAULT_REFERENCE_IMAGE_SHORT_EDGE,
+        videos: list[Any] | None = None,
+    ) -> package.ReferenceSizing:
+        return decode(references, videos=videos or [], audios=[], images=images, default=default)[1]
+
+    nine = sizing([image_ref] * 9, [square()] * 9)
+    check(
+        "nine 1024² images fit unchanged at the 1024 default",
+        (nine.edges, nine.total),
+        ([1024] * 9, 9216),
+    )
+    stepped = sizing([image_ref] * 9, [square(2048)] * 9, default=2048)
+    check(
+        "nine default images at a 2048 request default step to 1536",
+        (stepped.edges, stepped.total),
+        ([1536] * 9, 20736),
+    )
+    mixed = sizing([coarse, fine, image_ref], [square()] * 3)
+    check(
+        "mixed explicit fidelities are honored beside the default", mixed.edges, [512, 2048, 1024]
+    )
+    check(
+        "each image's tokens follow its own resolved edge",
+        [image.tokens for image in mixed.images],
+        [256, 4096, 1024],
+    )
+    check(
+        "sizing names each reference for telemetry",
+        mixed.summary,
+        "references.0 512->512 256 tokens; references.1 2048->2048 4096 tokens; "
+        "references.2 default->1024 1024 tokens",
+    )
+    check("a 512 request default stays at 512", sizing([image_ref], [square()], 512).edges, [512])
+    check(
+        "an off-ladder 2000 default steps to 1536, never up to 2048",
+        sizing([image_ref] * 9, [square()] * 9, 2000).edges,
+        [1536] * 9,
+    )
+    check(
+        "an explicit 2048 beside a 512 default never lifts the default",
+        sizing([fine, image_ref], [square()] * 2, 512).edges,
+        [2048, 512],
+    )
+    pushed = sizing([video_ref, *[image_ref] * 9], [square()] * 9, 2048, videos=[hd_video])
+    check(
+        "a video's fixed tokens push the default images down the ladder",
+        (pushed.video_tokens, pushed.edges, pushed.total),
+        (15120, [1024] * 9, 24336),
+    )
+    refusal(
+        "nine images at an explicit 2048 refuse",
+        lambda: sizing([fine] * 9, [square()] * 9),
+        "reference_policy",
+    )
+    message = ""
+    try:
+        sizing([fine] * 9, [square()] * 9)
+    except UnsupportedInput as exc:
+        message = str(exc)
+    check(
+        "the refusal carries the arithmetic: tokens needed, budget, explicit sizes",
+        [part in message for part in ("36864 tokens", "at most 32768", str([2048] * 9))],
+        [True] * 3,
+    )
+    refusal(
+        "eight explicit 2048 images leave no room for a ninth even at 256",
+        lambda: sizing([*[fine] * 8, image_ref], [square()] * 9),
+        "reference_policy",
+    )
+    refusal(
+        "a 15-second video beside eight explicit 2048 images refuses with no default to shrink",
+        lambda: sizing([video_ref, *[fine] * 8], [square()] * 8, videos=[hd_video]),
         "reference_policy",
     )
 
@@ -2241,6 +2408,22 @@ def arm_interface() -> None:
             ["video", "continuation_frame", "warnings"],
         )
     check("H3 permits Runtime encoded linear leaves", package.H3Model.__encoded_leaves__, "accept")
+    fields = entries["reference_media_to_video"]["request"]["fields"]
+    references = next(field for field in fields if field["name"] == "references")
+    image = next(
+        branch for branch in references["type"]["list"]["union"] if branch["tag"] == "image"
+    )
+    check(
+        "an image reference carries an optional short_edge",
+        [(field["name"], field.get("wire")) for field in image["fields"]],
+        [("image", None), ("short_edge", "optional")],
+    )
+    edge = next(field for field in fields if field["name"] == "reference_image_short_edge")
+    check(
+        "the request default edge is bounded 256..2048",
+        edge["constraints"],
+        {"ge": 256, "le": 2048},
+    )
 
 
 ARMS = {
