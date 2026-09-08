@@ -79,7 +79,7 @@ class Recorder:
 
 def pipeline(recorder: Recorder) -> Any:
     """The package's own builder, on the CPU, with no components registered."""
-    return package._text2image_pipeline(torch.device("cpu"), recorder.tel, recorder.phases)
+    return package._text2image_pipeline(torch.device("cpu"), recorder.phases)
 
 
 def loop_state(loop: Any, steps: int) -> Any:
@@ -217,7 +217,7 @@ def arm_deepcopy_trap() -> None:
     recorder = Recorder()
     shipped = AnimaModularPipeline(workflow="text2image")
     shipped.blocks.sub_blocks["denoise.denoise"].progress_bar = package._progress_bar(
-        recorder.tel, recorder.phases
+        recorder.phases
     )
     live = shipped._blocks.sub_blocks["denoise.denoise"]
     check("`blocks` hands back a copy", shipped.blocks.sub_blocks["denoise.denoise"] is live, False)
