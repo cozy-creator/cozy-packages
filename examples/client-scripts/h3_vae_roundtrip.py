@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime[media]>=0.6.0,<1", "minimax-h3", "cozy-eval"]
+# dependencies = ["cozy-runtime[media]>=0.7.0,<1", "minimax-h3", "cozy-eval"]
 # [tool.uv.sources]
 # minimax-h3 = {path = "../../minimax-h3", editable = true}
 # ///

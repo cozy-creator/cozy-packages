@@ -4,7 +4,7 @@ Run a Python file directly with `cozy run ./path/to/script.py --rental-only`.
 The client captures the script and its editable dependencies, then executes the
 ordinary `main()` function on the private worker. These files are not published
 packages and have no `package.toml`, App registry, or request/result classes.
-Runtime 0.6.0 or the matching source candidate is required for typed model/service
+Runtime 0.7.0 or newer is required for typed model/service
 parameters; the dependency is captured with the script.
 
 - `h3_checkpoint_repair.py` is the completed, guarded repair recipe for exactly

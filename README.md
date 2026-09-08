@@ -30,12 +30,12 @@ select their inputs explicitly and run without publishing code to the hub.
   Package code receives public decoded values and never opens a request path, URL, container, or
   packet. The model package does read its own five immutable tokenizer/processor data files.
 - Model code owns model-specific normalization, conditioning, schedules, inference, and output
-  semantics and quantization policy. Runtime owns generic quantization machinery, storage,
-  networking, device placement, and offload.
+  semantics and quantization policy. Runtime owns generic quantization machinery, device
+  placement, and offload; TensorFS owns artifact storage and transfers.
 - Private H3 configs, plans, and proof receipts are identified by their package member and closed
   field shape; they do not add globally versioned schema tags beside the PackageInterface.
-- Import libraries at module scope. Metadata inspection uses the package's locked dependency
-  environment and never loads model weights or requires a GPU.
+- Import libraries at module scope. Metadata inspection reads declarations without executing
+  package code. Model construction happens during admitted worker preparation.
 - Every wheel exposes exactly one standard `cozy.application` entry point matching the application
   named by `package.toml`; installed discovery never depends on source-tree metadata.
 - Community implementations are research evidence only. No community node, graph, prompt parser,
