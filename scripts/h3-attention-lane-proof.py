@@ -2,13 +2,12 @@
 """Run attention-lane through real Runtime and TensorFS over a tiny H3-shaped pruned fixture.
 
 Proves, for every lane the package declares, that the produced header is the source header
-plus one canonical `execution` config; that the config is byte-identical to the design
-document typed out here (attention-quantization.md §2, h3a-012) and that the runtime's own
-contract reader (cr-109) admits both at the same digest; that every tensor entry — object
-refs included — and every other config is byte-identical to the source's with zero source
-reads; that a retry replays the receipts; and that the typed refusals arm — a produced lane
-as a source (it already carries `execution`) and a BF16 source (its bytes are not the route
-the contracts name).
+plus one canonical `execution` config, byte-identical to the design document typed out here
+(attention-quantization.md §2, h3a-012); that every tensor entry — object refs included — and
+every other config is byte-identical to the source's with zero source reads; that a retry
+replays the receipts; and that the typed refusals arm — a produced lane as a source (it
+already carries `execution`) and a BF16 source (its bytes are not the route the contracts
+name). `h3-contract-proof.py` reads the same assets through the Runtime that applies them.
 """
 
 from __future__ import annotations
@@ -25,7 +24,6 @@ from cozy_runtime.author import UnsupportedInput, WeightsSink, canonical_json
 from cozy_runtime.author._model import _derive_model
 from cozy_runtime.author.fakes import fake_attempt
 from cozy_runtime.derive.quantization import h3_quantization_plan, prepare_quantization
-from cozy_runtime.internal.execution_contract import read as read_contract
 from cozy_runtime.internal.weights_sink import WeightsTransactionHost
 from h3_tables import job
 from h3_tables.model_config import dual_adaln_pruned_config, parse_production_config
@@ -197,7 +195,6 @@ def main() -> None:
         dit_rows = len(before["components"]["fl2va_dit"])
         assert result.inherited_tensors == dit_rows * 2 + 3
         produced: dict[str, str] = {}
-        contracts: dict[str, str] = {}
         for lane in result.lanes:
             asset = assets[lane.contract]
             receipt = facts[lane.lane]
@@ -206,17 +203,10 @@ def main() -> None:
             assert after["components"] == before["components"], f"{lane.lane} changed a tensor"
             configs = {name: bytes(raw) for name, raw in after["configs"].items()}
             assert configs == {**inherited, "execution": asset}, f"{lane.lane} is not source + 1"
-            contract = read_contract(configs)
-            expected = read_contract({"execution": canonical_json.encode(DESIGN[lane.contract])})
-            assert contract is not None and expected is not None
-            assert contract.document() == expected.document()
-            assert contract.digest() == expected.digest()
-            assert contract.weights.route == "encoded_gemm" and contract.device == "sm90"
             assert lane.execution_config_digest == canonical_json.digest_bytes(asset)
             assert not lane.replayed
             assert set(receipt["inherit_observation"].values()) == {0}, receipt
             produced[lane.lane] = manifest
-            contracts[lane.lane] = contract.digest()
         assert sorted(produced) == sorted(job.LANE_CONTRACT)
         assert len(set(produced.values())) == len(produced), "the lanes share one manifest"
         replayed, again = invoke(store, root, source, length, "attn8-1")
@@ -245,7 +235,6 @@ def main() -> None:
                     "execution_config_digests": {
                         lane.lane: lane.execution_config_digest for lane in result.lanes
                     },
-                    "execution_contract_digests": contracts,
                     "refusals": {"already_bound": bound, "bf16_source": plain},
                 }
             )
