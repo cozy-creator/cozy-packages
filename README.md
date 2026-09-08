@@ -31,8 +31,8 @@ conformance drivers. Model selection lives on the hub, never in source (see Mode
   semantics. It does not own storage, networking, device placement, offload, or quantization.
 - Private H3 configs, plans, and proof receipts are identified by their package member and closed
   field shape; they do not add globally versioned schema tags beside the PackageInterface.
-- Every import is at module scope (se-041). `cozy-runtime describe` runs in the package's locked
-  environment — the one Creator publishes from and installs into — with no GPU and no weights.
+- Import libraries at module scope. Metadata inspection uses the package's locked dependency
+  environment and never loads model weights or requires a GPU.
 - Every wheel exposes exactly one standard `cozy.application` entry point matching the application
   named by `package.toml`; installed discovery never depends on source-tree metadata.
 - Community implementations are research evidence only. No community node, graph, prompt parser,
@@ -45,9 +45,9 @@ is an owner action on the hub, never a default in `package.toml`. A freshly publ
 unbound until the owner binds it:
 
 ```sh
-cozy package bind paul/minimax-h3 first_last_frame_to_video.models.model paul/minimax-h3@1.0.0-rc.2 \
+cozy package bind paul/minimax-h3 fl2va.models.model paul/minimax-h3@1.0.0-rc.2 \
   --gpu H100=fp8-adaln-pruned --gpu B200=fp8-adaln-pruned --gpu 5090=fp8-adaln-pruned
-cozy package bind paul/minimax-h3 reference_media_to_video.models.model paul/minimax-h3@1.0.0-rc.2 \
+cozy package bind paul/minimax-h3 ref2va.models.model paul/minimax-h3@1.0.0-rc.2 \
   --gpu H100=fp8-adaln-pruned --gpu B200=fp8-adaln-pruned --gpu 5090=fp8-adaln-pruned
 ```
 
@@ -64,9 +64,54 @@ cozy package bind paul/minimax-h3 reference_media_to_video.models.model paul/min
 
 The H3 package exposes both official actions from one model generation:
 
-- `first_last_frame_to_video` accepts zero, first, last, or first-and-last keyframes.
-- `reference_media_to_video` accepts one ordered tagged list of image,
-  video, and standalone-audio references.
+- `fl2va` accepts zero, first, last, or first-and-last keyframes.
+- `ref2va` accepts an ordered Runtime `Assets` input containing image, video,
+  and standalone-audio references. Repeated CLI `--asset` arguments preserve this order;
+  callers do not construct tagged reference JSON.
+
+For a reference call, the package adapts the supplied assets through Runtime's existing
+media decoder. File delivery works the same locally and on a rental:
+
+```sh
+cozy run paul/minimax-h3/ref2va \
+  'prompt=<your H3 prompt>' \
+  --asset="~/Pictures/character-1.png" \
+  --asset="~/Pictures/character-2.png" \
+  seed=24680 --rental-only --await
+```
+
+The Hub binding supplies the default model. `--model.model=...` overrides it for
+one call. FL2VA accepts up to two images through the same Assets input. Images
+fill the first and last frame roles in order; labels `first` and `last` select those
+roles explicitly. For example, `--asset="last=ending.png"` supplies only a last frame.
+Other labels retain positional meaning. An empty collection generates without
+keyframes. The generated interface declares supported input shapes and bounds;
+the endpoint selects roles.
+
+Assets may have caller-supplied labels, such as `--asset="alice=~/Pictures/alice.png"`.
+Labels are unique within the collection and preserve their exact spelling. Package
+code can use `assets["alice"]` or `assets.info("alice")`; unlabelled references remain valid. H3
+preserves the supplied order when building its references. A label does not change
+the model's positional prompt syntax or rewrite the prompt.
+
+Reference-image fidelity is an optional per-occurrence hint:
+
+```sh
+cozy run paul/minimax-h3/ref2va \
+  'prompt=<your H3 prompt>' \
+  --asset="woman=~/Pictures/woman.png" --asset-fidelity=woman=high \
+  --asset="scene=~/Pictures/scene.png" --asset-fidelity=scene=low \
+  --rental-only --await
+```
+
+For Ref2VA, `low`, `medium`, and `high` select a 256, 1024, or 2048 pixel short edge,
+respectively; `auto` starts at `reference_image_short_edge` (default 1024) and steps down
+if needed to fit the combined reference budget. These are H3's
+package rules. Runtime preserves source resolution and the original file. The H3
+adapter supplies each resolved size to the official preprocessing step, preserves aspect
+ratio and the upstream grid, and reports actual normalized dimensions through
+telemetry. Keyframes in FL2VA still follow the generated canvas. These input-resolution
+choices do not change reference conditioning strength.
 
 Both actions use the official Diffusers MiniMax H3 implementation and share one exact BF16
 Qwen3-VL conditioner, one video VAE and one audio VAE at their official FP32 destination dtypes,
@@ -120,16 +165,16 @@ Ref2VA preserves request order and enforces the official product bounds: at most
 3 standalone audio clips, and 12 entries total. Video and audio clips are 2–15 seconds, with at most
 15 seconds per modality in aggregate. A video's embedded soundtrack belongs to that video and does
 not consume the standalone-audio count. Standalone audio cannot be the only reference modality.
-Each image reference is encoded at a short edge of 256–2048 px (Diffusers rounds both axes to
-its 32-pixel grid): an explicit `short_edge` on the reference fixes that image's fidelity, and the
-request's `reference_image_short_edge` (default 1024) applies to the rest. When the set's Qwen
-vision tokens exceed the 32,768 budget, only the images without an explicit `short_edge` step down
-together through 2048, 1536, 1024, 768, 512 and 256 from the request default until it fits;
-explicit values never change, auto-sizing never rises above the default, and a set that still does
-not fit refuses typed (`reference_policy`) with the arithmetic. The resolved sizes ride telemetry
-as `h3 reference sizing`. Video and audio references keep the official presentation. Prompts are
-bounded to 4,096 characters. The 32,768-token budget is a conservative capacity fence, not yet the
-measured maximum-cell H200 fit proof.
+The optional `reference_image_short_edge` sets the default short edge from 256 to 2048
+pixels (default 1024). Diffusers rounds both axes to its 32-pixel grid. Explicit fidelity
+hints keep their sizes; automatic images step down together through 2048, 1536, 1024,
+768, 512 and 256, starting no higher than the request default, until the combined
+32,768-token vision budget fits. A set that still exceeds the budget refuses with the
+arithmetic before entering a component scope. Video and audio presentation is unchanged.
+The resolved sizes are request-local and appear in telemetry. Smaller references reduce
+attention work while the generated video retains its resolution; output quality and speed
+still require measurement. Prompts are bounded to 4,096 characters. The token budget is a
+conservative capacity limit, not a measured maximum-size GPU fit guarantee.
 
 The task-stamped canonical plans live in `minimax-h3/timestep-plans/`, derived from the official
 scheduler by `python scripts/h3_plans.py 30 40 50` (which also restamps the producer's copies and

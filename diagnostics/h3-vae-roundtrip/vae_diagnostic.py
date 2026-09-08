@@ -33,16 +33,15 @@ from resident_samples import resident_hashes
 from safetensors.torch import save
 
 from h3 import (
-    AudioReference,
     H3Model,
     H3VideoOutput,
-    ImageReference,
+    ReferenceAssets,
     ReferenceMediaToVideoInput,
     _rgb8,
     preflight_reference_media,
 )
 from h3 import (
-    reference_media_to_video as reference_media_to_video,
+    ref2va as ref2va,
 )
 from official import (
     NumericalChecks,
@@ -227,26 +226,33 @@ class TraceModel(H3Model):
         self.pipe = loader.construct(TracePipeline, factory=build_trace_pipeline)
 
 
-def trace_preflight(payload: ReferenceMediaToVideoInput) -> ReferencePolicyFacts:
+def trace_preflight(
+    payload: ReferenceMediaToVideoInput, assets: ReferenceAssets
+) -> ReferencePolicyFacts:
     if payload.seed is None:
         raise InvalidRequest("activation comparisons require an explicit seed", fields=["seed"])
-    return preflight_reference_media(payload)
+    return preflight_reference_media(payload, assets)
 
 
 def save_trace(
-    trace: Any, ctx: Context, payload: ReferenceMediaToVideoInput, model: TraceModel, out: Outputs
+    trace: Any,
+    ctx: Context,
+    payload: ReferenceMediaToVideoInput,
+    assets: ReferenceAssets,
+    model: TraceModel,
+    out: Outputs,
 ) -> FileAsset:
     references = []
-    for reference in payload.references:
-        asset = (
-            reference.image
-            if isinstance(reference, ImageReference)
-            else reference.audio
-            if isinstance(reference, AudioReference)
-            else reference.video
-        )
+    for index in range(len(assets)):
+        info = assets.info(index)
         references.append(
-            {"kind": asset.kind, "digest": asset.digest, "size_bytes": asset.size_bytes}
+            {
+                "kind": info.kind,
+                "digest": info.digest,
+                "size_bytes": info.size_bytes,
+                "label": info.label,
+                "fidelity": info.fidelity,
+            }
         )
     document = trace.document()
     document["provenance"] = {
@@ -275,19 +281,19 @@ def save_trace(
 def reference_trace(
     ctx: Context,
     payload: ReferenceMediaToVideoInput,
+    assets: ReferenceAssets,
     facts: Preflight[ReferencePolicyFacts],
     model: TraceModel,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> TraceResult:
     """Normal H3 video plus bounded activations and original-dtype final latents."""
     trace = ActivationTrace(evaluations=payload.steps, first_step=False)
     with trace.active():
-        result = reference_media_to_video(ctx, payload, facts, model, decoder, out, tel)
+        result = ref2va(ctx, payload, assets, facts, model, out, tel)
     return TraceResult(
         inference=result,
-        activations=save_trace(trace, ctx, payload, model, out),
+        activations=save_trace(trace, ctx, payload, assets, model, out),
         final_latents=out.save_bytes(save(trace.latents), media_type="application/octet-stream"),
     )
 
@@ -296,9 +302,9 @@ def reference_trace(
 def reference_activations(
     ctx: Context,
     payload: ReferenceMediaToVideoInput,
+    assets: ReferenceAssets,
     facts: Preflight[ReferencePolicyFacts],
     model: TraceModel,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> ProbeResult:
@@ -306,9 +312,9 @@ def reference_activations(
     trace = ActivationTrace(evaluations=payload.steps, first_step=True)
     with trace.active():
         try:
-            reference_media_to_video(ctx, payload, facts, model, decoder, out, tel)
+            ref2va(ctx, payload, assets, facts, model, out, tel)
         except FirstStepCaptured:
             pass
         else:
             raise RuntimeError("first-step diagnostic did not stop at its callback")
-    return ProbeResult(save_trace(trace, ctx, payload, model, out), trace.completed_steps)
+    return ProbeResult(save_trace(trace, ctx, payload, assets, model, out), trace.completed_steps)

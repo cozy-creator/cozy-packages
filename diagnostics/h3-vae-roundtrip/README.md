@@ -18,7 +18,7 @@ for BF16/FP8 pairs. An unseeded diagnostic is refused during preflight.
 
 ## One inference implementation and one component scope
 
-Both actions call the imported `h3.reference_media_to_video` function. The model
+Both actions call the imported `h3.ref2va` function. The model
 inherits H3's original sampling methods and their ordinary Runtime component
 scopes. A thin pipeline subclass installs observers around `super().denoise` and
 wraps its existing step callback. It supplies no sampler, changes no argument or

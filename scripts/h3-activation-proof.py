@@ -185,7 +185,7 @@ def main() -> None:
     failing.fail = False
 
     # Exercise the diagnostic override and unchanged H3 parent method.
-    assert vae_diagnostic.reference_media_to_video is h3.reference_media_to_video
+    assert vae_diagnostic.ref2va is h3.ref2va
     assert vae_diagnostic.TraceModel.sample_ref2va is h3.H3Model.sample_ref2va
     seen: list[int] = []
 
