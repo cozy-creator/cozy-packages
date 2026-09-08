@@ -165,6 +165,38 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    ("scripts/h3-adaln-binding-proof.py", "cozy_runtime.author._model"): (
+        "Native/broker qualification driver exercises the real Runtime boundary; "
+        "retire when a public native invocation harness owns this fixture seam."
+    ),
+    ("scripts/h3-adaln-binding-proof.py", "cozy_runtime.author._services"): (
+        "Native/broker qualification driver exercises the real Runtime boundary; "
+        "retire when a public native invocation harness owns this fixture seam."
+    ),
+    ("scripts/h3-adaln-binding-proof.py", "cozy_runtime.internal.weights_sink"): (
+        "Native/broker qualification driver exercises the real Runtime boundary; "
+        "retire when a public native invocation harness owns this fixture seam."
+    ),
+    ("scripts/h3-adaln-resume-proof.py", "cozy_runtime.author._model"): (
+        "Native/broker qualification driver exercises the real Runtime boundary; "
+        "retire when a public native invocation harness owns this fixture seam."
+    ),
+    ("scripts/h3-adaln-resume-proof.py", "cozy_runtime.internal.weights_sink"): (
+        "Native/broker qualification driver exercises the real Runtime boundary; "
+        "retire when a public native invocation harness owns this fixture seam."
+    ),
+    ("scripts/h3-adaln-interface-proof.py", "cozy_runtime.author._calls"): (
+        "Native/broker qualification driver exercises the real Runtime boundary; "
+        "retire when a public native invocation harness owns this fixture seam."
+    ),
+    ("scripts/h3-adaln-interface-proof.py", "cozy_runtime.internal"): (
+        "Native/broker qualification driver exercises the real Runtime boundary; "
+        "retire when a public native invocation harness owns this fixture seam."
+    ),
+    ("scripts/h3-adaln-interface-proof.py", "cozy_runtime.internal.discovery"): (
+        "Native/broker qualification driver exercises the real Runtime boundary; "
+        "retire when a public native invocation harness owns this fixture seam."
+    ),
     ("scripts/h3-repair-proof.py", "cozy_runtime.author._model"): (
         "the repair integration driver constructs the same exact-checkpoint job source "
         "record as Runtime; for_test intentionally permits test:// identities only. "
