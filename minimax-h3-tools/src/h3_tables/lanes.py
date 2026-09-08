@@ -73,21 +73,23 @@ SERVABLE_ENCODINGS = frozenset({"fp8-rowwise/1"})
 UNSERVABLE_LANE = "mxfp8-adaln-pruned"
 
 #: Components no lane may treat, and why. This is a refusal BY NAME, not by shape, because
-#: the shape rule does not catch it: the audio VAE's 1,087 rows are 637 rank-3
-#: `weight_g`/`weight_v` weight-norm pairs (unrepresentable — `fp8-rowwise/1` pins
-#: `logical_rank: Some(2)` and `weight_g` never matches the `.weight` suffix) plus exactly
-#: SIX rank-2 float `.weight` rows, all of them in the `pre_block` ENCODER attention/MLP
-#: and all block-aligned. So the structural selector does NOT refuse this component — it
+#: the shape rule does not catch it. Of the audio VAE's 1,087 rows, 637 are rank-3 — 344 of
+#: them the BigVGAN decoder's `weight_norm` `weight_g`/`weight_v` pairs, the rest alias-free
+#: resampling filters — and all of them are unrepresentable: `fp8-rowwise/1` pins
+#: `logical_rank: Some(2)` and `weight_g` never matches the `.weight` suffix. But the
+#: component also carries exactly SIX rank-2 float `.weight` rows, all of them in the
+#: `pre_block` ENCODER attention/MLP and all block-aligned. So the structural selector does
+#: NOT refuse this component — it
 #: silently selects those six (12.6 M of 151 M parameters, dominated by
 #: `pre_block.attn.qkv.weight [6144, 2048]`), quantizes the audio CONDITIONING path, leaves
 #: the BigVGAN decoder untouched and saves nothing. Every ecosystem publisher pins audio
 #: autoencoders to fp32 and h3a-006 already records the same conclusion.
 REFUSED_COMPONENTS: Mapping[str, str] = {
     "audio_vae": (
-        "the audio VAE is not representable: 637 of its 1,087 rows are rank-3 weight_norm "
-        "weight_g/weight_v pairs, and the only six rank-2 float weights it has are the "
-        "pre_block ENCODER attention/MLP linears, so treating it would encode the audio "
-        "conditioning path and leave the BigVGAN decoder alone"
+        "the audio VAE is not representable: 637 of its 1,087 rows are rank-3, including the "
+        "BigVGAN decoder's 344 weight_norm weight_g/weight_v parameters, and the only six "
+        "rank-2 float weights it has are the pre_block ENCODER attention/MLP linears, so "
+        "treating it would encode the audio conditioning path and leave the decoder alone"
     ),
 }
 

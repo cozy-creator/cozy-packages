@@ -25,7 +25,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import numpy as np
 import tensorfs
@@ -71,7 +71,7 @@ class Source(Model[object]):
         del loader
 
 
-def _fail(what: str) -> None:
+def _fail(what: str) -> NoReturn:
     raise SystemExit(f"h3-lane-store-proof: {what}")
 
 
@@ -134,9 +134,17 @@ def _mint(store: Any, layout: dict[str, dict[str, tuple[int, ...]]], suffix: str
     return "sha256:" + manifest["sha256"], manifest["length"], values
 
 
+def _header(store: Any, manifest: str) -> Any:
+    """The parsed CozyTensors header of one committed manifest."""
+    raw = store.manifest(manifest)["header"]
+    if raw is None:
+        _fail(f"{manifest} carries no CozyTensors header")
+    return tensorfs.parse_header(bytes(raw))
+
+
 def _bodies(store: Any, manifest: str) -> dict[tuple[str, str, str], str]:
     """Every (component, tensor, role) -> its stored body, straight off the header."""
-    header = tensorfs.parse_header(bytes(store.manifest(manifest)["header"]))
+    header = _header(store, manifest)
     return {
         (component, key, role): json.dumps(
             part.get("segments", part.get("inline")), sort_keys=True, default=str
@@ -276,7 +284,7 @@ def main() -> None:
         )
 
         # 3. The rows that DID move are correctly declared and carry the right bytes.
-        header = tensorfs.parse_header(bytes(store.manifest(produced["treated"])["header"]))
+        header = _header(store, produced["treated"])
         declared = header["components"]["video_vae"]
         cast = declared["decoder.proj_in.weight"]
         if cast["logical"]["logical_dtype"] != "f16" or set(cast["parts"]) != {"value"}:

@@ -54,9 +54,10 @@ Two components are refused outright. **`mxfp8/1` on any new lane**: `RowwiseNati
 predicates `cuda.sm89+`, but `MicroScaledNativeLeaf` predicates the EQUALITY `cuda.sm120`,
 so mxfp8 executes on no H100/H200/B200 and degrades to dequant plus a bf16 GEMM;
 `mxfp8-adaln-pruned` is grandfathered by name and nothing else may join it. **The
-`audio_vae`, by name**: 637 of its 1,087 rows are rank-3 `weight_norm` `weight_g`/`weight_v`
-pairs that the rank-2 encoding cannot represent, and the only six rank-2 float weights it
-carries are the `pre_block` ENCODER attention/MLP linears — so a shape rule does not refuse
+`audio_vae`, by name**: 637 of its 1,087 rows are rank-3 — including the BigVGAN decoder's
+344 `weight_norm` `weight_g`/`weight_v` parameters — and the rank-2 encoding cannot
+represent any of them; the only six rank-2 float weights the component carries are the
+`pre_block` ENCODER attention/MLP linears — so a shape rule does not refuse
 the component, it silently quantizes the audio conditioning path and leaves the BigVGAN
 decoder untouched.
 

@@ -25,7 +25,7 @@ import json
 import math
 import struct
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from cozy_runtime.author import (
     UnsupportedInput,
@@ -56,13 +56,12 @@ def _headers() -> Path:
         if candidate.is_dir():
             return candidate
     _fail("no tensorfs/vectors/h3-headers corpus found beside this checkout")
-    raise SystemExit(1)
 
 
 LOGICAL = {"F32": "f32", "F16": "f16", "BF16": "bf16"}
 
 
-def _fail(what: str) -> None:
+def _fail(what: str) -> NoReturn:
     raise SystemExit(f"lane-proof: {what}")
 
 
