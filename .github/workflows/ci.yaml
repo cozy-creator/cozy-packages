@@ -87,6 +87,9 @@ jobs:
         run: |
           uv run --no-project python scripts/torch_family.py
 
+      - name: Native checkpoint repair script and resume
+        run: .venv/bin/python scripts/h3-repair-proof.py
+
   h3-conformance:
     # Independent so a failure in static analysis cannot silently skip the red arms.
     name: H3 deterministic conformance
@@ -164,7 +167,3 @@ jobs:
           minimax-h3-tools/.venv/bin/python scripts/tensorfs_seeds.py
         env:
           PYTHONPATH: minimax-h3-tools/src
-
-      - name: Native checkpoint row repair and resume
-        if: matrix.package == 'minimax-h3-tools'
-        run: minimax-h3-tools/.venv/bin/python scripts/h3-repair-proof.py

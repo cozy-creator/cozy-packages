@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
 import struct
@@ -21,6 +22,7 @@ from cozy_runtime.internal.weights_sink import WeightsTransactionHost
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "examples" / "client-scripts"))
 import h3_checkpoint_repair as repair  # noqa: E402
+
 ENCODINGS = repair.ENCODINGS
 
 
