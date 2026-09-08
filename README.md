@@ -34,8 +34,8 @@ conformance drivers. Model selection lives on the hub, never in source (see Mode
   semantics. It does not own storage, networking, device placement, offload, or quantization.
 - Private H3 configs, plans, and proof receipts are identified by their package member and closed
   field shape; they do not add globally versioned schema tags beside the PackageInterface.
-- Module scope stays light. `cozy-runtime describe` must work without Torch, model libraries, a
-  GPU, or weights.
+- Import libraries at module scope. Metadata inspection uses the package's locked dependency
+  environment and never loads model weights or requires a GPU.
 - Every wheel exposes exactly one standard `cozy.application` entry point matching the application
   named by `package.toml`; installed discovery never depends on source-tree metadata.
 - Community implementations are research evidence only. No community node, graph, prompt parser,
@@ -84,9 +84,12 @@ cozy run paul/minimax-h3/ref2va \
 ```
 
 The Hub binding supplies the default model. `--model.model=...` overrides it for
-one call. FL2VA keeps explicit `first_frame` and `last_frame` image roles, including
-last-frame-only requests. The generated interface declares the supported input
-shapes and bounds; the CLI does not infer roles from filenames.
+one call. FL2VA accepts up to two images through the same Assets input. Images
+fill the first and last frame roles in order; labels `first` and `last` select those
+roles explicitly. For example, `--asset="last=ending.png"` supplies only a last frame.
+Other labels retain positional meaning. An empty collection generates without
+keyframes. The generated interface declares supported input shapes and bounds;
+the endpoint selects roles.
 
 Assets may have caller-supplied labels, such as `--asset="alice=~/Pictures/alice.png"`.
 Labels are unique within the collection and preserve their exact spelling. Package

@@ -21,11 +21,22 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+from PIL import Image as PILImage
+
 ROOT = Path(__file__).resolve().parent.parent
 H3 = ROOT / "minimax-h3"
 sys.path.insert(0, str(H3))
 
-from cozy_runtime.author import canonical_json, describe  # noqa: E402
+from cozy_runtime.author import (  # noqa: E402
+    Assets,
+    AudioAsset,
+    Image,
+    ImageAsset,
+    Mixed,
+    VideoAsset,
+    canonical_json,
+    describe,
+)
 
 import h3 as package  # noqa: E402
 from conditioner import build_text_conditioner, text_conditioner_config  # noqa: E402
@@ -434,9 +445,7 @@ def arm_schedule() -> None:
             scheduler = MiniMaxH3Scheduler(shift=shift)
             scheduler.set_timesteps(schedule.sigma_grid_points)
             official_sigmas = tuple(float(value) for value in scheduler.sigmas.float().cpu())
-            official_timesteps = tuple(
-                float(value) for value in scheduler.timesteps.float().cpu()
-            )
+            official_timesteps = tuple(float(value) for value in scheduler.timesteps.float().cpu())
             check(f"{steps}-step {name} sigmas equal Diffusers", sigmas, official_sigmas)
             check(f"{steps}-step {name} timesteps equal Diffusers", timesteps, official_timesteps)
             check(f"{steps}-step {name} forwards", len(official_timesteps), steps)
@@ -1382,7 +1391,6 @@ def _video(seconds: int, *, soundtrack: Any | None = None) -> Any:
 
 def arm_media() -> None:
     import torch
-    from cozy_runtime.author import Assets, AudioAsset, ImageAsset, ImageFrame, VideoAsset
     from cozy_runtime.author.fakes import fake_attempt, fake_telemetry
 
     print("\n== ordered mixed references, exact clocks, and continuation identity ==")
@@ -1432,7 +1440,8 @@ def arm_media() -> None:
 
     class Pipe:
         @staticmethod
-        def image_reference(value: Any) -> Any:
+        def image_reference(value: Any, *, short_edge: int) -> Any:
+            del short_edge
             return value
 
         @staticmethod
@@ -1443,23 +1452,18 @@ def arm_media() -> None:
         def audio_reference(value: Any) -> Any:
             return value
 
-    class Decoder:
-        def __init__(self, videos: list[Any], audios: list[Any], images: list[Any]) -> None:
-            self._videos = list(videos)
-            self._audios = list(audios)
-            self._images = list(images)
+    class PreparedMedia:
+        """Decoded values isolate H3 policy; Runtime owns the real decoder proofs."""
 
-        def decode_image(self, asset: Any) -> Any:
-            del asset
-            return self._images.pop(0)
+        def __init__(self, references: list[Any], values: list[Any]) -> None:
+            self.inputs = Assets[Mixed](references)
+            self.values = values
 
-        def decode_video(self, asset: Any) -> Any:
-            del asset
-            return self._videos.pop(0)
+        def __iter__(self) -> Any:
+            return iter(self.values)
 
-        def decode_audio(self, asset: Any) -> Any:
-            del asset
-            return self._audios.pop(0)
+        def info(self, index: int) -> Any:
+            return self.inputs.info(index)
 
     def decode(
         references: list[Any],
@@ -1467,31 +1471,53 @@ def arm_media() -> None:
         audios: list[Any],
         images: list[Any] | None = None,
     ) -> list[Any]:
-        return package._decode_references(
-            Assets(references),
-            decoder=cast(Any, Decoder(videos, audios, images or [])),
-            pipe=cast(Any, Pipe()),
+        by_kind = {"image": iter(images or []), "video": iter(videos), "audio": iter(audios)}
+        values = [next(by_kind[reference.kind]) for reference in references]
+        return package.assets_to_h3_refs(
+            cast(Any, PreparedMedia(references, values)), pipe=cast(Any, Pipe())
         )
 
     video_ref = VideoAsset("sha256:" + "1" * 64)
     audio_ref = AudioAsset("sha256:" + "2" * 64)
     image_ref = ImageAsset("sha256:" + "3" * 64)
-    image = ImageFrame(32, 32, bytes(32 * 32 * 3))
+    another_image = ImageAsset("sha256:" + "4" * 64)
+    for description, inputs, expected in [
+        ("text-only", [], (None, None)),
+        ("one unlabelled image", [image_ref], (0, None)),
+        ("two positional images", [image_ref, another_image], (0, 1)),
+        ("last frame only", [image_ref.with_label("last")], (None, 0)),
+        (
+            "labels choose roles despite order",
+            [image_ref.with_label("last"), another_image.with_label("first")],
+            (1, 0),
+        ),
+        (
+            "unlabelled image fills remaining role",
+            [image_ref.with_label("last"), another_image],
+            (1, 0),
+        ),
+        (
+            "other labels retain positional meaning",
+            [image_ref.with_label("woman"), another_image.with_label("product")],
+            (0, 1),
+        ),
+    ]:
+        roles = package._keyframe_roles(Assets[Image](inputs))
+        check(f"FL2VA {description}", roles, expected)
+    image = PILImage.frombytes("RGB", (32, 32), bytes(32 * 32 * 3))
     mixed_video, mixed_audio = _video(2), _audio(2)
-    mixed = Assets[ImageAsset | VideoAsset | AudioAsset](
+    mixed = Assets[Mixed](
         [image_ref.with_label("Alice"), video_ref, audio_ref, image_ref.with_label("アリス")]
     )
     policy = package.preflight_reference_media(
         package.ReferenceMediaToVideoInput(prompt="The two characters meet."), mixed
     )
     check("metadata preflight counts duplicate image occurrences", policy.total, 4)
-    check(
-        "reference labels preserve arbitrary caller text", mixed.by_label("アリス").label, "アリス"
-    )
+    check("reference labels preserve arbitrary caller text", mixed.info("アリス").label, "アリス")
     check("naming an occurrence preserves the source handle", image_ref.label, "")
     check(
         "duplicate image references keep separate positions",
-        [asset.position for asset in mixed],
+        [mixed.info(index).position for index in range(len(mixed))],
         [0, 1, 2, 3],
     )
     prepared = decode(
@@ -1514,7 +1540,7 @@ def arm_media() -> None:
         "metadata preflight refuses audio-only before decoding",
         lambda: package.preflight_reference_media(
             package.ReferenceMediaToVideoInput(prompt="An audio-only reference."),
-            Assets([audio_ref]),
+            Assets[Mixed]([audio_ref]),
         ),
         "reference_policy",
     )
@@ -2149,7 +2175,7 @@ def arm_interface() -> None:
     )
     expected = {
         "fl2va": (
-            ["prompt", "first_frame", "last_frame", "mute", "seed", "steps"],
+            ["prompt", "mute", "seed", "steps", "assets"],
             "fl2va_dit",
         ),
         "ref2va": (
@@ -2185,13 +2211,30 @@ def arm_interface() -> None:
             ["video", "continuation_frame", "warnings"],
         )
     check("H3 permits Runtime encoded linear leaves", package.H3Model.__encoded_leaves__, "accept")
-    check("reference files bind to the explicit Assets parameter",
-          entries["ref2va"]["assets"]["parameter"], "assets")
-    check("reference collection admits only the three H3 media kinds",
-          {kind["kind"] for kind in entries["ref2va"]["assets"]["kinds"]},
-          {"image", "video", "audio"})
-    check("keyframe endpoint preserves its explicit first/last roles",
-          "assets" in entries["fl2va"], False)
+    check(
+        "reference files bind to the explicit Assets parameter",
+        entries["ref2va"]["assets"]["parameter"],
+        "assets",
+    )
+    check(
+        "reference collection admits only the three H3 media kinds",
+        {kind["kind"] for kind in entries["ref2va"]["assets"]["kinds"]},
+        {"image", "video", "audio"},
+    )
+    check(
+        "keyframe endpoint uses the same explicit Assets input",
+        entries["fl2va"]["assets"]["parameter"],
+        "assets",
+    )
+    check(
+        "keyframe collection permits at most two images",
+        next(
+            field["constraints"]
+            for field in entries["fl2va"]["request"]["fields"]
+            if field["name"] == "assets"
+        ),
+        {"max_length": 2},
+    )
 
 
 ARMS = {

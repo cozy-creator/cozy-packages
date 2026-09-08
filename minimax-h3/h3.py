@@ -12,19 +12,21 @@ from fractions import Fraction
 from typing import Annotated, Any, Literal
 
 import msgspec
+import torch
 from cozy_runtime.author import (
     App,
     AssetBound,
+    AssetLimits,
     Assets,
-    AudioAsset,
     Context,
     DecodedAudio,
     DecodedVideo,
+    Image,
     ImageAsset,
     ImageFrame,
     InvalidRequest,
     Loader,
-    MediaDecoder,
+    Mixed,
     Model,
     OutputError,
     Outputs,
@@ -39,7 +41,11 @@ from gates import MediaFacts, pre_encode_gate
 from official import (
     FPS,
     FRAMES,
+    MAX_AUDIO_REFERENCES,
     MAX_CONDITIONER_VISION_TOKENS,
+    MAX_IMAGE_REFERENCES,
+    MAX_REFERENCES,
+    MAX_VIDEO_REFERENCES,
     REFERENCE_IMAGE_SHORT_EDGE,
     NumericalChecks,
     OfficialH3Pipeline,
@@ -56,22 +62,22 @@ from official import (
 app = App()
 
 _MIB = 1 << 20
-_GIB = 1 << 30
-_IMAGE_BOUND = AssetBound(max_bytes=64 * _MIB, max_decoded_bytes=256 * _MIB)
-_AUDIO_BOUND = AssetBound(max_bytes=128 * _MIB, max_decoded_bytes=128 * _MIB)
-_VIDEO_BOUND = AssetBound(max_bytes=2 * _GIB, max_decoded_bytes=2 * _GIB)
 _MIN_REFERENCE_DURATION = Fraction(2, 1)
 _MAX_REFERENCE_DURATION = Fraction(15, 1)
 
 
 ReferenceAssets = Annotated[
-    Assets[
-        Annotated[ImageAsset, _IMAGE_BOUND]
-        | Annotated[VideoAsset, _VIDEO_BOUND]
-        | Annotated[AudioAsset, _AUDIO_BOUND]
-    ],
-    msgspec.Meta(min_length=1, max_length=12),
+    Assets[Mixed],
+    AssetLimits(
+        images=MAX_IMAGE_REFERENCES,
+        videos=MAX_VIDEO_REFERENCES,
+        audio=MAX_AUDIO_REFERENCES,
+        total=MAX_REFERENCES,
+    ),
+    msgspec.Meta(min_length=1),
 ]
+KeyframeAssets = Annotated[Assets[Image], AssetLimits(images=2)]
+_REFERENCE_FIDELITY_EDGES = {"low": 256, "medium": 1024, "high": REFERENCE_IMAGE_SHORT_EDGE}
 Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
 # The wire enum is the committed plans' step counts; a bound lane serves exactly these
 # and the fastest is the default.
@@ -85,8 +91,6 @@ Steps = Annotated[
 
 class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Prompt
-    first_frame: Annotated[ImageAsset | None, _IMAGE_BOUND] = None
-    last_frame: Annotated[ImageAsset | None, _IMAGE_BOUND] = None
     mute: bool = False
     seed: int | None = None
     steps: Steps = DEFAULT_STEPS
@@ -121,19 +125,11 @@ def preflight_reference_media(
 ) -> ReferencePolicyFacts:
     """Refuse cross-field count errors before Runtime hydrates a single asset."""
     del payload
-    kinds = [_reference_kind(asset) for asset in assets]
+    kinds = [assets.info(index).kind for index in range(len(assets))]
     try:
         return validate_reference_policy(kinds)
     except ValueError as exc:
         raise UnsupportedInput(str(exc), code="reference_policy", fields=["assets"]) from exc
-
-
-def _reference_kind(reference: ImageAsset | VideoAsset | AudioAsset) -> str:
-    if isinstance(reference, ImageAsset):
-        return "image"
-    if isinstance(reference, VideoAsset):
-        return "video"
-    return "audio"
 
 
 class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept"):
@@ -200,24 +196,39 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept"):
             return self.pipe.denoise("ref2va", state, on_step=on_step, cancel=cancel, checks=checks)
 
 
-def _decode_keyframe(
-    asset: ImageAsset | None,
+def _keyframe_roles(assets: KeyframeAssets) -> tuple[int | None, int | None]:
+    """Explicit first/last labels choose roles; other images fill remaining roles in order."""
+    named = {
+        assets.info(index).label: index
+        for index in range(len(assets))
+        if assets.info(index).label in {"first", "last"}
+    }
+    remaining = iter(
+        index for index in range(len(assets)) if assets.info(index).label not in {"first", "last"}
+    )
+    first = named["first"] if "first" in named else next(remaining, None)
+    last = named["last"] if "last" in named else next(remaining, None)
+    if next(remaining, None) is not None:
+        raise InvalidRequest("FL2VA accepts at most two images", fields=["assets"])
+    return first, last
+
+
+def _keyframe_image(
+    assets: KeyframeAssets,
+    index: int | None,
     *,
     field: str,
-    decoder: MediaDecoder,
-    pipe: OfficialH3Pipeline,
-) -> Any | None:
-    if asset is None:
+) -> Image | None:
+    if index is None:
         return None
-    image = decoder.decode_image(asset)
+    image = assets[index]
     _validate_ratio(image.width, image.height, field)
-    return pipe.keyframe(image)
+    return image
 
 
-def _decode_references(
+def assets_to_h3_refs(
     references: ReferenceAssets,
     *,
-    decoder: MediaDecoder,
     pipe: OfficialH3Pipeline,
     reference_image_short_edge: int = REFERENCE_IMAGE_SHORT_EDGE,
 ) -> list[Any]:
@@ -227,17 +238,21 @@ def _decode_references(
     vision_tokens = 0
 
     for index, reference in enumerate(references):
-        field = f"assets.{index}"
-        if isinstance(reference, ImageAsset):
-            image = decoder.decode_image(reference)
+        info = references.info(index)
+        field = info.id
+        if isinstance(reference, Image):
+            image = reference
             _validate_ratio(image.width, image.height, field)
-            vision_tokens += reference_image_vision_tokens(
-                image.width, image.height, reference_image_short_edge
+            short_edge = (
+                reference_image_short_edge
+                if info.fidelity == "auto"
+                else _REFERENCE_FIDELITY_EDGES[info.fidelity]
             )
+            vision_tokens += reference_image_vision_tokens(image.width, image.height, short_edge)
             _validate_vision_budget(vision_tokens)
-            prepared.append(pipe.image_reference(image))
-        elif isinstance(reference, VideoAsset):
-            video = decoder.decode_video(reference)
+            prepared.append(pipe.image_reference(image, short_edge=short_edge))
+        elif isinstance(reference, DecodedVideo):
+            video = reference
             _validate_video(video, field)
             video_duration += video.duration
             if video_duration > _MAX_REFERENCE_DURATION:
@@ -252,7 +267,7 @@ def _decode_references(
             _validate_vision_budget(vision_tokens)
             prepared.append(pipe.video_reference(video))
         else:
-            audio = decoder.decode_audio(reference)
+            audio = reference
             _validate_audio(audio, field)
             audio_duration += audio.duration
             _validate_audio_aggregate(audio_duration)
@@ -372,7 +387,6 @@ def _finish(
     cancel: Any,
     checks: NumericalChecks | None = None,
 ) -> H3VideoOutput:
-    import torch
 
     cancel()
     with tel.stage("decode_audio", overall_range=(0.85, 0.90)):
@@ -494,8 +508,8 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
 def fl2va(
     ctx: Context,
     payload: FirstLastFrameToVideoInput,
+    assets: KeyframeAssets,
     model: H3Model,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
@@ -503,12 +517,9 @@ def fl2va(
     view = model.for_request(ctx, seed=payload.seed)
     checks = NumericalChecks(tel, model.pipe.resident)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
-        first = _decode_keyframe(
-            payload.first_frame, field="first_frame", decoder=decoder, pipe=model.pipe
-        )
-        last = _decode_keyframe(
-            payload.last_frame, field="last_frame", decoder=decoder, pipe=model.pipe
-        )
+        first_index, last_index = _keyframe_roles(assets)
+        first = _keyframe_image(assets, first_index, field="first")
+        last = _keyframe_image(assets, last_index, field="last")
         state = model.pipe.start_fl2va(
             prompt=payload.prompt,
             first_frame=first,
@@ -524,9 +535,7 @@ def fl2va(
     with tel.stage("denoise", overall_range=(0.15, 0.85)):
         schedule = model.sample_fl2va(
             state,
-            on_step=tel.step_callback(
-                payload.steps, stage="denoise", overall_range=(0.15, 0.85)
-            ),
+            on_step=tel.step_callback(payload.steps, stage="denoise", overall_range=(0.15, 0.85)),
             cancel=ctx.raise_if_cancelled,
             checks=checks,
         )
@@ -550,7 +559,6 @@ def ref2va(
     assets: ReferenceAssets,
     facts: Preflight[ReferencePolicyFacts],
     model: H3Model,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
@@ -559,9 +567,8 @@ def ref2va(
     view = model.for_request(ctx, seed=payload.seed)
     checks = NumericalChecks(tel, model.pipe.resident)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
-        references = _decode_references(
+        references = assets_to_h3_refs(
             assets,
-            decoder=decoder,
             pipe=model.pipe,
             reference_image_short_edge=payload.reference_image_short_edge,
         )
@@ -572,6 +579,18 @@ def ref2va(
             steps=payload.steps,
             reference_image_short_edge=payload.reference_image_short_edge,
         )
+        for index, reference in enumerate(state.normalized_references):
+            if reference.kind == "image":
+                info = assets.info(index)
+                width, height = reference.image.size
+                tel.log(
+                    "h3 reference resolution",
+                    input_id=info.id,
+                    label=info.label,
+                    fidelity=info.fidelity,
+                    width=width,
+                    height=height,
+                )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
         model.condition_text("ref2va", state, checks=checks)
     with tel.stage("condition_media", overall_range=(0.08, 0.15)):
@@ -579,9 +598,7 @@ def ref2va(
     with tel.stage("denoise", overall_range=(0.15, 0.85)):
         schedule = model.sample_ref2va(
             state,
-            on_step=tel.step_callback(
-                payload.steps, stage="denoise", overall_range=(0.15, 0.85)
-            ),
+            on_step=tel.step_callback(payload.steps, stage="denoise", overall_range=(0.15, 0.85)),
             cancel=ctx.raise_if_cancelled,
             checks=checks,
         )

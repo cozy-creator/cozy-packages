@@ -249,10 +249,18 @@ def save_trace(
     import importlib.metadata
     import json
 
-    references = [
-        {"kind": asset.kind, "digest": asset.digest, "size_bytes": asset.size_bytes}
-        for asset in assets
-    ]
+    references = []
+    for index in range(len(assets)):
+        info = assets.info(index)
+        references.append(
+            {
+                "kind": info.kind,
+                "digest": info.digest,
+                "size_bytes": info.size_bytes,
+                "label": info.label,
+                "fidelity": info.fidelity,
+            }
+        )
     document = trace.document()
     document["provenance"] = {
         "request_id": ctx.request_id,
@@ -283,7 +291,6 @@ def reference_trace(
     assets: ReferenceAssets,
     facts: Preflight[ReferencePolicyFacts],
     model: TraceModel,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> TraceResult:
@@ -293,7 +300,7 @@ def reference_trace(
 
     trace = ActivationTrace(evaluations=payload.steps, first_step=False)
     with trace.active():
-        result = ref2va(ctx, payload, assets, facts, model, decoder, out, tel)
+        result = ref2va(ctx, payload, assets, facts, model, out, tel)
     return TraceResult(
         inference=result,
         activations=save_trace(trace, ctx, payload, assets, model, out),
@@ -308,7 +315,6 @@ def reference_activations(
     assets: ReferenceAssets,
     facts: Preflight[ReferencePolicyFacts],
     model: TraceModel,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> ProbeResult:
@@ -318,7 +324,7 @@ def reference_activations(
     trace = ActivationTrace(evaluations=payload.steps, first_step=True)
     with trace.active():
         try:
-            ref2va(ctx, payload, assets, facts, model, decoder, out, tel)
+            ref2va(ctx, payload, assets, facts, model, out, tel)
         except FirstStepCaptured:
             pass
         else:

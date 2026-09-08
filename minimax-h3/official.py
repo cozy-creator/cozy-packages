@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import random
 import struct
 import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -23,18 +24,44 @@ from pathlib import Path
 from typing import Any, Literal
 
 import msgspec
+import torch
 from cozy_runtime.author import (
     Config,
     ConformanceError,
     DecodedAudio,
-    DecodedImage,
     DecodedVideo,
+    Image,
     InvalidRequest,
     OutputError,
     Telemetry,
     canonical_json,
 )
+from diffusers import (
+    AutoencoderKLMiniMaxH3,
+    AutoencoderKLMiniMaxH3Audio,
+    MiniMaxH3Blocks,
+    MiniMaxH3ModularPipeline,
+    MiniMaxH3Scheduler,
+    MiniMaxH3Transformer3DModel,
+)
+from diffusers.configuration_utils import FrozenDict
+from diffusers.modular_pipelines.minimax_h3 import (
+    MiniMaxH3AudioReference,
+    MiniMaxH3ImageReference,
+    MiniMaxH3VideoReference,
+)
+from diffusers.modular_pipelines.minimax_h3.modular_pipeline import resolve_canvas_size
+from diffusers.modular_pipelines.modular_pipeline import PipelineState
+from torch.utils._pytree import keystr, tree_flatten_with_path
+from transformers import (
+    AddedToken,
+    Qwen2Tokenizer,
+    Qwen2VLImageProcessor,
+    Qwen3VLProcessor,
+    Qwen3VLVideoProcessor,
+)
 
+from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
 from conditioner import build_text_conditioner
 
 Task = Literal["fl2va", "ref2va"]
@@ -386,19 +413,30 @@ def supported_steps() -> tuple[int, ...]:
     return steps["fl2va"]
 
 
+def reference_image_size(
+    width: int, height: int, short_edge: int = REFERENCE_IMAGE_SHORT_EDGE
+) -> tuple[int, int]:
+    """Official reference short-edge geometry, returned as PIL's (width, height)."""
+    if min(width, height, short_edge) <= 0:
+        raise ValueError("reference image dimensions and short edge must be positive")
+    if width > 4 * height or height > 4 * width:
+        raise ValueError(f"A reference image must be within 1:4 and 4:1, got {width}x{height}.")
+    scale = short_edge / min(width, height)
+    target_height = max(32, round(height * scale / 32) * 32)
+    target_width = max(32, round(width * scale / 32) * 32)
+    return target_width, target_height
+
+
 def reference_image_vision_tokens(
     width: int, height: int, short_edge: int = REFERENCE_IMAGE_SHORT_EDGE
 ) -> int:
     """Official short-edge, 16-patch, 2x2-merge image demand."""
-    scale = short_edge / min(width, height)
-    target_height = max(32, round(height * scale / 32) * 32)
-    target_width = max(32, round(width * scale / 32) * 32)
+    target_width, target_height = reference_image_size(width, height, short_edge)
     return target_height * target_width // (16 * 16 * 2 * 2)
 
 
 def reference_video_vision_tokens(width: int, height: int, duration: Fraction) -> int:
     """Exact official 2-fps, pair-merged vision demand after the target canvas rule."""
-    from diffusers.modular_pipelines.minimax_h3.modular_pipeline import resolve_canvas_size
 
     canvas = resolve_canvas_size(width, height, 32, 768, 768 * 1344)
     canvas_height, canvas_width = (int(value) for value in canvas)
@@ -500,8 +538,6 @@ class NumericalChecks:
     def _observe(
         self, stage: str, values: Sequence[tuple[str, Any]], *, required: bool
     ) -> _Observation:
-        import torch
-        from torch.utils._pytree import keystr, tree_flatten_with_path
 
         observation = _Observation(stage)
         with torch.no_grad():
@@ -590,7 +626,6 @@ class NumericalChecks:
     @staticmethod
     def _read(scalars: list[Any]) -> list[float]:
         """Copy queued scalars back in one sync per device, whatever mix they sit on."""
-        import torch
 
         values: dict[int, float] = {}
         by_device: dict[Any, list[int]] = {}
@@ -672,6 +707,30 @@ class NumericalChecks:
         self.settle()
 
 
+@dataclass(slots=True)
+class SizedImageReference(MiniMaxH3ImageReference):  # type: ignore[misc]
+    """An official reference carrying its resolved package-owned short-edge policy."""
+
+    image: Image
+    short_edge: int = REFERENCE_IMAGE_SHORT_EDGE
+
+
+class _ReferenceImageProcessor:
+    """Preserve only this request's normalized images through upstream global resizing."""
+
+    def __init__(self, processor: Any, images: Sequence[Image]) -> None:
+        self._processor = processor
+        self._images = tuple(images)
+
+    def resize(self, image: Any, *args: Any, **kwargs: Any) -> Any:
+        if any(image is normalized for normalized in self._images):
+            return image
+        return self._processor.resize(image, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._processor, name)
+
+
 class _ScopedPipeline:
     """A request-local view whose execution device follows the admitted component.
 
@@ -722,13 +781,6 @@ class OfficialH3Pipeline:
     """Both official task workflows over one shared, dual-DiT construction."""
 
     def __init__(self, config: Config) -> None:
-        from diffusers import (
-            AutoencoderKLMiniMaxH3,
-            AutoencoderKLMiniMaxH3Audio,
-            MiniMaxH3Blocks,
-            MiniMaxH3ModularPipeline,
-            MiniMaxH3Scheduler,
-        )
 
         mapping = _artifact_sections(config.mapping())
         blocks = {name: MiniMaxH3Blocks().get_workflow(name) for name in _WORKFLOW_TASKS}
@@ -780,9 +832,6 @@ class OfficialH3Pipeline:
 
     def generator(self, source: object) -> Any:
         """Adapt Runtime's public request generator to Diffusers' torch generator."""
-        import random
-
-        import torch
 
         if isinstance(source, torch.Generator):
             return source
@@ -793,29 +842,17 @@ class OfficialH3Pipeline:
             )
         return torch.Generator().manual_seed(source.getrandbits(63))
 
-    def image_reference(self, image: DecodedImage) -> Any:
-        import numpy as np
-        from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference
-
-        pixels = np.frombuffer(image.rgb, dtype=np.uint8).reshape(image.height, image.width, 3)
-        return MiniMaxH3ImageReference(image=pixels)
-
-    def keyframe(self, image: DecodedImage) -> Any:
-        """Public RGB bytes into the input type required by the official resize block."""
-        import numpy as np
-
-        pixels = np.frombuffer(image.rgb, dtype=np.uint8).reshape(image.height, image.width, 3)
-        return self._pipes["fl2va"].image_processor.numpy_to_pil(pixels.astype(np.float32) / 255.0)[
-            0
-        ]
+    def image_reference(
+        self, image: Image, *, short_edge: int = REFERENCE_IMAGE_SHORT_EDGE
+    ) -> SizedImageReference:
+        """Bind a resolved edge without changing Runtime's borrowed source image."""
+        return SizedImageReference(image=image.convert("RGB"), short_edge=short_edge)
 
     def audio_reference(self, audio: DecodedAudio) -> Any:
-        from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3AudioReference
 
         return MiniMaxH3AudioReference(audio=_audio_tensor(audio), sample_rate=audio.sample_rate)
 
     def video_reference(self, video: DecodedVideo) -> Any:
-        from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3VideoReference
 
         soundtrack = _aligned_soundtrack(video)
         return MiniMaxH3VideoReference(
@@ -876,8 +913,6 @@ class OfficialH3Pipeline:
         reference_image_short_edge: int = REFERENCE_IMAGE_SHORT_EDGE,
         **values: Any,
     ) -> Any:
-        from diffusers.configuration_utils import FrozenDict
-        from diffusers.modular_pipelines.modular_pipeline import PipelineState
 
         # The plan, not the request, spells the official grid: `steps` transformer
         # evaluations are the schedule's grid points less the terminal zero.
@@ -899,15 +934,41 @@ class OfficialH3Pipeline:
             if task == "ref2va":
                 # Only setup uses this per-request geometry. A view leaves the shared
                 # pipeline unchanged, even if preprocessing raises or calls overlap.
+                images = []
+                references = []
+                for entry in state.references:
+                    if (
+                        isinstance(entry, SizedImageReference)
+                        and entry.short_edge != reference_image_short_edge
+                    ):
+                        width, height = reference_image_size(
+                            entry.image.width, entry.image.height, entry.short_edge
+                        )
+                        if width > 4 * height or height > 4 * width:
+                            raise ValueError(
+                                "a per-image short edge that differs from the request default "
+                                "must not round the reference beyond 4:1; use a 32-pixel-aligned "
+                                "edge or the matching request default"
+                            )
+                        image = entry.image
+                        if image.size != (width, height):
+                            image = pipe.image_processor.resize(image, height=height, width=width)
+                        images.append(image)
+                        entry = SizedImageReference(image=image, short_edge=entry.short_edge)
+                    references.append(entry)
+                # Matching edges take the original upstream path, including validation
+                # before rounding. Only differing per-image edges need resize protection.
+                state.set("references", references)
                 pipe = _ScopedPipeline(
                     pipe,
                     overrides={
+                        "image_processor": _ReferenceImageProcessor(pipe.image_processor, images),
                         "config": FrozenDict(
                             {
                                 **pipe.config,
                                 "reference_image_short_edge": reference_image_short_edge,
                             }
-                        )
+                        ),
                     },
                 )
             self._run_with(task, pipe, "before_encode", state)
@@ -950,7 +1011,6 @@ class OfficialH3Pipeline:
         cancel: Callable[[], None],
         checks: NumericalChecks | None = None,
     ) -> ScheduleFacts:
-        from diffusers import MiniMaxH3Scheduler
 
         blocks = self._blocks[self._workflow(task, state)].sub_blocks
         scoped = _ScopedPipeline(
@@ -1128,13 +1188,10 @@ def _dit_specs(
 
 
 def _build_dit(config: Mapping[str, Any], structure: str, plan: TimestepPlan) -> Any:
-    from diffusers import MiniMaxH3Transformer3DModel
 
     if structure == "full":
         transformer = MiniMaxH3Transformer3DModel.from_config(dict(config))
     else:
-        from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
-
         timesteps, block_keys = plan.table_layout()
         transformer = AdaLNPrunedMiniMaxH3Transformer.from_official_config(
             config,
@@ -1170,7 +1227,6 @@ def _validate_dual_dit_topology(dits: Mapping[Task, Any]) -> None:
 
 def _apply_transformer_dtype(transformer: Any) -> Any:
     """Reproduce Diffusers' mixed FULL compute policy on Runtime destinations."""
-    import torch
 
     # Cast each root directly to its final dtype. In particular, RoPE frequencies
     # are real config-derived buffers: BF16 followed by FP32 cannot restore them.
@@ -1263,13 +1319,6 @@ def _validate_model_contract(pipe: Any, transformer: Any, video_vae: Any, audio_
 
 
 def _processor() -> tuple[Any, Any]:
-    from transformers import (
-        AddedToken,
-        Qwen2Tokenizer,
-        Qwen2VLImageProcessor,
-        Qwen3VLProcessor,
-        Qwen3VLVideoProcessor,
-    )
 
     vocab = _json_mapping(_ASSETS / "tokenizer" / "vocab.json")
     config = _json_mapping(_ASSETS / "tokenizer" / "tokenizer_config.json")
@@ -1330,7 +1379,6 @@ def _json_mapping(path: Path) -> dict[str, Any]:
 
 
 def _audio_tensor(audio: DecodedAudio) -> Any:
-    import torch
 
     channels = [
         torch.frombuffer(bytearray(channel), dtype=torch.float32) for channel in audio.pcm_f32le
@@ -1340,7 +1388,6 @@ def _audio_tensor(audio: DecodedAudio) -> Any:
 
 def _aligned_soundtrack(video: DecodedVideo) -> Any | None:
     """Put embedded PCM on the video's origin without rounding either native clock."""
-    import torch
 
     audio = video.soundtrack
     if audio is None:
@@ -1375,7 +1422,6 @@ def _aligned_soundtrack(video: DecodedVideo) -> Any | None:
 
 def _video_at_24fps(video: DecodedVideo) -> Any:
     """Exact presentation boundaries onto the official whole-frame 24-fps clock."""
-    import torch
 
     starts = video.frame_pts
     durations = video.frame_durations

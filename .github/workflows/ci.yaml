@@ -16,14 +16,19 @@ jobs:
           version: "0.12.7"
       - run: uv python install 3.12
 
-      # Runtime installs from PyPI like any dependency. CI therefore sees the real author
-      # types and media capability on every run; there is no secret-gated skipped-green path.
+      # H3 imports its libraries at module scope. Its committed lock supplies the
+      # same dependency environment for metadata inspection and conformance.
       - name: Environment
         run: |
-          uv venv --python 3.12
+          UV_PROJECT_ENVIRONMENT="$GITHUB_WORKSPACE/.venv" uv sync --locked --project minimax-h3 --no-install-project
           uv pip install \
-            "cozy-runtime>=0.2.13,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
+          # Keep type checks focused on the public author API, as before; model
+          # library behavior is covered by the separate locked conformance jobs.
+          uv venv --python 3.12 .venv-types
+          .venv/bin/python -c 'import importlib.metadata, pathlib; pathlib.Path("author-requirement.txt").write_text("cozy-runtime==" + importlib.metadata.version("cozy-runtime") + "\n")'
+          uv pip install --python .venv-types/bin/python -r author-requirement.txt \
+            "av==18.1.0" "mypy==2.3.1" "numpy>=1.26"
 
       - name: Fences
         run: uv run --no-project python scripts/fence.py
@@ -34,7 +39,7 @@ jobs:
           h3-quality-gate/ minimax-h3-tools/ checkpoint-repair/ diagnostics/h3-vae-roundtrip/
 
       - name: Types
-        run: uv run --no-project mypy
+        run: .venv-types/bin/mypy
 
       - name: Package interfaces are current
         run: |
@@ -126,6 +131,9 @@ jobs:
 
       - name: Diagnostic hooks preserve outputs and stop explicitly
         run: PYTHONPATH=minimax-h3 minimax-h3/.venv/bin/python scripts/h3-activation-proof.py
+
+      - name: Reference fidelity survives conditioning
+        run: minimax-h3/.venv/bin/python scripts/h3-reference-fidelity-proof.py
 
   package-locks:
     # Independent so a failure to materialize an exact dependency environment cannot hide
