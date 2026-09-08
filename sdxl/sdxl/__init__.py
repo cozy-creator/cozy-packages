@@ -345,35 +345,18 @@ class SdxlModel(Model[SdxlPipeline]):
     def warm(self, ctx: Context) -> None:
         """One dry step — tokenize, encode, denoise, decode — at the default request's
         shape (classifier-free batch, HiDiffusion on), so no request pays a first-call
-        cost. The runtime calls it once per fill, before the placement serves."""
-        import torch
-        from diffusers import EulerDiscreteScheduler
-
+        cost. The runtime calls it once per fill, before the placement serves. Outputs
+        are dropped, so no schedule: the tensors carry their own dtype and device."""
         ctx.raise_if_cancelled()
         tokenizers = (_tokenizer("tokenizer"), _tokenizer("tokenizer_2"))
         prompt, pooled = self.encode(*_tokenize(tokenizers, ""))
-        device = prompt.device
-        scheduler = EulerDiscreteScheduler.from_config(  # type: ignore[no-untyped-call]
-            self.pipe.scheduler_config
-        )
-        scheduler.set_timesteps(1, device=device)
-        timestep = scheduler.timesteps[0]
         side = _WARM_SIDE // 8
-        latents = (
-            torch.randn(1, 4, side, side, device=device, dtype=torch.float16)
-            * scheduler.init_noise_sigma
-        )
-        time_ids = torch.tensor(
-            [[_WARM_SIDE, _WARM_SIDE, 0, 0, _WARM_SIDE, _WARM_SIDE]] * 2,
-            device=device, dtype=torch.float16,
-        )
-        batch = scheduler.scale_model_input(torch.cat([latents, latents]), timestep)
+        latents = prompt.new_empty((2, 4, side, side)).normal_()
+        time_ids = prompt.new_tensor([[_WARM_SIDE, _WARM_SIDE, 0, 0, _WARM_SIDE, _WARM_SIDE]] * 2)
         noise = self.denoise(
-            batch, timestep, torch.cat([prompt, prompt]), torch.cat([pooled, pooled]),
-            time_ids, 0, 1, True,
+            latents, 999, prompt.repeat(2, 1, 1), pooled.repeat(2, 1), time_ids, 0, 1, True
         )
-        latents = scheduler.step(noise.chunk(2)[1], timestep, latents).prev_sample
-        self.decode(latents)
+        self.decode(noise.chunk(2)[1])
 
     @uses_components("text_encoder", "text_encoder_2")
     def encode(self, ids: Any, ids_2: Any) -> tuple[Any, Any]:

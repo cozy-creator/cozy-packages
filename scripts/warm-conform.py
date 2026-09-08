@@ -22,6 +22,11 @@ from cozy_runtime.author import Cancelled, Config
 from cozy_runtime.author.fakes import warm_with_fakes
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path[:0] = [str(ROOT / "anima"), str(ROOT / "sdxl")]
+
+import anima  # noqa: E402
+import sdxl  # noqa: E402
+
 PASS = "  ok   "
 FAIL = "  FAIL "
 _failures = 0
@@ -116,9 +121,7 @@ def anima_config() -> Config:
 
 
 def arm_sdxl() -> None:
-    sys.path.insert(0, str(ROOT / "sdxl"))
-    import sdxl as package
-
+    package = sdxl
     pipe = package.build_pipeline(sdxl_config())
     unet_inputs: list[tuple[int, ...]] = []
     decoded: list[tuple[int, ...]] = []
@@ -139,9 +142,7 @@ def arm_sdxl() -> None:
 
 
 def arm_anima() -> None:
-    sys.path.insert(0, str(ROOT / "anima"))
-    import anima as package
-
+    package = anima
     pipe = package.build_pipeline(anima_config())
     dit_inputs: list[tuple[int, ...]] = []
     decoded: list[tuple[int, ...]] = []
