@@ -691,18 +691,14 @@ def arm_reference_resolution() -> None:
         finally:
             pipe._blocks["ref2va"].sub_blocks["before_encode"] = before
 
-    field = get_type_hints(package.ReferenceMediaToVideoInput, include_extras=True)[
-        "reference_image_short_edge"
-    ]
-    check("typed request accepts 768px", msgspec.convert(768, type=field), 768)
-    check("typed request permits upstream rounding", msgspec.convert(769, type=field), 769)
-    for invalid in (0, 255, 2080):
-        refusal(
-            f"typed request refuses invalid edge {invalid}",
-            partial(msgspec.convert, invalid, type=field),
-        )
-    request = package.ReferenceMediaToVideoInput(prompt="A person in a garden.")
-    check("request default short edge is 1024", request.reference_image_short_edge, 1024)
+    refusal(
+        "typed request refuses removed reference edge argument",
+        partial(
+            msgspec.convert,
+            {"prompt": "A person in a garden.", "reference_image_short_edge": 768},
+            type=package.ReferenceMediaToVideoInput,
+        ),
+    )
 
 
 def arm_zero_reference_preparation() -> None:
@@ -2560,7 +2556,6 @@ def arm_interface() -> None:
                 "prompt",
                 "mute",
                 "seed",
-                "reference_image_short_edge",
                 "steps",
                 "duration_s",
                 "assets",

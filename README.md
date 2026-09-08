@@ -267,10 +267,11 @@ Ref2VA preserves request order and enforces the official product bounds: at most
 3 standalone audio clips, and 12 entries total. Video and audio clips are 2–15 seconds, with at most
 15 seconds per modality in aggregate. A video's embedded soundtrack belongs to that video and does
 not consume the standalone-audio count. Standalone audio cannot be the only reference modality.
-The optional `reference_image_short_edge` sets the default short edge from 256 to 2048
-pixels (default 1024). Diffusers rounds both axes to its 32-pixel grid. Explicit fidelity
-hints keep their sizes; automatic images step down together through 2048, 1536, 1024,
-768, 512 and 256, starting no higher than the request default, until the combined
+The package selects reference-image sizes automatically. Images with `auto` fidelity
+start at a 1024-pixel short edge; `low`, `medium`, and `high` fidelity select 256, 1024,
+and 2048 pixels respectively. Diffusers rounds both axes to its 32-pixel grid. Explicit
+fidelity hints keep their sizes; automatic images step down together through 1024,
+768, 512 and 256 until the combined
 32,768-token vision budget fits. A set that still exceeds the budget refuses with the
 arithmetic before entering a component scope. Video and audio presentation is unchanged.
 The resolved sizes are request-local and appear in telemetry. Smaller references reduce

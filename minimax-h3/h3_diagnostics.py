@@ -228,7 +228,6 @@ def save_trace(
         "prompt": payload.prompt,
         "seed": payload.seed,
         "references": references,
-        "reference_image_short_edge": payload.reference_image_short_edge,
         "mute": payload.mute,
     }
     raw = json.dumps(document, allow_nan=False, separators=(",", ":")).encode()
