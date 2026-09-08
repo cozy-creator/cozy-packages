@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime>=0.5.2,<1"]
+# dependencies = ["cozy-runtime>=0.6.0,<1"]
 # [tool.cozy.models]
 # source = "paul/minimax-h3@sha256:3f6c224a010fbff36adce0f19a8b866f4f1739a1d30e2202c140ba994dc0b4df"
 # [tool.cozy.weights]

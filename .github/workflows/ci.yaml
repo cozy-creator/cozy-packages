@@ -16,17 +16,15 @@ jobs:
           version: "0.12.7"
       - run: uv python install 3.12
 
-      # Runtime installs from PyPI like any dependency, at the packages' own floor (0.4.3:
-      # `Model.warm`, `fakes.warm_with_fakes`). CI therefore sees the real author types and
-      # media capability on every run; there is no secret-gated skipped-green path.
-      # No model library is installed here: every import is at module scope (se-041), so
-      # `describe` and the installed-wheel import run in each package's LOCKED environment
-      # below. Host-side static describe is a separate Creator guarantee.
+      # Runtime installs from PyPI like any dependency, at the packages' own floor (0.6.0:
+      # memoized operations, native source custody and typed plain scripts).
+      # The light checks need no model libraries. Locked environments below also
+      # qualify installed-wheel imports and execution against each exact dependency set.
       - name: Environment
         run: |
           uv venv --python 3.12
           uv pip install \
-            "cozy-runtime>=0.4.3,<1" \
+            "cozy-runtime>=0.6.0,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences
@@ -100,8 +98,8 @@ jobs:
       - name: Diagnostic hooks preserve outputs and stop explicitly
         run: PYTHONPATH=minimax-h3 minimax-h3/.venv/bin/python scripts/h3-activation-proof.py
 
-      # `describe` reads the package through its module-scope imports, so it runs here, in
-      # the author's locked environment (se-041), separate from host static describe.
+      # Static describe must agree with the committed interface. This same locked
+      # environment separately proves that the model's execution imports resolve.
       - name: Package interface is current
         run: test "$(minimax-h3/.venv/bin/cozy-runtime --json --dir minimax-h3 describe)" = "$(cat minimax-h3/metadata/package-interface.json)"
 
@@ -111,7 +109,7 @@ jobs:
           uv pip install --python minimax-h3/.venv/bin/python --no-deps dist/packages/minimax-h3/*.whl
           minimax-h3/.venv/bin/python -P scripts/package_import.py minimax-h3 --installed
 
-      - name: Plain client scripts use the installed model helpers
+      - name: Worker-side script interfaces and installed model helpers
         run: |
           PYTHONPATH=examples/client-scripts minimax-h3/.venv/bin/python -P - <<'PYCODE'
           from pathlib import Path
@@ -151,8 +149,8 @@ jobs:
       - name: The locked stack imports
         run: ${{ matrix.package }}/.venv/bin/python scripts/package_import.py ${{ matrix.package }}
 
-      # `describe` reads the package through its module-scope imports, so it runs here, in
-      # the author's locked environment (se-041), separate from host static describe.
+      # Static describe must agree with the committed interface. This same locked
+      # environment separately proves that the model's execution imports resolve.
       - name: Package interface is current
         run: test "$(${{ matrix.package }}/.venv/bin/cozy-runtime --json --dir ${{ matrix.package }} describe)" = "$(cat ${{ matrix.package }}/metadata/package-interface.json)"
       # The progress meter is only observable by RUNNING the seam: se-026's denoise hook was
