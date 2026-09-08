@@ -35,7 +35,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.7.0"
+version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -46,10 +46,10 @@ dependencies = [
     { name = "protobuf" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c6/2e/2c97aee81530112c41b27348b5fb50756075f2051241225da92d9f622d7e/cozy_runtime-0.7.0.tar.gz", hash = "sha256:029e01edebfb4e470ae69c282bc9153b02cac24a87ed134db1587c85b094cfea", size = 1515355, upload-time = "2026-09-08T05:52:03.958Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8a/17/f037a3bd92fdf9d4b8a72dd00be8ef3d6a4868382e8fc49088013ad0e1be/cozy_runtime-0.11.0.tar.gz", hash = "sha256:bf04b47d63af8568436f1b22ccad1c213bde5448f49cf3aceb884986e7b86200", size = 1580042, upload-time = "2026-09-08T22:36:49.975Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/f7/cf3b6cf7417aa3be8e0d96c03f051cdccf035e3fdd2860c7e266d1567f2e/cozy_runtime-0.7.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:cc90b9458f3c01a3892028b5b36c98fad7b5b4f055a1dc9e28f58b6eb6fc22db", size = 13582409, upload-time = "2026-09-08T05:51:59.951Z" },
-    { url = "https://files.pythonhosted.org/packages/90/c4/fda63a4be0a6033cbdea55278a61169577073abe020adeab0b781350e3a1/cozy_runtime-0.7.0-py3-none-any.whl", hash = "sha256:6d2b39b8b95de4987b01d7d0c93fbc1ef0968a264a49a716989b393ea647e682", size = 1114993, upload-time = "2026-09-08T05:52:02.325Z" },
+    { url = "https://files.pythonhosted.org/packages/18/f3/1dcb024937b048fa9c3169296be2c419bb4abd9b6490fab8696ffc4991b2/cozy_runtime-0.11.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:2e33893da1fc408bd2b7312d55e9fee4b7bd374c3a8b5bae428e8e3f4623f798", size = 13614890, upload-time = "2026-09-08T22:36:45.253Z" },
+    { url = "https://files.pythonhosted.org/packages/84/85/fbfceb2232cbb85bda501dd792179523ead5d79fa2067375556b66ee790b/cozy_runtime-0.11.0-py3-none-any.whl", hash = "sha256:7af1bf3dd3eb5873fd1a40bfae45629b0316b6c375d247def894d4ef1ac00b99", size = 1147473, upload-time = "2026-09-08T22:36:47.917Z" },
 ]
 
 [[package]]
@@ -204,7 +204,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3-tools"
-version = "2.5.0"
+version = "2.5.1"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime" },
@@ -222,7 +222,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", specifier = ">=0.7.0,<1" },
+    { name = "cozy-runtime", specifier = ">=0.11.0,<1" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "torch", specifier = ">=2.13,<3" },
@@ -517,11 +517,11 @@ wheels = [
 
 [[package]]
 name = "tensorfs"
-version = "0.3.22"
+version = "0.3.26"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/bb/55/7b91b178ddff23a38ec633e5418d8cc9b5dec66bf73c92a46dfd5afd2688/tensorfs-0.3.22.tar.gz", hash = "sha256:861c819885b63a3e51438b9791828d15578aea1a57866107f1ce4735a766fc5a", size = 703505, upload-time = "2026-09-08T02:16:13.188Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/01/b1/56180bc6fb3e186d915f386df08adade6ff5efee6edcb8d66046483b56a4/tensorfs-0.3.26.tar.gz", hash = "sha256:21c621d12516158bd5a8f7c60cc2a98c449944158ecdcd0434da40aa593e5c96", size = 710712, upload-time = "2026-09-08T19:29:07.029Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/27/f6/30f1b7a594b6839e9db4f2abedf7a34b0e7034118818b49b83e7fb5c3721/tensorfs-0.3.22-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:60c87e03d7174e0a06f92cc93f9babe1acb47f0ddcaf0ce8f686f873b93079e8", size = 7601347, upload-time = "2026-09-08T02:16:11.304Z" },
+    { url = "https://files.pythonhosted.org/packages/45/01/c3ace3127e6ad78a2ab3742a4d57863a7a67086dde5d73d11c2b7dbf721a/tensorfs-0.3.26-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:aad91c6d1805988fb8ee4de1e1440e30f845663c60b193586313e3ef14559e4d", size = 7622304, upload-time = "2026-09-08T19:29:05.099Z" },
 ]
 
 [[package]]
