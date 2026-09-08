@@ -15,30 +15,12 @@ or adaptation of MiniMax, ComfyUI, DiffSynth-Studio, or other community serving 
 `h3/h3_arch/` ComfyUI-derived GPL-3.0 port was deleted atomically with the official replacement;
 no GPL-derived H3 source remains in this repository.
 
-VENDORED FIRST-PARTY WHEELS
+PACKAGE DEPENDENCIES
 
-  h3/vendor/cozy_runtime-0.0.29-py3-none-any.whl — Cozy Runtime, first-party
-  h3/vendor/cozy_eval-2.3.2-py3-none-any.whl — Cozy Eval, first-party
-  h3/vendor/tensorfs-0.0.7-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl — TensorFS, first-party
-  anima/vendor/cozy_runtime-0.0.29-py3-none-any.whl — Cozy Runtime, first-party
-  quality-judge/vendor/cozy_runtime-0.0.29-py3-none-any.whl — Cozy Runtime, first-party
-  quality-judge/vendor/tensorfs-0.0.7-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl — TensorFS, first-party
-  sdxl/vendor/cozy_runtime-0.0.29-py3-none-any.whl — Cozy Runtime, first-party
-  video-assembly/vendor/cozy_runtime-0.0.29-py3-none-any.whl — Cozy Runtime, first-party
-
-VENDORED LOCKED THIRD-PARTY WHEELS
-
-  anima/vendor/native-provenance.json — hf-xet, PyYAML, regex, safetensors, Shellingham, tokenizers
-  h3/vendor/native-provenance.json — hf-xet, pydantic-core, PyYAML, regex, safetensors, Shellingham, tokenizers
-  quality-judge/vendor/native-provenance.json — hf-xet, PyYAML, regex, safetensors, Shellingham, tokenizers
-  sdxl/vendor/native-provenance.json — hf-xet, PyYAML, regex, safetensors, Shellingham, tokenizers
-
-Each manifest records the exact vendored PyPI wheel path, public source URL, length, and SHA-256.
-The wheel archives retain their upstream metadata and license files.
-
-These are exact build inputs pending publication of the first-party packages. Their source commits,
-sizes, and SHA-256 digests are recorded in the package closure documents; Tensorhub owns their one
-digest-pinned canonical build command.
+Cozy Runtime, Cozy Eval, TensorFS and third-party dependencies are installed from each
+project's declared dependencies and exact lock. No first-party or third-party dependency
+wheel is vendored in this repository. Installed distributions carry their own notices
+and license files.
 
 BUNDLED MODEL INPUT DATA
 

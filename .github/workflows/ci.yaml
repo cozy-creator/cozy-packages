@@ -168,4 +168,3 @@ jobs:
       - name: Native checkpoint row repair and resume
         if: matrix.package == 'minimax-h3-tools'
         run: minimax-h3-tools/.venv/bin/python scripts/h3-repair-proof.py
-

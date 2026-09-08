@@ -308,25 +308,10 @@ test "$(.venv-check/bin/cozy-runtime --json --dir minimax-h3 describe)" = "$(cat
 test "$(.venv-check/bin/cozy-runtime --json --dir sdxl describe)" = "$(cat sdxl/metadata/package-interface.json)"
 ```
 
-The independent weightless assembly closure runs with its own current Runtime wheel:
-
-```bash
-uv sync --project video-assembly --locked
-uv run --project video-assembly ruff check video-assembly
-uv run --project video-assembly mypy
-test "$(uv run --project video-assembly cozy-runtime --json --dir video-assembly describe)" = "$(cat video-assembly/metadata/package-interface.json)"
-uv run --project video-assembly python video-assembly/live.py
-```
-
-That live closure includes a real low-resolution eight-shot launch-cell clock (8 x 345 source
-frames at 24 fps and 32 kHz), requiring exactly 2,753 output frames and 3,670,667 submitted audio
-samples. It also runs segment/master determinism, late-corruption and cancellation cleanup,
-peak-guard engagement, and fresh-process two/eight-shot RSS against a retained-snapshot poison.
-
 The H3 project environment is reproduced only from its committed lock:
 
 ```bash
-cd h3
+cd minimax-h3
 uv sync --locked
 uv run ../scripts/h3-conform.py
 ```

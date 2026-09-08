@@ -332,8 +332,6 @@ IDENTIFIERS = (
 #: own committed assets and expected outputs — never a model-selection binding, which
 #: lives on the hub. Scoped to the checkpoint-digest shape only; every other
 #: identifier rule applies to these files unchanged.
-#: The repair package pins only its recorded bad source roots and their immutable
-#: encoding identities; native proof verifies the encoding IDs against TensorFS seeds.
 DIGEST_PINNED_PREFIXES = (
     "minimax-h3-tools/src/h3_tables/",
 )
@@ -850,6 +848,13 @@ def fence_interface_format() -> Fence:
 
 def fence_publication_metadata() -> Fence:
     bad: list[str] = []
+    expected_projects = {"anima", "sdxl", "minimax-h3", "minimax-h3-tools"}
+    actual_projects = {rel(path.parent) for path in ROOT.rglob("package.toml") if ours(path)}
+    if actual_projects != expected_projects:
+        bad.append(
+            f"deployable projects must be {sorted(expected_projects)}; "
+            f"found {sorted(actual_projects)}; one-off work belongs in examples/client-scripts"
+        )
     for project in projects():
         path = project / "pyproject.toml"
         try:
