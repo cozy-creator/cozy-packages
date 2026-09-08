@@ -234,9 +234,9 @@ def main() -> None:
                 configs={"model": WeightsConfig("body", "model")},
                 order=((COMPONENT, "body.weight"), *((COMPONENT, key) for key in tensors)),
             )
-            header = tensorfs.parse_header(
-                bytes(store.manifest(receipt.artifact.manifest.digest)["header"])
-            )
+            header_bytes = store.manifest(receipt.artifact.manifest.digest)["header"]
+            assert header_bytes is not None, "produced model has no CozyTensors header"
+            header = tensorfs.parse_header(header_bytes)
             table_parts.append({key: header["components"][COMPONENT][key] for key in tensors})
         assert table_parts[0] == table_parts[1] == table_parts[2]
         print(
