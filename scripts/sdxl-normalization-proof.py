@@ -20,8 +20,12 @@ import tensorfs
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "sdxl"))
 
-from cozy_runtime import canonical_json  # noqa: E402
-from cozy_runtime.author import UnsupportedInput, WeightsSink, WeightsTransaction  # noqa: E402
+from cozy_runtime.author import (  # noqa: E402
+    UnsupportedInput,
+    WeightsSink,
+    WeightsTransaction,
+    canonical_json,
+)
 from cozy_runtime.author._model import _derive_model  # noqa: E402
 from cozy_runtime.author.fakes import fake_attempt, fake_context, fake_telemetry  # noqa: E402
 from cozy_runtime.derive.quantization import QuantizationSource  # noqa: E402
@@ -62,7 +66,9 @@ def tiny_plan() -> norm.NormalizationPlan:
     )
 
 
-def source(store: Any, plan: norm.NormalizationPlan) -> tuple[str, int, dict[str, bytes]]:
+def source(
+    store: Any, plan: norm.NormalizationPlan, *, bad_positions: bool = False
+) -> tuple[str, int, dict[str, bytes]]:
     targets: dict[str, Any] = {}
     values: dict[str, bytes] = {}
     order = []
@@ -71,7 +77,8 @@ def source(store: Any, plan: norm.NormalizationPlan) -> tuple[str, int, dict[str
         for key, spec in rows.items():
             size = math.prod(spec.shape)
             if spec.dtype == "i64":
-                value = np.arange(size, dtype="<i8").tobytes()
+                positions = np.arange(size, dtype="<i8")
+                value = (positions[::-1] if bad_positions else positions).tobytes()
             else:
                 # Include signed zero and a NaN payload: normalization must preserve bits.
                 value = (np.arange(size, dtype="<u2") + 0x7DFA).tobytes()
@@ -244,6 +251,34 @@ def main() -> None:
                 pass
             else:
                 raise AssertionError("unreviewed source entered normalization")
+        bad_store = tensorfs.Store.init(root / "bad-positions")
+        bad_manifest, bad_length, _ = source(bad_store, plan, bad_positions=True)
+        bad_model = _derive_model(QuantizationSource, bad_manifest)
+        bad_host = WeightsTransactionHost(
+            store=bad_store,
+            owner_scope="normalization-proof",
+            request_id="bad-positions",
+            invocation_spec_digest=tensorfs.object_id(b"bad positions invocation"),
+            work_fingerprint=tensorfs.object_id(b"bad positions implementation"),
+            writer_session_id=1,
+            allowed_sources={bad_manifest: bad_length},
+            output_bounds={"model": norm.MAX_NEW_BYTES},
+        )
+        bad_attempt = fake_attempt("bad-positions", spool=root / "bad-spool")
+        bad_sink = WeightsSink(
+            bad_attempt,
+            {"source": bad_model},
+            {"model": norm.MAX_NEW_BYTES},
+            bad_host.open,
+            bad_host.structure,
+        )
+        try:
+            norm._normalize(bad_model, bad_sink, fake_context(), fake_telemetry(bad_attempt), plan)
+        except UnsupportedInput as error:
+            assert "position IDs" in str(error)
+        else:
+            raise AssertionError("changed position-ID values were discarded")
+        assert bad_store.derived_lookup(bad_host.transaction_id("model"))["state"] != "committed"
     print(
         json.dumps(
             {
@@ -254,6 +289,7 @@ def main() -> None:
                 "graft_identity_preserved": True,
                 "split_transpose_reshape_bits_exact": True,
                 "unreviewed_sources_refused": True,
+                "changed_position_ids_refused": True,
             }
         )
     )

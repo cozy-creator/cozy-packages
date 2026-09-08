@@ -8,7 +8,6 @@ from typing import Any, Literal
 
 import msgspec
 import numpy as np
-from cozy_runtime import canonical_json
 from cozy_runtime.author import (
     Context,
     ModelArtifact,
@@ -22,6 +21,7 @@ from cozy_runtime.author import (
     WeightsTarget,
     WeightsTensor,
     WeightsTransaction,
+    canonical_json,
     invocable,
 )
 from cozy_runtime.derive.quantization import QuantizationSource
