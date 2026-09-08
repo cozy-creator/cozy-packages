@@ -882,6 +882,18 @@ def arm_clip_length() -> None:
         ),
         (min(DURATIONS), min(DURATIONS)),
     )
+    # `mute` never skipped audio generation: `decode_audio` ran regardless and the audio rows
+    # denoised in the same packed sequence at every step, so the flag only suppressed the mux
+    # while costing the caller the same time and money (se-052). It is deleted rather than
+    # documented, and a payload that still carries it refuses as an unknown field.
+    for name, request in (
+        ("fl2va", package.FirstLastFrameToVideoInput),
+        ("ref2va", package.ReferenceMediaToVideoInput),
+    ):
+        refusal(
+            f"{name} refuses a mute field on the wire",
+            partial(msgspec.convert, {"prompt": "x", "mute": True}, type=request),
+        )
     # A plan holds one row per (timestep, modality); no row depends on the frame count, so
     # a served length never needs a re-tabled checkpoint.
     for task in ("fl2va", "ref2va"):
@@ -1916,7 +1928,6 @@ def arm_media() -> None:
             SimpleNamespace(audio=finish_audio, video=finish_video),
             schedule,
             duration_s=DEFAULT_DURATION_S,
-            mute=False,
             out=cast(Any, finish_outputs),
             tel=telemetry,
             cancel=lambda: None,
@@ -2009,7 +2020,6 @@ def arm_media() -> None:
             SimpleNamespace(audio=finish_audio, video=finish_video),
             schedule,
             duration_s=DURATIONS[1],
-            mute=False,
             out=cast(Any, FinishOutputs()),
             tel=fake_telemetry(fake_attempt("h3-finish-length")),
             cancel=lambda: None,
@@ -2363,7 +2373,7 @@ def arm_resident_fill() -> None:
 
 def arm_output_gates() -> None:
     print("\n== structural refusals and quality observations ==")
-    requested = MediaFacts(width=1, height=1, frames=2, fps=24, sample_rate=24, mute=False)
+    requested = MediaFacts(width=1, height=1, frames=2, fps=24, sample_rate=24)
     decoded = torch.zeros((1, 2, 3, 1, 1), dtype=torch.float32)
     pixels = torch.zeros((2, 1, 1, 3), dtype=torch.uint8)
     waveform = torch.zeros((1, 2), dtype=torch.float32)
@@ -2402,7 +2412,7 @@ def arm_output_gates() -> None:
     )
     # A real quality rejection must remain visible without suppressing an
     # otherwise encodable inference result. Checkpoints are qualified separately.
-    requested = MediaFacts(width=512, height=512, frames=5, fps=24, sample_rate=240, mute=True)
+    requested = MediaFacts(width=512, height=512, frames=5, fps=24, sample_rate=240)
     pixels = torch.full((5, 512, 512, 3), 100, dtype=torch.uint8)
     pixels[:, ::16] = 220
     warnings = pre_encode_gate(
@@ -2548,18 +2558,11 @@ def arm_interface() -> None:
     )
     expected = {
         "fl2va": (
-            ["prompt", "mute", "seed", "steps", "duration_s", "assets"],
+            ["prompt", "seed", "steps", "duration_s", "assets"],
             "fl2va_dit",
         ),
         "ref2va": (
-            [
-                "prompt",
-                "mute",
-                "seed",
-                "steps",
-                "duration_s",
-                "assets",
-            ],
+            ["prompt", "seed", "steps", "duration_s", "assets"],
             "ref2va_dit",
         ),
     }

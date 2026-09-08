@@ -19,7 +19,6 @@ class MediaFacts:
     frames: int
     fps: int
     sample_rate: int
-    mute: bool
 
     @property
     def duration(self) -> Fraction:

@@ -131,7 +131,6 @@ DurationSeconds = Annotated[
 
 class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Prompt
-    mute: bool = False
     seed: int | None = None
     steps: Steps = DEFAULT_STEPS
     duration_s: DurationSeconds = DEFAULT_DURATION_S
@@ -139,7 +138,6 @@ class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
 
 class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Prompt
-    mute: bool = False
     seed: int | None = None
     steps: Steps = DEFAULT_STEPS
     duration_s: DurationSeconds = DEFAULT_DURATION_S
@@ -522,7 +520,6 @@ def _finish(
     schedule: ScheduleFacts,
     *,
     duration_s: int,
-    mute: bool,
     out: Outputs,
     tel: Telemetry,
     cancel: Any,
@@ -561,7 +558,6 @@ def _finish(
         frames=frames,
         fps=FPS,
         sample_rate=sample_rate,
-        mute=mute,
     )
     if frames != frames_for(duration_s) or channels != 3:
         raise OutputError(
@@ -589,7 +585,7 @@ def _finish(
         video = out.save_video(
             pixels,
             fps=FPS,
-            audio=None if mute else waveform,
+            audio=waveform,
             sample_rate=sample_rate,
         )
         continuation = out.save_image(ImageFrame(width, height, frame_bytes), format="png")
@@ -714,7 +710,6 @@ def fl2va(
         state,
         schedule,
         duration_s=payload.duration_s,
-        mute=payload.mute,
         out=out,
         tel=tel,
         cancel=ctx.raise_if_cancelled,
@@ -783,7 +778,6 @@ def ref2va(
         state,
         schedule,
         duration_s=payload.duration_s,
-        mute=payload.mute,
         out=out,
         tel=tel,
         cancel=ctx.raise_if_cancelled,
