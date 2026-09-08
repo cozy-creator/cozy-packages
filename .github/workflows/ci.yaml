@@ -66,7 +66,6 @@ jobs:
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/dit-full-specs.json'
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/execution.sm90-attn8.json'
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/execution.sm90-fa3.json'
-          unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/execution.sm90-fa3.json'
 
       # The torch family is ABI-coupled — torchvision's compiled ops link against torch's
       # C++ ABI — and #633 gives one PlatformTarget exactly ONE family. A package that
