@@ -139,7 +139,7 @@ def _reference_kind(reference: Reference) -> str:
     return "audio"
 
 
-class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept"):
+class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept"):
     pipe: OfficialH3Pipeline
 
     def load(self, loader: Loader) -> None:
