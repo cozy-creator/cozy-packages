@@ -97,7 +97,7 @@ Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
 # The fastest supported schedule is the default.
 DEFAULT_STEPS = 30
 Steps = Annotated[
-    Literal[30, 40, 50]
+    Literal[30, 40, 50],
     msgspec.Meta(description="Denoise steps (transformer evaluations); fewer is faster."),
 ]
 
