@@ -1243,6 +1243,20 @@ def _dit_spec(
     fields = {"task", "modulation"}
     if structure == "adaln-pruned":
         fields.add("timestep_plan_digest")
+    if structure == "adaln-pruned" and "generating_projection_digest" in extension:
+        digest = extension["generating_projection_digest"]
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 71
+            or not digest.startswith("sha256:")
+            or any(c not in "0123456789abcdef" for c in digest[7:])
+        ):
+            raise ConformanceError(
+                "AdaLN generating projection binding is not an exact digest",
+                code="artifact_config",
+                fields=[component, "cozy_h3", "generating_projection_digest"],
+            )
+        fields.add("generating_projection_digest")
     if set(extension) != fields:
         raise ConformanceError(
             f"artifact config {component!r} has no closed cozy_h3 structure",

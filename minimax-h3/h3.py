@@ -12,7 +12,7 @@ import sys
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import msgspec
 import torch
@@ -38,6 +38,7 @@ from cozy_runtime.author import (
     Telemetry,
     UnsupportedInput,
     VideoAsset,
+    data_values,
     uses_components,
 )
 from msgspec.structs import replace
@@ -88,15 +89,19 @@ DEFAULT_REFERENCE_IMAGE_SHORT_EDGE = 1024
 _SHORT_EDGE_LADDER = (2048, 1536, 1024, 768, 512, 256)
 _REFERENCE_FIDELITY_EDGES = {"low": 256, "medium": 1024, "high": REFERENCE_IMAGE_SHORT_EDGE}
 Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
-# The request is declarative; the selected artifact's schedule validates supported counts.
-# Do not duplicate those counts in a second wire enum.
-DEFAULT_STEPS = 30
+# The shipped plans own the enum and must agree for both inference tasks.
+SUPPORTED_STEPS = data_values(
+    __file__, "timestep-plans/fl2va.json", "schedules", "transformer_evaluations"
+)
+if (
+    data_values(__file__, "timestep-plans/ref2va.json", "schedules", "transformer_evaluations")
+    != SUPPORTED_STEPS
+):
+    raise ValueError("H3 task plans declare different supported step counts")
+DEFAULT_STEPS = min(SUPPORTED_STEPS)
 Steps = Annotated[
-    int,
-    msgspec.Meta(
-        ge=1,
-        description="Denoise steps (transformer evaluations), supported by the selected lane.",
-    ),
+    Literal[SUPPORTED_STEPS],  # type: ignore[valid-type]
+    msgspec.Meta(description="Denoise steps (transformer evaluations); fewer is faster."),
 ]
 # Length is the request's largest cost lever: the DiT attends over ONE packed sequence whose
 # rows scale with the frame count, and attention is quadratic in it. Every whole second in

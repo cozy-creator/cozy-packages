@@ -182,6 +182,7 @@ def resident_hashes(component: str, module: Any) -> tuple[dict[str, str], dict[s
     Q/K/V subjects select only the first128rows after checking the full shape.
     Unknown component names raise ValueError as a diagnostic programming error.
     """
+
     if component not in _SAMPLES:
         raise ValueError(f"unsupported resident sample component: {component}")
     actual: dict[str, str] = {}

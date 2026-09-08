@@ -27,6 +27,7 @@ from cozy_runtime.derive.quantization import h3_quantization_plan, prepare_quant
 from cozy_runtime.internal.weights_sink import WeightsTransactionHost
 from h3_tables import job
 from h3_tables.model_config import dual_adaln_pruned_config, parse_production_config
+from h3_tables.source import TARGET_COMPONENT, H3FullTransformer, full_targets
 
 #: attention-quantization.md §2 (decision #707) and h3a-012's same-class kernel, verbatim.
 #: The package assets are these documents' canonical bytes and nothing else.
@@ -98,9 +99,9 @@ def fixture(store: Any, encoding: str) -> tuple[str, int]:
     targets: dict[str, Any] = {}
     values: dict[tuple[str, str, str], bytes] = {}
     order: list[tuple[str, str]] = []
-    for component in job._full_targets():
+    for component in full_targets():
         add: dict[str, Any] = {}
-        task = next((t for t, c in job.TARGET_COMPONENT.items() if c == component), None)
+        task = next((t for t, c in TARGET_COMPONENT.items() if c == component), None)
         if task is None:
             add[f"{component}.w"] = plain
             values[component, f"{component}.w", "value"] = b"\x00\x3f\x80\x3f"
@@ -149,7 +150,7 @@ def invoke(
     store: Any, root: Path, source: str, length: int, request_id: str
 ) -> tuple[job.AttentionLaneResult, dict[str, dict[str, Any]]]:
     bounds = {lane: job.MAX_FULL_BYTES for lane in job.LANE_CONTRACT}
-    model = _derive_model(job.H3FullTransformer, source)
+    model = _derive_model(H3FullTransformer, source)
     host = WeightsTransactionHost(
         store=store,
         owner_scope="attention-lane-proof",
@@ -163,9 +164,7 @@ def invoke(
     attempt = fake_attempt(request_id, spool=root / f"spool-{request_id}")
     sink = WeightsSink(attempt, {"pruned": model}, bounds, host.open, host.structure)
     result = job.attention_lane(job.ProductionRequest(), model, sink)
-    facts = {
-        lane: store.derived_lookup(host.transaction_id(lane))["receipt"] for lane in bounds
-    }
+    facts = {lane: store.derived_lookup(host.transaction_id(lane))["receipt"] for lane in bounds}
     return result, facts
 
 

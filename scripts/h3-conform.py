@@ -20,6 +20,7 @@ from contextlib import redirect_stderr
 from dataclasses import replace
 from fractions import Fraction
 from functools import partial
+from importlib.resources import files
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, cast, get_type_hints
@@ -69,13 +70,12 @@ H3 = ROOT / "minimax-h3"
 sys.path.insert(0, str(H3))
 sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
 
-from h3_tables.job import _asset, _full_order  # noqa: E402
 from h3_tables.model_config import (  # noqa: E402
     dual_adaln_pruned_config,
     dual_full_config,
     parse_production_config,
 )
-from h3_tables.order import current_order  # noqa: E402
+from h3_tables.order import current_order, full_order  # noqa: E402
 from h3_tables.plans import parse_plan  # noqa: E402
 from h3_tables.source import official_full_specs  # noqa: E402
 
@@ -225,6 +225,10 @@ def arm_producer_configs() -> None:
                 )
 
 
+def _asset(name: str) -> bytes:
+    return files("h3_tables").joinpath("assets", name).read_bytes()
+
+
 def arm_producer_construction_order() -> None:
     """The producer's one ordered spec resource follows the real serving factory."""
     sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
@@ -236,7 +240,7 @@ def arm_producer_construction_order() -> None:
         for task in ("fl2va", "ref2va")
     }
     for mode, raw, expected in (
-        ("full", dual_full_config(sections), _full_order(sections, current.rows)),
+        ("full", dual_full_config(sections), full_order(sections, current.rows)),
         (
             "adaln-pruned",
             dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"]),
@@ -2529,6 +2533,8 @@ def arm_rgb8_handoff() -> None:
 
 
 def arm_interface() -> None:
+    check("wire step values come from both verified task plans", package.SUPPORTED_STEPS, STEPS)
+    check("the default is the shortest shipped schedule", package.DEFAULT_STEPS, min(STEPS))
     print("\n== committed public surface ==")
     interface_path = H3 / "metadata" / "package-interface.json"
     interface = json.loads(interface_path.read_text())
@@ -2570,18 +2576,9 @@ def arm_interface() -> None:
             fields,
         )
         check(
-            f"{name} steps are a declarative integer validated by the artifact schedule",
+            f"{name} wire steps come from the shipped plans",
             next(field["type"] for field in entry["request"]["fields"] if field["name"] == "steps"),
-            "int",
-        )
-        check(
-            f"{name} step counts must be positive",
-            next(
-                field["constraints"]
-                for field in entry["request"]["fields"]
-                if field["name"] == "steps"
-            )["ge"],
-            1,
+            {"literal": list(STEPS)},
         )
         duration = next(
             field for field in entry["request"]["fields"] if field["name"] == "duration_s"

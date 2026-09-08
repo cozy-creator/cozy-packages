@@ -3,23 +3,30 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from importlib.resources import files
 from typing import Any, Protocol
 
 import msgspec
-from cozy_runtime.author import canonical_json
+from cozy_runtime.author import Loader, Model, WeightsSink, WeightsTarget, canonical_json
 
 from .kernel import H3Topology, removed_keys, table_shapes
 from .plans import TimestepPlan
 
+TARGET_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
+
+
+class H3FullTransformer(Model[object]):
+    """Native H3 source used only for derivation, never inference construction."""
+
+    def load(self, loader: Loader) -> None:
+        del loader
+
+
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
-_FULL_SPECS_DIGEST = (
-    "sha256:3af7354b5080f4c117922157971261fd079f12790f9584615e87b4fdd95ae3e2"
-)
-_FULL_CONFIG_DIGEST = (
-    "sha256:4150e2b9009aad13cf5a18b9878337346b2bfa7662b3f8037a0286cdaa806382"
-)
+_FULL_SPECS_DIGEST = "sha256:3af7354b5080f4c117922157971261fd079f12790f9584615e87b4fdd95ae3e2"
+_FULL_CONFIG_DIGEST = "sha256:4150e2b9009aad13cf5a18b9878337346b2bfa7662b3f8037a0286cdaa806382"
 _NATIVE_ONLY_SOURCE_SPECS = {"rope.inv_freq": ("f32", (16,))}
 _TEXT_LAYER_SUFFIXES = (
     "input_layernorm.weight",
@@ -84,25 +91,17 @@ def official_full_specs(
     shape and dtype against the same OfficialH3Pipeline used by inference.
     """
     if canonical_json.digest(config) != _FULL_CONFIG_DIGEST:
-        raise ValueError(
-            "H3 model config changed without a matching full-spec contract"
-        )
+        raise ValueError("H3 model config changed without a matching full-spec contract")
     raw = files(__package__).joinpath("assets", "dit-full-specs.json").read_bytes()
     if (
         canonical_json.normalize(raw) != raw
         or canonical_json.digest_bytes(raw) != _FULL_SPECS_DIGEST
     ):
-        raise ValueError(
-            "H3 full-spec resource is not its exact canonical package bytes"
-        )
+        raise ValueError("H3 full-spec resource is not its exact canonical package bytes")
     document = msgspec.convert(canonical_json.decode(raw), type=_FullSpecs)
     if document.config_digest != _FULL_CONFIG_DIGEST or len(document.specs) != 638:
-        raise ValueError(
-            "H3 full-spec resource changed its config binding or 638-row census"
-        )
-    result = {
-        name: (value.dtype, value.shape) for name, value in document.specs
-    }
+        raise ValueError("H3 full-spec resource changed its config binding or 638-row census")
+    result = {name: (value.dtype, value.shape) for name, value in document.specs}
     if len(result) != len(document.specs):
         raise ValueError("H3 full-spec resource repeats a tensor destination")
     if any(
@@ -113,9 +112,7 @@ def official_full_specs(
     return result
 
 
-def validate_full_component(
-    tensors: Sequence[TensorView], config: dict[str, Any]
-) -> str:
+def validate_full_component(tensors: Sequence[TensorView], config: dict[str, Any]) -> str:
     """Require the exact production source topology and return its plain encoding id.
 
     The canonicalized official-native sources retain one 64-byte ``rope.inv_freq``
@@ -162,25 +159,19 @@ def _validate_component(
     encodings: set[str] = set()
     for key, (dtype, shape) in expected.items():
         value = actual[key]
-        parts = tuple(
-            (part.role, part.dtype, tuple(part.shape)) for part in value.parts
-        )
+        parts = tuple((part.role, part.dtype, tuple(part.shape)) for part in value.parts)
         if value.logical_dtype != dtype or tuple(value.shape) != shape:
             raise ValueError(
                 f"{label} H3 tensor {key} is {value.logical_dtype} {tuple(value.shape)}, "
                 f"expected {dtype} {shape}"
             )
         if parts != (("value", dtype, shape),):
-            raise ValueError(
-                f"{label} H3 tensor {key} is not one plain value role: {parts}"
-            )
+            raise ValueError(f"{label} H3 tensor {key} is not one plain value role: {parts}")
         if _DIGEST.fullmatch(value.encoding) is None:
             raise ValueError(f"{label} H3 tensor {key} has no exact encoding identity")
         encodings.add(value.encoding)
     if len(encodings) != 1:
-        raise ValueError(
-            f"{label} H3 component is not one plain encoding: {sorted(encodings)}"
-        )
+        raise ValueError(f"{label} H3 component is not one plain encoding: {sorted(encodings)}")
     return encodings.pop()
 
 
@@ -192,7 +183,51 @@ def validate_adaln_pruned_component(
     expected = official_full_specs(config)
     for key in removed_keys(topology):
         expected.pop(key)
-    expected.update(
-        {key: ("bf16", shape) for key, shape in table_shapes(topology, plan).items()}
-    )
+    expected.update({key: ("bf16", shape) for key, shape in table_shapes(topology, plan).items()})
     return _validate_component(tensors, expected, "AdaLN-pruned")
+
+
+def full_targets() -> dict[str, WeightsTarget]:
+    return {
+        "fl2va_dit": WeightsTarget(
+            source="dits",
+            source_component="fl2va_dit",
+            drop=source_only_keys(),
+        ),
+        "ref2va_dit": WeightsTarget(
+            source="dits",
+            source_component="ref2va_dit",
+            drop=source_only_keys(),
+        ),
+        "text_encoder": WeightsTarget(
+            source="shared",
+            source_component="text_encoder",
+            drop=text_source_only_keys(),
+        ),
+        "video_vae": WeightsTarget(source="shared", source_component="video_vae"),
+        "audio_vae": WeightsTarget(source="shared", source_component="audio_vae"),
+    }
+
+
+def select_full_targets(
+    artifacts: WeightsSink, sources: Mapping[str, H3FullTransformer]
+) -> dict[str, WeightsTarget]:
+    """Drop source-only rows that remain in these exact granted checkpoints."""
+    keys: dict[str, set[tuple[str, str]]] = {}
+    for source in sources.values():
+        if source.checkpoint_ref not in keys:
+            keys[source.checkpoint_ref] = {
+                (tensor.component, tensor.key) for tensor in artifacts.structure(source).tensors
+            }
+    targets = full_targets()
+    return {
+        component: replace(
+            target,
+            drop=tuple(
+                key
+                for key in target.drop
+                if (target.source_component, key) in keys[sources[target.source].checkpoint_ref]
+            ),
+        )
+        for component, target in targets.items()
+    }

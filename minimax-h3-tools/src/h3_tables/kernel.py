@@ -64,9 +64,7 @@ def removed_keys(topology: H3Topology) -> tuple[str, ...]:
     return tuple(sorted(keys))
 
 
-def table_shapes(
-    topology: H3Topology, plan: TimestepPlan
-) -> dict[str, tuple[int, ...]]:
+def table_shapes(topology: H3Topology, plan: TimestepPlan) -> dict[str, tuple[int, ...]]:
     shapes: dict[str, tuple[int, ...]] = {
         f"transformer_blocks.{index}.adaln_proj.table": (
             len(plan.block_rows),
@@ -146,12 +144,19 @@ def precompute_tables(
     write: TableWriter,
     progress: Progress,
     device: torch.device,
+    completed: frozenset[str] = frozenset(),
 ) -> None:
     """Precompute one task checkpoint's tables in Diffusers 0.40 operation order.
 
     Only one block projection is resident at a time. The source's unrelated 112+ GB never
     enters the process; TensorFS carries it by ObjectRef in the derived snapshot.
     """
+    expected = table_shapes(topology, plan)
+    if not completed <= expected.keys():
+        raise ValueError("completed table set contains undeclared keys")
+    if completed == expected.keys():
+        progress(len(expected), len(expected))
+        return
     shapes = source_shapes(topology)
     timestep = torch.tensor(plan.timesteps, dtype=torch.float32, device=device)
     time_features = _timestep_features(timestep, topology.freq_dim)
@@ -189,6 +194,10 @@ def precompute_tables(
     )
     activated = F.silu(temb).to(torch.bfloat16)
     for index in range(topology.num_layers):
+        name = f"transformer_blocks.{index}.adaln_proj.table"
+        if name in completed:
+            progress(index + 1, topology.num_layers + 1)
+            continue
         prefix = f"transformer_blocks.{index}.adaln_proj.linear"
         weight = _read(read, f"{prefix}.weight", *shapes[f"{prefix}.weight"], device)
         bias = _read(read, f"{prefix}.bias", *shapes[f"{prefix}.bias"], device)
@@ -200,12 +209,11 @@ def precompute_tables(
         del weight, bias, dense
         progress(index + 1, topology.num_layers + 1)
 
-    weight = _read(
-        read, "norm_out.linear.weight", *shapes["norm_out.linear.weight"], device
-    )
+    if "norm_out.table" in completed:
+        progress(topology.num_layers + 1, topology.num_layers + 1)
+        return
+    weight = _read(read, "norm_out.linear.weight", *shapes["norm_out.linear.weight"], device)
     bias = _read(read, "norm_out.linear.bias", *shapes["norm_out.linear.bias"], device)
-    final = F.linear(activated, weight, bias).reshape(
-        len(plan.timesteps), 2, topology.hidden_size
-    )
+    final = F.linear(activated, weight, bias).reshape(len(plan.timesteps), 2, topology.hidden_size)
     write("norm_out.table", final)
     progress(topology.num_layers + 1, topology.num_layers + 1)

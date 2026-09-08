@@ -6,9 +6,8 @@
 [tool.mypy]
 python_version = "3.12"
 files = [
-    "anima", "minimax-h3", "sdxl", "scripts",
-    "minimax-h3-tools/src", "checkpoint-repair/src",
-    "diagnostics/h3-vae-roundtrip",
+    "anima", "minimax-h3", "sdxl", "scripts", "examples",
+    "minimax-h3-tools/src",
 ]
 strict = true
 warn_unreachable = true
@@ -48,7 +47,8 @@ disallow_subclassing_any = false
 [tool.ruff]
 line-length = 100
 src = [
-    "anima", "minimax-h3", "sdxl", "scripts", "minimax-h3-tools",
+    "anima", "minimax-h3", "sdxl", "scripts", "examples",
+    "minimax-h3-tools",
 ]
 exclude = [".venv"]
 

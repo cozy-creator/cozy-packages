@@ -1,2 +1,0 @@
-[application]
-object = "checkpoint_repair.job:app"

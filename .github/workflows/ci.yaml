@@ -16,17 +16,15 @@ jobs:
           version: "0.12.7"
       - run: uv python install 3.12
 
-      # Runtime installs from PyPI like any dependency, at the highest package floor (0.5.0:
-      # decoded Assets and argument-scoped AssetLimits). CI therefore sees the real author types and
-      # media capability on every run; there is no secret-gated skipped-green path.
-      # No model library is installed here: every import is at module scope (se-041), so
-      # `describe` and the installed-wheel import run in each package's LOCKED environment
-      # below — the one Creator describes in at publish and install.
+      # Runtime installs from PyPI like any dependency, at the packages' own floor (0.7.0:
+      # memoized operations, native source custody and typed plain scripts).
+      # The light checks need no model libraries. Locked environments below also
+      # qualify installed-wheel imports and execution against each exact dependency set.
       - name: Environment
         run: |
           uv venv --python 3.12
           uv pip install \
-            "cozy-runtime>=0.5.0,<1" \
+            "cozy-runtime>=0.7.0,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences
@@ -39,8 +37,7 @@ jobs:
 
       - name: Lint
         run: >-
-          uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/
-          minimax-h3-tools/ checkpoint-repair/ diagnostics/h3-vae-roundtrip/
+          uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ examples/
 
       - name: Types
         run: uv run --no-project mypy
@@ -50,14 +47,14 @@ jobs:
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          for package in anima minimax-h3 sdxl minimax-h3-tools checkpoint-repair; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools; do
             uv lock --check --project "$package"
           done
 
       - name: Every package builds a wheel
         run: |
           mkdir -p dist/packages
-          for package in anima minimax-h3 sdxl minimax-h3-tools checkpoint-repair; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done
@@ -69,7 +66,6 @@ jobs:
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/dit-full-specs.json'
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/execution.sm90-attn8.json'
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/execution.sm90-fa3.json'
-          unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/execution.sm90-fa3.json'
 
       # The torch family is ABI-coupled — torchvision's compiled ops link against torch's
       # C++ ABI — and #633 gives one PlatformTarget exactly ONE family. A package that
@@ -78,6 +74,9 @@ jobs:
       - name: One torch family across every package
         run: |
           uv run --no-project python scripts/torch_family.py
+
+      - name: Native checkpoint repair script and resume
+        run: .venv/bin/python scripts/h3-repair-proof.py
 
   h3-conformance:
     # Independent so a failure in static analysis cannot silently skip the red arms.
@@ -98,7 +97,7 @@ jobs:
         run: |
           uv lock --check --project minimax-h3
           cd minimax-h3
-          uv sync --locked --no-cache --no-install-project
+          uv sync --locked --no-cache
 
       - name: Arms
         run: minimax-h3/.venv/bin/python scripts/h3-conform.py
@@ -107,10 +106,10 @@ jobs:
         run: PYTHONPATH=minimax-h3 minimax-h3/.venv/bin/python scripts/h3-activation-proof.py
 
       - name: Reference fidelity survives conditioning
-        run: minimax-h3/.venv/bin/python scripts/h3-reference-fidelity-proof.py
+        run: CUDA_VISIBLE_DEVICES='' minimax-h3/.venv/bin/python scripts/h3-reference-fidelity-proof.py
 
-      # `describe` reads the package through its module-scope imports, so it runs here, in
-      # the locked environment Creator describes in at publish and install (se-041).
+      # Static describe must agree with the committed interface. This same locked
+      # environment separately proves that the model's execution imports resolve.
       - name: Package interface is current
         run: test "$(minimax-h3/.venv/bin/cozy-runtime --json --dir minimax-h3 describe)" = "$(cat minimax-h3/metadata/package-interface.json)"
 
@@ -120,14 +119,19 @@ jobs:
           uv pip install --python minimax-h3/.venv/bin/python --no-deps dist/packages/minimax-h3/*.whl
           minimax-h3/.venv/bin/python -P scripts/package_import.py minimax-h3 --installed
 
-      - name: Optional H3 diagnostics build and expose bounded assets
+      - name: Worker-side script interfaces and installed model helpers
         run: |
-          mkdir -p diagnostics/h3-vae-roundtrip/dependencies
-          cp dist/packages/minimax-h3/*.whl diagnostics/h3-vae-roundtrip/dependencies/
-          uv lock --check --project diagnostics/h3-vae-roundtrip
-          uv build --project diagnostics/h3-vae-roundtrip --wheel --out-dir dist/diagnostic
-          uv pip install --python minimax-h3/.venv/bin/python --no-deps dist/diagnostic/*.whl
-          minimax-h3/.venv/bin/cozy-runtime --json --dir diagnostics/h3-vae-roundtrip describe > dist/diagnostic/interface.json
+          PYTHONPATH=examples/client-scripts minimax-h3/.venv/bin/python -P - <<'PYCODE'
+          from pathlib import Path
+          from cozy_runtime.author import describe, script_app
+          import h3_diagnostics, h3_activation_trace, h3_resident_samples
+
+          for module in (h3_diagnostics, h3_activation_trace, h3_resident_samples):
+              assert "site-packages" in Path(module.__file__).parts
+          for name in ("h3_vae_roundtrip", "h3_checkpoint_repair"):
+              surface, = describe(script_app(name))
+              assert surface.name == "main" and len(surface.model_bindings) == 1
+          PYCODE
 
   package-locks:
     # Independent so a failure to materialize an exact dependency environment cannot hide
@@ -142,7 +146,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [anima, sdxl, minimax-h3-tools, checkpoint-repair]
+        package: [anima, sdxl, minimax-h3-tools]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -159,8 +163,8 @@ jobs:
       - name: The locked stack imports
         run: ${{ matrix.package }}/.venv/bin/python scripts/package_import.py ${{ matrix.package }}
 
-      # `describe` reads the package through its module-scope imports, so it runs here, in
-      # the locked environment Creator describes in at publish and install (se-041).
+      # Static describe must agree with the committed interface. This same locked
+      # environment separately proves that the model's execution imports resolve.
       - name: Package interface is current
         run: test "$(${{ matrix.package }}/.venv/bin/cozy-runtime --json --dir ${{ matrix.package }} describe)" = "$(cat ${{ matrix.package }}/metadata/package-interface.json)"
       # The progress meter is only observable by RUNNING the seam: se-026's denoise hook was
@@ -182,14 +186,13 @@ jobs:
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/order-proof.py
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/stage-proof.py
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/full-source-proof.py
+          minimax-h3-tools/.venv/bin/python scripts/h3-adaln-resume-proof.py
+          minimax-h3-tools/.venv/bin/python scripts/h3-adaln-binding-proof.py
+          minimax-h3-tools/.venv/bin/python scripts/h3-adaln-interface-proof.py
           minimax-h3-tools/.venv/bin/python scripts/tensorfs_seeds.py
           minimax-h3-tools/.venv/bin/python scripts/h3-attention-lane-proof.py
         env:
           PYTHONPATH: minimax-h3-tools/src
-
-      - name: Native checkpoint row repair and resume
-        if: matrix.package == 'checkpoint-repair'
-        run: checkpoint-repair/.venv/bin/python scripts/h3-repair-proof.py
 
       - name: The package builds and imports from its wheel
         run: |

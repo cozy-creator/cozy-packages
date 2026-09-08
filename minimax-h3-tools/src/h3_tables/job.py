@@ -14,7 +14,6 @@ import torch
 from cozy_runtime.author import (
     App,
     Context,
-    Model,
     Telemetry,
     UnsupportedInput,
     WeightsConfig,
@@ -39,6 +38,7 @@ from cozy_runtime.derive.quantization import (
     quantize_component_into,
 )
 
+from . import adaln_operations as _adaln_operations
 from .kernel import H3Topology, removed_keys, source_shapes, table_bytes, table_shapes
 from .kernel import precompute_tables as compute_tables
 from .model_config import (
@@ -46,9 +46,17 @@ from .model_config import (
     dual_full_config,
     parse_production_config,
 )
+from .operations import assemble_full as assemble_full_artifact
+from .operations import precompute_adaln
 from .order import current_order
+from .order import full_order as _full_order
 from .plans import TimestepPlan, parse_declared_plan
-from .source import official_full_specs, source_only_keys, text_source_only_keys
+from .source import (
+    TARGET_COMPONENT,
+    H3FullTransformer,
+)
+from .source import full_targets as _full_targets
+from .source import select_full_targets as _select_full_targets
 
 app = App()
 
@@ -57,7 +65,6 @@ FP8_SPEC = "sha256:c4be0120fb4548306b134f6ee07eb2545a363bc140a005af1ef6543c790cf
 MXFP8_SPEC = "sha256:7e9b1ad8f2e5ddd236a4d4303042d632a96eadef4f25d44eb0fb63124cec7cfd"
 
 SOURCE_READ_CHUNK = 32 << 20
-TARGET_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
 EXECUTION_CONFIG = "execution"
 #: The lane each named execution contract (`assets/execution.<name>.json`,
 #: attention-quantization.md §2) produces. The key spells the contract's kernel token, which
@@ -82,30 +89,27 @@ def _production_plan(task: str) -> TimestepPlan:
 
 
 def _check_table_budget(declared: int) -> None:
-    """Refuse at import unless the committed plans still occupy exactly `declared` table bytes."""
+    """Refuse before native writes if either committed task plan exceeds the ceiling."""
     sections = parse_production_config(_asset("model-config.json"))
     measured = max(
         table_bytes(H3Topology.from_config(sections[section]), _production_plan(task))
         for task, section in SOURCE_SECTION.items()
     )
-    if measured != declared:
-        raise ValueError(f"the committed plans occupy {measured} table bytes, not {declared}")
+    if measured > declared:
+        raise ValueError(
+            f"the committed plans need {measured} table bytes, above budget {declared}"
+        )
 
 
-#: The exact table bytes one task's plan occupies, the larger task governing. A literal
-#: because the static interface reader folds the output bounds it feeds and never runs
-#: package code (cr-114); the check above keeps it the committed plans' own number.
-TABLE_BYTES = 1_020_515_328
+# An author-declared per-task ceiling, not a second copy of table geometry.
+# The committed plans currently use about 95% of this budget; shape validation
+# and native byte accounting still require exactly the declared output tensors.
+MAX_TABLE_BYTES = 1 << 30
 MAX_FULL_BYTES = 64 << 10
-MAX_PRUNED_BYTES = 2 * TABLE_BYTES + (128 << 10)
+MAX_PRUNED_BYTES = 2 * MAX_TABLE_BYTES + (128 << 10)
 MAX_QUANTIZED_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_PRUNED_BYTES
 
-_check_table_budget(TABLE_BYTES)
-
-
-class H3FullTransformer(Model[object]):
-    def load(self, loader: Any) -> None:
-        del loader
+_check_table_budget(MAX_TABLE_BYTES)
 
 
 class ProductionRequest(msgspec.Struct, forbid_unknown_fields=True):
@@ -200,22 +204,13 @@ def _compute_table_parts(
 
     def read(name: str, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
         nonlocal source_bytes
-        value, length = _read_source(
-            transaction, source, source_component, name, dtype, shape
-        )
+        value, length = _read_source(transaction, source, source_component, name, dtype, shape)
         source_bytes += length
         return value
 
     def write(name: str, value: torch.Tensor) -> None:
         nonlocal written
-        raw = (
-            value.detach()
-            .to(device="cpu")
-            .contiguous()
-            .view(torch.uint16)
-            .numpy()
-            .tobytes()
-        )
+        raw = value.detach().to(device="cpu").contiguous().view(torch.uint16).numpy().tobytes()
         write_part(name, raw)
         written += len(raw)
 
@@ -250,75 +245,6 @@ def _compute_table_parts(
     return source_bytes, written
 
 
-def _full_order(
-    sections: dict[str, dict[str, Any]], current: tuple[tuple[str, str], ...]
-) -> tuple[tuple[str, str], ...]:
-    fl = tuple(
-        ("fl2va_dit", key) for key in official_full_specs(sections["transformer"])
-    )
-    ref = tuple(
-        ("ref2va_dit", key)
-        for key in official_full_specs(sections["transformer_ref"])
-    )
-    shared = tuple(row for row in current if row[0] not in TARGET_COMPONENT.values())
-    if len(fl) != 638 or len(ref) != 638 or len(shared) != 2692:
-        raise ValueError(
-            f"full H3 order is {len(fl)}/{len(ref)}/{len(shared)}, expected 638/638/2692"
-        )
-    return (*fl, *ref, *shared)
-
-
-def _full_targets() -> dict[str, WeightsTarget]:
-    return {
-        "fl2va_dit": WeightsTarget(
-            source="dits",
-            source_component="fl2va_dit",
-            drop=source_only_keys(),
-        ),
-        "ref2va_dit": WeightsTarget(
-            source="dits",
-            source_component="ref2va_dit",
-            drop=source_only_keys(),
-        ),
-        "text_encoder": WeightsTarget(
-            source="shared",
-            source_component="text_encoder",
-            drop=text_source_only_keys(),
-        ),
-        "video_vae": WeightsTarget(
-            source="shared", source_component="video_vae"
-        ),
-        "audio_vae": WeightsTarget(
-            source="shared", source_component="audio_vae"
-        ),
-    }
-
-
-def _select_full_targets(
-    artifacts: WeightsSink, sources: Mapping[str, H3FullTransformer]
-) -> dict[str, WeightsTarget]:
-    """Drop source-only rows that remain in these exact granted checkpoints."""
-    keys: dict[str, set[tuple[str, str]]] = {}
-    for source in sources.values():
-        if source.checkpoint_ref not in keys:
-            keys[source.checkpoint_ref] = {
-                (tensor.component, tensor.key) for tensor in artifacts.structure(source).tensors
-            }
-    targets = _full_targets()
-    return {
-        component: replace(
-            target,
-            drop=tuple(
-                key
-                for key in target.drop
-                if (target.source_component, key) in keys[sources[target.source].checkpoint_ref]
-            ),
-        )
-        for component, target in targets.items()
-    }
-
-
-
 def _assembly_result(receipt: WeightsReceipt) -> AssemblyResult:
     return AssemblyResult(
         receipt.weights_transaction_id,
@@ -345,9 +271,7 @@ def assemble_full(
         "model",
         sources=sources,
         targets=_select_full_targets(artifacts, sources),
-        configs={
-            "model": WeightsConfig(data=config, length=len(config))
-        },
+        configs={"model": WeightsConfig(data=config, length=len(config))},
         order=_full_order(sections, current.rows),
     )
     return _assembly_result(receipt)
@@ -630,9 +554,7 @@ def _retable_targets(
         topology = H3Topology.from_config(sections[section])
         keys = {key for owner, key in present if owner == component}
         if not set(tables[task]) <= keys or set(removed_keys(topology)) & keys:
-            raise ValueError(
-                f"{component} is not an AdaLN-pruned source carrying table rows only"
-            )
+            raise ValueError(f"{component} is not an AdaLN-pruned source carrying table rows only")
         for key, (dtype, shape) in source_shapes(topology).items():
             tensor = full_present.get((component, key))
             if (
@@ -689,22 +611,26 @@ def retable(
     )
     order = current_order(_asset("whole-order.json"))
     bank_order = tuple(
-        row
-        for row in order.rows
-        if row[0] in bank_targets and row[1] in bank_targets[row[0]].add
+        row for row in order.rows if row[0] in bank_targets and row[1] in bank_targets[row[0]].add
     )
     source_bytes = written = 0
     receipts: dict[str, WeightsReceipt] = {}
     with ExitStack() as stack:
         bank = stack.enter_context(
             artifacts.open(
-                "tables", sources={"full": full}, targets=bank_targets, configs=config,
+                "tables",
+                sources={"full": full},
+                targets=bank_targets,
+                configs=config,
                 order=bank_order,
             )
         )
         retabled = stack.enter_context(
             artifacts.open(
-                "adaln-pruned", sources={"pruned": pruned}, targets=targets, configs=config,
+                "adaln-pruned",
+                sources={"pruned": pruned},
+                targets=targets,
+                configs=config,
                 order=order.rows,
             )
         )
@@ -745,6 +671,42 @@ def retable(
         written,
         source_bytes,
     )
+
+
+# Register after defining the source capability used by the managed operation.
+from . import operations  # noqa: E402
+
+app.job(
+    operations.quantize,
+    name="quantize-artifact",
+    weights=(WeightsOutput("model", max_new_bytes=MAX_QUANTIZED_BYTES),),
+)
+
+
+app.job(precompute_adaln, name="precompute-adaln")
+app.job(
+    _adaln_operations.select_adaln_weights,
+    name="select-adaln-weights",
+    weights=(WeightsOutput("model", 0),),
+)
+app.job(
+    _adaln_operations.compute_adaln_tables,
+    name="compute-adaln-tables",
+    weights=(WeightsOutput("model", MAX_TABLE_BYTES),),
+)
+app.job(
+    _adaln_operations.apply_adaln,
+    name="apply-adaln",
+    weights=(
+        WeightsOutput("model", 0),
+        WeightsOutput("fl2va-weights", 0),
+        WeightsOutput("ref2va-weights", 0),
+    ),
+)
+
+app.job(assemble_full_artifact, name="assemble-full-artifact", weights=(WeightsOutput("model", 0),))
+
+app.job(_adaln_operations.retable_adaln, name="retable-adaln", weights=(WeightsOutput("model", 0),))
 
 
 def _contract(name: str) -> tuple[bytes, str]:

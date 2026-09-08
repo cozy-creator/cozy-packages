@@ -1,15 +1,9 @@
 [project]
 name = "minimax-h3-tools"
-version = "2.4.2"
+version = "2.4.3"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    # The RANGE stays wide because publication refuses a narrower one on an image-owned
-    # distribution (the fleet must move between image builds). The LOCK is the pin, and it
-    # stays at 0.5.1: cr-114's static interface reader (0.5.2) reads the package TREE, while
-    # Creator's published install re-derives the interface from a source directory holding
-    # only package.toml, pyproject.toml and uv.lock, so a 0.5.2 lock cannot install. Relock
-    # forward once Creator describes an install from its committed interface.
-    "cozy-runtime>=0.5,<1",
+    "cozy-runtime>=0.7.0,<1",
     "msgspec>=0.19",
     "numpy>=1.26",
     "torch>=2.13,<3",
