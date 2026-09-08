@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from importlib.resources import files
 from typing import Literal, cast
 
@@ -26,9 +27,9 @@ from cozy_runtime.derive.quantization import (
     quantize_component_into,
 )
 
-from .model_config import parse_production_config
+from .model_config import dual_full_config, parse_production_config
 from .order import current_order, full_order
-from .source import TARGET_COMPONENT, H3FullTransformer
+from .source import TARGET_COMPONENT, H3FullTransformer, select_full_targets
 
 
 def _quantization_plan(structure: WeightsSource) -> ArtifactQuantizationPlan:
@@ -142,7 +143,19 @@ async def precompute_adaln(
     Retabling an already pruned model requires its full generating model. The current
     approved union bank supports all three schedules and is shared across body encodings.
     """
-    from .adaln_operations import _plan, apply_adaln, compute_adaln_tables, select_adaln_weights
+    from .adaln_operations import (
+        Selection,
+        _plan,
+        apply_adaln,
+        compute_adaln_tables,
+        select_adaln_weights,
+    )
+
+    # The generated interfaces remove injected services and replace bound Model
+    # parameters with ModelArtifact. These remain the same admitted call proxies.
+    select = cast(Callable[..., Awaitable[Selection]], select_adaln_weights)
+    compute = cast(Callable[..., Awaitable[ModelArtifact]], compute_adaln_tables)
+    attach = cast(Callable[..., Awaitable[ModelArtifact]], apply_adaln)
 
     ctx.raise_if_cancelled()
     if (
@@ -155,9 +168,9 @@ async def precompute_adaln(
         )
     # Managed proxies carry exact ModelArtifact values; the owner injects the bound
     # model only into each child implementation. Generated caller interfaces express this.
-    generator = cast(H3FullTransformer, generating_model or model)
-    selected_fl = await select_adaln_weights(source=generator, task="fl2va")
-    selected_ref = await select_adaln_weights(source=generator, task="ref2va")
+    generator = generating_model or model
+    selected_fl = await select(source=generator, task="fl2va")
+    selected_ref = await select(source=generator, task="ref2va")
     if selected_fl.ready and selected_ref.ready:
         if generating_model is not None:
             raise UnsupportedInput(
@@ -170,18 +183,41 @@ async def precompute_adaln(
             "H3 source does not contain both tasks' generating weights",
             code="adaln_generating_weights",
         )
-    fl = await compute_adaln_tables(
-        source=cast(H3FullTransformer, selected_fl.projection),
+    fl = await compute(
+        source=selected_fl.projection,
         task="fl2va",
         plan_digest=_plan("fl2va").digest,
     )
-    ref = await compute_adaln_tables(
-        source=cast(H3FullTransformer, selected_ref.projection),
+    ref = await compute(
+        source=selected_ref.projection,
         task="ref2va",
         plan_digest=_plan("ref2va").digest,
     )
-    return await apply_adaln(
-        source=cast(H3FullTransformer, model),
-        fl2va=cast(H3FullTransformer, fl),
-        ref2va=cast(H3FullTransformer, ref),
+    return await attach(
+        source=model,
+        fl2va=fl,
+        ref2va=ref,
     )
+
+
+@invocable(memoize=True)
+async def assemble_full(
+    ctx: Context,
+    *,
+    dits: H3FullTransformer,
+    shared: H3FullTransformer,
+    weights: WeightsSink,
+) -> ModelArtifact:
+    """Assemble converted DiTs and shared weights using the existing native H3 order."""
+    ctx.raise_if_cancelled()
+    assets = files(__package__).joinpath("assets")
+    sections = parse_production_config(assets.joinpath("model-config.json").read_bytes())
+    current = current_order(assets.joinpath("whole-order.json").read_bytes()).rows
+    sources = {"dits": dits, "shared": shared}
+    return weights.derive(
+        "model",
+        sources=sources,
+        targets=select_full_targets(weights, sources),
+        configs={"model": WeightsConfig(data=dual_full_config(sections))},
+        order=full_order(sections, current),
+    ).artifact

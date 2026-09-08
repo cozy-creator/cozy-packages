@@ -44,6 +44,7 @@ from .model_config import (
     dual_full_config,
     parse_production_config,
 )
+from .operations import assemble_full as assemble_full_artifact
 from .operations import precompute_adaln
 from .order import current_order
 from .order import full_order as _full_order
@@ -51,9 +52,9 @@ from .plans import TimestepPlan, parse_declared_plan
 from .source import (
     TARGET_COMPONENT,
     H3FullTransformer,
-    source_only_keys,
-    text_source_only_keys,
 )
+from .source import full_targets as _full_targets
+from .source import select_full_targets as _select_full_targets
 
 app = App()
 
@@ -209,52 +210,6 @@ def _compute_table_parts(
     if written != expected or len(table_shapes(topology, plan)) != topology.num_layers + 1:
         raise ValueError(f"{task} emitted {written} table bytes, expected {expected}")
     return source_bytes, written
-
-
-def _full_targets() -> dict[str, WeightsTarget]:
-    return {
-        "fl2va_dit": WeightsTarget(
-            source="dits",
-            source_component="fl2va_dit",
-            drop=source_only_keys(),
-        ),
-        "ref2va_dit": WeightsTarget(
-            source="dits",
-            source_component="ref2va_dit",
-            drop=source_only_keys(),
-        ),
-        "text_encoder": WeightsTarget(
-            source="shared",
-            source_component="text_encoder",
-            drop=text_source_only_keys(),
-        ),
-        "video_vae": WeightsTarget(source="shared", source_component="video_vae"),
-        "audio_vae": WeightsTarget(source="shared", source_component="audio_vae"),
-    }
-
-
-def _select_full_targets(
-    artifacts: WeightsSink, sources: Mapping[str, H3FullTransformer]
-) -> dict[str, WeightsTarget]:
-    """Drop source-only rows that remain in these exact granted checkpoints."""
-    keys: dict[str, set[tuple[str, str]]] = {}
-    for source in sources.values():
-        if source.checkpoint_ref not in keys:
-            keys[source.checkpoint_ref] = {
-                (tensor.component, tensor.key) for tensor in artifacts.structure(source).tensors
-            }
-    targets = _full_targets()
-    return {
-        component: replace(
-            target,
-            drop=tuple(
-                key
-                for key in target.drop
-                if (target.source_component, key) in keys[sources[target.source].checkpoint_ref]
-            ),
-        )
-        for component, target in targets.items()
-    }
 
 
 def _assembly_result(receipt: WeightsReceipt) -> AssemblyResult:
@@ -695,7 +650,6 @@ app.job(
 )
 
 
-
 app.job(precompute_adaln, name="precompute-adaln")
 app.job(
     _adaln_operations.select_adaln_weights,
@@ -716,3 +670,5 @@ app.job(
         WeightsOutput("ref2va-weights", 0),
     ),
 )
+
+app.job(assemble_full_artifact, name="assemble-full-artifact", weights=(WeightsOutput("model", 0),))

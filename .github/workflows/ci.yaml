@@ -165,6 +165,9 @@ jobs:
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/order-proof.py
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/stage-proof.py
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/full-source-proof.py
+          minimax-h3-tools/.venv/bin/python scripts/h3-adaln-resume-proof.py
+          minimax-h3-tools/.venv/bin/python scripts/h3-adaln-binding-proof.py
+          minimax-h3-tools/.venv/bin/python scripts/h3-adaln-interface-proof.py
           minimax-h3-tools/.venv/bin/python scripts/tensorfs_seeds.py
         env:
           PYTHONPATH: minimax-h3-tools/src
