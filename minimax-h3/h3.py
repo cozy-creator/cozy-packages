@@ -8,6 +8,7 @@ stages weighted roots, and joins those two boundaries.
 from __future__ import annotations
 
 import hashlib
+import sys
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
@@ -148,17 +149,35 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept
         return None
 
     def warm(self, ctx: Context) -> None:
-        """One dry DiT forward per entrypoint, before this construction serves anything.
+        """One dry DiT forward per entrypoint DiT this device ADMITS, before serving.
 
-        Both DiTs, because one construction carries both entrypoints and a switch between
-        them must not pay a first call either (h3a-018). The runtime has already applied
-        the fused glue and loaded its cubins for this device by the time `warm` runs
-        (h3a-015, `fusion="accept"` above); the dry forward is what pays their first
-        launches, the rotary tables and the projections' first GEMM plans.
+        Both DiTs are offered, because one construction carries both entrypoints and a
+        switch between them must not pay a first call either (h3a-018). The runtime has
+        already applied the fused glue and loaded its cubins for this device by the time
+        `warm` runs (h3a-015, `fusion="accept"` above); the dry forward is what pays their
+        first launches, the rotary tables and the projections' first GEMM plans.
+
+        Offered, not required. A fill that could not hold both DiTs PARKED one, and `warm`
+        runs before any attempt fixes a placement rung, so admission there evicts nothing
+        and staging the parked DiT is a measured `device_shortfall`. That is a capacity
+        fact about the card, not a construction failure: the parked DiT is staged by the
+        ladder on its entrypoint's first request, under a rung that may evict, and pays its
+        first launches there. So a shortfall on one entrypoint's DiT is recorded and
+        skipped while the other is still warmed — consent, not requirement, the shape
+        h3a-015 gave the fused lane itself.
         """
         for warm_one in (self.warm_fl2va, self.warm_ref2va):
             ctx.raise_if_cancelled()
-            warm_one()
+            try:
+                warm_one()
+            except Exception as exc:
+                if getattr(exc, "code", "") != "device_shortfall":
+                    raise
+                print(
+                    f"[minimax-h3] {warm_one.__name__} not applied: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
     @uses_components("fl2va_dit")
     def warm_fl2va(self) -> None:

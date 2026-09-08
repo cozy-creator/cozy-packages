@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import json
 import struct
 import sys
 from collections import Counter
 from collections.abc import Callable
+from contextlib import redirect_stderr
 from dataclasses import replace
 from fractions import Fraction
 from functools import partial
@@ -42,6 +44,7 @@ from cozy_runtime.author import (
 )
 from cozy_runtime.author.fakes import fake_attempt, fake_telemetry, warm_with_fakes
 from cozy_runtime.internal.derive import derive
+from cozy_runtime.internal.residency import ResidencyRefusal
 from diffusers import (
     AutoencoderKLMiniMaxH3,
     AutoencoderKLMiniMaxH3Audio,
@@ -2462,6 +2465,60 @@ def tiny_dit() -> Any:
     ).eval()
 
 
+#: The refusal an 80 GB H100 SXM raised on `warm_ref2va` at 2026-09-08T03:41Z, verbatim
+#: (requests req-1dca4b32cd6d6fea0385e67b, req-3bd12813ad65770c728b918d): the fill parked
+#: `ref2va_dit`, and re-staging it wants the component's FILL PEAK — its logical tree and
+#: its encoded payload at once — beside a resident `fl2va_dit` nothing may evict.
+PARKED_DIT_SHORTFALL = ResidencyRefusal(
+    "device_shortfall",
+    "warm_ref2va() declares component 'ref2va_dit' requiring 61237622220 B at admission "
+    "(21105997260 B of weights, 0 B of forward headroom, including overlapping fill "
+    "storage); 52054843392 B are allocatable (11895177216 B driver-free of 85017493504 B) "
+    "with ['audio_vae', 'fl2va_dit', 'video_vae'] resident, short by 9182778828 B. Every "
+    "evictable component was already freed, so this is a capacity fact, not an allocation "
+    "to retry",
+    {"resource": "vram", "scope": "component_use", "request_shape": "warm_ref2va"},
+)
+
+
+class ShortfallPlane:
+    """A residency plane that admits every declared set except one, the way Runtime does.
+
+    `ComponentResidency` reads the driver through `torch.cuda.mem_get_info` on every
+    admission, so the plane itself cannot run on the CPU this driver proves on. What is
+    real is everything the fix turns on: the exception CLASS Runtime raises, its typed
+    `device_shortfall` code, the verbatim detail the card produced, and the real
+    `@uses_components` scope that calls `admit` before the method body exists.
+    """
+
+    def __init__(self, refuse: str, refusal: ResidencyRefusal) -> None:
+        self.refuse = refuse
+        self.refusal = refusal
+        self.admitted: list[str] = []
+        self.released: list[str] = []
+
+    def admit(self, method: str, components: tuple[str, ...]) -> None:
+        self.admitted.append(method)
+        if self.refuse in components:
+            raise self.refusal
+
+    def release(self, method: str, components: tuple[str, ...]) -> None:
+        self.released.append(method)
+
+
+def warm_under(plane: ShortfallPlane) -> tuple[Any, str]:
+    """Warm a fresh H3 construction under `plane`, returning the model and its stderr."""
+    pipe = meta_h3_pipeline()
+    for component in _DIT_COMPONENT.values():
+        pipe.components[component] = tiny_dit()
+    model = package.H3Model.for_test(pipe=pipe)
+    object.__setattr__(model, "_cozy_residency", plane)
+    recorded = io.StringIO()
+    with redirect_stderr(recorded):
+        warm_with_fakes(model)
+    return model, recorded.getvalue()
+
+
 def arm_warm() -> None:
     """`Model.warm` (#708) runs one dry DiT forward per entrypoint and nothing else.
 
@@ -2524,6 +2581,43 @@ def arm_warm() -> None:
         check("a cancelled fill refuses before any scope", cancelled.harness.calls, [])
     else:
         fail("a cancelled fill refuses", "warm returned")
+
+    # A DiT THE FILL PARKED. Warming is offered per entrypoint, and a card that cannot
+    # admit the second one refuses typed; the construction still serves both entrypoints,
+    # so a shortfall here must not fault the placement (se-045).
+    print("\n== warm: a parked DiT is skipped, not a construction failure ==")
+    plane = ShortfallPlane("ref2va_dit", PARKED_DIT_SHORTFALL)
+    model, recorded = warm_under(plane)
+    check("both entrypoint DiTs were offered", plane.admitted, ["warm_fl2va", "warm_ref2va"])
+    check("only the admitted scope opened", [call.method for call in model.harness.calls], [
+        "warm_fl2va"
+    ])
+    check("the admitted DiT was warmed and released", plane.released, ["warm_fl2va"])
+    check(
+        "the non-application is recorded with the runtime's own numbers",
+        [
+            "warm_ref2va not applied" in recorded,
+            "device_shortfall" in recorded,
+            "9182778828 B" in recorded,
+        ],
+        [True, True, True],
+    )
+    observe("recorded", recorded.strip()[:200])
+    refusal(
+        "a poisoned residency plane still fails the construction",
+        lambda: warm_under(
+            ShortfallPlane(
+                "fl2va_dit",
+                ResidencyRefusal("residency_poisoned", "the plane latched a mid-stage failure"),
+            )
+        ),
+        "residency_poisoned",
+    )
+    red(
+        "device_shortfall is the code the tolerated refusal carries",
+        PARKED_DIT_SHORTFALL.code,
+        "residency_poisoned",
+    )
 
 
 ARMS = {
