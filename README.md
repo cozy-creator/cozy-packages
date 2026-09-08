@@ -115,7 +115,7 @@ cozy run paul/minimax-h3/ref2va \
   'prompt=<your H3 prompt>' \
   --asset="~/Pictures/character-1.png" \
   --asset="~/Pictures/character-2.png" \
-  seed=24680 --rental-only --await
+  duration_s:=10 seed=24680 --rental-only --await
 ```
 
 The Hub binding supplies the default model. `--model.model=...` overrides it for
@@ -131,6 +131,13 @@ Labels are unique within the collection and preserve their exact spelling. Packa
 code can use `assets["alice"]` or `assets.info("alice")`; unlabelled references remain valid. H3
 preserves the supplied order when building its references. A label does not change
 the model's positional prompt syntax or rewrite the prompt.
+
+Ref2VA declares a conservative preparation cap of 8192 pixels on the longest edge
+and 16,777,216 pixels in total. This preserves room for a high-fidelity 2048px short
+edge at the allowed 4:1 aspect ratio. Creator can fit oversized originals before
+upload; Runtime applies the same preparation when it receives an original. The
+package then performs its normal per-reference sizing below. FL2VA keeps its
+canvas-dependent preprocessing.
 
 Reference-image fidelity is an optional per-occurrence hint:
 
@@ -177,13 +184,30 @@ an alias would let the second checkpoint fill overwrite the first and an evictio
 name invalidate both. Artifact config equality and the constructed destination topology are both
 checked before fill; only checkpoint contents and the task-specific upstream interface differ.
 
-The frame cell is part of the release, not request policy: 345 frames at 24 fps. The one request
-knob is `steps`, the number of transformer evaluations, from the committed plans' set (30, 40 or
-50; the fastest is the default). Each step count is the official grid
-`MiniMaxH3Scheduler.set_timesteps(steps + 1)` per modality (video shift 12, audio shift 3): the
-terminal zero is a grid point with no evaluation, so `steps` evaluations run and the progress
-callback counts exactly them. Duration, frame-count, task-selector, graph-selector, and AdaLN-mode
-request fields are absent.
+Two request knobs set the cost. `steps` is the number of transformer evaluations, from the
+committed plans' set (30, 40 or 50; the fastest is the default). Each step count is the official
+grid `MiniMaxH3Scheduler.set_timesteps(steps + 1)` per modality (video shift 12, audio shift 3):
+the terminal zero is a grid point with no evaluation, so `steps` evaluations run and the progress
+callback counts exactly them.
+
+`duration_s` is the clip length in whole seconds, **5 to 14, defaulting to 5** — the shortest, not
+the longest, because length is the larger lever of the two: the DiT attends over ONE packed
+sequence whose rows scale with the frame count, and attention is quadratic in it. The video VAE
+encodes `17n + 5` frames per clip, so a request's seconds snap UP to the next such count (never
+down) and the served set is exactly the whole seconds whose snapped length stays inside the
+pipeline's own 5.0-15.0 s envelope:
+
+| `duration_s` | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| frames | 124 | 158 | 175 | 192 | 226 | 243 | 277 | 294 | 328 | 345 |
+| delivered s | 5.167 | 6.583 | 7.292 | 8.000 | 9.417 | 10.125 | 11.542 | 12.250 | 13.667 | 14.375 |
+| denoise rows at 1344x768 | 37,710 | 47,902 | 53,000 | 58,096 | 68,290 | 73,386 | 83,580 | 88,676 | 98,870 | 103,966 |
+
+4 s would snap to 107 frames (4.458 s, under the floor) and 15 s to 362 (15.083 s, over the
+ceiling), so both refuse typed at decode. A timestep plan holds one row per (timestep, modality)
+and no row depends on the frame count, so every length runs on the same AdaLN-pruned tables and no
+lane is re-tabled for one. Every attempt logs its length and resulting packed-sequence rows in the
+`h3 output geometry` row. Task-selector, graph-selector, and AdaLN-mode request fields are absent.
 The artifact config fixes both DiTs to one modulation structure before construction: reference
 artifacts use the official FULL AdaLN path, while production artifacts use exact table rows for the
 two committed TimestepPlans and contain no replaced timestep/AdaLN projection destinations. A

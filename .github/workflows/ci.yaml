@@ -139,6 +139,10 @@ jobs:
     name: Package exact locked environments
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
     strategy:
       fail-fast: false
       matrix:

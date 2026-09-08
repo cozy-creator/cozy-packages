@@ -8,6 +8,7 @@ stages weighted roots, and joins those two boundaries.
 from __future__ import annotations
 
 import hashlib
+import sys
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
@@ -26,6 +27,7 @@ from cozy_runtime.author import (
     Image,
     ImageAsset,
     ImageFrame,
+    ImagePreparation,
     InvalidRequest,
     Loader,
     Mixed,
@@ -44,7 +46,6 @@ from msgspec.structs import replace
 from gates import MediaFacts, pre_encode_gate
 from official import (
     FPS,
-    FRAMES,
     MAX_AUDIO_REFERENCES,
     MAX_CONDITIONER_VISION_TOKENS,
     MAX_IMAGE_REFERENCES,
@@ -56,7 +57,10 @@ from official import (
     ReferencePolicyFacts,
     ScheduleFacts,
     Task,
+    assert_duration_envelope,
     build_h3_pipeline,
+    denoise_rows,
+    frames_for,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
     validate_reference_policy,
@@ -77,6 +81,7 @@ ReferenceAssets = Annotated[
         audio=MAX_AUDIO_REFERENCES,
         total=MAX_REFERENCES,
     ),
+    ImagePreparation(max_edge=8192, max_pixels=16_777_216),
     msgspec.Meta(min_length=1),
 ]
 KeyframeAssets = Annotated[Assets[Image], AssetLimits(images=2)]
@@ -98,6 +103,29 @@ Steps = Annotated[
     Literal[SUPPORTED_STEPS],  # type: ignore[valid-type]
     msgspec.Meta(description="Denoise steps (transformer evaluations); fewer is faster."),
 ]
+# Length is the request's largest cost lever: the DiT attends over ONE packed sequence whose
+# rows scale with the frame count, and attention is quadratic in it. Every whole second in
+# the envelope is served, and the SHORTEST is the default — a caller that says nothing pays
+# the cheapest clip, not the longest (se-047).
+# Declared, because the wire IS the declaration: `describe` reads this file and runs none of
+# it (#713). `assert_duration_envelope` refuses unless the official 17n+5 snap and the
+# official envelope serve exactly these whole seconds, so the pair below cannot drift from
+# the geometry it advertises.
+MIN_DURATION_S = 5
+MAX_DURATION_S = 14
+assert_duration_envelope((MIN_DURATION_S, MAX_DURATION_S))
+DEFAULT_DURATION_S = MIN_DURATION_S
+DurationSeconds = Annotated[
+    int,
+    msgspec.Meta(
+        ge=MIN_DURATION_S,
+        le=MAX_DURATION_S,
+        description=(
+            "Clip length in whole seconds, snapped up to the video VAE's own 17n+5 frame "
+            "grid; shorter is quadratically faster."
+        ),
+    ),
+]
 
 
 class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -105,6 +133,7 @@ class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     mute: bool = False
     seed: int | None = None
     steps: Steps = DEFAULT_STEPS
+    duration_s: DurationSeconds = DEFAULT_DURATION_S
 
 
 class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -120,6 +149,7 @@ class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
         ),
     ] = DEFAULT_REFERENCE_IMAGE_SHORT_EDGE
     steps: Steps = DEFAULT_STEPS
+    duration_s: DurationSeconds = DEFAULT_DURATION_S
 
 
 class H3VideoOutput(msgspec.Struct):
@@ -153,17 +183,35 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept
         return None
 
     def warm(self, ctx: Context) -> None:
-        """One dry DiT forward per entrypoint, before this construction serves anything.
+        """One dry DiT forward per entrypoint DiT this device ADMITS, before serving.
 
-        Both DiTs, because one construction carries both entrypoints and a switch between
-        them must not pay a first call either (h3a-018). The runtime has already applied
-        the fused glue and loaded its cubins for this device by the time `warm` runs
-        (h3a-015, `fusion="accept"` above); the dry forward is what pays their first
-        launches, the rotary tables and the projections' first GEMM plans.
+        Both DiTs are offered, because one construction carries both entrypoints and a
+        switch between them must not pay a first call either (h3a-018). The runtime has
+        already applied the fused glue and loaded its cubins for this device by the time
+        `warm` runs (h3a-015, `fusion="accept"` above); the dry forward is what pays their
+        first launches, the rotary tables and the projections' first GEMM plans.
+
+        Offered, not required. A fill that could not hold both DiTs PARKED one, and `warm`
+        runs before any attempt fixes a placement rung, so admission there evicts nothing
+        and staging the parked DiT is a measured `device_shortfall`. That is a capacity
+        fact about the card, not a construction failure: the parked DiT is staged by the
+        ladder on its entrypoint's first request, under a rung that may evict, and pays its
+        first launches there. So a shortfall on one entrypoint's DiT is recorded and
+        skipped while the other is still warmed — consent, not requirement, the shape
+        h3a-015 gave the fused lane itself.
         """
         for warm_one in (self.warm_fl2va, self.warm_ref2va):
             ctx.raise_if_cancelled()
-            warm_one()
+            try:
+                warm_one()
+            except Exception as exc:
+                if getattr(exc, "code", "") != "device_shortfall":
+                    raise
+                print(
+                    f"[minimax-h3] {warm_one.__name__} not applied: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
     @uses_components("fl2va_dit")
     def warm_fl2va(self) -> None:
@@ -465,6 +513,7 @@ def _finish(
     state: Any,
     schedule: ScheduleFacts,
     *,
+    duration_s: int,
     mute: bool,
     out: Outputs,
     tel: Telemetry,
@@ -506,9 +555,10 @@ def _finish(
         sample_rate=sample_rate,
         mute=mute,
     )
-    if frames != FRAMES or channels != 3:
+    if frames != frames_for(duration_s) or channels != 3:
         raise OutputError(
-            f"official H3 decode returned {frames} frames and {channels} channels",
+            f"official H3 decode returned {frames} frames and {channels} channels for a "
+            f"{duration_s}s request, expected {frames_for(duration_s)} frames and 3 channels",
             code="output_integrity",
         )
 
@@ -542,6 +592,9 @@ def _finish(
         height=height,
         frames=frames,
         fps=FPS,
+        requested_duration_s=duration_s,
+        duration_seconds=round(frames / FPS, 3),
+        denoise_rows=denoise_rows(frames, height, width),
         sample_rate=sample_rate,
     )
     tel.log(
@@ -626,6 +679,7 @@ def fl2va(
             last_frame=last,
             generator=model.pipe.generator(view.generator),
             steps=payload.steps,
+            frames=frames_for(payload.duration_s),
         )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
         model.condition_text("fl2va", state, checks=checks)
@@ -644,6 +698,7 @@ def fl2va(
         "fl2va",
         state,
         schedule,
+        duration_s=payload.duration_s,
         mute=payload.mute,
         out=out,
         tel=tel,
@@ -685,6 +740,7 @@ def ref2va(
             references=references,
             generator=model.pipe.generator(view.generator),
             steps=payload.steps,
+            frames=frames_for(payload.duration_s),
             reference_image_short_edges=sizing.edges,
         )
         for index, reference in enumerate(state.normalized_references):
@@ -715,6 +771,7 @@ def ref2va(
         "ref2va",
         state,
         schedule,
+        duration_s=payload.duration_s,
         mute=payload.mute,
         out=out,
         tel=tel,

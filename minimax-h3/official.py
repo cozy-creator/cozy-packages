@@ -48,7 +48,12 @@ from diffusers.modular_pipelines.minimax_h3 import (
     MiniMaxH3ImageReference,
     MiniMaxH3VideoReference,
 )
-from diffusers.modular_pipelines.minimax_h3.modular_pipeline import resolve_canvas_size
+from diffusers.modular_pipelines.minimax_h3.modular_pipeline import (
+    align_num_frames,
+    audio_latent_num_frames,
+    resolve_canvas_size,
+    video_latent_num_frames,
+)
 from diffusers.modular_pipelines.modular_pipeline import PipelineState
 from torch.utils._pytree import keystr, tree_flatten_with_path
 from transformers import (
@@ -68,7 +73,19 @@ _TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
 _WORKFLOW_TASKS: dict[str, Task] = {"t2va": "fl2va", "fl2va": "fl2va", "ref2va": "ref2va"}
 
 FPS = 24
-FRAMES = 345
+#: The video VAE's temporal chunking: `clip_length` pixel frames per chunk keeping
+#: `tokens_chunk_size` latents, so only `17n + 5` frame counts decode. Refused at
+#: construction if the artifact config drifts (`_validate_model_contract`).
+FRAMES_PER_CHUNK = 17
+LATENTS_PER_CHUNK = 5
+#: The official generated-clip envelope in seconds, as the pipeline declares it.
+MIN_DURATION = 5.0
+MAX_DURATION = 15.0
+#: Packed-sequence geometry: the VAE's spatial compression, the DiT's patch, and the
+#: stereo audio latents' channel-major packing. All three are contract-checked.
+VAE_SPATIAL_RATIO = 16
+PATCH_SIZE = (1, 2, 2)
+AUDIO_CHANNELS = 2
 MAX_IMAGE_REFERENCES = 9
 MAX_VIDEO_REFERENCES = 3
 MAX_AUDIO_REFERENCES = 3
@@ -92,6 +109,62 @@ _ASSETS = Path(__file__).resolve().parent
 #: (timestep, modality) pair the step gathers.
 _WARM_ROWS = 8
 _WARM_VIDEO_TAG, _WARM_TEXT_TAG, _WARM_AUDIO_TAG = 0, 1, 2
+
+
+def frames_for(duration_s: int) -> int:
+    """Whole seconds onto the video VAE's own `17n + 5` grid, by the official snap.
+
+    The snap only ever goes UP, so a clip is never shorter than the seconds asked for; the
+    exact delivered length is `frames_for(seconds) / FPS`.
+    """
+    return int(align_num_frames(duration_s * FPS, FRAMES_PER_CHUNK, LATENTS_PER_CHUNK))
+
+
+def supported_durations() -> tuple[int, ...]:
+    """The whole seconds this release serves: those whose snapped frame count lands inside
+    the official envelope. 4 s snaps to 107 frames (4.458 s, under the floor) and 15 s to
+    362 (15.083 s, over the ceiling), so the set is 5..14 s = 124..345 frames."""
+    return tuple(
+        seconds
+        for seconds in range(1, 1 + math.ceil(MAX_DURATION))
+        if MIN_DURATION <= frames_for(seconds) / FPS <= MAX_DURATION
+    )
+
+
+def assert_duration_envelope(served: tuple[int, int]) -> None:
+    """Refuse unless the official geometry serves exactly the whole seconds on the wire.
+
+    The wire states its own bounds, because `describe` reads this package's source and
+    never runs it (#713). This is what holds those two numbers to the 17n+5 snap and the
+    official envelope, so the pair cannot drift from the geometry it advertises.
+    """
+    durations = supported_durations()
+    if (durations[0], durations[-1]) != served or durations != tuple(
+        range(served[0], served[1] + 1)
+    ):
+        raise ConformanceError(
+            f"the official MiniMax-H3 geometry serves {durations} whole seconds, not the "
+            f"contiguous {served[0]}..{served[1]} this release admits",
+            code="artifact_config",
+        )
+
+
+#: The longest clip this release generates; the geometry the committed plans are stamped with.
+MAX_FRAMES = frames_for(max(supported_durations()))
+
+
+def denoise_rows(frames: int, height: int, width: int) -> int:
+    """Rows of the one packed sequence the DiT attends over — what attention is quadratic
+    in, and therefore what a length choice actually buys."""
+    latent_frames = video_latent_num_frames(frames, FRAMES_PER_CHUNK, LATENTS_PER_CHUNK)
+    patch_t, patch_h, patch_w = PATCH_SIZE
+    video = (
+        latent_frames
+        // patch_t
+        * (height // VAE_SPATIAL_RATIO // patch_h)
+        * (width // VAE_SPATIAL_RATIO // patch_w)
+    )
+    return int(video + audio_latent_num_frames(frames) * AUDIO_CHANNELS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,7 +391,10 @@ class TimestepPlan:
             "adaln_row_index": "timestep_index*3+modality_tag",
             "final_norm_row_index": "timestep_index",
             "table_order": "first-distinct-evaluation-class-occurrence",
-            "frames": FRAMES,
+            # The geometry stamp. A plan holds one row per (timestep, modality) and no row
+            # depends on the frame count, so this names the release's longest clip rather
+            # than constraining anything a request may ask for.
+            "frames": MAX_FRAMES,
             "fps": FPS,
             "video_shift": _float_hex(self.video_shift),
             "audio_shift": _float_hex(self.audio_shift),
@@ -871,6 +947,7 @@ class OfficialH3Pipeline:
         last_frame: Any | None,
         generator: Any,
         steps: int,
+        frames: int,
     ) -> Any:
         # With no anchor, state the official default canvas. With an anchor, leaving the
         # dimensions absent makes the first supplied keyframe the geometry authority.
@@ -880,6 +957,7 @@ class OfficialH3Pipeline:
             prompt=prompt,
             generator=generator,
             steps=steps,
+            frames=frames,
             image=first_frame,
             last_image=last_frame,
             height=height,
@@ -893,6 +971,7 @@ class OfficialH3Pipeline:
         references: Sequence[Any],
         generator: Any,
         steps: int,
+        frames: int,
         reference_image_short_edges: Sequence[int],
     ) -> Any:
         """``reference_image_short_edges`` is one resolved edge per image reference, in
@@ -902,6 +981,7 @@ class OfficialH3Pipeline:
             prompt=prompt,
             generator=generator,
             steps=steps,
+            frames=frames,
             references=list(references),
             image_short_edges=tuple(reference_image_short_edges),
         )
@@ -913,6 +993,7 @@ class OfficialH3Pipeline:
         prompt: str,
         generator: Any,
         steps: int,
+        frames: int,
         image_short_edges: Sequence[int] = (),
         **values: Any,
     ) -> Any:
@@ -923,7 +1004,7 @@ class OfficialH3Pipeline:
         fixed = {
             "prompt": prompt,
             "generator": generator,
-            "num_frames": FRAMES,
+            "num_frames": frames,
             "num_inference_steps": schedule.sigma_grid_points,
             "output_type": "pt",
             **values,
@@ -1282,7 +1363,7 @@ def _validate_model_contract(pipe: Any, transformer: Any, video_vae: Any, audio_
                 "ffn_dim": 14336,
                 "in_channels": 24,
                 "audio_in_channels": 32,
-                "patch_size": (1, 2, 2),
+                "patch_size": PATCH_SIZE,
                 "text_dim": 5120,
                 "freq_dim": 256,
                 "time_embed_hidden_dim": 5376,
@@ -1303,7 +1384,7 @@ def _validate_model_contract(pipe: Any, transformer: Any, video_vae: Any, audio_
                 "latent_channels": 24,
                 "spatial_downsample_factors": (2, 2, 2, 2, 1, 1),
                 "temporal_downsample_factors": (1, 2, 2, 1, 1, 1),
-                "clip_length": 17,
+                "clip_length": FRAMES_PER_CHUNK,
                 "token_drop": 3,
             },
         ),
@@ -1336,11 +1417,24 @@ def _validate_model_contract(pipe: Any, transformer: Any, video_vae: Any, audio_
             code="artifact_config",
             fields=["pipeline", "reference_image_short_edge"],
         )
-    if video_vae.tokens_chunk_size != 5 or video_vae.spatial_compression_ratio != 16:
+    if (
+        video_vae.tokens_chunk_size != LATENTS_PER_CHUNK
+        or video_vae.spatial_compression_ratio != VAE_SPATIAL_RATIO
+    ):
         raise ConformanceError(
             "official H3 video VAE derived geometry differs from 5-token/16-pixel release",
             code="artifact_config",
             fields=["video_vae"],
+        )
+    # The length envelope this release admits is the pipeline's own; a library that moves
+    # either bound would silently change which durations the wire enum serves.
+    envelope = (pipe.fps, pipe.min_duration, pipe.max_duration, pipe.audio_channels)
+    if envelope != (FPS, MIN_DURATION, MAX_DURATION, AUDIO_CHANNELS):
+        raise ConformanceError(
+            f"official H3 clip envelope is {envelope}, expected "
+            f"{(FPS, MIN_DURATION, MAX_DURATION, AUDIO_CHANNELS)}",
+            code="artifact_config",
+            fields=["pipeline"],
         )
 
 

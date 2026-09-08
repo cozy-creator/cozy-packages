@@ -35,7 +35,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.4.1"
+version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -46,10 +46,10 @@ dependencies = [
     { name = "protobuf" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/11/30/eba3faabef133b51fd67771771a70aeb05ce6f537a91cd5331847fafa2b6/cozy_runtime-0.4.1.tar.gz", hash = "sha256:d63df9779b1c250c686ec6edce37989c3099ac04cafa3b1bf2ac117e35dee4f9", size = 1345746, upload-time = "2026-09-07T23:37:18.992Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/69/a981acc49261dd2e12d5775e0479b63598165a6df45fe3da784c4113f1de/cozy_runtime-0.5.1.tar.gz", hash = "sha256:38080d2945cad299ecfb770355fb6a4f72ee4ea66bdc09aa15e74b35e02a29b4", size = 1414030, upload-time = "2026-09-08T01:51:37.893Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d5/07/c80264df7130f41daad4b4f8c40b1a4360b02a9d1edb59ee142e764026df/cozy_runtime-0.4.1-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:8be99d1083c4362b81e3b267098d3dc9e57d94762a330f1930a3f09ce9015285", size = 13473547, upload-time = "2026-09-07T23:37:15.003Z" },
-    { url = "https://files.pythonhosted.org/packages/12/59/95d42f77f22afdf8c327161b0d36a02dda1f2005fe08908724f6c141dfee/cozy_runtime-0.4.1-py3-none-any.whl", hash = "sha256:5c7f82f87bbbdab8b863a2b02f12672c45ad5ff4322af05ede2316280bd047ee", size = 1006130, upload-time = "2026-09-07T23:37:17.381Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/a2/e7d20b781ddd61656b2f71162890b53be49ca15819abed94629198c23e06/cozy_runtime-0.5.1-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:2cf6df93067d3b4ad050a532a94af78ba74e77c6c76fa82e4fcae279baaf76ba", size = 13510660, upload-time = "2026-09-08T01:51:34.764Z" },
+    { url = "https://files.pythonhosted.org/packages/55/50/a7a68c620727dec3bb69d50ffdb6a1ce6da50f2be871500d5b8aadea08ea/cozy_runtime-0.5.1-py3-none-any.whl", hash = "sha256:35ed6e4c5e9f3128ac9e5c16505e2d1b508b7c74b8523ddc25bfe6c29cebc05f", size = 1043238, upload-time = "2026-09-08T01:51:36.687Z" },
 ]
 
 [[package]]
@@ -204,7 +204,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3-tools"
-version = "2.3.3"
+version = "2.4.2"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime" },
@@ -222,7 +222,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", specifier = ">=0.4.0,<1.0.0" },
+    { name = "cozy-runtime", specifier = ">=0.5,<1" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "torch", specifier = ">=2.13,<3" },
