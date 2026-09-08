@@ -34,6 +34,7 @@ from cozy_runtime.author import (
     Telemetry,
     UnsupportedInput,
     VideoAsset,
+    data_values,
     uses_components,
 )
 from msgspec.structs import replace
@@ -52,7 +53,7 @@ from official import (
     build_h3_pipeline,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
-    supported_steps,
+    assert_supported_steps,
     validate_reference_policy,
 )
 
@@ -95,8 +96,12 @@ class AudioReference(msgspec.Struct, tag="audio", tag_field="type", forbid_unkno
 Reference = ImageReference | VideoReference | AudioReference
 Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
 # The wire enum is the committed plans' step counts; a bound lane serves exactly these
-# and the fastest is the default.
-SUPPORTED_STEPS = supported_steps()
+# and the fastest is the default. Read as DATA, so `describe` reaches it without importing
+# this module (cr-115), and checked against both parsed plans on the next line.
+SUPPORTED_STEPS = data_values(
+    __file__, "timestep-plans/fl2va.json", "schedules", "transformer_evaluations"
+)
+assert_supported_steps(SUPPORTED_STEPS)
 DEFAULT_STEPS = min(SUPPORTED_STEPS)
 Steps = Annotated[
     Literal[SUPPORTED_STEPS],  # type: ignore[valid-type]

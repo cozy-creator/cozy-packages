@@ -412,12 +412,20 @@ def canonical_timestep_plan(task: Task) -> TimestepPlan:
     return plan
 
 
-def supported_steps() -> tuple[int, ...]:
-    """The denoise step counts both committed plans serve."""
-    steps = {task: canonical_timestep_plan(task).steps for task in _TASKS}
-    if len(set(steps.values())) != 1:
-        raise ValueError("the FL2VA and Ref2VA plans must serve the same denoise step counts")
-    return steps["fl2va"]
+def assert_supported_steps(served: tuple[int, ...]) -> None:
+    """Refuse unless BOTH committed plans serve exactly the step counts on the wire.
+
+    The wire enum is read straight off the fl2va plan (`h3.py`), so this is what holds the
+    two plans to one another and holds the enum to the schedules a lane can actually run.
+    """
+    for task in _TASKS:
+        steps = canonical_timestep_plan(task).steps
+        if steps != served:
+            raise ConformanceError(
+                f"the committed MiniMax-H3 {task} plan serves {steps}, not the {served} "
+                "this release admits",
+                code="artifact_config",
+            )
 
 
 def reference_image_vision_tokens(

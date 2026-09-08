@@ -100,13 +100,13 @@ from official import (  # noqa: E402
     canonical_timestep_plan,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
-    supported_steps,
     timestep_plan_digest,
     validate_reference_policy,
 )
 from vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
 
-STEPS = supported_steps()
+# The wire enum itself: read off the committed plan and already checked against both (cr-115).
+STEPS = package.SUPPORTED_STEPS
 DEFAULT_STEPS = min(STEPS)
 
 PASS = "  ok   "
