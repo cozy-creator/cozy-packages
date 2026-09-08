@@ -211,7 +211,6 @@ def main() -> None:
     jobs = {str(row["name"]): row for row in declared}
     if set(jobs) != {
         "assemble_full",
-        "attention-lane",
         "four-lane",
         "retable",
         "quantize-artifact",
