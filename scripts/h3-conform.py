@@ -28,6 +28,7 @@ import torch
 from cozy_runtime.author import (
     Artifact,
     AudioAsset,
+    Cancelled,
     Config,
     DecodedAudio,
     DecodedVideo,
@@ -37,7 +38,7 @@ from cozy_runtime.author import (
     canonical_json,
     describe,
 )
-from cozy_runtime.author.fakes import fake_attempt, fake_telemetry
+from cozy_runtime.author.fakes import fake_attempt, fake_telemetry, warm_with_fakes
 from cozy_runtime.internal.derive import derive
 from diffusers import (
     AutoencoderKLMiniMaxH3,
@@ -78,6 +79,7 @@ from conditioner import build_text_conditioner, text_conditioner_config  # noqa:
 from gates import MediaFacts, pre_encode_gate  # noqa: E402
 from h3_order import construction_order, encode_order  # noqa: E402
 from official import (  # noqa: E402
+    _DIT_COMPONENT,
     FPS,
     FRAMES,
     REFERENCE_IMAGE_SHORT_EDGE,
@@ -2369,6 +2371,89 @@ def arm_interface() -> None:
     )
 
 
+def tiny_dit() -> Any:
+    """The real Diffusers DiT at toy widths: one block, one refiner block, 64 wide."""
+    return MiniMaxH3Transformer3DModel(
+        num_attention_heads=2,
+        attention_head_dim=32,
+        hidden_size=64,
+        num_layers=1,
+        num_refiner_layers=1,
+        ffn_dim=128,
+        in_channels=4,
+        audio_in_channels=8,
+        text_dim=32,
+        freq_dim=16,
+        time_embed_hidden_dim=64,
+        time_embed_dim=32,
+        rope_freq_dim=4,
+    ).eval()
+
+
+def arm_warm() -> None:
+    """`Model.warm` (#708) runs one dry DiT forward per entrypoint and nothing else.
+
+    Executed, not asserted about: the real `warm` body, the real Diffusers forward at toy
+    widths, and the executor's own warm Context (`warm_with_fakes`). The dry step is what
+    pays the fused glue's first launches on a pod (h3a-015); an H3 warm case is NOT a
+    generation (h3a-018 #709).
+    """
+    print("\n== warm: one dry DiT forward per entrypoint ==")
+    pipe = meta_h3_pipeline()
+    packed: dict[str, list[tuple[int, int, int]]] = {}
+    for task, component in _DIT_COMPONENT.items():
+        dit = tiny_dit()
+        rows = packed.setdefault(task, [])
+
+        def hook(_module: Any, _args: Any, kwargs: Any, _out: Any, rows: Any = rows) -> None:
+            rows.append(
+                (
+                    int(kwargs["hidden_states"].shape[1]),
+                    int(kwargs["position_ids"].shape[0]),
+                    int(kwargs["timestep"].shape[0]),
+                )
+            )
+
+        dit.register_forward_hook(hook, with_kwargs=True)
+        pipe.components[component] = dit
+    model = package.H3Model.for_test(pipe=pipe)
+    ctx = warm_with_fakes(model)
+    check("warm ran without an attempt", ctx.request_id, "")
+    check(
+        "scopes: one per entrypoint DiT",
+        [call.method for call in model.harness.calls],
+        ["warm_fl2va", "warm_ref2va"],
+    )
+    check("both entrypoint DiTs leased", model.harness.components(), ("fl2va_dit", "ref2va_dit"))
+    for task, rows in packed.items():
+        check(f"{task} dry forward (video rows, packed rows, timesteps)", rows, [(8, 24, 2)])
+
+    # The AdaLN-pruned structure REFUSES a (timestep, modality) pair its plan never
+    # tabulated, so the dry step's noise levels are a contract, not a convenience: the
+    # same widths carrying the canonical plan's own table layout must accept it.
+    pruned = meta_h3_pipeline()
+    for task, component in _DIT_COMPONENT.items():
+        timesteps, block_keys = canonical_timestep_plan(cast(Any, task)).table_layout()
+        pruned.components[component] = AdaLNPrunedMiniMaxH3Transformer.from_official_config(
+            dict(tiny_dit().config), table_timesteps=timesteps, table_block_keys=block_keys
+        ).eval()
+    warm_with_fakes(package.H3Model.for_test(pipe=pruned))
+    observe("the AdaLN-pruned tables accept the dry step's timestep/modality pairs")
+    refusal(
+        "an unplanned timestep is the pruned table's refusal",
+        lambda: pruned.components["fl2va_dit"].time_proj.rows(torch.tensor([-1.0])),
+        "artifact_config",
+    )
+
+    cancelled = package.H3Model.for_test(pipe=meta_h3_pipeline())
+    try:
+        warm_with_fakes(cancelled, cancelled=True)
+    except Cancelled:
+        check("a cancelled fill refuses before any scope", cancelled.harness.calls, [])
+    else:
+        fail("a cancelled fill refuses", "warm returned")
+
+
 ARMS = {
     "producer-configs": arm_producer_configs,
     "producer-construction-order": arm_producer_construction_order,
@@ -2386,6 +2471,7 @@ ARMS = {
     "vae-tiles": arm_vae_tiles,
     "rgb8-handoff": arm_rgb8_handoff,
     "interface": arm_interface,
+    "warm": arm_warm,
 }
 
 

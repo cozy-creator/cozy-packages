@@ -86,6 +86,13 @@ _WEIGHTED_CONFIG_SECTIONS = {
 _DIT_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
 _DIFFUSERS_DIT = {"fl2va": "transformer", "ref2va": "transformer_ref"}
 _ASSETS = Path(__file__).resolve().parent
+#: The dry warm forward (`warm_dit`): rows per modality, and the modality tags the DiT
+#: reads off `token_tags`. Eight rows is the smallest count that still runs both patch
+#: projections, the refiner, the packed block stack and its glue at least once; the noise
+#: levels are the plan's own first evaluation, so an AdaLN-pruned table holds every
+#: (timestep, modality) pair the step gathers.
+_WARM_ROWS = 8
+_WARM_VIDEO_TAG, _WARM_TEXT_TAG, _WARM_AUDIO_TAG = 0, 1, 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -966,6 +973,51 @@ class OfficialH3Pipeline:
                 .sub_blocks["vae_encoder"]
                 .intermediate_outputs,
                 required=True,
+            )
+
+    def warm_dit(self, task: Task) -> None:
+        """One dry forward of this task's DiT over a packed sequence of every modality.
+
+        Not a generation (h3a-018 #709: an H3 warm case would be a 30-step request, and the
+        runtime calls `warm` once per construction fill). What a first request would
+        otherwise pay is shape-independent: the fused glue's first launches on the
+        substituted blocks (h3a-015 — the executor loaded their cubins before `warm`), the
+        rotary tables, and each projection's first GEMM plan. The rows are the plan's own
+        first evaluation — target video and text at the first video timestep, target audio
+        at the first audio timestep — which is the pairing an AdaLN-pruned table is built
+        from. Inputs are zeros off the DiT's own rotary buffer, so nothing names a device
+        and no generator moves; outputs are dropped.
+        """
+        dit = self.components[_DIT_COMPONENT[task]]
+        schedule = self._plans[task].schedules[0]
+        rows, tags = _WARM_ROWS, (_WARM_VIDEO_TAG, _WARM_TEXT_TAG, _WARM_AUDIO_TAG)
+        packed = rows * len(tags)
+        anchor = dit.rope.inv_freq
+        rowwise = {
+            "token_tags": [tag for tag in tags for _ in range(rows)],
+            # Video and text rows ride the video timestep (index 0), audio rows the audio
+            # timestep (index 1) — `timestep` below holds exactly those two values.
+            "timestep_indices": [0] * (2 * rows) + [1] * rows,
+            "video_indices": range(rows),
+            "text_indices": range(rows, 2 * rows),
+            "audio_indices": range(2 * rows, packed),
+        }
+        with torch.no_grad():
+            dit(
+                hidden_states=anchor.new_zeros(
+                    1, rows, dit.config.in_channels * math.prod(dit.config.patch_size)
+                ),
+                audio_hidden_states=anchor.new_zeros(1, rows, dit.config.audio_in_channels),
+                encoder_hidden_states=anchor.new_zeros(1, rows, dit.config.text_dim),
+                timestep=anchor.new_tensor(
+                    [schedule.video_timesteps[0], schedule.audio_timesteps[0]]
+                ),
+                position_ids=anchor.new_zeros(packed, 3, dtype=torch.int64),
+                return_dict=False,
+                **{
+                    name: anchor.new_tensor(list(value), dtype=torch.int64)
+                    for name, value in rowwise.items()
+                },
             )
 
     def denoise(

@@ -158,6 +158,27 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept
     def unload(self, loader: Loader) -> None:
         return None
 
+    def warm(self, ctx: Context) -> None:
+        """One dry DiT forward per entrypoint, before this construction serves anything.
+
+        Both DiTs, because one construction carries both entrypoints and a switch between
+        them must not pay a first call either (h3a-018). The runtime has already applied
+        the fused glue and loaded its cubins for this device by the time `warm` runs
+        (h3a-015, `fusion="accept"` above); the dry forward is what pays their first
+        launches, the rotary tables and the projections' first GEMM plans.
+        """
+        for warm_one in (self.warm_fl2va, self.warm_ref2va):
+            ctx.raise_if_cancelled()
+            warm_one()
+
+    @uses_components("fl2va_dit")
+    def warm_fl2va(self) -> None:
+        self.pipe.warm_dit("fl2va")
+
+    @uses_components("ref2va_dit")
+    def warm_ref2va(self) -> None:
+        self.pipe.warm_dit("ref2va")
+
     @uses_components("text_encoder")
     def condition_text(self, task: Task, state: Any, *, checks: NumericalChecks) -> None:
         checks.component("text_encoder", self.pipe.components["text_encoder"])
