@@ -8,6 +8,7 @@ stages weighted roots, and joins those two boundaries.
 from __future__ import annotations
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 from typing import Annotated, Any, Literal
 
@@ -399,7 +400,7 @@ def _finish(
     cancel()
     video_nonfinite_fraction = _nonfinite_fraction(torch, decoded)
     audio_nonfinite_fraction = _nonfinite_fraction(torch, waveform)
-    pixels = _rgb8(torch, decoded)
+    pixels, video_pixel_digest = _rgb8(torch, decoded)
     del decoded
     frames, height, width, channels = (int(value) for value in pixels.shape)
     facts = MediaFacts(
@@ -460,24 +461,40 @@ def _finish(
     )
     tel.log(
         "h3 source digests",
-        video_pixel_digest=hashlib.sha256(pixel_array).hexdigest(),
+        video_pixel_digest=video_pixel_digest,
         audio_sample_digest=hashlib.sha256(audio_array).hexdigest(),
         continuation_pixel_digest=hashlib.sha256(frame_bytes).hexdigest(),
     )
     return H3VideoOutput(video=video, continuation_frame=continuation, warnings=warnings)
 
 
-def _rgb8(torch: Any, decoded: Any) -> Any:
-    """Bounded float-decode to one CPU RGB8 buffer, before either encoder."""
+#: Frames per handoff chunk: 8 frames of 1344x768 are 100 MB of fp32 source and 25 MB of
+#: RGB8, so one chunk's device temporaries stay small and the hash of one chunk (~25 ms)
+#: hides under the quantize-and-copy of the next.
+_RGB8_CHUNK_FRAMES = 8
+
+
+def _rgb8(torch: Any, decoded: Any) -> tuple[Any, str]:
+    """Bounded float-decode to ONE CPU RGB8 buffer, digested as it lands (h3a-017).
+
+    Each chunk is quantized on the device, copied straight into its slice of the host
+    buffer (no per-chunk host temporary), and handed to one hashing thread while the next
+    chunk copies. The chunks are consecutive slices of a contiguous buffer, so the running
+    sha256 is byte-for-byte the digest of the finished buffer — the `h3 source digests`
+    identity — computed under the copies instead of after them.
+    """
     source = decoded[0]
     frames, _, height, width = (int(value) for value in source.shape)
     pixels = torch.empty((frames, height, width, 3), dtype=torch.uint8, device="cpu")
-    for start in range(0, frames, 8):
-        chunk = source[start : start + 8]
-        chunk.clamp_(0, 1).mul_(255).round_()
-        rgb = chunk.to(torch.uint8).permute(0, 2, 3, 1).contiguous().cpu()
-        pixels[start : start + len(rgb)].copy_(rgb)
-    return pixels
+    digest = hashlib.sha256()
+    with ThreadPoolExecutor(max_workers=1) as hasher:
+        for start in range(0, frames, _RGB8_CHUNK_FRAMES):
+            chunk = source[start : start + _RGB8_CHUNK_FRAMES]
+            chunk.clamp_(0, 1).mul_(255).round_()
+            landed = pixels[start : start + len(chunk)]
+            landed.copy_(chunk.to(torch.uint8).permute(0, 2, 3, 1).contiguous())
+            hasher.submit(digest.update, landed.numpy())
+    return pixels, digest.hexdigest()
 
 
 def _nonfinite_fraction(torch: Any, value: Any) -> float:
@@ -526,9 +543,7 @@ def first_last_frame_to_video(
     with tel.stage("denoise", overall_range=(0.15, 0.85)):
         schedule = model.sample_fl2va(
             state,
-            on_step=tel.step_callback(
-                payload.steps, stage="denoise", overall_range=(0.15, 0.85)
-            ),
+            on_step=tel.step_callback(payload.steps, stage="denoise", overall_range=(0.15, 0.85)),
             cancel=ctx.raise_if_cancelled,
             checks=checks,
         )
@@ -580,9 +595,7 @@ def reference_media_to_video(
     with tel.stage("denoise", overall_range=(0.15, 0.85)):
         schedule = model.sample_ref2va(
             state,
-            on_step=tel.step_callback(
-                payload.steps, stage="denoise", overall_range=(0.15, 0.85)
-            ),
+            on_step=tel.step_callback(payload.steps, stage="denoise", overall_range=(0.15, 0.85)),
             cancel=ctx.raise_if_cancelled,
             checks=checks,
         )

@@ -168,7 +168,7 @@ def roundtrip(
     assert tuple(video.shape) == (1, payload.frames, 3, 768, 1344)
     assert torch.isfinite(video).all()
     ctx.raise_if_cancelled()
-    rgb = _rgb8(torch, video)
+    rgb, _ = _rgb8(torch, video)
     facts = output_integrity(rgb.numpy())
     tel.log("VAE diagnostic only", frames=payload.frames, grid_peak_ratio=facts.grid_peak_ratio)
     return Result(
