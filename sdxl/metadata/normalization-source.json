@@ -1,0 +1,49 @@
+{
+  "source": {
+    "version": 128078,
+    "file": 92696,
+    "full_object_bytes": 6938078334,
+    "header_bytes": 402436,
+    "downloaded_bytes": 402444,
+    "sha256_header_prefix": "589687d06e1891c440d7c73aa793acfafb1ec21f7ed17293b1a77913a210f78c",
+    "tensor_payload_downloaded_bytes": 0,
+    "tensors": 2515
+  },
+  "configs": [
+    {
+      "member": "unet/config.json",
+      "url": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/462165984030d82259a11f4367a4eed129e94a7b/unet/config.json",
+      "sha256": "30ebc70750223e59006f7f2b4e1e6c102570aa19a9c4ae3e1fbe7591332dbae6",
+      "bytes": 1680
+    },
+    {
+      "member": "vae/config.json",
+      "url": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/462165984030d82259a11f4367a4eed129e94a7b/vae/config.json",
+      "sha256": "0b331c8ac22ded5f9997a144a575c1d113d6169aff262c353f39015bd24a6264",
+      "bytes": 642
+    },
+    {
+      "member": "text_encoder/config.json",
+      "url": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/462165984030d82259a11f4367a4eed129e94a7b/text_encoder/config.json",
+      "sha256": "39b8b2e4b1949e36969caa425b6c81c68bace99198dd9078ce05d16ad401fe7f",
+      "bytes": 565
+    },
+    {
+      "member": "text_encoder_2/config.json",
+      "url": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/462165984030d82259a11f4367a4eed129e94a7b/text_encoder_2/config.json",
+      "sha256": "a892d1c3a69a7e9247a24de2bc1d5891e3109a54696e53be20093af671072c34",
+      "bytes": 575
+    },
+    {
+      "member": "scheduler/scheduler_config.json",
+      "url": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/462165984030d82259a11f4367a4eed129e94a7b/scheduler/scheduler_config.json",
+      "sha256": "af3e45a949aff8b8341ab8b811429ec03fee857a700a1d9477363e4fff9666e2",
+      "bytes": 479
+    }
+  ],
+  "source_sha256": "e6bb9ea85bbf7bf6478a7c6d18b71246f22e95d41bcdd80ed40aa212c33cfeff",
+  "diffusers": "0.40.0",
+  "transformers": "5.16.1",
+  "constructor": "sdxl.SdxlPipeline",
+  "destinations": 2641
+}

@@ -63,6 +63,39 @@ cozy package bind paul/minimax-h3 ref2va.models.model paul/minimax-h3@1.0.0-rc.2
   There is no curator stamp or `profile=` prefix.
 - A request overrides one slot for that call with `model.<param>=<org/model@release>`.
 
+## SDXL source normalization
+
+`sdxl.normalization.normalize` turns the reviewed unquantized SDXL single-file
+component layout into the current `SdxlPipeline` constructor input. It is a memoized
+managed operation over one granted `ModelArtifact`; the script remains ordinary Python:
+
+```python
+from cozy_runtime.author.sources import download_civitai, convert_cozytensors
+from sdxl.normalization import normalize
+from sdxl.operations import quantize
+
+async def main(ctx):
+    raw = await download_civitai(128078, file="civitai/files/92696")
+    split = await convert_cozytensors(
+        raw, profile="civitai/101055/128078/single-file-fp16"
+    )
+    original = await normalize(source=split)
+    return await quantize(source=original, encoding="fp8-rowwise/1")
+```
+
+The Civitai intake needs TensorFS 0.3.23 through the corresponding Runtime release.
+The normalization itself uses existing Runtime weights capabilities. Family-owned
+mapping and config data come from the pinned Diffusers 0.40 / Transformers 5.16 constructor.
+Its 2,641 destinations preserve constructor order: 2,440 roles inherit by reference;
+200 slices/reshapes and one projection transpose rewrite 322,289,664 bytes in bounded
+roles. The operation never constructs the full model or reads a source carrier path.
+Unknown keys, shapes, encodings or nonstandard CLIP position IDs refuse.
+
+`scripts/sdxl-normalization-proof.py` checks the complete mapping on meta and runs a
+small real native source through process exit after a checkpoint, resume and replay.
+This establishes layout/custody/recovery, not full-checkpoint inference or quality.
+The se-042 assessment consumer and paid failure/edit test remain separate gates.
+
 ## Client quantization operations
 
 The family libraries export `sdxl.operations.quantize`, `anima.operations.quantize`,
