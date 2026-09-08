@@ -12,6 +12,8 @@ from __future__ import annotations
 import hashlib
 from typing import Any, NamedTuple
 
+import torch
+
 
 class _Sample(NamedTuple):
     key: str
@@ -180,7 +182,6 @@ def resident_hashes(component: str, module: Any) -> tuple[dict[str, str], dict[s
     Q/K/V subjects select only the first128rows after checking the full shape.
     Unknown component names raise ValueError as a diagnostic programming error.
     """
-    import torch
 
     if component not in _SAMPLES:
         raise ValueError(f"unsupported resident sample component: {component}")
