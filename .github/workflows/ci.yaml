@@ -176,6 +176,10 @@ jobs:
 
       # `Model.warm` is only observable by RUNNING it: the package's own constructors at
       # toy widths, under the author harness the executor's warm path is built from.
+      - name: SDXL normalization and native process restart
+        if: matrix.package == 'sdxl'
+        run: sdxl/.venv/bin/python scripts/sdxl-normalization-proof.py
+
       - name: Warm arms
         if: matrix.package == 'anima' || matrix.package == 'sdxl'
         run: ${{ matrix.package }}/.venv/bin/python scripts/warm-conform.py ${{ matrix.package }}

@@ -163,6 +163,18 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    ("scripts/sdxl-normalization-proof.py", "cozy_runtime.author._model"): (
+        "the normalization driver constructs the exact-checkpoint source Runtime admits; "
+        "for_test permits test:// identities only. Retire with a public native job fixture."
+    ),
+    ("scripts/sdxl-normalization-proof.py", "cozy_runtime.internal.weights_sink"): (
+        "the normalization driver proves custody and process restart through Runtime's "
+        "native weights host. Retire when the public fake service can construct this host."
+    ),
+    ("scripts/sdxl_normalization_plan.py", "cozy_runtime.author._loader"): (
+        "the plan proof uses Runtime's exact constructor census to compare tensor order; "
+        "retire when that conformance census has a public driver surface."
+    ),
     ("scripts/h3-adaln-binding-proof.py", "cozy_runtime.author._model"): (
         "Native/broker qualification driver exercises the real Runtime boundary; "
         "retire when a public native invocation harness owns this fixture seam."

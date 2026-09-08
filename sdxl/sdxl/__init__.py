@@ -675,9 +675,15 @@ def quantize(
 
 
 # The managed export has its own derive-only input; legacy job schemas stay unchanged.
-from . import operations  # noqa: E402
+from . import normalization, operations  # noqa: E402
 
 app.job(
     operations.quantize, name="quantize-artifact",
     weights=(WeightsOutput("model", max_new_bytes=_LANE_BYTES),),
+)
+
+
+app.job(
+    normalization.normalize, name="normalize",
+    weights=(WeightsOutput("model", max_new_bytes=normalization.MAX_NEW_BYTES),),
 )
