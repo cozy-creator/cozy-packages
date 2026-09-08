@@ -216,6 +216,17 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "host and TensorFS writer, including interrupted resume and exact receipt replay. "
         "Retire when the public fake weights service can construct this native host."
     ),
+    ("scripts/h3-lane-store-proof.py", "cozy_runtime.author._model"): (
+        "the lane driver constructs the exact-checkpoint job source record Runtime builds; "
+        "for_test intentionally permits test:// identities only, and this proof needs the "
+        "real minted manifest. Retire when a public native job fixture factory owns it."
+    ),
+    ("scripts/h3-lane-store-proof.py", "cozy_runtime.internal.weights_sink"): (
+        "the lane driver runs per-component cast/encode treatments through the real "
+        "Runtime weights host and TensorFS writer, and reads the committed headers back to "
+        "prove an untreated component keeps the SOURCE's exact ObjectRefs in every lane. "
+        "Retire when the public fake weights service can construct this native host."
+    ),
     ("scripts/h3-conform.py", "cozy_runtime.internal.residency"): (
         "the warm arms raise Runtime's OWN `ResidencyRefusal` — the class, the typed "
         "`device_shortfall` code and the verbatim detail an H100 produced — so the "

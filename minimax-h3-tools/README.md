@@ -1,12 +1,12 @@
 # tensorhub/minimax-h3-tools
 
 This is the official H3 producer package. Its stable callable reference is
-`tensorhub/minimax-h3-tools@v2/four-lane`.
+`tensorhub/minimax-h3-tools@v2/lanes`.
 
 Publisher ownership is not project metadata. Creator derives it from the current authenticated
 Tensorhub account; the official reference above assumes the `tensorhub` account.
 
-The ordinary `four-lane` job consumes two reviewed TensorFS source profiles from the same
+The ordinary `lanes` job consumes two reviewed TensorFS source profiles from the same
 pinned MiniMaxAI/MiniMax-H3 provider download:
 
 - `dits` → `hf/minimax-h3/native-dual-bf16/1`: the native FL2VA and Ref2VA
@@ -22,14 +22,46 @@ modulation and quantized replacement tensors remain mandatory, and TensorFS stil
 checks the complete destination order. This does not accept a pruned or quantized
 checkpoint as a substitute for the full BF16 source.
 
-One attempt emits exactly four dual-task checkpoints:
+## Lanes
 
-- `bf16-full`
-- `bf16-adaln-pruned`
-- `fp8-adaln-pruned`
-- `mxfp8-adaln-pruned`
+A lane is a NAME plus, per component, what this producer does to it. The whole catalogue
+lives in `h3_tables/lanes.py`; the request names which of its rows this attempt produces
+and defaults to all of them. The recipes are code, never a request field: output slot names
+are decorator-time facts, and every lane mints a MiniMax H3 Model Derivative under §I.11(i)
+of the community licence, which is a reviewed act rather than a caller choice.
 
-The standalone `assemble_full` job remains available for direct use; `four-lane` does not
+| lane | modulation | per-component treatment |
+|---|---|---|
+| `bf16-full` | full | none — every component inherited |
+| `bf16-adaln-pruned` | AdaLN-pruned | none |
+| `fp8-adaln-pruned` | AdaLN-pruned | both DiTs `fp8-rowwise/1` |
+| `mxfp8-adaln-pruned` | AdaLN-pruned | both DiTs `mxfp8/1` |
+
+A component a lane does not name is **inherited by reference**: TensorFS copies its tensor
+metadata and ObjectRefs unchanged through the zero-read/zero-hash inherit gate, so the
+58.2 GiB conditioner/VAE trio is the same stored objects in every lane above. Naming a
+component costs its bytes once per lane that names it, which is why the treatment map is
+sparse and must stay sparse.
+
+A treatment is a dtype `cast` over the component's float32 rows, an `encode` over its
+block-aligned rank-2 float weights, or both; `keep` names exact keys the encoding must not
+select. Adding a lane is one catalogue row, one `WeightsOutput` line and one `LaneName`
+member — an import-time check proves the three agree, and refuses a lane that treats the
+audio VAE, that uses an encoding with no rung on the cards we serve, or whose declared byte
+ceiling disagrees with its treatments.
+
+Two components are refused outright. **`mxfp8/1` on any new lane**: `RowwiseNativeLeaf`
+predicates `cuda.sm89+`, but `MicroScaledNativeLeaf` predicates the EQUALITY `cuda.sm120`,
+so mxfp8 executes on no H100/H200/B200 and degrades to dequant plus a bf16 GEMM;
+`mxfp8-adaln-pruned` is grandfathered by name and nothing else may join it. **The
+`audio_vae`, by name**: 637 of its 1,087 rows are rank-3 — including the BigVGAN decoder's
+344 `weight_norm` `weight_g`/`weight_v` parameters — and the rank-2 encoding cannot
+represent any of them; the only six rank-2 float weights the component carries are the
+`pre_block` ENCODER attention/MLP linears — so a shape rule does not refuse
+the component, it silently quantizes the audio conditioning path and leaves the BigVGAN
+decoder untouched.
+
+The standalone `assemble_full` job remains available for direct use; `lanes` does not
 invoke or nest it and owns the same transformations directly inside one weight-production
 attempt. The former per-task table jobs and `assemble_dual` are gone: `retable` replaces
 their table pass over an existing pruned checkpoint, and two jobs with byte-identical
@@ -80,9 +112,22 @@ quantization callables. They are not Creator-supplied assets. Run
 `scripts/order-proof.py` to recheck their closed census and
 `../../proofs/producer-callable.py` to validate the generated graph-free descriptor.
 
-The four-lane result preserves the Runtime quantizer's existing weight measurements in
-`weight_fidelity_this_run`, a list of rows naming output slot, component and stats: worst per-tensor relative
-Frobenius error, saturated element count, measured tensor count and byte counters. Each
+Two proofs cover the lane catalogue, neither needing a GPU, a rental or one weight byte.
+`scripts/lane-proof.py` rebuilds the exact five-component source structure from this
+package's own 638-row contract and the banked upstream safetensors HEADERS, then checks
+every lane's declaration, the selection each treatment resolves to on the real components,
+and every refusal. `../../scripts/h3-lane-store-proof.py` mints a tiny synthetic source in
+a real TensorFS store, derives three lanes through the real Runtime `WeightsSink`, and
+reads the committed headers back to prove that an untreated component keeps the source's
+exact stored objects in every lane — the property that decides whether a per-component lane
+is affordable at all.
+
+The result preserves the Runtime quantizer's existing weight measurements in
+`weight_fidelity_this_run`, a list of rows naming output slot, component, the treatment that
+produced them and stats: worst per-tensor relative Frobenius error for the encoding and,
+separately, for the cast — they measure different carriers against different bounds and a
+maximum over both would hide which one moved — plus saturated element count, measured tensor
+count and byte counters. Each
 completed component also logs those same values before later stages run. Replayed outputs
 are absent from this run's measurements; absence never means zero error. BF16 inheritance
 and AdaLN table production do not claim quantizer measurements. Activation fidelity,

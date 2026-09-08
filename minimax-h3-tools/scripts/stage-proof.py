@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise actual four-lane sequencing with interrupted computation and receipt replay.
+"""Exercise actual lane sequencing with interrupted computation and receipt replay.
 
 This is a CPU orchestration proof. Recording collaborators replace expensive table
 and quantization work and native storage; no GPU, payload custody, or numerical claim.
@@ -18,7 +18,11 @@ from cozy_runtime.author import (
     WeightsSourcePart,
     WeightsSourceTensor,
 )
-from cozy_runtime.derive.quantization import QuantizationStats
+from cozy_runtime.derive.quantization import (
+    QuantizationStats,
+    h3_quantization_plan,
+    prepare_quantization,
+)
 from h3_tables import job
 
 
@@ -60,16 +64,32 @@ class Recorder:
         self.fail_at = ""
 
     def structure(self, _: Any) -> WeightsSource:
-        return WeightsSource(
-            (),
-            tuple(
-                WeightsSourceTensor(
-                    component, key, "f32", (1,), (WeightsSourcePart("value", "f32", (1,)),)
-                )
-                for component, target in job._full_targets().items()
-                for key in target.drop
-            ),
+        """Source-only rows plus the reviewed DiT weights every encoding lane selects.
+
+        A lane resolves each treatment against the granted structure before it opens a
+        transaction, so a recorder that offers only droppable rows would refuse rather than
+        sequence. These are real geometry values and carry no byte custody claim.
+        """
+        plan = prepare_quantization(h3_quantization_plan())
+        rows = [
+            WeightsSourceTensor(
+                component, key, "f32", (1,), (WeightsSourcePart("value", "f32", (1,)),)
+            )
+            for component, target in job._full_targets().items()
+            for key in target.drop
+        ]
+        rows.extend(
+            WeightsSourceTensor(
+                component,
+                tensor.key,
+                tensor.logical_dtype,
+                tensor.shape,
+                (WeightsSourcePart("value", tensor.logical_dtype, tensor.shape),),
+            )
+            for component in job.TARGET_COMPONENT.values()
+            for tensor in plan.tensors
         )
+        return WeightsSource((), tuple(rows))
 
     def open(self, slot: str, **_: Any) -> Transaction:
         return Transaction(self, slot)
@@ -128,15 +148,13 @@ def invoke(recorder: Recorder, fail_at: str = "") -> Any:
     original_tf32 = job.torch.backends.cuda.matmul.allow_tf32
     original_precision = job.torch.get_float32_matmul_precision()
     try:
-        # Explicit computation seams only; all stage control stays in four_lane.
+        # Explicit computation seams only; all stage control stays in the lanes job.
         module: Any = job
         module._write_tables = recorder.tables
         module.quantize_component_into = recorder.quantize
         module.torch.cuda.is_available = lambda: True
         source = job.H3FullTransformer.for_test()
-        return module.four_lane(
-            None, job.ProductionRequest(), source, source, recorder, Telemetry()
-        )
+        return module.lanes(None, job.LaneRequest(), source, source, recorder, Telemetry())
     finally:
         job._write_tables = original_tables
         job.quantize_component_into = original_quantize
@@ -146,7 +164,7 @@ def invoke(recorder: Recorder, fail_at: str = "") -> Any:
 
 
 def main() -> None:
-    slots = ("bf16-full", "bf16-adaln-pruned", "fp8-adaln-pruned", "mxfp8-adaln-pruned")
+    slots = tuple(job.LANES)
     for failure, retained in (
         ("tables:ref2va", slots[:1]),
         ("quantize:fp8-adaln-pruned", slots[:2]),
@@ -184,7 +202,7 @@ def main() -> None:
         assert result.source_bytes_read_this_run == result.quantized_keys_this_run == 0
         assert recorder.events == []
     print(
-        "H3 stage commits PASS table/FP8/MXFP8 interruption, "
+        f"H3 stage commits PASS lanes={len(slots)} table/FP8/MXFP8 interruption, "
         "completed receipt replay, full no-work replay"
     )
 
