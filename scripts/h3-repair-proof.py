@@ -24,6 +24,8 @@ sys.path.insert(0, str(ROOT / "examples" / "client-scripts"))
 import h3_checkpoint_repair as repair  # noqa: E402
 
 ENCODINGS = repair.ENCODINGS
+# Guard arms deliberately have no services: invalid roots must refuse before I/O.
+UNAVAILABLE: Any = None
 
 
 class Checkpoint(Model[object]):
@@ -103,7 +105,7 @@ def exercise(root: Path, variant: str) -> None:
     # Ordinary new roots are refused; explicitly admit this tiny fixture only in
     # this diagnostic process. Production keeps its four immutable source IDs.
     try:
-        repair.repair(model, None, None, ENCODINGS)
+        repair.repair(model, UNAVAILABLE, UNAVAILABLE, ENCODINGS)
     except ValueError:
         pass
     else:
@@ -209,7 +211,7 @@ def exercise(root: Path, variant: str) -> None:
     store.derived_abandon(probe_id)
     # Corrected output cannot enter the migration and accidentally undo the fix.
     try:
-        repair.repair(_derive_model(Checkpoint, manifest), None, None, ENCODINGS)
+        repair.repair(_derive_model(Checkpoint, manifest), UNAVAILABLE, UNAVAILABLE, ENCODINGS)
     except ValueError:
         pass
     else:
