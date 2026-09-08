@@ -155,9 +155,7 @@ PUBLIC_RUNTIME_ROOTS = (["cozy_runtime", "author"], ["cozy_runtime", "derive"])
 
 def public_runtime_surface(module: str) -> bool:
     parts = module.split(".")
-    return parts[:2] in PUBLIC_RUNTIME_ROOTS and not any(
-        part.startswith("_") for part in parts[2:]
-    )
+    return parts[:2] in PUBLIC_RUNTIME_ROOTS and not any(part.startswith("_") for part in parts[2:])
 
 
 #: Every private Runtime module ONE named driver may import, with the reason it is not a
@@ -332,9 +330,7 @@ IDENTIFIERS = (
 #: own committed assets and expected outputs — never a model-selection binding, which
 #: lives on the hub. Scoped to the checkpoint-digest shape only; every other
 #: identifier rule applies to these files unchanged.
-DIGEST_PINNED_PREFIXES = (
-    "minimax-h3-tools/src/h3_tables/",
-)
+DIGEST_PINNED_PREFIXES = ("minimax-h3-tools/src/h3_tables/",)
 
 
 def fence_identifiers() -> Fence:
@@ -461,8 +457,24 @@ def fence_no_choreography() -> Fence:
     weights is exactly the thing the port was supposed to remove."""
     bad: list[str] = []
     for path in package_modules():
-        code = _strip_literals(path.read_text())
+        source = path.read_text()
+        code = _strip_literals(source)
+        # Encoding returned latent samples is an output operation, not a model
+        # checkpoint reader. Permit only this explicit write-only import; load,
+        # safe_open and module imports still trigger the source-format fence.
+        serializers = {
+            node.lineno
+            for node in ast.parse(source).body
+            if isinstance(node, ast.ImportFrom)
+            and node.module == "safetensors.torch"
+            and node.names
+            and all(alias.name == "save" for alias in node.names)
+        }
         for line_no, line in enumerate(code.splitlines(), 1):
+            if line_no in serializers:
+                # Remove only the permitted import token, not other operations on
+                # the same line (for example a semicolon followed by torch.load).
+                line = line.replace("safetensors.torch", "", 1)
             for pattern, what in CHOREOGRAPHY:
                 if pattern.search(line):
                     bad.append(
@@ -649,9 +661,7 @@ def _anima_field_default(field: str, expected: str) -> list[str]:
         value = _anima_literal(tree, item.value)
         if value == expected:
             return []
-        return [
-            f"anima GenerateInput.{field} default is {value!r}, expected {expected!r}"
-        ]
+        return [f"anima GenerateInput.{field} default is {value!r}, expected {expected!r}"]
     return [f"anima GenerateInput declares no {field} field"]
 
 
@@ -674,9 +684,11 @@ def _anima_number_default(field: str, expected: str) -> list[str]:
             and item.target.id == field
         ):
             got = ast.unparse(item.value) if item.value is not None else "<none>"
-            return [] if got == expected else [
-                f"anima GenerateInput.{field} default is {got}, expected {expected}"
-            ]
+            return (
+                []
+                if got == expected
+                else [f"anima GenerateInput.{field} default is {got}, expected {expected}"]
+            )
     return [f"anima GenerateInput declares no {field} field"]
 
 
@@ -718,9 +730,7 @@ def _anima_literal(tree: ast.Module, node: ast.expr | None) -> str | None:
         for item in tree.body:
             if (
                 isinstance(item, ast.Assign)
-                and any(
-                    isinstance(t, ast.Name) and t.id == node.id for t in item.targets
-                )
+                and any(isinstance(t, ast.Name) and t.id == node.id for t in item.targets)
                 and isinstance(item.value, ast.Constant)
                 and isinstance(item.value.value, str)
             ):
@@ -817,7 +827,8 @@ def _anima_progress_ladder() -> list[str]:
     measured = {
         phases.get(keyword.value.value.id, ("", 0.0, 0.0))[0]
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
         and node.func.attr == "step_callback"
         and any(k.arg == "overall_range" for k in node.keywords)
         for keyword in node.keywords
@@ -886,7 +897,7 @@ def fence_publication_metadata() -> Fence:
         expected = application.get("object") if isinstance(application, dict) else None
         if not isinstance(applications, dict) or list(applications.values()) != [expected]:
             bad.append(
-                f"{rel(path)}: [project.entry-points.\"cozy.application\"] must expose "
+                f'{rel(path)}: [project.entry-points."cozy.application"] must expose '
                 f"exactly the package.toml application {expected!r}"
             )
     return bad, f"{len(projects())} packages declare one catalog and installed identity"

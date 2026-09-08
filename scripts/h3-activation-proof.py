@@ -17,7 +17,12 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "minimax-h3"))
+from safetensors.torch import load, save  # noqa: E402
+
+import h3  # noqa: E402
+import h3_diagnostics  # noqa: E402
 from h3_activation_trace import ACTIVE_TRACE, ActivationTrace, FirstStepCaptured  # noqa: E402
+from official import OfficialH3Pipeline  # noqa: E402
 
 
 class Block(torch.nn.Module):
@@ -180,14 +185,8 @@ def main() -> None:
     failing.fail = False
 
     # Exercise the diagnostic override and unchanged H3 parent method.
-    import vae_diagnostic
-    from safetensors.torch import load, save
-
-    import h3
-    from official import OfficialH3Pipeline
-
-    assert vae_diagnostic.reference_media_to_video is h3.reference_media_to_video
-    assert vae_diagnostic.TraceModel.sample_ref2va is h3.H3Model.sample_ref2va
+    assert h3_diagnostics.reference_media_to_video is h3.reference_media_to_video
+    assert h3_diagnostics.TraceModel.sample_ref2va is h3.H3Model.sample_ref2va
     seen: list[int] = []
 
     def denoise(
@@ -212,9 +211,9 @@ def main() -> None:
         finally:
             OfficialH3Pipeline.denoise = original  # type: ignore[method-assign]
 
-    pipe = object.__new__(vae_diagnostic.TracePipeline)
+    pipe = object.__new__(h3_diagnostics.TracePipeline)
     pipe.components = {"ref2va_dit": model}
-    observed_model: Any = vae_diagnostic.TraceModel.for_test(pipe=pipe)
+    observed_model: Any = h3_diagnostics.TraceModel.for_test(pipe=pipe)
     checks = SimpleNamespace(component=lambda *_: None, forwards=lambda *_: nullcontext())
     full = ActivationTrace(evaluations=3, first_step=False)
     with synthetic_steps(), full.active():
