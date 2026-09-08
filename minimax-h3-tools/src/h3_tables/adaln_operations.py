@@ -226,7 +226,18 @@ async def select_adaln_weights(
                 code="adaln_generating_weights",
             )
         _validate_table_rows(weights.structure(source), task, bank=False)
-        return Selection(None, True)
+        structure = weights.structure(source)
+        ready = weights.derive(
+            "model",
+            sources={"source": source},
+            targets={
+                component: WeightsTarget("source", component)
+                for component in dict.fromkeys(tensor.component for tensor in structure.tensors)
+            },
+            configs={"model": WeightsConfig("source", "model")},
+            order=current_order(_asset("whole-order.json")).rows,
+        ).artifact
+        return Selection(ready, True)
     return Selection(_project(weights, source, task, "model"), False)
 
 
@@ -422,18 +433,22 @@ def _require_bank_binding(
         )
 
 
-@invocable(memoize=True)
-async def apply_adaln(
+def _apply_adaln(
     ctx: Context,
     *,
     source: H3FullTransformer,
     fl2va: H3FullTransformer,
     ref2va: H3FullTransformer,
     weights: WeightsSink,
+    require_pruned: bool,
 ) -> ModelArtifact:
     ctx.raise_if_cancelled()
     structure = weights.structure(source)
     pruned = _body_kind(structure)
+    if pruned != require_pruned:
+        raise UnsupportedInput(
+            "AdaLN attachment source has a different pruning state", code="adaln_source"
+        )
     _validate_body_config(weights, source, pruned)
     bindings = (
         _bindings(weights, source)
@@ -484,3 +499,31 @@ async def apply_adaln(
         configs=configs,
         order=current_order(_asset("whole-order.json")).rows,
     ).artifact
+
+
+@invocable(memoize=True)
+async def apply_adaln(
+    ctx: Context,
+    *,
+    source: H3FullTransformer,
+    fl2va: H3FullTransformer,
+    ref2va: H3FullTransformer,
+    weights: WeightsSink,
+) -> ModelArtifact:
+    return _apply_adaln(
+        ctx, source=source, fl2va=fl2va, ref2va=ref2va, weights=weights, require_pruned=False
+    )
+
+
+@invocable(memoize=True)
+async def retable_adaln(
+    ctx: Context,
+    *,
+    source: H3FullTransformer,
+    fl2va: H3FullTransformer,
+    ref2va: H3FullTransformer,
+    weights: WeightsSink,
+) -> ModelArtifact:
+    return _apply_adaln(
+        ctx, source=source, fl2va=fl2va, ref2va=ref2va, weights=weights, require_pruned=True
+    )
