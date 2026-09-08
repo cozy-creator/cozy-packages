@@ -37,6 +37,10 @@ def main() -> None:
     surfaces = describe(job.app)
     parent = next(surface for surface in surfaces if surface.name == "precompute-adaln")
     assert not parent.model_bindings and not parent.weights_outputs
+    declared = {surface.name: len(surface.weights_outputs) for surface in surfaces}
+    assert declared["select-adaln-weights"] == 1
+    assert declared["apply-adaln"] == 3
+    assert declared["retable-adaln"] == 1
     discovered = Discovered(
         job.app, "h3_tables.job:app", Path(job.__file__).parents[2], job, surfaces, {}
     )

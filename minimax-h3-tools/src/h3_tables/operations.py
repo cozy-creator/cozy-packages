@@ -148,6 +148,7 @@ async def precompute_adaln(
         _plan,
         apply_adaln,
         compute_adaln_tables,
+        retable_adaln,
         select_adaln_weights,
     )
 
@@ -155,7 +156,10 @@ async def precompute_adaln(
     # parameters with ModelArtifact. These remain the same admitted call proxies.
     select = cast(Callable[..., Awaitable[Selection]], select_adaln_weights)
     compute = cast(Callable[..., Awaitable[ModelArtifact]], compute_adaln_tables)
-    attach = cast(Callable[..., Awaitable[ModelArtifact]], apply_adaln)
+    attach = cast(
+        Callable[..., Awaitable[ModelArtifact]],
+        retable_adaln if generating_model is not None else apply_adaln,
+    )
 
     ctx.raise_if_cancelled()
     if (
