@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import importlib
 import io
 import json
 import struct
@@ -14,17 +13,20 @@ from pathlib import Path
 from typing import Any
 
 import tensorfs
-from cozy_runtime.author import WeightsSink
+from cozy_runtime.author import Model, WeightsSink
 from cozy_runtime.author._model import _derive_model
 from cozy_runtime.author.fakes import fake_attempt, fake_telemetry
 from cozy_runtime.internal.weights_sink import WeightsTransactionHost
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "checkpoint-repair" / "src"))
-import checkpoint_repair.job as job  # noqa: E402
-
-repair: Any = importlib.import_module("checkpoint_repair.repair")
+sys.path.insert(0, str(ROOT / "examples" / "client-scripts"))
+import h3_checkpoint_repair as repair  # noqa: E402
 ENCODINGS = repair.ENCODINGS
+
+
+class Checkpoint(Model[object]):
+    def load(self, loader: Any) -> None:
+        del loader
 
 
 def fixture(
@@ -95,7 +97,7 @@ def exercise(root: Path, variant: str) -> None:
     store = tensorfs.Store.ensure(root)
     source, length, values, source_order = fixture(store, variant)
     original = tensorfs.parse_header(bytes(store.manifest(source)["header"]))
-    model = _derive_model(job.Checkpoint, source)
+    model = _derive_model(Checkpoint, source)
     # Ordinary new roots are refused; explicitly admit this tiny fixture only in
     # this diagnostic process. Production keeps its four immutable source IDs.
     try:
@@ -108,6 +110,16 @@ def exercise(root: Path, variant: str) -> None:
     checkpoints: list[Any] = []
 
     def invoke(epoch: int, interrupt: bool = False) -> Any:
+        receipts: list[Any] = []
+        reads: list[int] = []
+        read_swapped = repair._read_swapped
+
+        def observed_read(
+            transaction: Any, component: str, key: str, role: str, length: int
+        ) -> bytearray:
+            reads.append(length)
+            return read_swapped(transaction, component, key, role, length)
+
         def checkpoint(row: Any) -> None:
             checkpoints.append(row)
             if interrupt:
@@ -123,6 +135,7 @@ def exercise(root: Path, variant: str) -> None:
             allowed_sources={source: length},
             output_bounds={"checkpoint": repair.MAX_NEW_BYTES},
             record_checkpoint=checkpoint,
+            record_receipt=receipts.append,
         )
         structure_order = [(row.component, row.key) for row in host.structure(source).tensors]
         assert structure_order == source_order, "source structure changed construction order"
@@ -134,8 +147,12 @@ def exercise(root: Path, variant: str) -> None:
             host.open,
             host.structure,
         )
-        result = job.h3_swiglu(job.Request(), model, sink, fake_telemetry(attempt))
-        return result
+        repair._read_swapped = observed_read
+        try:
+            result = repair.main(source=model, artifacts=sink, tel=fake_telemetry(attempt))
+        finally:
+            repair._read_swapped = read_swapped
+        return result, receipts[-1], reads
 
     try:
         invoke(2, interrupt=True)
@@ -144,12 +161,13 @@ def exercise(root: Path, variant: str) -> None:
     else:
         raise AssertionError("native checkpoint interruption did not fire")
     assert len(checkpoints) == 1
-    resumed = invoke(3)
-    assert resumed.repaired_tensors == 104 and resumed.replayed_parts > 0
-    replayed = invoke(4)
-    assert replayed.replayed and replayed.source_bytes_read_this_run == 0
-    assert replayed.tensorfs_receipt_digest == resumed.tensorfs_receipt_digest
-    facts = store.derived_lookup(resumed.weights_transaction_id)["receipt"]
+    resumed, resumed_receipt, resumed_reads = invoke(3)
+    changed_roles = sum(key in repair.FC1_KEYS for _, key, _ in values)
+    assert 0 < len(resumed_reads) < changed_roles, "completed parts were read again"
+    replayed, replayed_receipt, replayed_reads = invoke(4)
+    assert replayed_receipt.replayed and not replayed_reads
+    assert replayed == resumed
+    facts = store.derived_lookup(resumed_receipt.weights_transaction_id)["receipt"]
     manifest = "sha256:" + facts["manifest"]["sha256"]
     produced = tensorfs.parse_header(bytes(store.manifest(manifest)["header"]))
     assert produced["configs"] == original["configs"]
@@ -189,7 +207,7 @@ def exercise(root: Path, variant: str) -> None:
     store.derived_abandon(probe_id)
     # Corrected output cannot enter the migration and accidentally undo the fix.
     try:
-        repair.repair(_derive_model(job.Checkpoint, manifest), None, None, ENCODINGS)
+        repair.repair(_derive_model(Checkpoint, manifest), None, None, ENCODINGS)
     except ValueError:
         pass
     else:
@@ -199,9 +217,9 @@ def exercise(root: Path, variant: str) -> None:
             {
                 "encoding": variant,
                 "repaired_tensors": 104,
-                "replayed_parts": resumed.replayed_parts,
+                "replayed_parts": changed_roles - len(resumed_reads),
                 "verified_roles": len(values),
-                "replay_bytes_read": replayed.source_bytes_read_this_run,
+                "replay_bytes_read": sum(replayed_reads),
                 "unchanged_tensor_refs_and_configs": True,
                 "nonlexical_order_preserved": True,
             }

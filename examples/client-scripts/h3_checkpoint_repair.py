@@ -1,13 +1,27 @@
-"""Exact FC1 row repair for the four checkpoints produced by the old H3 converter."""
+# /// script
+# requires-python = ">=3.12,<3.13"
+# dependencies = ["cozy-runtime>=0.5.2,<1"]
+# [tool.cozy.models]
+# source = "paul/minimax-h3@sha256:3f6c224a010fbff36adce0f19a8b866f4f1739a1d30e2202c140ba994dc0b4df"
+# [tool.cozy.weights]
+# checkpoint = 34359738368
+# ///
+"""One-time FC1 row repair for the four original H3 checkpoints.
+
+Run: cozy run ./h3_checkpoint_repair.py --rental-only
+Select another recorded bad root with model.source=paul/minimax-h3@sha256:...
+All four production repairs are already complete (se-031). This example preserves
+that operation; corrected and unknown inputs refuse before any writes.
+"""
 
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping
 
-import msgspec
 from cozy_runtime.author import (
     Model,
+    ModelArtifact,
     Telemetry,
     WeightsConfig,
     WeightsPart,
@@ -42,16 +56,6 @@ DTYPE_BYTES = {"bf16": 2, "f32": 4, "f8_e4m3fn": 1, "u8": 1}
 READ_BYTES = 32 << 20
 MAX_ROLE_BYTES = 28672 * 5376 * 2
 MAX_NEW_BYTES = 32 << 30
-
-
-class RepairResult(msgspec.Struct):
-    source_checkpoint: str
-    tensorfs_receipt_digest: str
-    weights_transaction_id: str
-    repaired_tensors: int
-    source_bytes_read_this_run: int
-    replayed_parts: int
-    replayed: bool
 
 
 def _declaration(
@@ -105,7 +109,7 @@ def _read_swapped(
 
 def repair(
     source: Model[object], artifacts: WeightsSink, tel: Telemetry, encodings: Mapping[str, str]
-) -> RepairResult:
+) -> ModelArtifact:
     variant = SOURCES.get(source.checkpoint_ref)
     if variant is None:
         raise ValueError(
@@ -161,12 +165,17 @@ def repair(
                 transaction.checkpoint()
                 tel.progress((index + 1) / len(changed), stage="repair-fc1")
             receipt = transaction.commit()
-    return RepairResult(
-        source.checkpoint_ref,
-        receipt.tensorfs_receipt_digest,
-        receipt.weights_transaction_id,
-        len(changed),
-        source_bytes,
-        replayed_parts,
-        transaction.replayed,
+    tel.log(
+        "H3 checkpoint repaired",
+        source_checkpoint=source.checkpoint_ref,
+        checkpoint=receipt.artifact.manifest.digest,
+        repaired_tensors=len(changed),
+        source_bytes_read_this_run=source_bytes,
+        replayed_parts=replayed_parts,
+        replayed=transaction.replayed,
     )
+    return receipt.artifact
+
+
+def main(*, source: Model[object], artifacts: WeightsSink, tel: Telemetry) -> ModelArtifact:
+    return repair(source, artifacts, tel, ENCODINGS)

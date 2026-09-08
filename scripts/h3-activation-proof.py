@@ -1,6 +1,6 @@
 """CPU proof that diagnostic hooks observe without changing H3 calls or RNG.
 
-Run with the diagnostic project's locked interpreter; no weights or GPU needed.
+Run with the H3 project's locked interpreter; no weights or GPU needed.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ from typing import Any
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "diagnostics/h3-vae-roundtrip"))
-from activation_trace import ACTIVE_TRACE, ActivationTrace, FirstStepCaptured  # noqa: E402
+sys.path.insert(0, str(ROOT / "minimax-h3"))
+from h3_activation_trace import ACTIVE_TRACE, ActivationTrace, FirstStepCaptured  # noqa: E402
 
 
 class Block(torch.nn.Module):
