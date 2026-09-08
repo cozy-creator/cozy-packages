@@ -543,10 +543,7 @@ class QuantizedLanes(msgspec.Struct):
 
 @app.job(
     name="quantize",
-    weights=(
-        WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),
-        WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),
-    ),
+    weights=tuple(WeightsOutput(lane, max_new_bytes=_LANE_BYTES) for lane in _LANE_ENCODINGS),
 )
 def quantize(
     ctx: Context,

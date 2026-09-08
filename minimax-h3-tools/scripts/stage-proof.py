@@ -97,9 +97,13 @@ class Recorder:
         if self.fail_at == event:
             raise Interrupted(event)
         return QuantizationStats(
-        encoded_keys=1, reused_keys=0, source_bytes_read=1,
-        new_bytes_written=1, saturated_elements=2, worst_relative_frobenius=0.03125,
-    )
+            encoded_keys=1,
+            reused_keys=0,
+            source_bytes_read=1,
+            new_bytes_written=1,
+            saturated_elements=2,
+            worst_relative_frobenius=0.03125,
+        )
 
 
 class Telemetry:

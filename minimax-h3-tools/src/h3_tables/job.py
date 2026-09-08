@@ -15,6 +15,7 @@ from cozy_runtime.author import (
     App,
     Context,
     Telemetry,
+    UnsupportedInput,
     WeightsConfig,
     WeightsOutput,
     WeightsPart,
@@ -24,6 +25,7 @@ from cozy_runtime.author import (
     WeightsTarget,
     WeightsTensor,
     WeightsTransaction,
+    canonical_json,
 )
 from cozy_runtime.derive.quantization import (
     MAX_OUTPUT_BYTES,
@@ -63,6 +65,14 @@ FP8_SPEC = "sha256:c4be0120fb4548306b134f6ee07eb2545a363bc140a005af1ef6543c790cf
 MXFP8_SPEC = "sha256:7e9b1ad8f2e5ddd236a4d4303042d632a96eadef4f25d44eb0fb63124cec7cfd"
 
 SOURCE_READ_CHUNK = 32 << 20
+EXECUTION_CONFIG = "execution"
+#: The lane each named execution contract (`assets/execution.<name>.json`,
+#: attention-quantization.md §2) produces. The key spells the contract's kernel token, which
+#: the hub's release fence checks against the header it publishes the lane for.
+LANE_CONTRACT = {"fp8-attn8-adaln-pruned": "sm90-attn8", "fp8-fa3-adaln-pruned": "sm90-fa3"}
+#: The stored DiT encoding each contract weights route is true of: a contract binds bytes the
+#: runtime resolves through the route it names, or it refuses.
+ROUTE_ENCODING = {"encoded_gemm": "fp8-rowwise/1"}
 SOURCE_SECTION = {"fl2va": "transformer", "ref2va": "transformer_ref"}
 TORCH_DTYPE = {"bf16": torch.bfloat16, "f32": torch.float32}
 
@@ -78,12 +88,28 @@ def _production_plan(task: str) -> TimestepPlan:
     return plan
 
 
-# Exact bytes per committed task plan. order-proof independently recomputes the
-# emitted table geometry and refuses drift; description never needs to execute it.
-TABLE_BYTES = 1_020_515_328
+def _check_table_budget(declared: int) -> None:
+    """Refuse before native writes if either committed task plan exceeds the ceiling."""
+    sections = parse_production_config(_asset("model-config.json"))
+    measured = max(
+        table_bytes(H3Topology.from_config(sections[section]), _production_plan(task))
+        for task, section in SOURCE_SECTION.items()
+    )
+    if measured > declared:
+        raise ValueError(
+            f"the committed plans need {measured} table bytes, above budget {declared}"
+        )
+
+
+# An author-declared per-task ceiling, not a second copy of table geometry.
+# The committed plans currently use about 95% of this budget; shape validation
+# and native byte accounting still require exactly the declared output tensors.
+MAX_TABLE_BYTES = 1 << 30
 MAX_FULL_BYTES = 64 << 10
-MAX_PRUNED_BYTES = 2 * TABLE_BYTES + (128 << 10)
+MAX_PRUNED_BYTES = 2 * MAX_TABLE_BYTES + (128 << 10)
 MAX_QUANTIZED_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_PRUNED_BYTES
+
+_check_table_budget(MAX_TABLE_BYTES)
 
 
 class ProductionRequest(msgspec.Struct, forbid_unknown_fields=True):
@@ -122,6 +148,20 @@ class RetableResult(msgspec.Struct):
     table_tensors: int
     table_bytes_this_run: int
     source_bytes_read_this_run: int
+
+
+class AttentionLane(msgspec.Struct):
+    lane: str
+    contract: str
+    execution_config_digest: str
+    tensorfs_receipt_digest: str
+    replayed: bool
+
+
+class AttentionLaneResult(msgspec.Struct):
+    source_checkpoint: str
+    lanes: list[AttentionLane]
+    inherited_tensors: int
 
 
 def _read_source(
@@ -652,7 +692,7 @@ app.job(
 app.job(
     _adaln_operations.compute_adaln_tables,
     name="compute-adaln-tables",
-    weights=(WeightsOutput("model", TABLE_BYTES),),
+    weights=(WeightsOutput("model", MAX_TABLE_BYTES),),
 )
 app.job(
     _adaln_operations.apply_adaln,
@@ -667,3 +707,111 @@ app.job(
 app.job(assemble_full_artifact, name="assemble-full-artifact", weights=(WeightsOutput("model", 0),))
 
 app.job(_adaln_operations.retable_adaln, name="retable-adaln", weights=(WeightsOutput("model", 0),))
+
+
+def _contract(name: str) -> tuple[bytes, str]:
+    """One committed contract's canonical bytes and the stored encoding its route names."""
+    raw = _asset(f"execution.{name}.json")
+    if canonical_json.normalize(raw) != raw:
+        raise ValueError(f"execution contract {name!r} is not its canonical package bytes")
+    route = str(canonical_json.decode(raw)["weights"]["route"])
+    if route not in ROUTE_ENCODING:
+        raise ValueError(f"execution contract {name!r} names an unknown weights route {route!r}")
+    return raw, ROUTE_ENCODING[route]
+
+
+def _attention_lane_targets(
+    source: WeightsSource,
+    encoding: str,
+    sections: dict[str, dict[str, Any]],
+    tables: Mapping[str, Mapping[str, WeightsTensor]],
+) -> dict[str, WeightsTarget]:
+    """Inherit every component of an AdaLN-pruned source whose DiT rows are stored as `encoding`.
+
+    Refuses before any read unless the source carries no execution contract yet, is the
+    five-component H3 checkpoint with table rows and no dynamic modulation weights in both
+    DiTs, and stores every quantization-plan row in `encoding`'s role layout: the contract's
+    `weights.route` must be true of the bytes it binds.
+    """
+
+    def refuse(detail: str) -> UnsupportedInput:
+        return UnsupportedInput(detail, code="attention_lane_source")
+
+    if EXECUTION_CONFIG in source.configs:
+        raise refuse("the source already carries an execution contract")
+    present = {(tensor.component, tensor.key): tensor for tensor in source.tensors}
+    components = {tensor.component for tensor in source.tensors}
+    if components != set(_full_targets()):
+        raise refuse(f"attention-lane source components are {sorted(components)}")
+    layout = {
+        key: {(role, part.dtype) for role, part in tensor.parts.items()}
+        for key, tensor in quantization_additions(
+            encoding, prepare_quantization(h3_quantization_plan()), "dit"
+        ).items()
+    }
+    for task, section in SOURCE_SECTION.items():
+        component = TARGET_COMPONENT[task]
+        topology = H3Topology.from_config(sections[section])
+        keys = {key for owner, key in present if owner == component}
+        if not set(tables[task]) <= keys or set(removed_keys(topology)) & keys:
+            raise refuse(f"{component} is not an AdaLN-pruned source carrying table rows only")
+        for key, roles in layout.items():
+            row = present.get((component, key))
+            if row is None or {(part.name, part.dtype) for part in row.parts} != roles:
+                raise refuse(f"{component}/{key} is not stored as {encoding}")
+    return {
+        component: WeightsTarget(source="pruned", source_component=component)
+        for component in components
+    }
+
+
+@app.job(
+    name="attention-lane",
+    weights=(
+        WeightsOutput("fp8-attn8-adaln-pruned", max_new_bytes=MAX_FULL_BYTES),
+        WeightsOutput("fp8-fa3-adaln-pruned", max_new_bytes=MAX_FULL_BYTES),
+    ),
+)
+def attention_lane(
+    payload: ProductionRequest,
+    pruned: H3FullTransformer,
+    artifacts: WeightsSink,
+) -> AttentionLaneResult:
+    """Bind each declared execution contract to an AdaLN-pruned checkpoint, by reference.
+
+    Every lane shares each tensor blob and config with `pruned` and adds the one inline
+    `execution` config the runtime applies or refuses typed (attention-quantization.md §2-3),
+    so a lane costs one manifest and no tensor byte is read or written.
+    """
+    del payload
+    sections = parse_production_config(_asset("model-config.json"))
+    tables = _table_additions(sections)
+    source = artifacts.structure(pruned)
+    inherited = {
+        name: WeightsConfig(source="pruned", source_config=name) for name in source.configs
+    }
+    order = tuple((tensor.component, tensor.key) for tensor in source.tensors)
+    lanes: list[AttentionLane] = []
+    for lane, name in LANE_CONTRACT.items():
+        contract, encoding = _contract(name)
+        targets = _attention_lane_targets(source, encoding, sections, tables)
+        receipt = artifacts.derive(
+            lane,
+            sources={"pruned": pruned},
+            targets=targets,
+            configs={
+                **inherited,
+                EXECUTION_CONFIG: WeightsConfig(data=contract, length=len(contract)),
+            },
+            order=order,
+        )
+        lanes.append(
+            AttentionLane(
+                lane,
+                name,
+                canonical_json.digest_bytes(contract),
+                receipt.tensorfs_receipt_digest,
+                receipt.replayed,
+            )
+        )
+    return AttentionLaneResult(pruned.checkpoint_ref, lanes, len(source.tensors))

@@ -34,6 +34,7 @@ from cozy_runtime.author import (
     Telemetry,
     UnsupportedInput,
     VideoAsset,
+    data_values,
     uses_components,
 )
 from msgspec.structs import replace
@@ -93,11 +94,19 @@ class AudioReference(msgspec.Struct, tag="audio", tag_field="type", forbid_unkno
 
 Reference = ImageReference | VideoReference | AudioReference
 Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
-# Static wire declarations; h3-conform verifies the enum against both committed plans.
-# The fastest supported schedule is the default.
-DEFAULT_STEPS = 30
+# The shipped plans own the enum. The imported module and conformance proof also
+# verify that the other task supports the same schedules.
+SUPPORTED_STEPS = data_values(
+    __file__, "timestep-plans/fl2va.json", "schedules", "transformer_evaluations"
+)
+if (
+    data_values(__file__, "timestep-plans/ref2va.json", "schedules", "transformer_evaluations")
+    != SUPPORTED_STEPS
+):
+    raise ValueError("H3 task plans declare different supported step counts")
+DEFAULT_STEPS = min(SUPPORTED_STEPS)
 Steps = Annotated[
-    Literal[30, 40, 50],
+    Literal[SUPPORTED_STEPS],  # type: ignore[valid-type]
     msgspec.Meta(description="Denoise steps (transformer evaluations); fewer is faster."),
 ]
 
@@ -155,6 +164,27 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept
 
     def unload(self, loader: Loader) -> None:
         return None
+
+    def warm(self, ctx: Context) -> None:
+        """One dry DiT forward per entrypoint, before this construction serves anything.
+
+        Both DiTs, because one construction carries both entrypoints and a switch between
+        them must not pay a first call either (h3a-018). The runtime has already applied
+        the fused glue and loaded its cubins for this device by the time `warm` runs
+        (h3a-015, `fusion="accept"` above); the dry forward is what pays their first
+        launches, the rotary tables and the projections' first GEMM plans.
+        """
+        for warm_one in (self.warm_fl2va, self.warm_ref2va):
+            ctx.raise_if_cancelled()
+            warm_one()
+
+    @uses_components("fl2va_dit")
+    def warm_fl2va(self) -> None:
+        self.pipe.warm_dit("fl2va")
+
+    @uses_components("ref2va_dit")
+    def warm_ref2va(self) -> None:
+        self.pipe.warm_dit("ref2va")
 
     @uses_components("text_encoder")
     def condition_text(self, task: Task, state: Any, *, checks: NumericalChecks) -> None:

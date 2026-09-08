@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from cozy_runtime.author import (
+    WeightsPart,
     WeightsSource,
     WeightsSourcePart,
     WeightsSourceTensor,
@@ -20,8 +21,9 @@ from cozy_runtime.derive.quantization import (
 )
 from h3_tables.job import (
     FP8_SPEC,
+    MAX_TABLE_BYTES,
     MXFP8_SPEC,
-    TABLE_BYTES,
+    PLAIN_SPEC,
     _full_order,
     _full_targets,
     _pruned_targets,
@@ -115,9 +117,7 @@ def main() -> None:
     if len(full) != 3968:
         raise RuntimeError(f"full dual order has {len(full)} rows, expected 3968")
     if len(text_source_only_keys()) != 156:
-        raise RuntimeError(
-            "official 1,058-row text source does not trim exactly to 902 rows"
-        )
+        raise RuntimeError("official 1,058-row text source does not trim exactly to 902 rows")
     full_targets = _full_targets()
     for component in ("fl2va_dit", "ref2va_dit"):
         target = full_targets[component]
@@ -142,6 +142,7 @@ def main() -> None:
     fp8 = _pruned_targets(sections, tables, full_targets, quantization, "fp8-rowwise/1")
     mxfp8 = _pruned_targets(sections, tables, full_targets, quantization, "mxfp8/1")
 
+    measured_bytes: dict[str, int] = {}
     for task, source, component in (
         ("fl2va", "transformer", "fl2va_dit"),
         ("ref2va", "transformer_ref", "ref2va_dit"),
@@ -151,15 +152,15 @@ def main() -> None:
         topology = H3Topology.from_config(sections[source])
         shapes = table_shapes(topology, plan)
         emitted = sum(2 * shape[0] * shape[1] * shape[2] for shape in shapes.values())
-        if len(shapes) != 51 or emitted != TABLE_BYTES:
+        if len(shapes) != 51 or emitted > MAX_TABLE_BYTES:
             raise RuntimeError(
-                f"{task} table contract is {len(shapes)}/{emitted}, expected 51/{TABLE_BYTES}"
+                f"{task} table contract has {len(shapes)} tensors and {emitted} bytes; "
+                f"expected 51 tensors within {MAX_TABLE_BYTES} bytes"
             )
+        measured_bytes[task] = emitted
         dynamic = set(removed_keys(topology))
         if len(dynamic) != 106 or source_only_keys() != ("rope.inv_freq",):
-            raise RuntimeError(
-                f"{task} does not drop 106 dynamic rows plus the native rope buffer"
-            )
+            raise RuntimeError(f"{task} does not drop 106 dynamic rows plus the native rope buffer")
         target = pruned[component]
         if (
             target.source != "dits"
@@ -168,6 +169,15 @@ def main() -> None:
             or set(target.add) != set(shapes)
         ):
             raise RuntimeError(f"{component} lost its exact direct pruned edit")
+        for key, shape in shapes.items():
+            declared = target.add[key]
+            if (
+                declared.logical_dtype != "bf16"
+                or declared.shape != shape
+                or declared.encoding != PLAIN_SPEC
+                or dict(declared.parts) != {"value": WeightsPart("bf16", shape)}
+            ):
+                raise RuntimeError(f"{component}/{key} changed its exact BF16 table bytes")
         selected = {tensor.key for tensor in quantization.tensors}
         for name, target, spec in (
             ("fp8", fp8[component], FP8_SPEC),
@@ -192,9 +202,7 @@ def main() -> None:
         if plan.steps != (30, 40, 50):
             raise RuntimeError(f"{task} plan serves {plan.steps}, expected 30/40/50 steps")
 
-    package_interface = json.loads(
-        (PROJECT / "metadata" / "package-interface.json").read_bytes()
-    )
+    package_interface = json.loads((PROJECT / "metadata" / "package-interface.json").read_bytes())
     if "model_productions" in package_interface:
         raise RuntimeError("package retained the retired model-production graph")
     declared = package_interface.get("jobs")
@@ -202,9 +210,17 @@ def main() -> None:
         raise TypeError("package jobs are not one interface list")
     jobs = {str(row["name"]): row for row in declared}
     if set(jobs) != {
-        "assemble_full", "four-lane", "retable", "quantize-artifact", "precompute-adaln",
-        "apply-adaln", "compute-adaln-tables", "select-adaln-weights",
-        "assemble-full-artifact", "retable-adaln",
+        "assemble_full",
+        "attention-lane",
+        "four-lane",
+        "retable",
+        "quantize-artifact",
+        "precompute-adaln",
+        "apply-adaln",
+        "compute-adaln-tables",
+        "select-adaln-weights",
+        "assemble-full-artifact",
+        "retable-adaln",
     }:
         raise RuntimeError(f"package callable compatibility changed: {sorted(jobs)}")
     job = jobs["four-lane"]
@@ -236,9 +252,10 @@ def main() -> None:
     }:
         raise RuntimeError("retable changed its two typed sources or two outputs")
     print(
-        "H3 FOUR-LANE CONTRACT PASS jobs=10 graphs=0 outputs=4 full_rows=3968 "
+        f"H3 FOUR-LANE CONTRACT PASS jobs={len(jobs)} graphs=0 outputs=4 full_rows=3968 "
         "task_rows=583 shared_text_drop=156 quantized_per_task=313 tables_per_task=51 "
-        f"table_bytes_per_task={TABLE_BYTES} source_drop=rope dynamic_drops_per_task=106 "
+        f"table_bytes_per_task={measured_bytes} table_budget_per_task={MAX_TABLE_BYTES} "
+        "source_drop=rope dynamic_drops_per_task=106 "
         "direct_siblings=1 changed_plan=refused steps=30/40/50"
     )
 
