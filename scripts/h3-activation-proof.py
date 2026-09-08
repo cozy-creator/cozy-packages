@@ -14,6 +14,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import torch
+from cozy_runtime.author import ImageFrame
+from cozy_runtime.author.fakes import fake_context, fake_outputs
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "minimax-h3"))
@@ -223,6 +225,20 @@ def main() -> None:
     assert result == "unchanged parent result" and seen == [0, 1, 2]
     restored = load(save(full.latents))
     assert all(torch.equal(restored[key], value) for key, value in full.latents.items())
+    output = fake_outputs()
+    reference_image = output.save_image(ImageFrame(2, 2, b"\xff\x00\x00" * 4), format="png")
+    request = h3.ReferenceMediaToVideoInput(
+        prompt="fixed trace",
+        seed=42,
+        references=[
+            h3.ImageReference(reference_image, short_edge=512),
+            h3.ImageReference(reference_image),
+        ],
+    )
+    saved = h3_diagnostics.save_trace(full, fake_context(), request, observed_model, output)
+    provenance = json.loads(saved.read_bytes())["provenance"]
+    assert [reference["short_edge"] for reference in provenance["references"]] == [512, None]
+    assert provenance["reference_image_short_edge"] == request.reference_image_short_edge
     seen.clear()
     partial = ActivationTrace(evaluations=3, first_step=True)
     try:
@@ -251,6 +267,7 @@ def main() -> None:
                 "actual_h3_parent_delegation": True,
                 "component_scope_preserves_sentinel": True,
                 "safetensors_roundtrip": True,
+                "per_reference_fidelity_recorded": True,
             }
         )
     )

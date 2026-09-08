@@ -207,7 +207,16 @@ def save_trace(
             else reference.video
         )
         references.append(
-            {"kind": asset.kind, "digest": asset.digest, "size_bytes": asset.size_bytes}
+            {
+                "kind": asset.kind,
+                "digest": asset.digest,
+                "size_bytes": asset.size_bytes,
+                **(
+                    {"short_edge": reference.short_edge}
+                    if isinstance(reference, ImageReference)
+                    else {}
+                ),
+            }
         )
     document = trace.document()
     document["provenance"] = {
