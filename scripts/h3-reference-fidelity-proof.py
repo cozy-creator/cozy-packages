@@ -36,8 +36,10 @@ from official import (  # noqa: E402
     REFERENCE_IMAGE_SHORT_EDGE,
     OfficialH3Pipeline,
     _ScopedPipeline,
+    frames_for,
     reference_image_size,
     reference_image_vision_tokens,
+    supported_durations,
     supported_steps,
 )
 
@@ -91,6 +93,7 @@ def start(
         references=references,
         generator=torch.Generator().manual_seed(7),
         steps=min(supported_steps()),
+        frames=frames_for(min(supported_durations())),
         reference_image_short_edges=edges,
     )
 

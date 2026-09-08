@@ -87,8 +87,10 @@ from h3_order import construction_order, encode_order  # noqa: E402
 from official import (  # noqa: E402
     _DIT_COMPONENT,
     FPS,
-    FRAMES,
     MAX_CONDITIONER_VISION_TOKENS,
+    MAX_DURATION,
+    MAX_FRAMES,
+    MIN_DURATION,
     REFERENCE_IMAGE_SHORT_EDGE,
     NumericalChecks,
     OfficialH3Pipeline,
@@ -105,8 +107,11 @@ from official import (  # noqa: E402
     _validate_model_contract,
     _video_at_24fps,
     canonical_timestep_plan,
+    denoise_rows,
+    frames_for,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
+    supported_durations,
     supported_steps,
     timestep_plan_digest,
     validate_reference_policy,
@@ -115,6 +120,11 @@ from vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
 
 STEPS = supported_steps()
 DEFAULT_STEPS = min(STEPS)
+DURATIONS = supported_durations()
+DEFAULT_DURATION_S = min(DURATIONS)
+DEFAULT_FRAMES = frames_for(DEFAULT_DURATION_S)
+#: The one canvas a generated clip resolves to without a keyframe.
+CANVAS_HEIGHT, CANVAS_WIDTH = 768, 1344
 
 PASS = "  ok   "
 FAIL = "  FAIL "
@@ -563,6 +573,7 @@ def arm_reference_resolution() -> None:
             references=references,
             generator=torch.Generator().manual_seed(7),
             steps=DEFAULT_STEPS,
+            frames=DEFAULT_FRAMES,
             reference_image_short_edges=[edge],
         )
         image = state.normalized_references[0].image
@@ -585,6 +596,7 @@ def arm_reference_resolution() -> None:
         references=references,
         generator=torch.Generator().manual_seed(7),
         steps=DEFAULT_STEPS,
+        frames=DEFAULT_FRAMES,
         reference_image_short_edges=[REFERENCE_IMAGE_SHORT_EDGE],
     )
     check(
@@ -597,6 +609,7 @@ def arm_reference_resolution() -> None:
         references=references * 3,
         generator=torch.Generator().manual_seed(7),
         steps=DEFAULT_STEPS,
+        frames=DEFAULT_FRAMES,
         reference_image_short_edges=[512, 2048, 1024],
     )
     shapes = [np.asarray(entry.image).shape for entry in mixed.normalized_references]
@@ -635,6 +648,7 @@ def arm_reference_resolution() -> None:
                 references=references,
                 generator=torch.Generator().manual_seed(7),
                 steps=DEFAULT_STEPS,
+                frames=DEFAULT_FRAMES,
                 reference_image_short_edges=[768],
             ),
         )
@@ -665,6 +679,7 @@ def arm_reference_resolution() -> None:
                     references=references,
                     generator=torch.Generator().manual_seed(7),
                     steps=DEFAULT_STEPS,
+                    frames=DEFAULT_FRAMES,
                     reference_image_short_edges=[768],
                 ),
                 "artifact_config",
@@ -693,13 +708,14 @@ def arm_zero_reference_preparation() -> None:
     # in for the preceding encoder and GPU. No model forward or weights are read.
     pipe.components["fl2va_dit"] = SimpleNamespace(device=torch.device("cpu"))
 
-    def start(steps: int) -> Any:
+    def start(steps: int, frames: int = DEFAULT_FRAMES) -> Any:
         return pipe.start_fl2va(
             prompt="Three friends walk in a garden.",
             first_frame=None,
             last_frame=None,
             generator=torch.Generator().manual_seed(7),
             steps=steps,
+            frames=frames,
         )
 
     refusal("an unserved step count refuses before preparation", lambda: start(29), "steps")
@@ -729,8 +745,16 @@ def arm_zero_reference_preparation() -> None:
         observe("zero-reference request reaches first forward without keyframe-only inputs")
     else:
         check("zero-reference preparation must stop before any model forward", False, True)
-    check("text-only video rows", tuple(state.latents.shape), (102816, 96))
-    check("text-only audio rows", tuple(state.audio_latents.shape), (1150, 32))
+    check(
+        "text-only packed rows are the default length's",
+        int(state.latents.shape[0]) + int(state.audio_latents.shape[0]),
+        denoise_rows(DEFAULT_FRAMES, CANVAS_HEIGHT, CANVAS_WIDTH),
+    )
+    check(
+        "text-only latent widths",
+        (state.latents.shape[1], state.audio_latents.shape[1]),
+        (96, 32),
+    )
     check("text-only anchors", state.keyframe_anchors, ())
     check("text-only rows remain finite", bool(torch.isfinite(state.latents).all()), True)
     check("text-only default grid means the default forwards", len(state.timesteps), DEFAULT_STEPS)
@@ -744,6 +768,125 @@ def arm_zero_reference_preparation() -> None:
         lambda: pipe._plans["fl2va"].executed(state.timesteps.tolist()[:-1], []),
         "artifact_config",
     )
+
+
+def arm_clip_length() -> None:
+    print("\n== clip length is a request field on the model's own frame grid ==")
+    # The grid is the video VAE's: `clip_length` pixel frames per chunk keeping
+    # `tokens_chunk_size` latents, so a decodable clip is `17n + 5` frames long. The
+    # envelope is the pipeline's own [min_duration, max_duration]; the served set is every
+    # whole second whose snapped count lands inside it.
+    check("served whole seconds", DURATIONS, tuple(range(5, 15)))
+    check(
+        "each second's frame count",
+        [frames_for(seconds) for seconds in DURATIONS],
+        [124, 158, 175, 192, 226, 243, 277, 294, 328, 345],
+    )
+    check(
+        "every served count is on the 17n + 5 grid",
+        {frames_for(seconds) % 17 for seconds in DURATIONS},
+        {5},
+    )
+    check(
+        "the snap is never downward",
+        [frames_for(seconds) >= seconds * FPS for seconds in DURATIONS],
+        [True] * len(DURATIONS),
+    )
+    check(
+        "the envelope holds for every served second",
+        [MIN_DURATION <= frames_for(seconds) / FPS <= MAX_DURATION for seconds in DURATIONS],
+        [True] * len(DURATIONS),
+    )
+    check(
+        "the two seconds just outside the served set",
+        [
+            (seconds, frames_for(seconds), round(frames_for(seconds) / FPS, 3))
+            for seconds in (4, 15)
+        ],
+        [(4, 107, 4.458), (15, 362, 15.083)],
+    )
+    check(
+        "and neither lands inside the envelope",
+        [MIN_DURATION <= frames_for(seconds) / FPS <= MAX_DURATION for seconds in (4, 15)],
+        [False, False],
+    )
+    check("the longest served clip", MAX_FRAMES, 345)
+
+    # Every length end to end through the official preparation blocks, at the release
+    # canvas: the packed sequence the DiT would attend over is exactly what `denoise_rows`
+    # reports, so the telemetry number is the model's own and not a restatement.
+    pipe = meta_h3_pipeline()
+    pipe.components["fl2va_dit"] = SimpleNamespace(device=torch.device("cpu"))
+
+    class ReachedDenoise(Exception):
+        pass
+
+    def prepare(frames: int) -> Any:
+        state = pipe.start_fl2va(
+            prompt="Three friends walk in a garden.",
+            first_frame=None,
+            last_frame=None,
+            generator=torch.Generator().manual_seed(7),
+            steps=DEFAULT_STEPS,
+            frames=frames,
+        )
+        state.set("prompt_embeds", torch.zeros(1, 4, 5120))
+        state.set("text_token_tags", torch.ones(4, dtype=torch.long))
+        try:
+            pipe.denoise(
+                "fl2va",
+                state,
+                on_step=lambda _: None,
+                cancel=lambda: (_ for _ in ()).throw(ReachedDenoise()),
+            )
+        except ReachedDenoise:
+            return state
+        raise AssertionError("preparation must stop before any model forward")
+
+    for seconds in DURATIONS:
+        frames = frames_for(seconds)
+        state = prepare(frames)
+        rows = int(state.latents.shape[0]) + int(state.audio_latents.shape[0])
+        check(
+            f"{seconds}s prepares {frames} frames as one packed sequence",
+            (int(state.num_frames), rows),
+            (frames, denoise_rows(frames, CANVAS_HEIGHT, CANVAS_WIDTH)),
+        )
+        del state
+
+    # The bounds are upstream's, not ours: one grid step outside the wire enum in either
+    # direction is refused by the official block itself.
+    for name, frames in (("below the floor", frames_for(4)), ("above the ceiling", frames_for(15))):
+        refusal(f"a clip {name} refuses in the official preparation", partial(prepare, frames))
+
+    field = get_type_hints(package.FirstLastFrameToVideoInput, include_extras=True)["duration_s"]
+    check(
+        "every served second decodes typed",
+        [msgspec.convert(seconds, type=field) for seconds in DURATIONS],
+        list(DURATIONS),
+    )
+    for invalid in (0, 4, 15, 60):
+        refusal(
+            f"an unserved length {invalid} refuses typed at decode",
+            partial(msgspec.convert, invalid, type=field),
+        )
+    refusal(
+        "a fractional length refuses typed at decode",
+        partial(msgspec.convert, 5.5, type=field),
+    )
+    check(
+        "the request default is the cheapest served length",
+        (
+            package.FirstLastFrameToVideoInput(prompt="x").duration_s,
+            package.ReferenceMediaToVideoInput(prompt="x").duration_s,
+        ),
+        (min(DURATIONS), min(DURATIONS)),
+    )
+    # A plan holds one row per (timestep, modality); no row depends on the frame count, so
+    # a served length never needs a re-tabled checkpoint.
+    for task in ("fl2va", "ref2va"):
+        plan = canonical_timestep_plan(cast(Any, task))
+        check(f"{task} plan identity is length-independent", plan.digest, PLAN_DIGESTS[task])
 
 
 def arm_graph_and_dtypes() -> None:
@@ -1747,7 +1890,7 @@ def arm_media() -> None:
             digest = hashlib.sha256(frame.rgb).hexdigest()
             return ImageAsset(f"sha256:{digest}")
 
-    finish_video = torch.zeros((1, FRAMES, 3, 2, 3), dtype=torch.float32)
+    finish_video = torch.zeros((1, DEFAULT_FRAMES, 3, 2, 3), dtype=torch.float32)
     finish_video[0, -1] = torch.tensor(
         [
             [[1.0, 0.0, 0.25], [0.5, 0.75, 0.0]],
@@ -1772,6 +1915,7 @@ def arm_media() -> None:
             "fl2va",
             SimpleNamespace(audio=finish_audio, video=finish_video),
             schedule,
+            duration_s=DEFAULT_DURATION_S,
             mute=False,
             out=cast(Any, finish_outputs),
             tel=telemetry,
@@ -1814,7 +1958,16 @@ def arm_media() -> None:
     check(
         "Runtime-admitted output geometry receipt",
         logs.get("h3 output geometry"),
-        {"width": 3, "height": 2, "frames": FRAMES, "fps": FPS, "sample_rate": 32000},
+        {
+            "width": 3,
+            "height": 2,
+            "frames": DEFAULT_FRAMES,
+            "fps": FPS,
+            "requested_duration_s": DEFAULT_DURATION_S,
+            "duration_seconds": round(DEFAULT_FRAMES / FPS, 3),
+            "denoise_rows": denoise_rows(DEFAULT_FRAMES, 2, 3),
+            "sample_rate": 32000,
+        },
     )
     check(
         "Runtime-admitted schedule receipt",
@@ -1846,9 +1999,27 @@ def arm_media() -> None:
         (0, 0),
     )
 
-    check("single-shot frame cell", (FRAMES, FPS), (345, 24))
-    check("eight-shot de-duplicated frame count", 8 * FRAMES - 7, 2753)
-    check("eight-shot exact duration", Fraction(8 * FRAMES - 7, FPS), Fraction(2753, 24))
+    # The decode is proven against the length the REQUEST asked for, not against a
+    # constant: a clip of any other length is an integrity refusal.
+    refusal(
+        "a decode whose length is not the requested one refuses",
+        lambda: package._finish(
+            cast(Any, FinishModel()),
+            "fl2va",
+            SimpleNamespace(audio=finish_audio, video=finish_video),
+            schedule,
+            duration_s=DURATIONS[1],
+            mute=False,
+            out=cast(Any, FinishOutputs()),
+            tel=fake_telemetry(fake_attempt("h3-finish-length")),
+            cancel=lambda: None,
+        ),
+        "output_integrity",
+    )
+
+    check("longest single-shot cell", (MAX_FRAMES, FPS), (345, 24))
+    check("eight-shot de-duplicated frame count", 8 * MAX_FRAMES - 7, 2753)
+    check("eight-shot exact duration", Fraction(8 * MAX_FRAMES - 7, FPS), Fraction(2753, 24))
 
 
 class _NumericalTelemetry:
@@ -2375,11 +2546,19 @@ def arm_interface() -> None:
     )
     expected = {
         "fl2va": (
-            ["prompt", "mute", "seed", "steps", "assets"],
+            ["prompt", "mute", "seed", "steps", "duration_s", "assets"],
             "fl2va_dit",
         ),
         "ref2va": (
-            ["prompt", "mute", "seed", "reference_image_short_edge", "steps", "assets"],
+            [
+                "prompt",
+                "mute",
+                "seed",
+                "reference_image_short_edge",
+                "steps",
+                "duration_s",
+                "assets",
+            ],
             "ref2va_dit",
         ),
     }
@@ -2403,6 +2582,14 @@ def arm_interface() -> None:
                 if field["name"] == "steps"
             )["ge"],
             1,
+        )
+        duration = next(
+            field for field in entry["request"]["fields"] if field["name"] == "duration_s"
+        )
+        check(
+            f"{name} clip length is whole seconds bounded by the served envelope",
+            (duration["type"], duration["constraints"], duration["wire"]),
+            ("int", {"ge": min(DURATIONS), "le": max(DURATIONS)}, "optional"),
         )
         check(f"{name} shared model", entry["models"][0]["class"], "H3Model")
         check(f"{name} carries no retired stamps member", "stamps" in entry["models"][0], False)
@@ -2625,6 +2812,7 @@ ARMS = {
     "producer-construction-order": arm_producer_construction_order,
     "schedule": arm_schedule,
     "zero-reference": arm_zero_reference_preparation,
+    "clip-length": arm_clip_length,
     "reference-resolution": arm_reference_resolution,
     "graph": arm_graph_and_dtypes,
     "conditioner": arm_text_conditioner,
