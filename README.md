@@ -34,8 +34,8 @@ select their inputs explicitly and run without publishing code to the hub.
   networking, device placement, and offload.
 - Private H3 configs, plans, and proof receipts are identified by their package member and closed
   field shape; they do not add globally versioned schema tags beside the PackageInterface.
-- Module scope stays light. `cozy-runtime describe` must work without Torch, model libraries, a
-  GPU, or weights.
+- Every import is at module scope (se-041). `cozy-runtime describe` runs in the package's locked
+  environment — the one Creator publishes from and installs into — with no GPU and no weights.
 - Every wheel exposes exactly one standard `cozy.application` entry point matching the application
   named by `package.toml`; installed discovery never depends on source-tree metadata.
 - Community implementations are research evidence only. No community node, graph, prompt parser,

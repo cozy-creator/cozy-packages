@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
+import torch
 from cozy_runtime.author import ConformanceError
+from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
 
 _SOURCE_ARCHITECTURE = "Qwen3VLForConditionalGeneration"
 _SOURCE_LAYERS = 64
@@ -25,9 +27,6 @@ def text_conditioner_config() -> dict[str, object]:
 
 def build_text_conditioner(config: Mapping[str, object]) -> Any:
     """Build the upstream surface, then remove computation after hidden state 50."""
-    import torch
-    from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
-
     source = dict(config)
     extension = source.pop("cozy_h3", None)
     if extension != text_conditioner_config():

@@ -20,6 +20,7 @@ TOOLS = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
 sys.path.insert(0, str(H3))
 
 from cozy_runtime.author import canonical_json  # noqa: E402
+from diffusers import MiniMaxH3Scheduler  # noqa: E402
 
 from official import Schedule, Task, TimestepPlan  # noqa: E402
 
@@ -29,8 +30,6 @@ TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
 
 
 def official_schedule(steps: int) -> Schedule:
-    from diffusers import MiniMaxH3Scheduler
-
     sigmas = []
     for shift in (VIDEO_SHIFT, AUDIO_SHIFT):
         scheduler = MiniMaxH3Scheduler(shift=shift)

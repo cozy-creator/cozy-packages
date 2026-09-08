@@ -13,6 +13,7 @@ from typing import Annotated, Any, Literal, NamedTuple
 
 import cozy_runtime.derive as derive
 import msgspec
+import torch
 from cozy_runtime.author import (
     App,
     AssetBound,
@@ -30,6 +31,26 @@ from cozy_runtime.author import (
     WeightsSink,
     uses_components,
 )
+from diffusers import (
+    AnimaAutoBlocks,
+    AnimaModularPipeline,
+    AnimaTextConditioner,
+    AutoencoderKLQwenImage,
+    CosmosTransformer3DModel,
+    FlowMatchEulerDiscreteScheduler,
+)
+from diffusers.hooks._helpers import TransformerBlockMetadata, TransformerBlockRegistry
+from diffusers.hooks.first_block_cache import (
+    _FBC_BLOCK_HOOK,
+    _FBC_LEADER_BLOCK_HOOK,
+    FirstBlockCacheConfig,
+    apply_first_block_cache,
+)
+from diffusers.hooks.hooks import HookRegistry
+from diffusers.models.transformers.transformer_cosmos import CosmosTransformerBlock
+from diffusers.modular_pipelines import ModularPipelineBlocks
+from transformers import PreTrainedTokenizerFast, Qwen3Config, Qwen3Model
+from transformers import initialization as transformer_init
 
 app = App()
 _MODULE_ROOT = Path(__file__).resolve().parent
@@ -175,8 +196,6 @@ class ImageOutput(msgspec.Struct):
 
 
 def _tokenizer(path: Path) -> Any:
-    from transformers import PreTrainedTokenizerFast
-
     config = json.loads((path / "tokenizer_config.json").read_text())
     config.pop("tokenizer_class", None)
     return PreTrainedTokenizerFast(
@@ -186,15 +205,6 @@ def _tokenizer(path: Path) -> Any:
 
 class AnimaPipeline:
     def __init__(self, config: Any) -> None:
-        import torch
-        from diffusers import (
-            AnimaTextConditioner,
-            AutoencoderKLQwenImage,
-            CosmosTransformer3DModel,
-        )
-        from transformers import Qwen3Config, Qwen3Model
-        from transformers import initialization as transformer_init
-
         mapping = config.mapping()
         with transformer_init.no_init_weights():
             transformer = CosmosTransformer3DModel.from_config(mapping["transformer"]).to(
@@ -222,29 +232,8 @@ class AnimaPipeline:
 
 
 def warmup() -> None:
-    """Pay this package's DEFERRED import cost before Runtime takes the lane's device lock.
-
-    Runtime calls this off the lock, while another tenant is still computing on the card
-    (cr-104). `import anima` is 5 ms precisely because these are deferred, which is right
-    for every caller except the construction -- deferred, `import diffusers` (2.77 s warm)
-    lands inside it, under the lock, on the far side of the vacate. Nothing here may touch
-    the device.
-    """
-    from diffusers import (  # noqa: F401
-        AnimaAutoBlocks,
-        AnimaModularPipeline,
-        AnimaTextConditioner,
-        AutoencoderKLQwenImage,
-        CosmosTransformer3DModel,
-        FlowMatchEulerDiscreteScheduler,
-    )
-    from diffusers.modular_pipelines import ModularPipelineBlocks  # noqa: F401
-    from transformers import (  # noqa: F401
-        PreTrainedTokenizerFast,
-        Qwen3Config,
-        Qwen3Model,
-    )
-    from transformers import initialization as transformer_init  # noqa: F401
+    """Runtime's off-lock import hook (cr-104). Every import is at module scope (se-041), so
+    `import anima` already paid the cost and nothing is left to defer."""
 
 
 def build_pipeline(config: Any) -> AnimaPipeline:
@@ -293,9 +282,6 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         seed: int,
         phases: _Phases,
     ) -> Any:
-        import torch
-        from diffusers import FlowMatchEulerDiscreteScheduler
-
         device = next(self.pipe.components["transformer"].parameters()).device
         generator = torch.Generator(device=device).manual_seed(seed)
         pipeline: Any = _text2image_pipeline(device, phases)
@@ -336,9 +322,6 @@ def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
     defect (se-026). `blocks=` hands the pipeline the object it keeps, and the identity is
     the fix: `scripts/anima-conform.py` executes Diffusers' own loop driver against it.
     """
-    from diffusers import AnimaAutoBlocks, AnimaModularPipeline
-    from diffusers.modular_pipelines import ModularPipelineBlocks
-
     class Announce(ModularPipelineBlocks):
         """A weightless block whose only effect is to advance the meter."""
 
@@ -453,8 +436,6 @@ def generate(
     tel: Telemetry,
 ) -> ImageOutput:
     """Generate one native-resolution Anima image."""
-    import torch
-
     width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
     steps = payload.steps
     if payload.cfg_interval_start > payload.cfg_interval_stop:
@@ -502,15 +483,6 @@ def _apply_first_block_cache(transformer: Any, guider: Any, threshold: float) ->
     """
     if threshold <= 0.0:
         return lambda: None
-    from diffusers.hooks._helpers import TransformerBlockMetadata, TransformerBlockRegistry
-    from diffusers.hooks.first_block_cache import (
-        _FBC_BLOCK_HOOK,
-        _FBC_LEADER_BLOCK_HOOK,
-        FirstBlockCacheConfig,
-        apply_first_block_cache,
-    )
-    from diffusers.hooks.hooks import HookRegistry
-    from diffusers.models.transformers.transformer_cosmos import CosmosTransformerBlock
 
     try:
         TransformerBlockRegistry.get(CosmosTransformerBlock)

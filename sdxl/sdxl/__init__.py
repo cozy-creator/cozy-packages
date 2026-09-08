@@ -41,12 +41,15 @@ checkpoint or revision — `package.toml` and the deploy binding do.
 from __future__ import annotations
 
 import hashlib
+import json
+import random
 from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import cozy_runtime.derive as derive
 import msgspec
+import torch
 from cozy_runtime.author import (
     App,
     AssetBound,
@@ -66,6 +69,18 @@ from cozy_runtime.author import (
     WeightsSink,
     uses_components,
 )
+from diffusers import AutoencoderKL, EulerDiscreteScheduler, UNet2DConditionModel
+from hidiffusion import (  # type: ignore[import-not-found,import-untyped]
+    apply_hidiffusion,
+    remove_hidiffusion,
+)
+from transformers import (
+    CLIPTextConfig,
+    CLIPTextModel,
+    CLIPTextModelWithProjection,
+    CLIPTokenizer,
+)
+from transformers import initialization as transformer_init
 
 app = App()
 
@@ -214,8 +229,6 @@ class ImageOutput(msgspec.Struct):
 
 def _hidiffusion_unet_type() -> type[Any]:
     """The patched UNet owner, imported only when Runtime constructs the model."""
-    from diffusers import UNet2DConditionModel
-
     class HiDiffusionUNet(UNet2DConditionModel):
         """Select and reset the request's denoising implementation before step zero."""
 
@@ -227,11 +240,6 @@ def _hidiffusion_unet_type() -> type[Any]:
                 raise ValueError("HiDiffusion requires a positive timestep count")
             active = bool(getattr(self, "_cozy_hidiffusion_active", False))
             if hidiffusion != active:
-                from hidiffusion import (  # type: ignore[import-not-found,import-untyped]
-                    apply_hidiffusion,
-                    remove_hidiffusion,
-                )
-
                 if hidiffusion:
                     self.num_upsamplers = self._cozy_base_num_upsamplers
                     apply_hidiffusion(self)
@@ -271,11 +279,6 @@ class SdxlPipeline:
     """
 
     def __init__(self, config: Any) -> None:
-        import torch
-        from diffusers import AutoencoderKL
-        from transformers import CLIPTextConfig, CLIPTextModel, CLIPTextModelWithProjection
-        from transformers import initialization as transformer_init
-
         mapping = config.mapping()
         text_encoder = dict(mapping["text_encoder"])
         text_encoder_2 = dict(mapping["text_encoder_2"])
@@ -306,20 +309,8 @@ class SdxlPipeline:
 
 
 def warmup() -> None:
-    """Pay this package's DEFERRED import cost before Runtime takes the lane's device lock.
-
-    Runtime calls this off the lock, while another tenant is still computing on the card
-    (cr-104). Every import below is one the construction would otherwise do with the card
-    already vacated for it and idle: `import diffusers` measured 2.69 s warm, and it is
-    what `_hidiffusion_unet_type` actually spends -- the subclass body itself is free.
-    Nothing here may touch the device.
-    """
-    from diffusers import (  # noqa: F401
-        AutoencoderKL,
-        EulerDiscreteScheduler,
-        UNet2DConditionModel,
-    )
-
+    """Runtime's off-lock import hook (cr-104). Every import is at module scope (se-041), so
+    `import sdxl` already paid the cost; the HiDiffusion subclass body left here is free."""
     _hidiffusion_unet_type()
 
 
@@ -370,8 +361,6 @@ class SdxlModel(Model[SdxlPipeline]):
         naming a device — the one live instance se-001's record left open — and it made this
         package unservable on any envelope the runtime did not place at ordinal zero.
         """
-        import torch
-
         first_encoder = self.pipe.components["text_encoder"]
         second_encoder = self.pipe.components["text_encoder_2"]
         with torch.inference_mode():
@@ -394,8 +383,6 @@ class SdxlModel(Model[SdxlPipeline]):
         total_steps: int,
         hidiffusion: bool,
     ) -> Any:
-        import torch
-
         unet = self.pipe.components["unet"]
         if step == 0:
             unet.begin_denoise_request(total_steps, hidiffusion)
@@ -409,8 +396,6 @@ class SdxlModel(Model[SdxlPipeline]):
 
     @uses_components("vae")
     def decode(self, latents: Any) -> Any:
-        import torch
-
         vae = self.pipe.components["vae"]
         tiled = int(latents.shape[-2]) * int(latents.shape[-1]) * 64 > _UNTILED_DECODE_PIXELS
         if tiled:
@@ -451,10 +436,6 @@ def _tokenizer(name: str) -> Any:
     day make by accident — and `fence.py::no-identifiers-in-code` refuses it for exactly
     that reason. The direct constructor takes the two files and cannot reach anywhere.
     """
-    import json
-
-    from transformers import CLIPTokenizer
-
     root = _TOKENIZERS / name
     settings = json.loads((root / "tokenizer_config.json").read_text())
     return CLIPTokenizer(
@@ -509,8 +490,6 @@ def _request_generator(torch: Any, source: object, *, device: Any) -> Any:
     `view.generator` is a `random.Random` while the runtime is weightless and a
     `torch.Generator` once real fills exist; both spellings resolve here.
     """
-    import random
-
     if isinstance(source, torch.Generator):
         return source
     if not isinstance(source, random.Random):
@@ -530,9 +509,6 @@ def generate(
     tel: Telemetry,
 ) -> ImageOutput:
     """One text-to-image generation: tokenize, encode, denoise, decode, encode a PNG."""
-    import torch
-    from diffusers import EulerDiscreteScheduler
-
     view = model.for_request(ctx, seed=payload.seed)
     width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
     steps = payload.steps

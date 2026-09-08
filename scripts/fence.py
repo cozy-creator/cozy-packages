@@ -15,13 +15,13 @@ than as a convention someone remembers:
   2. no-identifiers       code states CAPABILITY, bindings state SELECTION (§1.0/§1.1).
                           A model, release, checkpoint digest or model revision spelled in
                           package code is a binding hard-coded into a build.
-  3. torch-free-import    package module scope may IMPORT nothing heavy: `describe` runs
-                          in a disposable container with no GPU and no weights, and a
-                          module-scope `import torch` makes the surface contract
-                          unreadable without a CUDA image. Checked over the IMPORT CLOSURE
-                          of `[application] object`, so a package may bring its own model
-                          library (H3 brings the whole MiniMax architecture) as long as
-                          nothing reaches it at import time.
+  3. top-level-imports    every import is at module scope (Paul, 2026-09-08): an import
+                          under a def or class hides a dependency from the file's head.
+                          Until se-041 that was how package code kept torch off CI's
+                          torch-free `describe`; production `describe` runs in the
+                          package's LOCKED environment (Creator publishes and installs
+                          there), CI now does the same, and a heavy module-scope import
+                          is the honest spelling. Armed on every run.
   4. no-memory-choreography
                           the mechanisms se-001 DELETED are gone from the source: runtime
                           quantization, source-format parsing, offload/pinning, allocator
@@ -311,6 +311,72 @@ def fence_driver_arm() -> Fence:
     return bad, (
         f"{len(ARM_PRIVATE)} private spellings fire the boundary, {len(ARM_PUBLIC)} public "
         "ones do not, and a recorded exception admits exactly its own driver and module"
+    )
+
+
+def local_imports(label: str, source: str) -> list[str]:
+    """Every import statement below module scope in ONE file, over its real AST.
+
+    A module-level `try:` or `if TYPE_CHECKING:` block IS module scope: the rule is that the
+    file's head declares what the file needs, and both of those still do."""
+    bad: list[str] = []
+
+    def visit(node: ast.AST, scope: str | None) -> None:
+        for child in ast.iter_child_nodes(node):
+            if scope and isinstance(child, ast.Import | ast.ImportFrom):
+                bad.append(
+                    f"{label}:{child.lineno}: import inside `{scope}` — every import goes at "
+                    "the top of the file (Paul, 2026-09-08)"
+                )
+            inner = scope
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
+                inner = f"def {child.name}"
+            elif isinstance(child, ast.ClassDef):
+                inner = f"class {child.name}"
+            visit(child, inner)
+
+    visit(ast.parse(source, filename=label), None)
+    return bad
+
+
+#: The arm: the spellings the rule exists to catch, and the module-scope ones it must admit.
+ARM_LOCAL_IMPORTS = (
+    "def f():\n    import torch\n",
+    "async def f():\n    from diffusers import X\n",
+    "class C:\n    def m(self):\n        import numpy as np\n",
+    "def f():\n    if flag:\n        from . import sibling\n",
+    "def f():\n    try:\n        import cozy_eval\n    except ImportError:\n        pass\n",
+)
+ARM_MODULE_IMPORTS = (
+    "import torch\n",
+    "from x import y\n",
+    "try:\n    import cozy_eval\nexcept ImportError:\n    cozy_eval = None\n",
+    "if TYPE_CHECKING:\n    from x import Y\n",
+)
+
+
+def fence_top_level_imports() -> Fence:
+    """Paul (2026-09-08): never import inside a function body. An import under a def or a
+    class hides a dependency from the file's head — and until se-041 it was how package code
+    kept torch off a torch-free `describe`, a constraint the production describe (Creator, in
+    the package's LOCKED environment) never had. Fired on its own arm first: a rule nobody
+    has watched go red is a rule nobody knows works."""
+    bad = [
+        f"a planted import below module scope does not fail the fence: {source!r}"
+        for source in ARM_LOCAL_IMPORTS
+        if not local_imports("arm.py", source)
+    ]
+    bad += [
+        f"a module-scope import fails the fence: {source!r}"
+        for source in ARM_MODULE_IMPORTS
+        if local_imports("arm.py", source)
+    ]
+    files = sorted(f for f in ROOT.rglob("*.py") if ours(f))
+    for path in files:
+        bad += local_imports(rel(path), path.read_text())
+    return bad, (
+        f"every import in {len(files)} modules is at module scope; {len(ARM_LOCAL_IMPORTS)} "
+        f"planted spellings fire and {len(ARM_MODULE_IMPORTS)} module-scope ones do not"
     )
 
 
@@ -906,6 +972,7 @@ def fence_publication_metadata() -> Fence:
 FENCES = (
     ("author-surface-only", fence_author_surface),
     ("driver-boundary-armed", fence_driver_arm),
+    ("top-level-imports", fence_top_level_imports),
     ("no-identifiers-in-code", fence_identifiers),
     ("no-memory-choreography", fence_no_choreography),
     ("no-test-suite", fence_no_tests),
