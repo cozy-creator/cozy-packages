@@ -699,6 +699,11 @@ def arm_zero_reference_preparation() -> None:
 
     refusal("an unserved step count refuses before preparation", lambda: start(29), "steps")
     check(
+        "the declared request default has an artifact schedule",
+        package.DEFAULT_STEPS in STEPS,
+        True,
+    )
+    check(
         "every served step count states its official grid",
         [start(steps).num_inference_steps for steps in STEPS],
         [steps + 1 for steps in STEPS],
@@ -2381,9 +2386,18 @@ def arm_interface() -> None:
             fields,
         )
         check(
-            f"{name} steps wire enum is the plan's step set",
+            f"{name} steps are a declarative integer validated by the artifact schedule",
             next(field["type"] for field in entry["request"]["fields"] if field["name"] == "steps"),
-            {"literal": list(STEPS)},
+            "int",
+        )
+        check(
+            f"{name} step counts must be positive",
+            next(
+                field["constraints"]
+                for field in entry["request"]["fields"]
+                if field["name"] == "steps"
+            )["ge"],
+            1,
         )
         check(f"{name} shared model", entry["models"][0]["class"], "H3Model")
         check(f"{name} carries no retired stamps member", "stamps" in entry["models"][0], False)

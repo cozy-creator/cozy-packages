@@ -11,7 +11,7 @@ import hashlib
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 import msgspec
 import torch
@@ -58,7 +58,6 @@ from official import (
     build_h3_pipeline,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
-    supported_steps,
     validate_reference_policy,
 )
 
@@ -84,13 +83,15 @@ DEFAULT_REFERENCE_IMAGE_SHORT_EDGE = 1024
 _SHORT_EDGE_LADDER = (2048, 1536, 1024, 768, 512, 256)
 _REFERENCE_FIDELITY_EDGES = {"low": 256, "medium": 1024, "high": REFERENCE_IMAGE_SHORT_EDGE}
 Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
-# The wire enum is the committed plans' step counts; a bound lane serves exactly these
-# and the fastest is the default.
-SUPPORTED_STEPS = supported_steps()
-DEFAULT_STEPS = min(SUPPORTED_STEPS)
+# The request is declarative; the selected artifact's schedule validates supported counts.
+# Do not duplicate those counts in a second wire enum.
+DEFAULT_STEPS = 30
 Steps = Annotated[
-    Literal[SUPPORTED_STEPS],  # type: ignore[valid-type]
-    msgspec.Meta(description="Denoise steps (transformer evaluations); fewer is faster."),
+    int,
+    msgspec.Meta(
+        ge=1,
+        description="Denoise steps (transformer evaluations), supported by the selected lane.",
+    ),
 ]
 
 
