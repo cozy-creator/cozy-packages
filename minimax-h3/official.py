@@ -718,6 +718,41 @@ class _ScopedPipeline:
         )
 
 
+class _ImageEdges:
+    """Request-local configuration view for the official ``ref2va`` setup step.
+
+    The step reads ``reference_image_short_edge`` once per image reference, in packed order,
+    so this view hands every image its own resolved edge and the official resize does the
+    per-image work — no copied geometry, and the shared pipeline config is never touched.
+    A read count that differs from the image count is upstream drift and refuses typed.
+    """
+
+    def __init__(self, config: Mapping[str, Any], edges: Sequence[int]) -> None:
+        self._config = config
+        self._edges = iter(edges)
+        self._count = len(edges)
+
+    def __getattr__(self, name: str) -> Any:
+        if name != "reference_image_short_edge":
+            return getattr(self._config, name)
+        edge = next(self._edges, None)
+        if edge is None:
+            raise ConformanceError(
+                f"official ref2va setup read more than {self._count} image short edges",
+                code="artifact_config",
+                fields=["pipeline", "reference_image_short_edge"],
+            )
+        return edge
+
+    def settle(self) -> None:
+        if next(self._edges, None) is not None:
+            raise ConformanceError(
+                f"official ref2va setup read fewer than {self._count} image short edges",
+                code="artifact_config",
+                fields=["pipeline", "reference_image_short_edge"],
+            )
+
+
 class OfficialH3Pipeline:
     """Both official task workflows over one shared, dual-DiT construction."""
 
@@ -856,15 +891,17 @@ class OfficialH3Pipeline:
         references: Sequence[Any],
         generator: Any,
         steps: int,
-        reference_image_short_edge: int = REFERENCE_IMAGE_SHORT_EDGE,
+        reference_image_short_edges: Sequence[int],
     ) -> Any:
+        """``reference_image_short_edges`` is one resolved edge per image reference, in
+        packed order; the official setup step resizes each image to its own."""
         return self._start(
             "ref2va",
             prompt=prompt,
             generator=generator,
             steps=steps,
             references=list(references),
-            reference_image_short_edge=reference_image_short_edge,
+            image_short_edges=tuple(reference_image_short_edges),
         )
 
     def _start(
@@ -874,10 +911,9 @@ class OfficialH3Pipeline:
         prompt: str,
         generator: Any,
         steps: int,
-        reference_image_short_edge: int = REFERENCE_IMAGE_SHORT_EDGE,
+        image_short_edges: Sequence[int] = (),
         **values: Any,
     ) -> Any:
-        from diffusers.configuration_utils import FrozenDict
         from diffusers.modular_pipelines.modular_pipeline import PipelineState
 
         # The plan, not the request, spells the official grid: `steps` transformer
@@ -897,21 +933,15 @@ class OfficialH3Pipeline:
         workflow = self._workflow(task, state)
         if "before_encode" in self._blocks[workflow].sub_blocks:
             pipe = self._pipes[workflow]
+            edges = None
             if task == "ref2va":
                 # Only setup uses this per-request geometry. A view leaves the shared
                 # pipeline unchanged, even if preprocessing raises or calls overlap.
-                pipe = _ScopedPipeline(
-                    pipe,
-                    overrides={
-                        "config": FrozenDict(
-                            {
-                                **pipe.config,
-                                "reference_image_short_edge": reference_image_short_edge,
-                            }
-                        )
-                    },
-                )
+                edges = _ImageEdges(pipe.config, image_short_edges)
+                pipe = _ScopedPipeline(pipe, overrides={"config": edges})
             self._run_with(task, pipe, "before_encode", state)
+            if edges is not None:
+                edges.settle()
         return state
 
     def condition_text(
