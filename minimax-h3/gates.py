@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any
 
+import cozy_eval.audio as ce_audio
+import cozy_eval.integrity as ce_integrity
+import cozy_eval.metrics.audio as ce_metrics_audio
 from cozy_runtime.author import OutputError, Telemetry
 
 
@@ -30,19 +33,6 @@ class MediaFacts:
         return abs(audio_seconds - self.duration) <= self.av_tolerance
 
 
-def _cozy_eval() -> tuple[Any, Any, Any]:
-    try:
-        import cozy_eval.audio as ce_audio
-        import cozy_eval.integrity as ce_integrity
-        import cozy_eval.metrics.audio as ce_metrics_audio
-    except ImportError as exc:
-        raise OutputError(
-            "cozy-eval is absent, so this package cannot prove its generated tensors",
-            code="output_integrity",
-        ) from exc
-    return ce_audio, ce_integrity, ce_metrics_audio
-
-
 def pre_encode_gate(
     torch: Any,
     *,
@@ -58,8 +48,6 @@ def pre_encode_gate(
     Quality acceptance belongs to explicit checkpoint validation. An inference
     result retains its video and warnings so the caller can inspect it.
     """
-    ce_audio, ce_integrity, ce_metrics_audio = _cozy_eval()
-
     if waveform.ndim != 2:
         raise OutputError(
             f"the audio decode has shape {tuple(waveform.shape)}, expected (channels, samples)",

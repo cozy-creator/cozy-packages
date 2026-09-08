@@ -12,6 +12,7 @@ the shapes it ran. No weights, GPU, network, or test framework.
 
 from __future__ import annotations
 
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -22,10 +23,6 @@ from cozy_runtime.author import Cancelled, Config
 from cozy_runtime.author.fakes import warm_with_fakes
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path[:0] = [str(ROOT / "anima"), str(ROOT / "sdxl")]
-
-import anima  # noqa: E402
-import sdxl  # noqa: E402
 
 PASS = "  ok   "
 FAIL = "  FAIL "
@@ -120,8 +117,17 @@ def anima_config() -> Config:
     return Config(section)
 
 
+def load(name: str) -> Any:
+    """The package under proof, from its source tree, in ITS locked environment.
+
+    Loaded when the arm runs, never at module scope: this driver runs inside one package's
+    lock, and the other package's stack (sdxl's `hidiffusion`, say) is not in it."""
+    sys.path.insert(0, str(ROOT / name))
+    return importlib.import_module(name)
+
+
 def arm_sdxl() -> None:
-    package = sdxl
+    package = load("sdxl")
     pipe = package.build_pipeline(sdxl_config())
     unet_inputs: list[tuple[int, ...]] = []
     decoded: list[tuple[int, ...]] = []
@@ -142,7 +148,7 @@ def arm_sdxl() -> None:
 
 
 def arm_anima() -> None:
-    package = anima
+    package = load("anima")
     pipe = package.build_pipeline(anima_config())
     dit_inputs: list[tuple[int, ...]] = []
     decoded: list[tuple[int, ...]] = []

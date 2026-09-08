@@ -14,6 +14,7 @@ from fractions import Fraction
 from typing import Annotated, Any, Literal
 
 import msgspec
+import torch
 from cozy_runtime.author import (
     App,
     AssetBound,
@@ -437,8 +438,6 @@ def _finish(
     cancel: Any,
     checks: NumericalChecks | None = None,
 ) -> H3VideoOutput:
-    import torch
-
     cancel()
     with tel.stage("decode_audio", overall_range=(0.85, 0.90)):
         audio, sample_rate = model.decode_audio(task, state, checks=checks)

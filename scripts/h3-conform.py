@@ -20,14 +20,16 @@ from fractions import Fraction
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, get_type_hints
 
-ROOT = Path(__file__).resolve().parent.parent
-H3 = ROOT / "minimax-h3"
-sys.path.insert(0, str(H3))
-
-from cozy_runtime.author import (  # noqa: E402
+import msgspec
+import numpy as np
+import torch
+from cozy_runtime.author import (
+    Artifact,
     AudioAsset,
+    Config,
+    DecodedAudio,
     DecodedVideo,
     ImageAsset,
     UnsupportedInput,
@@ -35,8 +37,43 @@ from cozy_runtime.author import (  # noqa: E402
     canonical_json,
     describe,
 )
+from cozy_runtime.author.fakes import fake_attempt, fake_telemetry
+from cozy_runtime.internal.derive import derive
+from diffusers import (
+    AutoencoderKLMiniMaxH3,
+    AutoencoderKLMiniMaxH3Audio,
+    MiniMaxH3Blocks,
+    MiniMaxH3ModularPipeline,
+    MiniMaxH3Scheduler,
+    MiniMaxH3Transformer3DModel,
+)
+from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference
+from diffusers.modular_pipelines.minimax_h3.before_denoise import MiniMaxH3SetTimestepsStep
+from diffusers.modular_pipelines.minimax_h3.denoise import MiniMaxH3LoopSchedulerStep
+from torch.utils._python_dispatch import TorchDispatchMode
+from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
+from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+    Qwen3VLTextRotaryEmbedding,
+    Qwen3VLVisionRotaryEmbedding,
+)
+
+ROOT = Path(__file__).resolve().parent.parent
+H3 = ROOT / "minimax-h3"
+sys.path.insert(0, str(H3))
+sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
+
+from h3_tables.job import _asset, _full_order  # noqa: E402
+from h3_tables.model_config import (  # noqa: E402
+    dual_adaln_pruned_config,
+    dual_full_config,
+    parse_production_config,
+)
+from h3_tables.order import current_order  # noqa: E402
+from h3_tables.plans import parse_plan  # noqa: E402
+from h3_tables.source import official_full_specs  # noqa: E402
 
 import h3 as package  # noqa: E402
+from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer  # noqa: E402
 from conditioner import build_text_conditioner, text_conditioner_config  # noqa: E402
 from gates import MediaFacts, pre_encode_gate  # noqa: E402
 from h3_order import construction_order, encode_order  # noqa: E402
@@ -45,6 +82,7 @@ from official import (  # noqa: E402
     FRAMES,
     REFERENCE_IMAGE_SHORT_EDGE,
     NumericalChecks,
+    OfficialH3Pipeline,
     ResidentWeights,
     ScheduleFacts,
     _aligned_soundtrack,
@@ -64,6 +102,7 @@ from official import (  # noqa: E402
     timestep_plan_digest,
     validate_reference_policy,
 )
+from vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
 
 STEPS = supported_steps()
 DEFAULT_STEPS = min(STEPS)
@@ -125,14 +164,6 @@ def dit_config(task: str, modulation: str = "full") -> dict[str, object]:
 
 def arm_producer_configs() -> None:
     """Pass actual producer bytes into the serving parser before any weight transfer."""
-    sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
-    from h3_tables.model_config import (
-        dual_adaln_pruned_config,
-        dual_full_config,
-        parse_production_config,
-    )
-    from h3_tables.plans import parse_plan
-
     assets = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
     sections = parse_production_config((assets / "model-config.json").read_bytes())
     plans = {
@@ -175,22 +206,6 @@ def arm_producer_configs() -> None:
 
 def arm_producer_construction_order() -> None:
     """The producer's one ordered spec resource follows the real serving factory."""
-    import torch
-    from cozy_runtime.author import Config
-
-    from official import OfficialH3Pipeline
-
-    sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
-    from h3_tables.job import _asset, _full_order
-    from h3_tables.model_config import (
-        dual_adaln_pruned_config,
-        dual_full_config,
-        parse_production_config,
-    )
-    from h3_tables.order import current_order
-    from h3_tables.plans import parse_plan
-    from h3_tables.source import official_full_specs
-
     sections = parse_production_config(_asset("model-config.json"))
     current = current_order(_asset("whole-order.json"))
     plans = {
@@ -333,12 +348,6 @@ def float_digest(values: Any) -> str:
 
 
 def arm_schedule() -> None:
-    import torch
-    from diffusers import MiniMaxH3Scheduler
-    from diffusers.modular_pipelines.minimax_h3.before_denoise import (
-        MiniMaxH3SetTimestepsStep,
-    )
-
     print("\n== exact schedule and AdaLN-pruned handoff ==")
     plans = {task: canonical_timestep_plan(task) for task in ("fl2va", "ref2va")}
     for task, plan in plans.items():
@@ -518,14 +527,6 @@ def arm_schedule() -> None:
 
 
 def meta_h3_pipeline() -> Any:
-    import torch
-    from cozy_runtime.author import Config, canonical_json
-
-    sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
-    from h3_tables.model_config import dual_full_config, parse_production_config
-
-    from official import OfficialH3Pipeline
-
     assets = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
     config = canonical_json.decode(
         dual_full_config(parse_production_config((assets / "model-config.json").read_bytes()))
@@ -535,13 +536,6 @@ def meta_h3_pipeline() -> Any:
 
 
 def arm_reference_resolution() -> None:
-    from typing import get_type_hints
-
-    import msgspec
-    import numpy as np
-    import torch
-    from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference
-
     print("\n== request-local reference resolution uses official preprocessing ==")
     pipe = meta_h3_pipeline()
     original_config = dict(pipe._pipes["ref2va"].config)
@@ -692,8 +686,6 @@ def arm_reference_resolution() -> None:
 
 
 def arm_zero_reference_preparation() -> None:
-    import torch
-
     print("\n== text-only request reaches the official denoise loop ==")
     pipe = meta_h3_pipeline()
     # Only preparation executes: synthetic text embeddings and a CPU scope stand
@@ -749,15 +741,6 @@ def arm_zero_reference_preparation() -> None:
 
 
 def arm_graph_and_dtypes() -> None:
-    import torch
-    from diffusers import (
-        AutoencoderKLMiniMaxH3,
-        AutoencoderKLMiniMaxH3Audio,
-        MiniMaxH3Blocks,
-        MiniMaxH3ModularPipeline,
-        MiniMaxH3Transformer3DModel,
-    )
-
     print("\n== official task-pruned graphs and destination dtypes ==")
     common = {
         "image_processor",
@@ -903,11 +886,6 @@ def arm_graph_and_dtypes() -> None:
 
 
 def arm_text_conditioner() -> None:
-    import torch
-    from cozy_runtime.author import Artifact, Config
-    from cozy_runtime.internal.derive import derive
-    from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
-
     print("\n== exact 50-layer pre-norm Qwen3-VL conditioner ==")
     source = tiny_text_config()
     upstream = {key: value for key, value in source.items() if key != "cozy_h3"}
@@ -968,11 +946,6 @@ def arm_text_conditioner() -> None:
 
     # Exercise the release's actual rotary widths rather than the tiny fixture's
     # one-frequency vision table, whose only value (1) survives a BF16 round trip.
-    from transformers.models.qwen3_vl.modeling_qwen3_vl import (
-        Qwen3VLTextRotaryEmbedding,
-        Qwen3VLVisionRotaryEmbedding,
-    )
-
     rotary_source = tiny_text_config()
     cast(dict[str, Any], rotary_source["text_config"]).update(
         head_dim=128,
@@ -1155,11 +1128,6 @@ def arm_text_conditioner() -> None:
 
 
 def arm_adaln_pruned() -> None:
-    import torch
-    from diffusers import MiniMaxH3Transformer3DModel
-
-    from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
-
     print("\n== AdaLN-pruned modulation over the inherited Diffusers forward ==")
     plan = canonical_timestep_plan("fl2va")
     timesteps, block_keys = plan.table_layout()
@@ -1423,8 +1391,6 @@ def arm_processor() -> None:
 
 
 def _audio(seconds: int, *, rate: int = 4, start: Fraction = Fraction(0)) -> Any:
-    from cozy_runtime.author import DecodedAudio
-
     samples = seconds * rate
     return DecodedAudio(
         channels=1,
@@ -1453,9 +1419,6 @@ def _video(seconds: int, *, soundtrack: Any | None = None, width: int = 1, heigh
 
 
 def arm_media() -> None:
-    import torch
-    from cozy_runtime.author.fakes import fake_attempt, fake_telemetry
-
     print("\n== ordered mixed references, exact clocks, and continuation identity ==")
     check(
         "maximum mixed reference policy",
@@ -1837,11 +1800,6 @@ class _NumericalTelemetry:
 
 
 def arm_numerics() -> None:
-    import torch
-    from diffusers import MiniMaxH3Scheduler
-    from diffusers.modular_pipelines.minimax_h3.denoise import MiniMaxH3LoopSchedulerStep
-    from torch.utils._python_dispatch import TorchDispatchMode
-
     print("\n== first non-finite numerical boundary ==")
     telemetry = _NumericalTelemetry()
     checks = NumericalChecks(cast(Any, telemetry))
@@ -2019,11 +1977,6 @@ def arm_numerics() -> None:
 
 
 def arm_resident_fill() -> None:
-    import torch
-    from diffusers import MiniMaxH3Scheduler
-    from diffusers.modular_pipelines.minimax_h3.denoise import MiniMaxH3LoopSchedulerStep
-    from torch.utils._python_dispatch import TorchDispatchMode
-
     print("\n== resident weights are scanned once per fill ==")
 
     class Kernels(TorchDispatchMode):  # type: ignore[misc]  # Torch is absent in static CI.
@@ -2178,9 +2131,6 @@ def arm_resident_fill() -> None:
 
 
 def arm_output_gates() -> None:
-    import torch
-    from cozy_runtime.author.fakes import fake_telemetry
-
     print("\n== structural refusals and quality observations ==")
     requested = MediaFacts(width=1, height=1, frames=2, fps=24, sample_rate=24, mute=False)
     decoded = torch.zeros((1, 2, 3, 1, 1), dtype=torch.float32)
@@ -2243,11 +2193,6 @@ def arm_output_gates() -> None:
 def arm_vae_tiles() -> None:
     """h3a-017: one chunk's tiles decode as one batch, within one ulp of the tile-at-a-time
     decode, on the real VAE class at the release tile geometry (CPU, random weights)."""
-    import torch
-    from diffusers import AutoencoderKLMiniMaxH3
-
-    from vae_tiles import TILE_BATCH, TileBatchedVideoVAE
-
     print("\n== tile-batched video VAE decode ==")
     torch.manual_seed(0)
     vae = TileBatchedVideoVAE(
@@ -2328,8 +2273,6 @@ def arm_vae_tiles() -> None:
 def arm_rgb8_handoff() -> None:
     """h3a-017: the chunked, digested-as-it-lands RGB8 handoff is byte-identical to a
     whole-tensor quantize and its digest is the digest of the finished buffer."""
-    import torch
-
     print("\n== chunked RGB8 handoff ==")
     frames = 3 * package._RGB8_CHUNK_FRAMES + 1  # three full chunks and a ragged tail
     decoded = torch.rand((1, frames, 3, 16, 32), generator=torch.Generator().manual_seed(2))

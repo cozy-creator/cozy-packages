@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import random
 import struct
 import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -23,6 +24,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 import msgspec
+import numpy as np
+import torch
 from cozy_runtime.author import (
     Config,
     ConformanceError,
@@ -34,8 +37,32 @@ from cozy_runtime.author import (
     Telemetry,
     canonical_json,
 )
+from diffusers import (
+    AutoencoderKLMiniMaxH3Audio,
+    MiniMaxH3Blocks,
+    MiniMaxH3ModularPipeline,
+    MiniMaxH3Scheduler,
+    MiniMaxH3Transformer3DModel,
+)
+from diffusers.modular_pipelines.minimax_h3 import (
+    MiniMaxH3AudioReference,
+    MiniMaxH3ImageReference,
+    MiniMaxH3VideoReference,
+)
+from diffusers.modular_pipelines.minimax_h3.modular_pipeline import resolve_canvas_size
+from diffusers.modular_pipelines.modular_pipeline import PipelineState
+from torch.utils._pytree import keystr, tree_flatten_with_path
+from transformers import (
+    AddedToken,
+    Qwen2Tokenizer,
+    Qwen2VLImageProcessor,
+    Qwen3VLProcessor,
+    Qwen3VLVideoProcessor,
+)
 
+from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
 from conditioner import build_text_conditioner
+from vae_tiles import TileBatchedVideoVAE
 
 Task = Literal["fl2va", "ref2va"]
 _TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
@@ -398,8 +425,6 @@ def reference_image_vision_tokens(
 
 def reference_video_vision_tokens(width: int, height: int, duration: Fraction) -> int:
     """Exact official 2-fps, pair-merged vision demand after the target canvas rule."""
-    from diffusers.modular_pipelines.minimax_h3.modular_pipeline import resolve_canvas_size
-
     canvas = resolve_canvas_size(width, height, 32, 768, 768 * 1344)
     canvas_height, canvas_width = (int(value) for value in canvas)
     frames_at_24fps = _round_fraction(duration * FPS)
@@ -500,9 +525,6 @@ class NumericalChecks:
     def _observe(
         self, stage: str, values: Sequence[tuple[str, Any]], *, required: bool
     ) -> _Observation:
-        import torch
-        from torch.utils._pytree import keystr, tree_flatten_with_path
-
         observation = _Observation(stage)
         with torch.no_grad():
             for name, value in values:
@@ -590,8 +612,6 @@ class NumericalChecks:
     @staticmethod
     def _read(scalars: list[Any]) -> list[float]:
         """Copy queued scalars back in one sync per device, whatever mix they sit on."""
-        import torch
-
         values: dict[int, float] = {}
         by_device: dict[Any, list[int]] = {}
         for index, scalar in enumerate(scalars):
@@ -757,15 +777,6 @@ class OfficialH3Pipeline:
     """Both official task workflows over one shared, dual-DiT construction."""
 
     def __init__(self, config: Config) -> None:
-        from diffusers import (
-            AutoencoderKLMiniMaxH3Audio,
-            MiniMaxH3Blocks,
-            MiniMaxH3ModularPipeline,
-            MiniMaxH3Scheduler,
-        )
-
-        from vae_tiles import TileBatchedVideoVAE
-
         mapping = _artifact_sections(config.mapping())
         blocks = {name: MiniMaxH3Blocks().get_workflow(name) for name in _WORKFLOW_TASKS}
         pipes = {name: MiniMaxH3ModularPipeline(blocks=block) for name, block in blocks.items()}
@@ -816,10 +827,6 @@ class OfficialH3Pipeline:
 
     def generator(self, source: object) -> Any:
         """Adapt Runtime's public request generator to Diffusers' torch generator."""
-        import random
-
-        import torch
-
         if isinstance(source, torch.Generator):
             return source
         if not isinstance(source, random.Random):
@@ -830,29 +837,20 @@ class OfficialH3Pipeline:
         return torch.Generator().manual_seed(source.getrandbits(63))
 
     def image_reference(self, image: DecodedImage) -> Any:
-        import numpy as np
-        from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference
-
         pixels = np.frombuffer(image.rgb, dtype=np.uint8).reshape(image.height, image.width, 3)
         return MiniMaxH3ImageReference(image=pixels)
 
     def keyframe(self, image: DecodedImage) -> Any:
         """Public RGB bytes into the input type required by the official resize block."""
-        import numpy as np
-
         pixels = np.frombuffer(image.rgb, dtype=np.uint8).reshape(image.height, image.width, 3)
         return self._pipes["fl2va"].image_processor.numpy_to_pil(pixels.astype(np.float32) / 255.0)[
             0
         ]
 
     def audio_reference(self, audio: DecodedAudio) -> Any:
-        from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3AudioReference
-
         return MiniMaxH3AudioReference(audio=_audio_tensor(audio), sample_rate=audio.sample_rate)
 
     def video_reference(self, video: DecodedVideo) -> Any:
-        from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3VideoReference
-
         soundtrack = _aligned_soundtrack(video)
         return MiniMaxH3VideoReference(
             frames=_video_at_24fps(video),
@@ -914,8 +912,6 @@ class OfficialH3Pipeline:
         image_short_edges: Sequence[int] = (),
         **values: Any,
     ) -> Any:
-        from diffusers.modular_pipelines.modular_pipeline import PipelineState
-
         # The plan, not the request, spells the official grid: `steps` transformer
         # evaluations are the schedule's grid points less the terminal zero.
         schedule = self._plans[task].schedule(steps)
@@ -981,8 +977,6 @@ class OfficialH3Pipeline:
         cancel: Callable[[], None],
         checks: NumericalChecks | None = None,
     ) -> ScheduleFacts:
-        from diffusers import MiniMaxH3Scheduler
-
         blocks = self._blocks[self._workflow(task, state)].sub_blocks
         scoped = _ScopedPipeline(
             self._pipes[self._workflow(task, state)],
@@ -1159,13 +1153,9 @@ def _dit_specs(
 
 
 def _build_dit(config: Mapping[str, Any], structure: str, plan: TimestepPlan) -> Any:
-    from diffusers import MiniMaxH3Transformer3DModel
-
     if structure == "full":
         transformer = MiniMaxH3Transformer3DModel.from_config(dict(config))
     else:
-        from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
-
         timesteps, block_keys = plan.table_layout()
         transformer = AdaLNPrunedMiniMaxH3Transformer.from_official_config(
             config,
@@ -1201,8 +1191,6 @@ def _validate_dual_dit_topology(dits: Mapping[Task, Any]) -> None:
 
 def _apply_transformer_dtype(transformer: Any) -> Any:
     """Reproduce Diffusers' mixed FULL compute policy on Runtime destinations."""
-    import torch
-
     # Cast each root directly to its final dtype. In particular, RoPE frequencies
     # are real config-derived buffers: BF16 followed by FP32 cannot restore them.
     for name, component in transformer.named_children():
@@ -1294,14 +1282,6 @@ def _validate_model_contract(pipe: Any, transformer: Any, video_vae: Any, audio_
 
 
 def _processor() -> tuple[Any, Any]:
-    from transformers import (
-        AddedToken,
-        Qwen2Tokenizer,
-        Qwen2VLImageProcessor,
-        Qwen3VLProcessor,
-        Qwen3VLVideoProcessor,
-    )
-
     vocab = _json_mapping(_ASSETS / "tokenizer" / "vocab.json")
     config = _json_mapping(_ASSETS / "tokenizer" / "tokenizer_config.json")
     config.pop("tokenizer_class", None)
@@ -1361,8 +1341,6 @@ def _json_mapping(path: Path) -> dict[str, Any]:
 
 
 def _audio_tensor(audio: DecodedAudio) -> Any:
-    import torch
-
     channels = [
         torch.frombuffer(bytearray(channel), dtype=torch.float32) for channel in audio.pcm_f32le
     ]
@@ -1371,8 +1349,6 @@ def _audio_tensor(audio: DecodedAudio) -> Any:
 
 def _aligned_soundtrack(video: DecodedVideo) -> Any | None:
     """Put embedded PCM on the video's origin without rounding either native clock."""
-    import torch
-
     audio = video.soundtrack
     if audio is None:
         return None
@@ -1406,8 +1382,6 @@ def _aligned_soundtrack(video: DecodedVideo) -> Any | None:
 
 def _video_at_24fps(video: DecodedVideo) -> Any:
     """Exact presentation boundaries onto the official whole-frame 24-fps clock."""
-    import torch
-
     starts = video.frame_pts
     durations = video.frame_durations
     for index in range(len(starts) - 1):

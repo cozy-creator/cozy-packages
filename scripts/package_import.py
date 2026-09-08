@@ -7,6 +7,10 @@ error — a fact no static check and no lock comparison can reach. Run it with t
 own interpreter, never the checking venv:
 
     sdxl/.venv/bin/python scripts/package_import.py sdxl
+
+`--installed` imports the package from the wheel installed in that environment instead of
+the source tree (run it under `python -P`, so nothing but site-packages can answer): the
+proof that the built wheel carries every module and asset the application needs.
 """
 
 from __future__ import annotations
@@ -71,25 +75,35 @@ def check_anima_cosmos_padding_mask(torch: Any) -> None:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2 or argv[1] not in PACKAGES:
-        print(f"usage: {argv[0]} <{'|'.join(PACKAGES)}>", file=sys.stderr)
+    installed = "--installed" in argv
+    args = [arg for arg in argv[1:] if arg != "--installed"]
+    if len(args) != 1 or args[0] not in PACKAGES:
+        print(f"usage: {argv[0]} <{'|'.join(PACKAGES)}> [--installed]", file=sys.stderr)
         return 2
-    package = argv[1]
+    package = args[0]
     module_name, peers = PACKAGES[package]
     package_root = ROOT / package
     source_root = package_root / "src"
-    sys.path.insert(0, str(source_root if source_root.is_dir() else package_root))
+    if not installed:
+        sys.path.insert(0, str(source_root if source_root.is_dir() else package_root))
     for peer in peers:
         importlib.import_module(peer)
     if "torch" in peers:
         torch = importlib.import_module("torch")
         print(f"{package}: torch {torch.__version__}, {len(peers)} peers imported")
-        if package == "anima":
+        if package == "anima" and not installed:
             check_anima_cosmos_padding_mask(torch)
             print("anima: Cosmos padding-mask forward passed on CPU")
     else:
         print(f"{package}: torch-free, {len(peers)} peers imported")
     module = importlib.import_module(module_name)
+    if installed:
+        location = pathlib.Path(str(module.__file__))
+        assert "site-packages" in location.parts, f"{module_name} answered from {location}"
+        if package == "minimax-h3":
+            for asset in ("processor", "timestep-plans", "tokenizer"):
+                assert (location.parent / asset).is_dir(), f"the wheel carries no {asset}/"
+        print(f"{package}: {module_name} imported from the installed wheel")
     app = module.app
     print(f"{package}: {module_name}:app registers {sorted(app._registry)}")
     return 0
