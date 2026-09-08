@@ -18,15 +18,17 @@ import torch
 from cozy_runtime.author import (
     App,
     AssetBound,
-    AudioAsset,
+    AssetLimits,
+    Assets,
     Context,
     DecodedAudio,
     DecodedVideo,
+    Image,
     ImageAsset,
     ImageFrame,
     InvalidRequest,
     Loader,
-    MediaDecoder,
+    Mixed,
     Model,
     OutputError,
     Outputs,
@@ -43,7 +45,11 @@ from gates import MediaFacts, pre_encode_gate
 from official import (
     FPS,
     FRAMES,
+    MAX_AUDIO_REFERENCES,
     MAX_CONDITIONER_VISION_TOKENS,
+    MAX_IMAGE_REFERENCES,
+    MAX_REFERENCES,
+    MAX_VIDEO_REFERENCES,
     REFERENCE_IMAGE_SHORT_EDGE,
     NumericalChecks,
     OfficialH3Pipeline,
@@ -59,43 +65,26 @@ from official import (
 app = App()
 
 _MIB = 1 << 20
-_GIB = 1 << 30
-_IMAGE_BOUND = AssetBound(max_bytes=64 * _MIB, max_decoded_bytes=256 * _MIB)
-_AUDIO_BOUND = AssetBound(max_bytes=128 * _MIB, max_decoded_bytes=128 * _MIB)
-_VIDEO_BOUND = AssetBound(max_bytes=2 * _GIB, max_decoded_bytes=2 * _GIB)
 _MIN_REFERENCE_DURATION = Fraction(2, 1)
 _MAX_REFERENCE_DURATION = Fraction(15, 1)
-DEFAULT_REFERENCE_IMAGE_SHORT_EDGE = 1024
-#: Auto-sizing rungs, walked downward from the request default until the vision budget fits.
-_SHORT_EDGE_LADDER = (2048, 1536, 1024, 768, 512, 256)
-ShortEdge = Annotated[
-    int,
-    msgspec.Meta(
-        ge=256,
-        le=REFERENCE_IMAGE_SHORT_EDGE,
-        description="Image-reference short edge in pixels; lower trades detail for speed.",
+
+
+ReferenceAssets = Annotated[
+    Assets[Mixed],
+    AssetLimits(
+        images=MAX_IMAGE_REFERENCES,
+        videos=MAX_VIDEO_REFERENCES,
+        audio=MAX_AUDIO_REFERENCES,
+        total=MAX_REFERENCES,
     ),
+    msgspec.Meta(min_length=1),
 ]
-
-
-class ImageReference(msgspec.Struct, tag="image", tag_field="type", forbid_unknown_fields=True):
-    image: Annotated[ImageAsset, _IMAGE_BOUND]
-    #: Explicit fidelity. Absent, the request default applies and may auto-step down.
-    short_edge: ShortEdge | None = None
-
-
-class VideoReference(msgspec.Struct, tag="video", tag_field="type", forbid_unknown_fields=True):
-    video: Annotated[VideoAsset, _VIDEO_BOUND]
-
-
-class AudioReference(msgspec.Struct, tag="audio", tag_field="type", forbid_unknown_fields=True):
-    audio: Annotated[AudioAsset, _AUDIO_BOUND]
-
-
-Reference = ImageReference | VideoReference | AudioReference
+KeyframeAssets = Annotated[Assets[Image], AssetLimits(images=2)]
+DEFAULT_REFERENCE_IMAGE_SHORT_EDGE = 1024
+_SHORT_EDGE_LADDER = (2048, 1536, 1024, 768, 512, 256)
+_REFERENCE_FIDELITY_EDGES = {"low": 256, "medium": 1024, "high": REFERENCE_IMAGE_SHORT_EDGE}
 Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
-# The shipped plans own the enum. The imported module and conformance proof also
-# verify that the other task supports the same schedules.
+# The shipped plans own the enum and must agree for both inference tasks.
 SUPPORTED_STEPS = data_values(
     __file__, "timestep-plans/fl2va.json", "schedules", "transformer_evaluations"
 )
@@ -113,8 +102,6 @@ Steps = Annotated[
 
 class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Prompt
-    first_frame: Annotated[ImageAsset | None, _IMAGE_BOUND] = None
-    last_frame: Annotated[ImageAsset | None, _IMAGE_BOUND] = None
     mute: bool = False
     seed: int | None = None
     steps: Steps = DEFAULT_STEPS
@@ -122,11 +109,16 @@ class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
 
 class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Prompt
-    references: Annotated[list[Reference], msgspec.Meta(min_length=1, max_length=12)]
     mute: bool = False
     seed: int | None = None
-    #: The short edge of every image without its own; stepped down until the budget fits.
-    reference_image_short_edge: ShortEdge = DEFAULT_REFERENCE_IMAGE_SHORT_EDGE
+    reference_image_short_edge: Annotated[
+        int,
+        msgspec.Meta(
+            ge=256,
+            le=REFERENCE_IMAGE_SHORT_EDGE,
+            description="Image-reference short edge in pixels; lower trades detail for speed.",
+        ),
+    ] = DEFAULT_REFERENCE_IMAGE_SHORT_EDGE
     steps: Steps = DEFAULT_STEPS
 
 
@@ -139,21 +131,16 @@ class H3VideoOutput(msgspec.Struct):
     warnings: list[str] = msgspec.field(default_factory=list)
 
 
-def preflight_reference_media(payload: ReferenceMediaToVideoInput) -> ReferencePolicyFacts:
+def preflight_reference_media(
+    payload: ReferenceMediaToVideoInput, assets: ReferenceAssets
+) -> ReferencePolicyFacts:
     """Refuse cross-field count errors before Runtime hydrates a single asset."""
-    kinds = [_reference_kind(reference) for reference in payload.references]
+    del payload
+    kinds = [assets.info(index).kind for index in range(len(assets))]
     try:
         return validate_reference_policy(kinds)
     except ValueError as exc:
-        raise UnsupportedInput(str(exc), code="reference_policy", fields=["references"]) from exc
-
-
-def _reference_kind(reference: Reference) -> str:
-    if isinstance(reference, ImageReference):
-        return "image"
-    if isinstance(reference, VideoReference):
-        return "video"
-    return "audio"
+        raise UnsupportedInput(str(exc), code="reference_policy", fields=["assets"]) from exc
 
 
 class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept"):
@@ -241,18 +228,34 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept
             return self.pipe.denoise("ref2va", state, on_step=on_step, cancel=cancel, checks=checks)
 
 
-def _decode_keyframe(
-    asset: ImageAsset | None,
+def _keyframe_roles(assets: KeyframeAssets) -> tuple[int | None, int | None]:
+    """Explicit first/last labels choose roles; other images fill remaining roles in order."""
+    named = {
+        assets.info(index).label: index
+        for index in range(len(assets))
+        if assets.info(index).label in {"first", "last"}
+    }
+    remaining = iter(
+        index for index in range(len(assets)) if assets.info(index).label not in {"first", "last"}
+    )
+    first = named["first"] if "first" in named else next(remaining, None)
+    last = named["last"] if "last" in named else next(remaining, None)
+    if next(remaining, None) is not None:
+        raise InvalidRequest("FL2VA accepts at most two images", fields=["assets"])
+    return first, last
+
+
+def _keyframe_image(
+    assets: KeyframeAssets,
+    index: int | None,
     *,
     field: str,
-    decoder: MediaDecoder,
-    pipe: OfficialH3Pipeline,
-) -> Any | None:
-    if asset is None:
+) -> Image | None:
+    if index is None:
         return None
-    image = decoder.decode_image(asset)
+    image = assets[index]
     _validate_ratio(image.width, image.height, field)
-    return pipe.keyframe(image)
+    return image
 
 
 class ImageSizing(msgspec.Struct, frozen=True):
@@ -316,52 +319,54 @@ def resolve_reference_sizing(
         f"{[image.requested for image in explicit]}); this release admits at most "
         f"{MAX_CONDITIONER_VISION_TOKENS}",
         code="reference_policy",
-        fields=["references"],
+        fields=["assets"],
     )
 
 
-def _decode_references(
-    references: list[Reference],
+def assets_to_h3_refs(
+    references: ReferenceAssets,
     *,
-    decoder: MediaDecoder,
     pipe: OfficialH3Pipeline,
     reference_image_short_edge: int = DEFAULT_REFERENCE_IMAGE_SHORT_EDGE,
 ) -> tuple[list[Any], ReferenceSizing]:
     prepared: list[Any] = []
-    images: list[ImageSizing] = []
     video_duration = Fraction(0)
     audio_duration = Fraction(0)
     video_tokens = 0
+    images: list[ImageSizing] = []
 
     for index, reference in enumerate(references):
-        field = f"references.{index}"
-        if isinstance(reference, ImageReference):
-            image = decoder.decode_image(reference.image)
+        info = references.info(index)
+        field = info.id
+        if isinstance(reference, Image):
+            image = reference
             _validate_ratio(image.width, image.height, field)
-            images.append(ImageSizing(field, image.width, image.height, reference.short_edge))
+            requested = (
+                None if info.fidelity == "auto" else _REFERENCE_FIDELITY_EDGES[info.fidelity]
+            )
+            images.append(ImageSizing(field, image.width, image.height, requested))
             prepared.append(pipe.image_reference(image))
-        elif isinstance(reference, VideoReference):
-            video = decoder.decode_video(reference.video)
+        elif isinstance(reference, DecodedVideo):
+            video = reference
             _validate_video(video, field)
             video_duration += video.duration
             if video_duration > _MAX_REFERENCE_DURATION:
                 raise InvalidRequest(
                     "reference videos total more than 15 seconds",
                     code="reference_policy",
-                    fields=["references"],
+                    fields=["assets"],
                 )
             video_tokens += reference_video_vision_tokens(video.width, video.height, video.duration)
             prepared.append(pipe.video_reference(video))
         else:
-            audio = decoder.decode_audio(reference.audio)
+            audio = reference
             _validate_audio(audio, field)
             audio_duration += audio.duration
             _validate_audio_aggregate(audio_duration)
             prepared.append(pipe.audio_reference(audio))
-    sizing = resolve_reference_sizing(
+    return prepared, resolve_reference_sizing(
         images, default=reference_image_short_edge, video_tokens=video_tokens
     )
-    return prepared, sizing
 
 
 def _validate_ratio(width: int, height: int, field: str) -> None:
@@ -432,7 +437,7 @@ def _validate_audio_aggregate(duration: Fraction) -> None:
         raise InvalidRequest(
             "standalone audio references total more than 15 seconds",
             code="reference_policy",
-            fields=["references"],
+            fields=["assets"],
         )
 
 
@@ -466,6 +471,7 @@ def _finish(
     cancel: Any,
     checks: NumericalChecks | None = None,
 ) -> H3VideoOutput:
+
     cancel()
     with tel.stage("decode_audio", overall_range=(0.85, 0.90)):
         audio, sample_rate = model.decode_audio(task, state, checks=checks)
@@ -599,11 +605,11 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
 
 
 @app.entrypoint()
-def first_last_frame_to_video(
+def fl2va(
     ctx: Context,
     payload: FirstLastFrameToVideoInput,
+    assets: KeyframeAssets,
     model: H3Model,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
@@ -611,12 +617,9 @@ def first_last_frame_to_video(
     view = model.for_request(ctx, seed=payload.seed)
     checks = NumericalChecks(tel, model.pipe.resident)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
-        first = _decode_keyframe(
-            payload.first_frame, field="first_frame", decoder=decoder, pipe=model.pipe
-        )
-        last = _decode_keyframe(
-            payload.last_frame, field="last_frame", decoder=decoder, pipe=model.pipe
-        )
+        first_index, last_index = _keyframe_roles(assets)
+        first = _keyframe_image(assets, first_index, field="first")
+        last = _keyframe_image(assets, last_index, field="last")
         state = model.pipe.start_fl2va(
             prompt=payload.prompt,
             first_frame=first,
@@ -650,12 +653,12 @@ def first_last_frame_to_video(
 
 
 @app.entrypoint(preflight=preflight_reference_media)
-def reference_media_to_video(
+def ref2va(
     ctx: Context,
     payload: ReferenceMediaToVideoInput,
+    assets: ReferenceAssets,
     facts: Preflight[ReferencePolicyFacts],
     model: H3Model,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
@@ -664,9 +667,8 @@ def reference_media_to_video(
     view = model.for_request(ctx, seed=payload.seed)
     checks = NumericalChecks(tel, model.pipe.resident)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
-        references, sizing = _decode_references(
-            payload.references,
-            decoder=decoder,
+        references, sizing = assets_to_h3_refs(
+            assets,
             pipe=model.pipe,
             reference_image_short_edge=payload.reference_image_short_edge,
         )
@@ -685,6 +687,18 @@ def reference_media_to_video(
             steps=payload.steps,
             reference_image_short_edges=sizing.edges,
         )
+        for index, reference in enumerate(state.normalized_references):
+            if reference.kind == "image":
+                info = assets.info(index)
+                width, height = reference.image.size
+                tel.log(
+                    "h3 reference resolution",
+                    input_id=info.id,
+                    label=info.label,
+                    fidelity=info.fidelity,
+                    width=width,
+                    height=height,
+                )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
         model.condition_text("ref2va", state, checks=checks)
     with tel.stage("condition_media", overall_range=(0.08, 0.15)):

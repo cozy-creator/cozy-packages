@@ -21,20 +21,22 @@ from functools import partial
 from importlib.resources import files
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast, get_type_hints
+from typing import Any, Literal, cast, get_type_hints
 
 import msgspec
 import numpy as np
 import torch
 from cozy_runtime.author import (
     Artifact,
+    Assets,
     AudioAsset,
     Cancelled,
     Config,
     DecodedAudio,
     DecodedVideo,
+    Image,
     ImageAsset,
-    UnsupportedInput,
+    Mixed,
     VideoAsset,
     canonical_json,
     describe,
@@ -52,6 +54,7 @@ from diffusers import (
 from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference
 from diffusers.modular_pipelines.minimax_h3.before_denoise import MiniMaxH3SetTimestepsStep
 from diffusers.modular_pipelines.minimax_h3.denoise import MiniMaxH3LoopSchedulerStep
+from PIL import Image as PILImage
 from torch.utils._python_dispatch import TorchDispatchMode
 from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
@@ -82,6 +85,7 @@ from official import (  # noqa: E402
     _DIT_COMPONENT,
     FPS,
     FRAMES,
+    MAX_CONDITIONER_VISION_TOKENS,
     REFERENCE_IMAGE_SHORT_EDGE,
     NumericalChecks,
     OfficialH3Pipeline,
@@ -166,6 +170,8 @@ def dit_config(task: str, modulation: str = "full") -> dict[str, object]:
 
 def arm_producer_configs() -> None:
     """Pass actual producer bytes into the serving parser before any weight transfer."""
+    sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
+
     assets = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
     sections = parse_production_config((assets / "model-config.json").read_bytes())
     plans = {
@@ -212,6 +218,8 @@ def _asset(name: str) -> bytes:
 
 def arm_producer_construction_order() -> None:
     """The producer's one ordered spec resource follows the real serving factory."""
+    sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
+
     sections = parse_production_config(_asset("model-config.json"))
     current = current_order(_asset("whole-order.json"))
     plans = {
@@ -533,6 +541,8 @@ def arm_schedule() -> None:
 
 
 def meta_h3_pipeline() -> Any:
+    sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
+
     assets = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
     config = canonical_json.decode(
         dual_full_config(parse_production_config((assets / "model-config.json").read_bytes()))
@@ -673,22 +683,8 @@ def arm_reference_resolution() -> None:
             f"typed request refuses invalid edge {invalid}",
             partial(msgspec.convert, invalid, type=field),
         )
-    image_ref = package.ImageReference(ImageAsset("sha256:" + "3" * 64))
-    request = package.ReferenceMediaToVideoInput(
-        prompt="A person in a garden.", references=[image_ref]
-    )
+    request = package.ReferenceMediaToVideoInput(prompt="A person in a garden.")
     check("request default short edge is 1024", request.reference_image_short_edge, 1024)
-    check("an image reference follows the request edge unless set", image_ref.short_edge, None)
-    edge_field = get_type_hints(package.ImageReference, include_extras=True)["short_edge"]
-    check(
-        "typed image reference accepts an explicit edge", msgspec.convert(512, type=edge_field), 512
-    )
-    check("typed image reference accepts none", msgspec.convert(None, type=edge_field), None)
-    for invalid in (255, 2049):
-        refusal(
-            f"typed image reference refuses edge {invalid}",
-            partial(msgspec.convert, invalid, type=edge_field),
-        )
 
 
 def arm_zero_reference_preparation() -> None:
@@ -708,6 +704,11 @@ def arm_zero_reference_preparation() -> None:
         )
 
     refusal("an unserved step count refuses before preparation", lambda: start(29), "steps")
+    check(
+        "the declared request default has an artifact schedule",
+        package.DEFAULT_STEPS in STEPS,
+        True,
+    )
     check(
         "every served step count states its official grid",
         [start(steps).num_inference_steps for steps in STEPS],
@@ -952,6 +953,7 @@ def arm_text_conditioner() -> None:
 
     # Exercise the release's actual rotary widths rather than the tiny fixture's
     # one-frequency vision table, whose only value (1) survives a BF16 round trip.
+
     rotary_source = tiny_text_config()
     cast(dict[str, Any], rotary_source["text_config"]).update(
         head_dim=128,
@@ -1409,11 +1411,11 @@ def _audio(seconds: int, *, rate: int = 4, start: Fraction = Fraction(0)) -> Any
     )
 
 
-def _video(seconds: int, *, soundtrack: Any | None = None, width: int = 1, height: int = 1) -> Any:
+def _video(seconds: int, *, soundtrack: Any | None = None) -> Any:
     frames = tuple(bytes([index, 0, 0]) for index in range(seconds))
     return DecodedVideo(
-        width=width,
-        height=height,
+        width=1,
+        height=1,
         frame_count=seconds,
         frames_rgb=frames,
         frame_pts=tuple(range(seconds)),
@@ -1450,6 +1452,16 @@ def arm_media() -> None:
         reference_video_vision_tokens(1920, 1080, Fraction(15)),
         15120,
     )
+    package.resolve_reference_sizing([], default=1024, video_tokens=32768)
+    observe("vision capacity boundary")
+    refusal(
+        "vision demand above the release budget refuses",
+        lambda: package.resolve_reference_sizing(
+            [], default=1024, video_tokens=MAX_CONDITIONER_VISION_TOKENS + 1
+        ),
+        "reference_policy",
+    )
+
     video = _video(2, soundtrack=_audio(1, start=Fraction(1, 2)))
     frames = _video_at_24fps(video)
     check("two exact seconds resample to 48 frames", tuple(frames.shape), (48, 3, 1, 1))
@@ -1475,40 +1487,98 @@ def arm_media() -> None:
         def audio_reference(value: Any) -> Any:
             return value
 
-    class Decoder:
-        def __init__(self, videos: list[Any], audios: list[Any], images: list[Any]) -> None:
-            self._videos = list(videos)
-            self._audios = list(audios)
-            self._images = list(images)
+    class PreparedMedia:
+        """Decoded values isolate H3 policy; Runtime owns the real decoder proofs."""
 
-        def decode_image(self, asset: Any) -> Any:
-            del asset
-            return self._images.pop(0)
+        def __init__(self, references: list[Any], values: list[Any]) -> None:
+            self.inputs = Assets[Mixed](references)
+            self.values = values
 
-        def decode_video(self, asset: Any) -> Any:
-            del asset
-            return self._videos.pop(0)
+        def __iter__(self) -> Any:
+            return iter(self.values)
 
-        def decode_audio(self, asset: Any) -> Any:
-            del asset
-            return self._audios.pop(0)
+        def info(self, index: int) -> Any:
+            return self.inputs.info(index)
 
     def decode(
         references: list[Any],
         videos: list[Any],
         audios: list[Any],
         images: list[Any] | None = None,
-        default: int = package.DEFAULT_REFERENCE_IMAGE_SHORT_EDGE,
-    ) -> tuple[list[Any], package.ReferenceSizing]:
-        return package._decode_references(
-            cast(Any, references),
-            decoder=cast(Any, Decoder(videos, audios, images or [])),
-            pipe=cast(Any, Pipe()),
-            reference_image_short_edge=default,
-        )
+    ) -> list[Any]:
+        by_kind = {"image": iter(images or []), "video": iter(videos), "audio": iter(audios)}
+        values = [next(by_kind[reference.kind]) for reference in references]
+        return package.assets_to_h3_refs(
+            cast(Any, PreparedMedia(references, values)), pipe=cast(Any, Pipe())
+        )[0]
 
-    video_ref = package.VideoReference(VideoAsset("sha256:" + "1" * 64))
-    audio_ref = package.AudioReference(AudioAsset("sha256:" + "2" * 64))
+    video_ref = VideoAsset("sha256:" + "1" * 64)
+    audio_ref = AudioAsset("sha256:" + "2" * 64)
+    image_ref = ImageAsset("sha256:" + "3" * 64)
+    another_image = ImageAsset("sha256:" + "4" * 64)
+    for description, inputs, expected in [
+        ("text-only", [], (None, None)),
+        ("one unlabelled image", [image_ref], (0, None)),
+        ("two positional images", [image_ref, another_image], (0, 1)),
+        ("last frame only", [image_ref.with_label("last")], (None, 0)),
+        (
+            "labels choose roles despite order",
+            [image_ref.with_label("last"), another_image.with_label("first")],
+            (1, 0),
+        ),
+        (
+            "unlabelled image fills remaining role",
+            [image_ref.with_label("last"), another_image],
+            (1, 0),
+        ),
+        (
+            "other labels retain positional meaning",
+            [image_ref.with_label("woman"), another_image.with_label("product")],
+            (0, 1),
+        ),
+    ]:
+        roles = package._keyframe_roles(Assets[Image](inputs))
+        check(f"FL2VA {description}", roles, expected)
+    image = PILImage.frombytes("RGB", (32, 32), bytes(32 * 32 * 3))
+    mixed_video, mixed_audio = _video(2), _audio(2)
+    mixed = Assets[Mixed](
+        [image_ref.with_label("Alice"), video_ref, audio_ref, image_ref.with_label("アリス")]
+    )
+    policy = package.preflight_reference_media(
+        package.ReferenceMediaToVideoInput(prompt="The two characters meet."), mixed
+    )
+    check("metadata preflight counts duplicate image occurrences", policy.total, 4)
+    check("reference labels preserve arbitrary caller text", mixed.info("アリス").label, "アリス")
+    check("naming an occurrence preserves the source handle", image_ref.label, "")
+    check(
+        "duplicate image references keep separate positions",
+        [mixed.info(index).position for index in range(len(mixed))],
+        [0, 1, 2, 3],
+    )
+    prepared = decode(
+        [image_ref, video_ref, audio_ref, image_ref],
+        videos=[mixed_video],
+        audios=[mixed_audio],
+        images=[image, image],
+    )
+    check(
+        "model adapter preserves mixed order and both uses of one image",
+        all(
+            actual is expected
+            for actual, expected in zip(
+                prepared, [image, mixed_video, mixed_audio, image], strict=True
+            )
+        ),
+        True,
+    )
+    refusal(
+        "metadata preflight refuses audio-only before decoding",
+        lambda: package.preflight_reference_media(
+            package.ReferenceMediaToVideoInput(prompt="An audio-only reference."),
+            Assets[Mixed]([audio_ref]),
+        ),
+        "reference_policy",
+    )
     check(
         "14s of soundtracked video plus 2s standalone audio fit their separate caps",
         len(
@@ -1516,7 +1586,7 @@ def arm_media() -> None:
                 [video_ref, video_ref, audio_ref],
                 videos=[_video(7, soundtrack=_audio(7)), _video(7, soundtrack=_audio(7))],
                 audios=[_audio(2)],
-            )[0]
+            )
         ),
         3,
     )
@@ -1530,7 +1600,7 @@ def arm_media() -> None:
                     _video(5, soundtrack=_audio(5)),
                 ],
                 audios=[_audio(10), _audio(5)],
-            )[0]
+            )
         ),
         4,
     )
@@ -1553,91 +1623,76 @@ def arm_media() -> None:
         "reference_policy",
     )
 
-    print("\n== per-reference fidelity and the internal vision budget ==")
-    image_ref = package.ImageReference(ImageAsset("sha256:" + "3" * 64))
-    coarse = package.ImageReference(ImageAsset("sha256:" + "4" * 64), short_edge=512)
-    fine = package.ImageReference(ImageAsset("sha256:" + "5" * 64), short_edge=2048)
-    hd_video = _video(15, width=1920, height=1080)
-
-    def square(side: int = 1024) -> Any:
-        return SimpleNamespace(width=side, height=side)
-
     def sizing(
-        references: list[Any],
-        images: list[Any],
-        default: int = package.DEFAULT_REFERENCE_IMAGE_SHORT_EDGE,
-        videos: list[Any] | None = None,
+        fidelities: list[str], *, default: int = 1024, video_tokens: int = 0
     ) -> package.ReferenceSizing:
-        return decode(references, videos=videos or [], audios=[], images=images, default=default)[1]
+        images = [
+            package.ImageSizing(
+                f"assets.{index}.asset",
+                1024,
+                1024,
+                None if fidelity == "auto" else package._REFERENCE_FIDELITY_EDGES[fidelity],
+            )
+            for index, fidelity in enumerate(fidelities)
+        ]
+        return package.resolve_reference_sizing(images, default=default, video_tokens=video_tokens)
 
-    nine = sizing([image_ref] * 9, [square()] * 9)
+    nine = sizing(["auto"] * 9)
+    check("nine default images fit unchanged", (nine.edges, nine.total), ([1024] * 9, 9216))
+    stepped = sizing(["auto"] * 9, default=2048)
+    check("nine auto images at 2048 step down", (stepped.edges, stepped.total), ([1536] * 9, 20736))
+    mixed_sizing = sizing(["low", "high", "auto"])
+    check("mixed explicit fidelities retain their sizes", mixed_sizing.edges, [256, 2048, 1024])
     check(
-        "nine 1024² images fit unchanged at the 1024 default",
-        (nine.edges, nine.total),
-        ([1024] * 9, 9216),
-    )
-    stepped = sizing([image_ref] * 9, [square(2048)] * 9, default=2048)
-    check(
-        "nine default images at a 2048 request default step to 1536",
-        (stepped.edges, stepped.total),
-        ([1536] * 9, 20736),
-    )
-    mixed = sizing([coarse, fine, image_ref], [square()] * 3)
-    check(
-        "mixed explicit fidelities are honored beside the default", mixed.edges, [512, 2048, 1024]
+        "each image has its own token demand",
+        [image.tokens for image in mixed_sizing.images],
+        [64, 4096, 1024],
     )
     check(
-        "each image's tokens follow its own resolved edge",
-        [image.tokens for image in mixed.images],
-        [256, 4096, 1024],
-    )
-    check(
-        "sizing names each reference for telemetry",
-        mixed.summary,
-        "references.0 512->512 256 tokens; references.1 2048->2048 4096 tokens; "
-        "references.2 default->1024 1024 tokens",
-    )
-    check("a 512 request default stays at 512", sizing([image_ref], [square()], 512).edges, [512])
-    check(
-        "an off-ladder 2000 default steps to 1536, never up to 2048",
-        sizing([image_ref] * 9, [square()] * 9, 2000).edges,
-        [1536] * 9,
-    )
-    check(
-        "an explicit 2048 beside a 512 default never lifts the default",
-        sizing([fine, image_ref], [square()] * 2, 512).edges,
+        "a smaller request default stays smaller",
+        sizing(["high", "auto"], default=512).edges,
         [2048, 512],
     )
-    pushed = sizing([video_ref, *[image_ref] * 9], [square()] * 9, 2048, videos=[hd_video])
     check(
-        "a video's fixed tokens push the default images down the ladder",
-        (pushed.video_tokens, pushed.edges, pushed.total),
-        (15120, [1024] * 9, 24336),
+        "off-ladder defaults step down, never up",
+        sizing(["auto"] * 9, default=2000).edges,
+        [1536] * 9,
     )
-    refusal(
-        "nine images at an explicit 2048 refuse",
-        lambda: sizing([fine] * 9, [square()] * 9),
-        "reference_policy",
+    pushed = sizing(["auto"] * 9, default=2048, video_tokens=15120)
+    check("video tokens share the image budget", (pushed.edges, pushed.total), ([1024] * 9, 24336))
+    for label, hints, video_tokens in (
+        ("nine explicit high references", ["high"] * 9, 0),
+        ("eight explicit high leave no room for auto", ["high"] * 8 + ["auto"], 0),
+        ("explicit images and video exceed budget", ["high"] * 8, 15120),
+    ):
+        refusal(
+            label,
+            partial(sizing, hints, video_tokens=video_tokens),
+            "reference_policy",
+        )
+    fidelity_hints: tuple[Literal["low", "medium", "high", "auto"], ...] = (
+        "low",
+        "medium",
+        "high",
+        "auto",
     )
-    message = ""
-    try:
-        sizing([fine] * 9, [square()] * 9)
-    except UnsupportedInput as exc:
-        message = str(exc)
+    actual_inputs = [
+        image_ref.with_label(f"ref-{index}").with_fidelity(fidelity)
+        for index, fidelity in enumerate(fidelity_hints)
+    ]
+    actual_references, actual_sizing = package.assets_to_h3_refs(
+        cast(Any, PreparedMedia(actual_inputs, [image] * 4)), pipe=cast(Any, Pipe())
+    )
     check(
-        "the refusal carries the arithmetic: tokens needed, budget, explicit sizes",
-        [part in message for part in ("36864 tokens", "at most 32768", str([2048] * 9))],
-        [True] * 3,
+        "public per-occurrence fidelity reaches H3 sizing",
+        actual_sizing.edges,
+        [256, 1024, 2048, 1024],
     )
-    refusal(
-        "eight explicit 2048 images leave no room for a ninth even at 256",
-        lambda: sizing([*[fine] * 8, image_ref], [square()] * 9),
-        "reference_policy",
-    )
-    refusal(
-        "a 15-second video beside eight explicit 2048 images refuses with no default to shrink",
-        lambda: sizing([video_ref, *[fine] * 8], [square()] * 8, videos=[hd_video]),
-        "reference_policy",
+    check("fidelity preserves all source occurrences", len(actual_references), 4)
+    check(
+        "sizing telemetry preserves occurrence identity",
+        [item.field for item in actual_sizing.images],
+        [f"assets.{index}.asset" for index in range(4)],
     )
 
     decoded = torch.tensor(
@@ -2314,20 +2369,20 @@ def arm_interface() -> None:
     check(
         "exact action names",
         set(entries),
-        {"first_last_frame_to_video", "reference_media_to_video"},
+        {"fl2va", "ref2va"},
     )
     check(
         "both official actions are visible",
         set(entries),
-        {"first_last_frame_to_video", "reference_media_to_video"},
+        {"fl2va", "ref2va"},
     )
     expected = {
-        "first_last_frame_to_video": (
-            ["prompt", "first_frame", "last_frame", "mute", "seed", "steps"],
+        "fl2va": (
+            ["prompt", "mute", "seed", "steps", "assets"],
             "fl2va_dit",
         ),
-        "reference_media_to_video": (
-            ["prompt", "references", "mute", "seed", "reference_image_short_edge", "steps"],
+        "ref2va": (
+            ["prompt", "mute", "seed", "reference_image_short_edge", "steps", "assets"],
             "ref2va_dit",
         ),
     }
@@ -2339,8 +2394,8 @@ def arm_interface() -> None:
             fields,
         )
         check(
-            f"{name} steps wire enum is the plan's step set",
-            entry["request"]["fields"][-1]["type"],
+            f"{name} wire steps come from the shipped plans",
+            next(field["type"] for field in entry["request"]["fields"] if field["name"] == "steps"),
             {"literal": list(STEPS)},
         )
         check(f"{name} shared model", entry["models"][0]["class"], "H3Model")
@@ -2359,21 +2414,29 @@ def arm_interface() -> None:
             ["video", "continuation_frame", "warnings"],
         )
     check("H3 permits Runtime encoded linear leaves", package.H3Model.__encoded_leaves__, "accept")
-    fields = entries["reference_media_to_video"]["request"]["fields"]
-    references = next(field for field in fields if field["name"] == "references")
-    image = next(
-        branch for branch in references["type"]["list"]["union"] if branch["tag"] == "image"
+    check(
+        "reference files bind to the explicit Assets parameter",
+        entries["ref2va"]["assets"]["parameter"],
+        "assets",
     )
     check(
-        "an image reference carries an optional short_edge",
-        [(field["name"], field.get("wire")) for field in image["fields"]],
-        [("image", None), ("short_edge", "optional")],
+        "reference collection admits only the three H3 media kinds",
+        {kind["kind"] for kind in entries["ref2va"]["assets"]["kinds"]},
+        {"image", "video", "audio"},
     )
-    edge = next(field for field in fields if field["name"] == "reference_image_short_edge")
     check(
-        "the request default edge is bounded 256..2048",
-        edge["constraints"],
-        {"ge": 256, "le": 2048},
+        "keyframe endpoint uses the same explicit Assets input",
+        entries["fl2va"]["assets"]["parameter"],
+        "assets",
+    )
+    check(
+        "keyframe collection permits at most two images",
+        next(
+            field["constraints"]
+            for field in entries["fl2va"]["request"]["fields"]
+            if field["name"] == "assets"
+        ),
+        {"max_length": 2},
     )
 
 

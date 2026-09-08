@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import torch
-from cozy_runtime.author import ImageFrame
+from cozy_runtime.author import Assets, ImageFrame, Mixed
 from cozy_runtime.author.fakes import fake_context, fake_outputs
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -187,7 +187,7 @@ def main() -> None:
     failing.fail = False
 
     # Exercise the diagnostic override and unchanged H3 parent method.
-    assert h3_diagnostics.reference_media_to_video is h3.reference_media_to_video
+    assert h3_diagnostics.ref2va is h3.ref2va
     assert h3_diagnostics.TraceModel.sample_ref2va is h3.H3Model.sample_ref2va
     seen: list[int] = []
 
@@ -227,17 +227,16 @@ def main() -> None:
     assert all(torch.equal(restored[key], value) for key, value in full.latents.items())
     output = fake_outputs()
     reference_image = output.save_image(ImageFrame(2, 2, b"\xff\x00\x00" * 4), format="png")
-    request = h3.ReferenceMediaToVideoInput(
-        prompt="fixed trace",
-        seed=42,
-        references=[
-            h3.ImageReference(reference_image, short_edge=512),
-            h3.ImageReference(reference_image),
-        ],
+    request = h3.ReferenceMediaToVideoInput(prompt="fixed trace", seed=42)
+    assets = Assets[Mixed](
+        [
+            reference_image.with_fidelity("low"),
+            reference_image.with_fidelity("auto"),
+        ]
     )
-    saved = h3_diagnostics.save_trace(full, fake_context(), request, observed_model, output)
+    saved = h3_diagnostics.save_trace(full, fake_context(), request, assets, observed_model, output)
     provenance = json.loads(saved.read_bytes())["provenance"]
-    assert [reference["short_edge"] for reference in provenance["references"]] == [512, None]
+    assert [reference["fidelity"] for reference in provenance["references"]] == ["low", "auto"]
     assert provenance["reference_image_short_edge"] == request.reference_image_short_edge
     seen.clear()
     partial = ActivationTrace(evaluations=3, first_step=True)

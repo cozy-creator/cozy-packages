@@ -214,10 +214,10 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "TensorFS writer so the produced header, its object refs and its replay are native "
         "facts. Retire when the public fake weights service can construct this host."
     ),
-    ("scripts/h3-attention-lane-proof.py", "cozy_runtime.internal.execution_contract"): (
-        "the produced `execution` config is proven through the reader that applies it "
-        "(cr-109) at the digest the runtime banks in triage. Retire when the author surface "
-        "exposes the contract reader."
+    ("scripts/h3-contract-proof.py", "cozy_runtime.internal.execution_contract"): (
+        "the committed contract assets are proven through the reader that applies them "
+        "(cr-109/cr-114) at the digest the runtime banks in triage. Retire when the author "
+        "surface exposes the contract reader."
     ),
     ("scripts/h3-conform.py", "cozy_runtime.internal.derive"): (
         "the derive harness is Runtime's CONSTRUCTION plane and cannot become author "

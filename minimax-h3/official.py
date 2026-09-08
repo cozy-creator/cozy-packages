@@ -24,14 +24,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 import msgspec
-import numpy as np
 import torch
 from cozy_runtime.author import (
     Config,
     ConformanceError,
     DecodedAudio,
-    DecodedImage,
     DecodedVideo,
+    Image,
     InvalidRequest,
     OutputError,
     Telemetry,
@@ -420,13 +419,19 @@ def supported_steps() -> tuple[int, ...]:
     return steps["fl2va"]
 
 
+def reference_image_size(
+    width: int, height: int, short_edge: int = REFERENCE_IMAGE_SHORT_EDGE
+) -> tuple[int, int]:
+    """The upstream 32-pixel-grid image geometry, in width/height order."""
+    scale = short_edge / min(width, height)
+    return max(32, round(width * scale / 32) * 32), max(32, round(height * scale / 32) * 32)
+
+
 def reference_image_vision_tokens(
     width: int, height: int, short_edge: int = REFERENCE_IMAGE_SHORT_EDGE
 ) -> int:
     """Official short-edge, 16-patch, 2x2-merge image demand."""
-    scale = short_edge / min(width, height)
-    target_height = max(32, round(height * scale / 32) * 32)
-    target_width = max(32, round(width * scale / 32) * 32)
+    target_width, target_height = reference_image_size(width, height, short_edge)
     return target_height * target_width // (16 * 16 * 2 * 2)
 
 
@@ -843,16 +848,8 @@ class OfficialH3Pipeline:
             )
         return torch.Generator().manual_seed(source.getrandbits(63))
 
-    def image_reference(self, image: DecodedImage) -> Any:
-        pixels = np.frombuffer(image.rgb, dtype=np.uint8).reshape(image.height, image.width, 3)
-        return MiniMaxH3ImageReference(image=pixels)
-
-    def keyframe(self, image: DecodedImage) -> Any:
-        """Public RGB bytes into the input type required by the official resize block."""
-        pixels = np.frombuffer(image.rgb, dtype=np.uint8).reshape(image.height, image.width, 3)
-        return self._pipes["fl2va"].image_processor.numpy_to_pil(pixels.astype(np.float32) / 255.0)[
-            0
-        ]
+    def image_reference(self, image: Image) -> Any:
+        return MiniMaxH3ImageReference(image=image if image.mode == "RGB" else image.convert("RGB"))
 
     def audio_reference(self, audio: DecodedAudio) -> Any:
         return MiniMaxH3AudioReference(audio=_audio_tensor(audio), sample_rate=audio.sample_rate)
