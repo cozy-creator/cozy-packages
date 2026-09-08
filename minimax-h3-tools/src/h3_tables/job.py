@@ -45,7 +45,6 @@ from .model_config import (
     parse_production_config,
 )
 from .operations import assemble_full as assemble_full_artifact
-from .operations import precompute_adaln
 from .order import current_order
 from .order import full_order as _full_order
 from .plans import TimestepPlan, parse_declared_plan
@@ -659,7 +658,6 @@ app.job(
 )
 
 
-app.job(precompute_adaln, name="precompute-adaln")
 app.job(
     _adaln_operations.select_adaln_weights,
     name="select-adaln-weights",

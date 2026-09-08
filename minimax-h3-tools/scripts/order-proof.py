@@ -214,7 +214,6 @@ def main() -> None:
         "four-lane",
         "retable",
         "quantize-artifact",
-        "precompute-adaln",
         "apply-adaln",
         "compute-adaln-tables",
         "select-adaln-weights",

@@ -1,18 +1,29 @@
 #!/usr/bin/env python3
-"""Generated caller and real broker sequencing; numerical/native proofs are separate."""
+"""Run the ordinary H3 helper through its caller overlay and admitted broker.
+
+Child replies are fixed routing controls. Native table computation and model quality
+are qualified by the separate binding/resume/numerical drivers, not by this proof.
+"""
 
 from __future__ import annotations
 
+import argparse
+import hashlib
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import time
+import zipfile
+from email.parser import BytesParser
 from pathlib import Path
 from typing import Any, cast
 
 import msgspec
 from cozy_runtime.author import (
+    App,
+    Context,
     Invocation,
     ModelArtifact,
     ObjectRef,
@@ -21,10 +32,34 @@ from cozy_runtime.author import (
     describe,
 )
 from cozy_runtime.author._calls import _Broker, _CallType
-from cozy_runtime.internal import interface_wheel, package_interface
+from cozy_runtime.internal import (
+    installed_interfaces,
+    interface_wheel,
+    package_environment,
+    package_interface,
+)
 from cozy_runtime.internal.discovery import Discovered
+
+# The isolated child resolves the actual caller wheel before importing the model tools.
+if "--overlay-root" in sys.argv:
+    sys.path.insert(0, sys.argv[sys.argv.index("--overlay-root") + 1])
+
 from h3_tables import job
 from h3_tables.adaln_operations import Selection
+from h3_tables.operations import precompute_adaln
+
+app = App()
+
+
+class Request(msgspec.Struct):
+    model: ModelArtifact
+    timesteps: int = 50
+
+
+@app.job
+async def prepare(ctx: Context, payload: Request) -> ModelArtifact:
+    ctx.raise_if_cancelled()
+    return await precompute_adaln(model=payload.model, timesteps=payload.timesteps)
 
 
 def artifact(name: str, digit: str) -> ModelArtifact:
@@ -33,22 +68,11 @@ def artifact(name: str, digit: str) -> ModelArtifact:
     )
 
 
-def main() -> None:
+def run_overlay(root: Path) -> None:
+    assert Path(job.__file__).is_relative_to(root)
+    assert precompute_adaln.__module__ == "h3_tables.operations"
     surfaces = describe(job.app)
-    parent = next(surface for surface in surfaces if surface.name == "precompute-adaln")
-    assert not parent.model_bindings and not parent.weights_outputs
-    declared = {surface.name: len(surface.weights_outputs) for surface in surfaces}
-    assert declared["select-adaln-weights"] == 1
-    assert declared["apply-adaln"] == 3
-    assert declared["retable-adaln"] == 1
-    discovered = Discovered(
-        job.app, "h3_tables.job:app", Path(job.__file__).parents[2], job, surfaces, {}
-    )
-    interface = package_interface.canonical_bytes(package_interface.build(discovered))
-    generated = interface_wheel.generate(interface)
-    caller = generated["h3_tables/operations/__init__.py"].decode()
-    assert "def precompute_adaln(" in caller and "ModelArtifact" in caller
-    assert "torch" not in caller and "WeightsSink" not in caller
+    assert "precompute-adaln" not in {surface.name for surface in surfaces}
     bindings = {
         ("", surface.fn.__module__, surface.fn.__name__): _CallType(
             "sha256:" + "f" * 64,
@@ -87,58 +111,106 @@ def main() -> None:
             ).decode(),
         }
 
-    with tempfile.TemporaryDirectory(prefix="h3-adaln-interface-") as area:
-        root = Path(area)
-        for path, data in generated.items():
-            destination = root / path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(data)
-        subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import sys; sys.path.insert(0, sys.argv[1]); "
-                "from h3_tables.operations import precompute_adaln; "
-                "assert 'torch' not in sys.modules; assert callable(precompute_adaln)",
-                str(root),
-            ],
-            check=True,
+    result, outcome, _ = attempt(
+        app.get("prepare"),
+        {"model": msgspec.to_builtins(original), "timesteps": 50},
+        Invocation(
+            "parent",
+            root / "spool",
+            time.monotonic() + 20,
+            calls=_Broker("parent", bindings, exchange),
+        ),
+    )
+    assert outcome.terminal == "succeeded" and result is not None, outcome
+    assert result.result == pruned
+    assert [call["export"] for call in calls] == [
+        "select_adaln_weights",
+        "select_adaln_weights",
+        "compute_adaln_tables",
+        "compute_adaln_tables",
+        "apply_adaln",
+    ]
+    payloads = [json.loads(call["payload"]) for call in calls]
+    assert payloads[2]["source"] == msgspec.to_builtins(projected_fl)
+    assert payloads[3]["source"] == msgspec.to_builtins(projected_ref)
+    assert payloads[4] == {
+        "source": msgspec.to_builtins(original),
+        "fl2va": msgspec.to_builtins(bank_fl),
+        "ref2va": msgspec.to_builtins(bank_ref),
+    }
+    calls.clear()
+    _, refused, _ = attempt(
+        app.get("prepare"),
+        {"model": msgspec.to_builtins(original), "timesteps": 37},
+        Invocation(
+            "invalid",
+            root / "invalid",
+            time.monotonic() + 20,
+            calls=_Broker("invalid", bindings, exchange),
+        ),
+    )
+    assert refused.code == "adaln_plan" and not calls, refused
+    print(
+        json.dumps(
+            {
+                "helper_from_overlay": True,
+                "precompute_job_registered": False,
+                "managed_sibling_calls": 5,
+                "per_task_projection_inputs": True,
+                "invalid_plan_refused_before_calls": True,
+            }
         )
-        result, outcome, _ = attempt(
-            job.app.get("precompute-adaln"),
-            {"model": msgspec.to_builtins(original), "timesteps": 50},
-            Invocation(
-                "parent",
-                root / "spool",
-                time.monotonic() + 20,
-                calls=_Broker("parent", bindings, exchange),
-            ),
-        )
-        assert outcome.terminal == "succeeded" and result is not None, outcome
-        assert result.result == pruned
-        assert len(calls) == 5
-        assert [call["export"] for call in calls] == [
-            "select_adaln_weights",
-            "select_adaln_weights",
-            "compute_adaln_tables",
-            "compute_adaln_tables",
-            "apply_adaln",
-        ]
-        payloads = [json.loads(call["payload"]) for call in calls]
-        assert payloads[2]["source"] == msgspec.to_builtins(projected_fl)
-        assert payloads[3]["source"] == msgspec.to_builtins(projected_ref)
-        assert payloads[4]["source"] == msgspec.to_builtins(original)
-        assert payloads[4]["fl2va"] == msgspec.to_builtins(bank_fl)
-        assert payloads[4]["ref2va"] == msgspec.to_builtins(bank_ref)
-        print(
-            json.dumps(
-                {
-                    "parent_model_bindings": 0,
-                    "generated_caller_imports_torch": False,
-                    "managed_sibling_calls": 5,
-                    "per_task_projection_inputs": True,
-                }
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--implementation-wheel", type=Path)
+    mode.add_argument("--overlay-root", type=Path)
+    args = parser.parse_args()
+    if args.overlay_root is not None:
+        run_overlay(args.overlay_root)
+        return
+    surfaces = describe(job.app)
+    assert "precompute-adaln" not in {surface.name for surface in surfaces}
+    discovered = Discovered(
+        job.app, "h3_tables.job:app", Path(job.__file__).parents[2], job, surfaces, {}
+    )
+    interface = package_interface.canonical_bytes(package_interface.build(discovered))
+    implementation = args.implementation_wheel.read_bytes()
+    with zipfile.ZipFile(io.BytesIO(implementation)) as source:
+        metadata = BytesParser().parsebytes(
+            source.read(
+                next(name for name in source.namelist() if name.endswith(".dist-info/METADATA"))
             )
+        )
+    _, wheel = interface_wheel.build(
+        interface,
+        distribution="minimax-h3-tools",
+        version=str(metadata["Version"]),
+        implementation_digest="sha256:" + hashlib.sha256(implementation).hexdigest(),
+        implementation_wheel=implementation,
+    )
+    with tempfile.TemporaryDirectory(prefix="h3-adaln-overlay-") as area:
+        root = Path(area)
+        with zipfile.ZipFile(io.BytesIO(wheel)) as archive:
+            archive.extractall(root)
+            preserved = archive.read(f"minimax_h3_tools-{metadata['Version']}.dist-info/METADATA")
+            assert b"Requires-Dist: torch" in preserved
+            assert archive.read("h3_tables/assets/timestep-plan.fl2va.json")
+        exports = installed_interfaces.read(
+            package_environment.InstalledEnvironment(
+                root, root, Path(sys.executable), b"", "", "sha256:" + "a" * 64, True
+            )
+        )
+        assert "precompute_adaln" not in {row["export"] for row in exports}
+        assert {"select_adaln_weights", "compute_adaln_tables", "apply_adaln", "retable_adaln"} <= {
+            row["export"] for row in exports
+        }
+        subprocess.run(
+            [sys.executable, "-I", str(Path(__file__).resolve()), "--overlay-root", str(root)],
+            check=True,
         )
 
 

@@ -137,9 +137,7 @@ async def quantize(
         return transaction.commit().artifact
 
 
-@invocable(memoize=True)
 async def precompute_adaln(
-    ctx: Context,
     *,
     model: ModelArtifact,
     timesteps: int = 50,
@@ -147,7 +145,7 @@ async def precompute_adaln(
 ) -> ModelArtifact:
     """Return the pruned H3 model using shared tables for approved 30/40/50-step schedules.
 
-    This orchestration job has inert artifact inputs and owns no GPU while children run.
+    This ordinary Python helper runs in the calling script and invokes memoized leaves.
     Retabling an already pruned model requires its full generating model. The current
     approved union bank supports all three schedules and is shared across body encodings.
     """
@@ -160,7 +158,6 @@ async def precompute_adaln(
         retable_adaln if generating_model is not None else apply_adaln,
     )
 
-    ctx.raise_if_cancelled()
     if (
         type(timesteps) is not int
         or timesteps not in _plan("fl2va").steps
