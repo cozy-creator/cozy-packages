@@ -96,7 +96,14 @@ class Recorder:
         self.events.append(event + ":" + kwargs["target_component"])
         if self.fail_at == event:
             raise Interrupted(event)
-        return QuantizationStats(1, 1, 1, 2, 0.03125)
+        return QuantizationStats(
+            encoded_keys=1,
+            reused_keys=0,
+            source_bytes_read=1,
+            new_bytes_written=1,
+            saturated_elements=2,
+            worst_relative_frobenius=0.03125,
+        )
 
 
 class Telemetry:

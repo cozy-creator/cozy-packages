@@ -34,8 +34,8 @@ jobs:
 
       - name: Lint
         run: >-
-          uv run --no-project ruff check anima/ minimax-h3/ quality-judge/ scripts/ sdxl/
-          h3-quality-gate/ minimax-h3-tools/ checkpoint-repair/ diagnostics/h3-vae-roundtrip/
+          uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/
+          minimax-h3-tools/ checkpoint-repair/ diagnostics/h3-vae-roundtrip/
 
       - name: Types
         run: uv run --no-project mypy
@@ -45,14 +45,14 @@ jobs:
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          for package in anima minimax-h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools checkpoint-repair; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools checkpoint-repair; do
             uv lock --check --project "$package"
           done
 
       - name: Every package builds a wheel
         run: |
           mkdir -p dist/packages
-          for package in anima minimax-h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools checkpoint-repair; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools checkpoint-repair; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done
@@ -62,6 +62,9 @@ jobs:
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/job.py'
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/whole-order.json'
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/dit-full-specs.json'
+          unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/execution.sm90-attn8.json'
+          unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/execution.sm90-fa3.json'
+          unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/execution.sm90-fa3.json'
 
       # The torch family is ABI-coupled — torchvision's compiled ops link against torch's
       # C++ ABI — and #633 gives one PlatformTarget exactly ONE family. A package that
@@ -124,13 +127,13 @@ jobs:
   package-locks:
     # Independent so a failure to materialize an exact dependency environment cannot hide
     # behind static analysis. The checks job separately builds and imports every project wheel.
-    name: SDXL and quality-judge exact locked environments
+    name: Package exact locked environments
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        package: [anima, sdxl, quality-judge, h3-quality-gate, minimax-h3-tools, checkpoint-repair]
+        package: [anima, sdxl, minimax-h3-tools, checkpoint-repair]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -164,13 +167,14 @@ jobs:
         if: matrix.package == 'anima' || matrix.package == 'sdxl'
         run: ${{ matrix.package }}/.venv/bin/python scripts/warm-conform.py ${{ matrix.package }}
 
-      - name: H3 table construction order proof
+      - name: H3 table construction order and attention-lane proofs
         if: matrix.package == 'minimax-h3-tools'
         run: |
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/order-proof.py
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/stage-proof.py
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/full-source-proof.py
           minimax-h3-tools/.venv/bin/python scripts/tensorfs_seeds.py
+          minimax-h3-tools/.venv/bin/python scripts/h3-attention-lane-proof.py
         env:
           PYTHONPATH: minimax-h3-tools/src
 
@@ -183,20 +187,3 @@ jobs:
           uv build --project ${{ matrix.package }} --wheel --out-dir dist/packages/${{ matrix.package }}
           uv pip install --python ${{ matrix.package }}/.venv/bin/python --no-deps dist/packages/${{ matrix.package }}/*.whl
           ${{ matrix.package }}/.venv/bin/python -P scripts/package_import.py ${{ matrix.package }} --installed
-
-  video-assembly:
-    name: Video assembly
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-        with:
-          version: "0.12.7"
-      - run: uv python install 3.12
-      - run: uv sync --project video-assembly --locked --group dev
-      - run: uv run --project video-assembly ruff check video-assembly
-      - run: uv run --project video-assembly ruff format --check video-assembly
-      - run: cd video-assembly && uv run mypy
-      - run: test "$(uv run --project video-assembly cozy-runtime --json --dir video-assembly describe)" = "$(cat video-assembly/metadata/package-interface.json)"
-      - run: uv run --project video-assembly python video-assembly/live.py
