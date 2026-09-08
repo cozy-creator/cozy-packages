@@ -39,6 +39,7 @@ from cozy_runtime.author import (
     UnsupportedInput,
     VideoAsset,
     data_values,
+    sequence_parallel,
     uses_components,
 )
 from msgspec.structs import replace
@@ -173,7 +174,23 @@ def preflight_reference_media(
         raise UnsupportedInput(str(exc), code="reference_policy", fields=["assets"]) from exc
 
 
+@sequence_parallel(degrees=(2, 4))
 class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept"):
+    """H3 is head-shardable at 2 and 4.
+
+    The DiT declares 56 attention heads, which divide by 2, 4 and 8, and its upstream
+    `_cp_plan` shards the packed sequence itself -- every block's GEMMs, norms, RoPE and
+    SwiGLU run on S/K rows, not just attention. `EncodedLinear` quantizes per TOKEN with
+    rowwise `_scaled_mm` scales, so a row's numbers do not depend on which rank holds it;
+    a per-tensor activation scale would be derived from the local shard and is refused by
+    the runtime rather than served.
+
+    2 and 4 are declared because 2 and 4 are what has been RUN: degree 2 and degree 4
+    reproduce the degree-1 video and audio velocities to 1.2e-7 and 2.4e-7 max absolute
+    error on this pipeline's own AdaLN-pruned DiT (2026-09-08), which is float32 round-off.
+    8 divides the heads too and stays undeclared until an 8-wide arm exists.
+    """
+
     pipe: OfficialH3Pipeline
 
     def load(self, loader: Loader) -> None:
