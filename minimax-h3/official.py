@@ -37,7 +37,6 @@ from cozy_runtime.author import (
     canonical_json,
 )
 from diffusers import (
-    AutoencoderKLMiniMaxH3,
     AutoencoderKLMiniMaxH3Audio,
     MiniMaxH3Blocks,
     MiniMaxH3ModularPipeline,
@@ -63,6 +62,7 @@ from transformers import (
 
 from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
 from conditioner import build_text_conditioner
+from vae_tiles import TileBatchedVideoVAE
 
 Task = Literal["fl2va", "ref2va"]
 _TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
@@ -782,6 +782,7 @@ class OfficialH3Pipeline:
 
     def __init__(self, config: Config) -> None:
 
+
         mapping = _artifact_sections(config.mapping())
         blocks = {name: MiniMaxH3Blocks().get_workflow(name) for name in _WORKFLOW_TASKS}
         pipes = {name: MiniMaxH3ModularPipeline(blocks=block) for name, block in blocks.items()}
@@ -792,7 +793,7 @@ class OfficialH3Pipeline:
         }
         _validate_dual_dit_topology(dits)
         text_encoder = build_text_conditioner(_section(mapping, "text_encoder"))
-        video_vae = AutoencoderKLMiniMaxH3.from_config(_section(mapping, "video_vae")).eval()
+        video_vae = TileBatchedVideoVAE.from_config(_section(mapping, "video_vae")).eval()
         audio_vae = AutoencoderKLMiniMaxH3Audio.from_config(_section(mapping, "audio_vae")).eval()
         for task in _TASKS:
             _validate_model_contract(pipes[task], dits[task], video_vae, audio_vae)

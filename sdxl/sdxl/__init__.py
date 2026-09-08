@@ -149,13 +149,11 @@ _TIER_DEMAND: dict[Megapixels, tuple[int, int]] = {
 _UNTILED_DECODE_PIXELS = 2048 * 2048
 _WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
 
-#: The boot warm pass's geometry and step count. `ctx.boot_warmup` is honoured because the
-#: alternative was measured (cl-003, decisions #392): a warm pass that decodes 1024px with
-#: every component resident OOMs this card at every boot, so the binding comes up DEGRADED
-#: for nothing and the worker serves anyway — a degradation with no cause, on every worker,
-#: forever.
+#: The warm dry step's geometry, measured rather than the request's (cl-003, decisions
+#: #392): a pass that decodes 1024px with every component resident OOMs an 8 GiB card at
+#: every boot, so the binding came up DEGRADED for nothing. 512px pays the same first-call
+#: costs at a shape every card fits.
 _WARM_SIDE = 512
-_WARM_STEPS = 1
 
 #: The tokenizer vocabularies this package BUNDLES. They are its own asset, exactly like
 #: the model library it imports — not an artifact identifier, not a catalog ref, and not
@@ -344,6 +342,22 @@ class SdxlModel(Model[SdxlPipeline]):
     def load(self, loader: Loader) -> None:
         self.pipe = loader.construct(SdxlPipeline, factory=build_pipeline)
 
+    def warm(self, ctx: Context) -> None:
+        """One dry step — tokenize, encode, denoise, decode — at the default request's
+        shape (classifier-free batch, HiDiffusion on), so no request pays a first-call
+        cost. The runtime calls it once per fill, before the placement serves. Outputs
+        are dropped, so no schedule: the tensors carry their own dtype and device."""
+        ctx.raise_if_cancelled()
+        tokenizers = (_tokenizer("tokenizer"), _tokenizer("tokenizer_2"))
+        prompt, pooled = self.encode(*_tokenize(tokenizers, ""))
+        side = _WARM_SIDE // 8
+        latents = prompt.new_empty((2, 4, side, side)).normal_()
+        time_ids = prompt.new_tensor([[_WARM_SIDE, _WARM_SIDE, 0, 0, _WARM_SIDE, _WARM_SIDE]] * 2)
+        noise = self.denoise(
+            latents, 999, prompt.repeat(2, 1, 1), pooled.repeat(2, 1), time_ids, 0, 1, True
+        )
+        self.decode(noise.chunk(2)[1])
+
     @uses_components("text_encoder", "text_encoder_2")
     def encode(self, ids: Any, ids_2: Any) -> tuple[Any, Any]:
         """SDXL's two-tower conditioning. ONE method, BOTH encoders — a composite operation
@@ -522,9 +536,6 @@ def generate(
     view = model.for_request(ctx, seed=payload.seed)
     width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
     steps = payload.steps
-    if ctx.boot_warmup:
-        width = height = _WARM_SIDE
-        steps = _WARM_STEPS
     # Above tier 1 HiDiffusion always runs — decode already refused the contradiction —
     # and any aspect is legal: past its training resolution base SDXL is not an
     # alternative. At tier 1 the measured geometry gate stands: square only.

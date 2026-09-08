@@ -8,6 +8,7 @@ run is a CPU semantic proof, not a generation or accelerator proof.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import struct
@@ -1596,7 +1597,7 @@ def arm_media() -> None:
             ]
         ]
     )
-    pixels = package._rgb8(torch, decoded)
+    pixels, _ = package._rgb8(torch, decoded)
     check("RGB8 conversion shape", tuple(pixels.shape), (2, 1, 2, 3))
     check("RGB8 clamp and round", pixels[0].flatten().tolist(), [0, 128, 0, 125, 255, 255])
     continuation = bytes(pixels[-1].numpy().tobytes())
@@ -2157,6 +2158,120 @@ def arm_output_gates() -> None:
     )
 
 
+def arm_vae_tiles() -> None:
+    """h3a-017: one chunk's tiles decode as one batch, within one ulp of the tile-at-a-time
+    decode, on the real VAE class at the release tile geometry (CPU, random weights)."""
+    import torch
+    from diffusers import AutoencoderKLMiniMaxH3
+
+    from vae_tiles import TILE_BATCH, TileBatchedVideoVAE
+
+    print("\n== tile-batched video VAE decode ==")
+    torch.manual_seed(0)
+    vae = TileBatchedVideoVAE(
+        block_out_channels=(8, 8, 8, 8, 8, 8),
+        layers_per_block=1,
+        norm_num_groups=8,
+        decoder_num_layers=1,
+        decoder_num_attention_heads=2,
+    ).eval()
+    with torch.no_grad():
+        for parameter in vae.parameters():
+            parameter.normal_(0, 0.02)
+    check(
+        "the served video VAE is the tile-batched class",
+        type(meta_h3_pipeline().components["video_vae"]),
+        TileBatchedVideoVAE,
+    )
+    check("tile-batched VAE keeps the release VAE contract", vae.tokens_chunk_size, 5)
+
+    # 1344x768 at the release tile geometry: latent 84x48 -> 4x7 tiles of (1, 24, 7, 16, 16).
+    ratio = vae.spatial_compression_ratio
+    rows = vae._split_tiles(768, vae.tile_sample_min_height, vae.tile_sample_min_overlap_height)
+    columns = vae._split_tiles(1344, vae.tile_sample_min_width, vae.tile_sample_min_overlap_width)
+    check(
+        "TILE_BATCH is the release grid, one forward per chunk",
+        len(rows[0]) * len(columns[0]),
+        TILE_BATCH,
+    )
+    clip = torch.randn(
+        1, 24, 7, 768 // ratio, 1344 // ratio, generator=torch.Generator().manual_seed(1)
+    )
+    with torch.no_grad():
+        sequential = AutoencoderKLMiniMaxH3._decode_clip(vae, clip)
+        batched = TileBatchedVideoVAE._decode_clip(vae, clip)
+    check("batched decode has the clip's pixel shape", tuple(batched.shape), (1, 3, 28, 768, 1344))
+    # A larger GEMM may reduce in another order, so the bytes are not the identity; the
+    # accuracy is. Against the same decode in float64, the batched fp32 result must sit in
+    # the sequential fp32 result's error class — a wrong tile, order or dtype is orders of
+    # magnitude out, a re-associated dot product is not.
+    with torch.no_grad():
+        exact = AutoencoderKLMiniMaxH3._decode_clip(copy.deepcopy(vae).double(), clip.double())
+    sequential_error = float((sequential.double() - exact).abs().max())
+    batched_error = float((batched.double() - exact).abs().max())
+    check("the sequential fp32 decode is itself inexact", sequential_error > 0, True)
+    check(
+        "batched tiles decode in the sequential decode's error class",
+        batched_error <= 2 * sequential_error,
+        True,
+    )
+    observe(
+        "tile-batch drift",
+        f"sequential_vs_fp64={sequential_error:.3e} batched_vs_fp64={batched_error:.3e} "
+        f"batched_vs_sequential={float((sequential - batched).abs().max()):.3e}",
+    )
+    # Red arm: a tile grid stitched in the wrong order is far outside that class.
+    with torch.no_grad():
+        wrong = TileBatchedVideoVAE._stitch_tiles(
+            vae,
+            [
+                [
+                    AutoencoderKLMiniMaxH3._decode_clip(
+                        vae, clip[..., y // ratio : y // ratio + 16, x // ratio : x // ratio + 16]
+                    )
+                    for x in reversed(columns[0])
+                ]
+                for y in rows[0]
+            ],
+            rows[2],
+            columns[2],
+        )
+    red(
+        "a reversed tile order still sits in the sequential error class",
+        float((wrong.double() - exact).abs().max()) <= 2 * sequential_error,
+        True,
+    )
+
+
+def arm_rgb8_handoff() -> None:
+    """h3a-017: the chunked, digested-as-it-lands RGB8 handoff is byte-identical to a
+    whole-tensor quantize and its digest is the digest of the finished buffer."""
+    import torch
+
+    print("\n== chunked RGB8 handoff ==")
+    frames = 3 * package._RGB8_CHUNK_FRAMES + 1  # three full chunks and a ragged tail
+    decoded = torch.rand((1, frames, 3, 16, 32), generator=torch.Generator().manual_seed(2))
+    decoded = decoded * 1.2 - 0.1  # excursions past [0, 1] on both sides
+    whole = (decoded[0].clamp(0, 1) * 255).round().to(torch.uint8).permute(0, 2, 3, 1).contiguous()
+    pixels, digest = package._rgb8(torch, decoded.clone())
+    check("chunked RGB8 equals the whole-tensor quantize", torch.equal(pixels, whole), True)
+    check(
+        "chunked RGB8 lands in one contiguous host buffer",
+        (pixels.is_contiguous(), pixels.device.type),
+        (True, "cpu"),
+    )
+    check(
+        "the running digest is the finished buffer's sha256",
+        digest,
+        hashlib.sha256(pixels.numpy()).hexdigest(),
+    )
+    # Red arm: chunks hashed out of order are a different digest, so the check has teeth.
+    reordered = hashlib.sha256()
+    for start in reversed(range(0, frames, package._RGB8_CHUNK_FRAMES)):
+        reordered.update(pixels[start : start + package._RGB8_CHUNK_FRAMES].numpy())
+    red("chunks digested out of order still match", reordered.hexdigest(), digest)
+
+
 def arm_interface() -> None:
     print("\n== committed public surface ==")
     interface_path = H3 / "metadata" / "package-interface.json"
@@ -2251,6 +2366,8 @@ ARMS = {
     "gates": arm_output_gates,
     "numerics": arm_numerics,
     "resident-fill": arm_resident_fill,
+    "vae-tiles": arm_vae_tiles,
+    "rgb8-handoff": arm_rgb8_handoff,
     "interface": arm_interface,
 }
 
