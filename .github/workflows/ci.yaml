@@ -31,8 +31,7 @@ jobs:
 
       - name: Lint
         run: >-
-          uv run --no-project ruff check anima/ minimax-h3/ quality-judge/ scripts/ sdxl/
-          h3-quality-gate/ minimax-h3-tools/ checkpoint-repair/ diagnostics/h3-vae-roundtrip/
+          uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ examples/
 
       - name: Types
         run: uv run --no-project mypy
@@ -41,24 +40,21 @@ jobs:
         run: |
           test "$(uv run --no-project cozy-runtime --json --dir minimax-h3 describe)" = "$(cat minimax-h3/metadata/package-interface.json)"
           test "$(uv run --no-project cozy-runtime --json --dir anima describe)" = "$(cat anima/metadata/package-interface.json)"
-          test "$(uv run --no-project cozy-runtime --json --dir quality-judge describe)" = "$(cat quality-judge/metadata/package-interface.json)"
           test "$(uv run --no-project cozy-runtime --json --dir sdxl describe)" = "$(cat sdxl/metadata/package-interface.json)"
-          test "$(uv run --no-project cozy-runtime --json --dir h3-quality-gate describe)" = "$(cat h3-quality-gate/metadata/package-interface.json)"
-          test "$(uv run --no-project cozy-runtime --json --dir checkpoint-repair describe)" = "$(cat checkpoint-repair/metadata/package-interface.json)"
 
       # A package with no `[project]` pyproject and no lock resolves no `ResolvedWheelSet`
       # and cannot publish at all, so a stale or absent lock is a release-blocking fact and
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          for package in anima minimax-h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools checkpoint-repair; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools; do
             uv lock --check --project "$package"
           done
 
       - name: Every package builds and imports from its wheel
         run: |
           mkdir -p dist/packages
-          for package in anima minimax-h3 quality-judge sdxl video-assembly h3-quality-gate minimax-h3-tools checkpoint-repair; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done
@@ -66,27 +62,17 @@ jobs:
           .venv/bin/python -P - <<'PY'
           from pathlib import Path
 
-          import anima, h3, h3_quality_gate, quality_judge, sdxl, video_assembly
-          import checkpoint_repair.job as checkpoint_repair
+          import anima, h3, sdxl
 
           # h3_tables (minimax-h3-tools) imports torch at module scope, so its wheel is
           # installed above but imported only in its own locked environment (package-locks).
-          for module in (anima, h3, h3_quality_gate, quality_judge, sdxl, video_assembly, checkpoint_repair):
+          for module in (anima, h3, sdxl):
               assert "site-packages" in str(module.__file__)
               assert module.app._registry
           h3_root = Path(h3.__file__).parent
           for asset in ("processor", "timestep-plans", "tokenizer"):
               assert (h3_root / asset).is_dir()
           PY
-      - name: Optional H3 diagnostics build and expose bounded assets
-        run: |
-          mkdir -p diagnostics/h3-vae-roundtrip/dependencies
-          cp dist/packages/minimax-h3/*.whl diagnostics/h3-vae-roundtrip/dependencies/
-          uv lock --check --project diagnostics/h3-vae-roundtrip
-          uv build --project diagnostics/h3-vae-roundtrip --wheel --out-dir dist/diagnostic
-          uv pip install --python .venv/bin/python --no-deps dist/diagnostic/*.whl
-          .venv/bin/cozy-runtime --json --dir diagnostics/h3-vae-roundtrip describe > dist/diagnostic/interface.json
-
       - name: The minimax-h3-tools wheel carries its job and assets
         run: |
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/job.py'
@@ -131,13 +117,13 @@ jobs:
   package-locks:
     # Independent so a failure to materialize an exact dependency environment cannot hide
     # behind static analysis. The checks job separately builds and imports every project wheel.
-    name: SDXL and quality-judge exact locked environments
+    name: Package exact locked environments
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        package: [anima, sdxl, quality-judge, h3-quality-gate, minimax-h3-tools, checkpoint-repair]
+        package: [anima, sdxl, minimax-h3-tools]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -180,22 +166,6 @@ jobs:
           PYTHONPATH: minimax-h3-tools/src
 
       - name: Native checkpoint row repair and resume
-        if: matrix.package == 'checkpoint-repair'
-        run: checkpoint-repair/.venv/bin/python scripts/h3-repair-proof.py
+        if: matrix.package == 'minimax-h3-tools'
+        run: minimax-h3-tools/.venv/bin/python scripts/h3-repair-proof.py
 
-  video-assembly:
-    name: Video assembly
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-        with:
-          version: "0.12.7"
-      - run: uv python install 3.12
-      - run: uv sync --project video-assembly --locked --group dev
-      - run: uv run --project video-assembly ruff check video-assembly
-      - run: uv run --project video-assembly ruff format --check video-assembly
-      - run: cd video-assembly && uv run mypy
-      - run: test "$(uv run --project video-assembly cozy-runtime --json --dir video-assembly describe)" = "$(cat video-assembly/metadata/package-interface.json)"
-      - run: uv run --project video-assembly python video-assembly/live.py
