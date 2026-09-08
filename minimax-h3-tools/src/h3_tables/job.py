@@ -78,16 +78,9 @@ def _production_plan(task: str) -> TimestepPlan:
     return plan
 
 
-def _table_budget() -> int:
-    """The exact table bytes one task's plan occupies, the larger task governing."""
-    sections = parse_production_config(_asset("model-config.json"))
-    return max(
-        table_bytes(H3Topology.from_config(sections[section]), _production_plan(task))
-        for task, section in SOURCE_SECTION.items()
-    )
-
-
-TABLE_BYTES = _table_budget()
+# Exact bytes per committed task plan. order-proof independently recomputes the
+# emitted table geometry and refuses drift; description never needs to execute it.
+TABLE_BYTES = 1_020_515_328
 MAX_FULL_BYTES = 64 << 10
 MAX_PRUNED_BYTES = 2 * TABLE_BYTES + (128 << 10)
 MAX_QUANTIZED_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_PRUNED_BYTES

@@ -52,7 +52,6 @@ from official import (
     build_h3_pipeline,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
-    supported_steps,
     validate_reference_policy,
 )
 
@@ -94,12 +93,11 @@ class AudioReference(msgspec.Struct, tag="audio", tag_field="type", forbid_unkno
 
 Reference = ImageReference | VideoReference | AudioReference
 Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
-# The wire enum is the committed plans' step counts; a bound lane serves exactly these
-# and the fastest is the default.
-SUPPORTED_STEPS = supported_steps()
-DEFAULT_STEPS = min(SUPPORTED_STEPS)
+# Static wire declarations; h3-conform verifies the enum against both committed plans.
+# The fastest supported schedule is the default.
+DEFAULT_STEPS = 30
 Steps = Annotated[
-    Literal[SUPPORTED_STEPS],  # type: ignore[valid-type]
+    Literal[30, 40, 50]
     msgspec.Meta(description="Denoise steps (transformer evaluations); fewer is faster."),
 ]
 
