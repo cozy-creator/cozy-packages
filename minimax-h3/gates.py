@@ -14,8 +14,8 @@ from cozy_runtime.author import OutputError, Telemetry
 
 @dataclass(frozen=True, slots=True)
 class MediaFacts:
-    width: int
-    height: int
+    """The requested clock: the frame count and rate a soundtrack must agree with."""
+
     frames: int
     fps: int
     sample_rate: int
@@ -32,40 +32,26 @@ class MediaFacts:
         return abs(audio_seconds - self.duration) <= self.av_tolerance
 
 
-def pre_encode_gate(
-    torch: Any,
+def refuse_before_encode(
     *,
-    pixels: Any,
     waveform: Any,
-    video_nonfinite_fraction: float,
     audio_nonfinite_fraction: float,
     requested: MediaFacts,
     tel: Telemetry,
-) -> list[str]:
-    """Refuse malformed/non-finite tensors and report quality without discarding media.
-
-    Quality acceptance belongs to explicit checkpoint validation. An inference
-    result retains its video and warnings so the caller can inspect it.
+) -> None:
+    """Refuse a malformed or non-finite soundtrack, or one off the video clock, before a
+    frame is decoded or encoded: everything here is known once the audio has landed.
+    Non-finite video is refused by the decode-to-encode stream at the chunk it appears in.
     """
     if waveform.ndim != 2:
         raise OutputError(
             f"the audio decode has shape {tuple(waveform.shape)}, expected (channels, samples)",
             code="output_integrity",
         )
-    tel.metric("video_nonfinite_fraction", round(video_nonfinite_fraction, 6))
     tel.metric("audio_nonfinite_fraction", round(audio_nonfinite_fraction, 6))
-    if video_nonfinite_fraction or audio_nonfinite_fraction:
+    if audio_nonfinite_fraction:
         raise OutputError(
-            "the official H3 decode produced non-finite video or audio values",
-            code="output_integrity",
-        )
-
-    shape = tuple(int(value) for value in pixels.shape)
-    expected = (requested.frames, requested.height, requested.width, 3)
-    if shape != expected:
-        raise OutputError(
-            f"the generated pixel tensor is {shape}, expected {expected}",
-            code="output_integrity",
+            "the official H3 audio decode produced non-finite values", code="output_integrity"
         )
     channels, samples = (int(value) for value in waveform.shape)
     if channels not in (1, 2):
@@ -82,7 +68,20 @@ def pre_encode_gate(
             code="output_integrity",
         )
 
-    integrity = ce_integrity.output_integrity(pixels.cpu().numpy())
+
+def report_after_encode(
+    torch: Any,
+    *,
+    pixels: Any,
+    waveform: Any,
+    requested: MediaFacts,
+    tel: Telemetry,
+) -> list[str]:
+    """Quality observations over the exact RGB8 and PCM the encoders consumed: reported,
+    never refused. Quality acceptance belongs to explicit checkpoint validation; an
+    inference result retains its video and warnings so the caller can inspect it.
+    """
+    integrity = ce_integrity.output_integrity(pixels.numpy())
     tel.metric("adjacent_frame_corr", round(integrity.adjacent_frame_corr or -1.0, 4))
     tel.metric("frame_std_min", round(integrity.frame_std_min or -1.0, 5))
     tel.metric("grid_peak_ratio", round(integrity.grid_peak_ratio or -1.0, 3))
@@ -90,6 +89,7 @@ def pre_encode_gate(
     tel.log("h3 output integrity", verdict=integrity.verdict, summary=integrity.summary())
     warnings = [] if integrity.ok else [integrity.summary()]
 
+    channels = int(waveform.shape[0])
     stats = ce_metrics_audio.signal_stats(
         waveform.to(torch.float32).cpu().numpy().T, requested.sample_rate
     )

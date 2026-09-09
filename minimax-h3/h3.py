@@ -8,9 +8,11 @@ stages weighted roots, and joins those two boundaries.
 from __future__ import annotations
 
 import hashlib
+import queue
 import sys
-from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import suppress
 from fractions import Fraction
 from typing import Annotated, Any, Literal
 
@@ -24,7 +26,12 @@ from cozy_runtime.author import (
     ChildCallError,
     Context,
     DecodedAudio,
+    DecodedAudioChunk,
+    DecodedAudioFormat,
+    DecodedMediaHeader,
     DecodedVideo,
+    DecodedVideoFormat,
+    DecodedVideoFrame,
     Image,
     ImageAsset,
     ImageFrame,
@@ -37,6 +44,7 @@ from cozy_runtime.author import (
     OutputError,
     Outputs,
     Preflight,
+    SavedVideo,
     Telemetry,
     UnsupportedInput,
     VideoAsset,
@@ -47,7 +55,7 @@ from cozy_runtime.author import (
 )
 from msgspec.structs import replace
 
-from gates import MediaFacts, pre_encode_gate
+from gates import MediaFacts, refuse_before_encode, report_after_encode
 from official import (
     FPS,
     MAX_AUDIO_REFERENCES,
@@ -248,13 +256,25 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept
         return audio, int(state.sampling_rate)
 
     @uses_components("video_vae")
-    def decode_video(self, task: Task, state: Any, *, checks: NumericalChecks | None = None) -> Any:
+    def decode_video(
+        self,
+        task: Task,
+        state: Any,
+        *,
+        on_chunk: Callable[[Any], None],
+        checks: NumericalChecks | None = None,
+    ) -> int:
+        """Hand every decoded temporal chunk to `on_chunk` inside the VAE's component scope;
+        a generator would run its body after the scope had closed."""
         if checks is not None:
             checks.component("video_vae", self.pipe.components["video_vae"])
-        video = self.pipe.decode_video(task, state)
-        if checks is not None:
-            checks.tensors("decode_video", [("video", video)])
-        return video
+
+        def observed(chunk: Any) -> None:
+            if checks is not None:
+                checks.tensors("decode_video", [("video", chunk)])
+            on_chunk(chunk)
+
+        return self.pipe.decode_video_chunks(task, state, observed)
 
     @uses_components("video_vae")
     def condition_fl2va_media(self, state: Any, *, checks: NumericalChecks) -> None:
@@ -541,56 +561,45 @@ def _finish(
             )
         waveform = audio[0].to(torch.float32).contiguous().cpu()
     cancel()
-    with tel.stage("decode_video", overall_range=(0.90, 0.97)):
-        decoded = model.decode_video(task, state, checks=checks)
-        if decoded.ndim != 5 or int(decoded.shape[0]) != 1 or int(decoded.shape[2]) != 3:
-            raise OutputError(
-                f"official H3 video decode returned shape {tuple(decoded.shape)}",
-                code="output_integrity",
-            )
-
-    cancel()
-    video_nonfinite_fraction = _nonfinite_fraction(torch, decoded)
-    audio_nonfinite_fraction = _nonfinite_fraction(torch, waveform)
-    pixels, video_pixel_digest = _rgb8(torch, decoded)
-    del decoded
-    frames, height, width, channels = (int(value) for value in pixels.shape)
-    facts = MediaFacts(
-        width=width,
-        height=height,
-        frames=frames,
-        fps=FPS,
-        sample_rate=sample_rate,
+    frames = frames_for(duration_s)
+    clock = MediaFacts(frames=frames, fps=FPS, sample_rate=sample_rate)
+    refuse_before_encode(
+        waveform=waveform,
+        audio_nonfinite_fraction=_nonfinite_fraction(torch, waveform),
+        requested=clock,
+        tel=tel,
     )
-    if frames != frames_for(duration_s) or channels != 3:
-        raise OutputError(
-            f"official H3 decode returned {frames} frames and {channels} channels for a "
-            f"{duration_s}s request, expected {frames_for(duration_s)} frames and 3 channels",
-            code="output_integrity",
-        )
 
-    with tel.stage("check_output", overall_range=(0.97, 0.98)):
-        warnings = pre_encode_gate(
+    # The encoder runs under the decode (h3a-017): each chunk is quantized on its device
+    # and landed in the host buffer while a worker feeds the runtime's streaming MP4 sink.
+    with tel.stage("decode_video", overall_range=(0.90, 0.98)):
+        stream = _VideoStream(
             torch,
-            pixels=pixels,
+            out,
+            frames=frames,
             waveform=waveform,
-            video_nonfinite_fraction=video_nonfinite_fraction,
-            audio_nonfinite_fraction=audio_nonfinite_fraction,
-            requested=facts,
-            tel=tel,
+            sample_rate=sample_rate,
+            cancel=cancel,
+            progress=tel.step_callback(frames, stage="decode_video", overall_range=(0.90, 0.98)),
+        )
+        try:
+            model.decode_video(task, state, on_chunk=stream.push, checks=checks)
+            saved, video_pixel_digest = stream.finish()
+        except BaseException:
+            stream.abandon()
+            raise
+    tel.metric("video_nonfinite_fraction", 0.0)
+    pixels = stream.pixels
+    _, height, width, _ = (int(value) for value in pixels.shape)
+
+    with tel.stage("check_output", overall_range=(0.98, 0.99)):
+        warnings = report_after_encode(
+            torch, pixels=pixels, waveform=waveform, requested=clock, tel=tel
         )
 
     cancel()
-    pixel_array = pixels.numpy()
-    audio_array = waveform.numpy()
-    frame_bytes = bytes(pixel_array[-1])
-    with tel.stage("encode_outputs", overall_range=(0.98, 1.00)):
-        video = out.save_video(
-            pixels,
-            fps=FPS,
-            audio=waveform,
-            sample_rate=sample_rate,
-        )
+    frame_bytes = bytes(pixels[-1].numpy())
+    with tel.stage("encode_outputs", overall_range=(0.99, 1.00)):
         continuation = out.save_image(ImageFrame(width, height, frame_bytes), format="png")
 
     tel.log(
@@ -617,39 +626,211 @@ def _finish(
     tel.log(
         "h3 source digests",
         video_pixel_digest=video_pixel_digest,
-        audio_sample_digest=hashlib.sha256(audio_array).hexdigest(),
+        audio_sample_digest=hashlib.sha256(waveform.numpy()).hexdigest(),
         continuation_pixel_digest=hashlib.sha256(frame_bytes).hexdigest(),
     )
-    return H3VideoOutput(video=video, continuation_frame=continuation, warnings=warnings)
+    tel.log(
+        "h3 container facts",
+        video_codec=saved.video_codec,
+        frame_count=saved.frame_count,
+        frame_rate=str(saved.frame_rate),
+        color_matrix=saved.color_matrix,
+        color_range=saved.color_range,
+        audio_codec=saved.audio.codec if saved.audio is not None else "",
+        audio_decoded_samples=saved.audio.decoded_samples if saved.audio is not None else 0,
+        video_bytes=saved.video.size_bytes,
+    )
+    return H3VideoOutput(video=saved.video, continuation_frame=continuation, warnings=warnings)
 
 
-#: Frames per handoff chunk: 8 frames of 1344x768 are 100 MB of fp32 source and 25 MB of
-#: RGB8, so one chunk's device temporaries stay small and the hash of one chunk (~25 ms)
-#: hides under the quantize-and-copy of the next.
+#: Frames per handoff slice: 8 frames of 1344x768 are 100 MB of fp32 source and 25 MB of
+#: RGB8, so a slice's device temporaries stay small and its hash and encode hide under the
+#: decode of the next chunk.
 _RGB8_CHUNK_FRAMES = 8
+#: Generated frames are square-pixel RGB at 24 fps, tagged BT.709 limited-range in the
+#: container — the runtime's own HD rule, so a player converts them as the encoder did.
+_VIDEO_COLOR = {"color_primaries": 1, "color_transfer": 1, "color_matrix": 1, "color_range": 1}
+_AUDIO_LAYOUTS = {1: ("mono", ("FC",)), 2: ("stereo", ("FL", "FR"))}
+
+
+def _land(torch: Any, chunk: Any, landed: Any) -> None:
+    """Quantize one `(t, 3, H, W)` float slice on its device, straight into `landed`, its
+    `(t, H, W, 3)` slice of the host buffer — no per-slice host temporary."""
+    chunk.clamp_(0, 1).mul_(255).round_()
+    landed.copy_(chunk.to(torch.uint8).permute(0, 2, 3, 1).contiguous())
 
 
 def _rgb8(torch: Any, decoded: Any) -> tuple[Any, str]:
-    """Bounded float-decode to ONE CPU RGB8 buffer, digested as it lands (h3a-017).
-
-    Each chunk is quantized on the device, copied straight into its slice of the host
-    buffer (no per-chunk host temporary), and handed to one hashing thread while the next
-    chunk copies. The chunks are consecutive slices of a contiguous buffer, so the running
-    sha256 is byte-for-byte the digest of the finished buffer — the `h3 source digests`
-    identity — computed under the copies instead of after them.
-    """
+    """A whole `(1, T, 3, H, W)` float decode to ONE host RGB8 buffer and its digest: the
+    slice-for-slice reference the streamed handoff below is held to."""
     source = decoded[0]
     frames, _, height, width = (int(value) for value in source.shape)
     pixels = torch.empty((frames, height, width, 3), dtype=torch.uint8, device="cpu")
     digest = hashlib.sha256()
-    with ThreadPoolExecutor(max_workers=1) as hasher:
-        for start in range(0, frames, _RGB8_CHUNK_FRAMES):
-            chunk = source[start : start + _RGB8_CHUNK_FRAMES]
-            chunk.clamp_(0, 1).mul_(255).round_()
-            landed = pixels[start : start + len(chunk)]
-            landed.copy_(chunk.to(torch.uint8).permute(0, 2, 3, 1).contiguous())
-            hasher.submit(digest.update, landed.numpy())
+    for start in range(0, frames, _RGB8_CHUNK_FRAMES):
+        landed = pixels[start : start + _RGB8_CHUNK_FRAMES]
+        _land(torch, source[start : start + len(landed)], landed)
+        digest.update(landed.numpy())
     return pixels, digest.hexdigest()
+
+
+class _VideoStream:
+    """The decode-to-encode handoff (h3a-017).
+
+    The decode thread refuses non-finite values, quantizes each chunk on its device and
+    lands it in its slice of ONE host RGB8 buffer; a worker thread digests the slices in
+    order and feeds the runtime's streaming MP4 sink while the next chunk decodes. The
+    running sha256 is byte-for-byte the finished buffer's — the `h3 source digests`
+    identity — while the container's bytes are a codec fact, not an output identity.
+    The soundtrack, decoded first, is interleaved behind the frames it covers.
+    """
+
+    def __init__(
+        self,
+        torch: Any,
+        out: Outputs,
+        *,
+        frames: int,
+        waveform: Any,
+        sample_rate: int,
+        cancel: Any,
+        progress: Callable[[int], None],
+    ) -> None:
+        self._torch = torch
+        self._out = out
+        self._frames = frames
+        self._waveform = waveform
+        self._sample_rate = sample_rate
+        self._cancel = cancel
+        self._progress = progress
+        self._slices: queue.SimpleQueue[tuple[int, int] | None] = queue.SimpleQueue()
+        self._pool = ThreadPoolExecutor(max_workers=1)
+        self._encode: Future[SavedVideo] | None = None
+        self._digest = hashlib.sha256()
+        self._abandoned = False
+        self.pixels: Any = None
+        self.landed = 0
+
+    def push(self, chunk: Any) -> None:
+        """One `(t, 3, H, W)` float chunk on its device, in decode order."""
+        self._cancel()
+        if self._encode is not None and self._encode.done():
+            self._encode.result()
+        torch = self._torch
+        frames, channels, height, width = (int(value) for value in chunk.shape)
+        bad = _nonfinite_fraction(torch, chunk)
+        if bad:
+            raise OutputError(
+                f"the official H3 video decode produced non-finite values ({bad:.6f} of frames "
+                f"{self.landed}..{self.landed + frames})",
+                code="output_integrity",
+            )
+        if self.pixels is None and channels == 3:
+            self.pixels = torch.empty(
+                (self._frames, height, width, 3), dtype=torch.uint8, device="cpu"
+            )
+            self._encode = self._pool.submit(self._out.save_video_stream, self._events())
+        if (
+            self.pixels is None
+            or (height, width) != tuple(self.pixels.shape[1:3])
+            or self.landed + frames > self._frames
+        ):
+            raise OutputError(
+                f"official H3 decode produced a {channels}x{height}x{width} chunk of {frames} "
+                f"frames at frame {self.landed}; the request is {self._frames} frames of "
+                f"3x{height}x{width}",
+                code="output_integrity",
+            )
+        for start in range(0, frames, _RGB8_CHUNK_FRAMES):
+            stop = self.landed + min(_RGB8_CHUNK_FRAMES, frames - start)
+            landed = self.pixels[self.landed : stop]
+            _land(torch, chunk[start : start + len(landed)], landed)
+            self._slices.put((self.landed, self.landed + len(landed)))
+            self.landed += len(landed)
+        self._progress(self.landed - 1)
+
+    def finish(self) -> tuple[SavedVideo, str]:
+        """Close the stream once every requested frame has landed; the sink's probed asset
+        and the buffer's digest."""
+        if self.landed != self._frames or self._encode is None:
+            raise OutputError(
+                f"official H3 decode returned {self.landed} frames, expected {self._frames}",
+                code="output_integrity",
+            )
+        self._slices.put(None)
+        try:
+            return self._encode.result(), self._digest.hexdigest()
+        finally:
+            self._pool.shutdown(wait=False)
+
+    def abandon(self) -> None:
+        """A failed decode ends the stream so the sink aborts and unlinks its partial file."""
+        self._abandoned = True
+        self._slices.put(None)
+        if self._encode is not None:
+            with suppress(Exception):
+                self._encode.result()
+        self._pool.shutdown(wait=False)
+
+    def _events(self) -> Iterator[DecodedMediaHeader | DecodedVideoFrame | DecodedAudioChunk]:
+        _, height, width, _ = (int(value) for value in self.pixels.shape)
+        channels, samples = (int(value) for value in self._waveform.shape)
+        yield DecodedMediaHeader(
+            video=DecodedVideoFormat(
+                width=width,
+                height=height,
+                time_base=Fraction(1, FPS),
+                pixel_aspect_ratio=Fraction(1),
+                nominal_frame_rate=Fraction(FPS),
+                **_VIDEO_COLOR,
+            ),
+            audio=DecodedAudioFormat(
+                channels=channels,
+                sample_rate=self._sample_rate,
+                channel_layout=_AUDIO_LAYOUTS[channels][0],
+                channel_names=_AUDIO_LAYOUTS[channels][1],
+                time_base=Fraction(1, self._sample_rate),
+            ),
+        )
+        submitted = 0
+        while (item := self._slices.get()) is not None:
+            start, stop = item
+            landed = self.pixels[start:stop]
+            self._digest.update(landed.numpy())
+            for index in range(start, stop):
+                yield DecodedVideoFrame(
+                    width=width,
+                    height=height,
+                    rgb=bytes(landed[index - start].numpy()),
+                    pts=index,
+                    duration=1,
+                    time_base=Fraction(1, FPS),
+                    pixel_aspect_ratio=Fraction(1),
+                    **_VIDEO_COLOR,
+                )
+            covered = min(samples, stop * self._sample_rate // FPS)
+            yield from self._audio(submitted, covered)
+            submitted = covered
+        if self._abandoned:
+            raise OutputError("the decode abandoned the video stream", code="output_integrity")
+        yield from self._audio(submitted, samples)
+
+    def _audio(self, start: int, stop: int) -> Iterator[DecodedAudioChunk]:
+        if stop <= start:
+            return
+        channels = int(self._waveform.shape[0])
+        yield DecodedAudioChunk(
+            channels=channels,
+            sample_count=stop - start,
+            sample_rate=self._sample_rate,
+            channel_layout=_AUDIO_LAYOUTS[channels][0],
+            channel_names=_AUDIO_LAYOUTS[channels][1],
+            pcm_f32le=tuple(
+                self._waveform[channel, start:stop].numpy().tobytes() for channel in range(channels)
+            ),
+            pts=start,
+            time_base=Fraction(1, self._sample_rate),
+        )
 
 
 def _nonfinite_fraction(torch: Any, value: Any) -> float:

@@ -14,6 +14,7 @@ import io
 import json
 import struct
 import sys
+import tempfile
 from collections import Counter
 from collections.abc import Callable
 from contextlib import redirect_stderr
@@ -43,7 +44,14 @@ from cozy_runtime.author import (
     canonical_json,
     describe,
 )
-from cozy_runtime.author.fakes import fake_attempt, fake_telemetry, warm_with_fakes
+from cozy_runtime.author.fakes import (
+    fake_attempt,
+    fake_input,
+    fake_media_decoder,
+    fake_outputs,
+    fake_telemetry,
+    warm_with_fakes,
+)
 from cozy_runtime.internal.derive import derive
 from cozy_runtime.internal.residency import ResidencyRefusal
 from diffusers import (
@@ -54,6 +62,7 @@ from diffusers import (
     MiniMaxH3Scheduler,
     MiniMaxH3Transformer3DModel,
 )
+from diffusers.modular_pipelines import PipelineState
 from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference
 from diffusers.modular_pipelines.minimax_h3.before_denoise import MiniMaxH3SetTimestepsStep
 from diffusers.modular_pipelines.minimax_h3.denoise import MiniMaxH3LoopSchedulerStep
@@ -82,7 +91,7 @@ from h3_tables.source import official_full_specs  # noqa: E402
 import h3 as package  # noqa: E402
 from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer  # noqa: E402
 from conditioner import build_text_conditioner, text_conditioner_config  # noqa: E402
-from gates import MediaFacts, pre_encode_gate  # noqa: E402
+from gates import MediaFacts, refuse_before_encode, report_after_encode  # noqa: E402
 from h3_order import construction_order, encode_order  # noqa: E402
 from official import (  # noqa: E402
     _DIT_COMPONENT,
@@ -1580,6 +1589,57 @@ def _video(seconds: int, *, soundtrack: Any | None = None) -> Any:
     )
 
 
+def tiny_video_vae() -> Any:
+    """The real tile-batched VAE class at toy widths, random weights."""
+    torch.manual_seed(0)
+    vae = TileBatchedVideoVAE(
+        block_out_channels=(8, 8, 8, 8, 8, 8),
+        layers_per_block=1,
+        norm_num_groups=8,
+        decoder_num_layers=1,
+        decoder_num_attention_heads=2,
+    ).eval()
+    with torch.no_grad():
+        for parameter in vae.parameters():
+            parameter.normal_(0, 0.02)
+    return vae
+
+
+def tiny_audio_vae() -> Any:
+    """The real audio VAE at toy widths; 8 kHz is AAC's floor, so its clip encodes for real."""
+    torch.manual_seed(0)
+    return AutoencoderKLMiniMaxH3Audio(
+        encoder_dim=8,
+        encoder_rates=(2, 2),
+        latent_dim=8,
+        latent_channels=8,
+        decoder_dim=8,
+        decoder_rates=(2, 2),
+        sampling_rate=8000,
+        latents_mean=[0.0] * 8,
+        latents_std=[1.0] * 8,
+    ).eval()
+
+
+def finish_scaffold(frames: int) -> tuple[Any, Any]:
+    """The official pipeline with tiny REAL VAEs in every workflow and a denoised state:
+    `frames` on the 17n + 5 grid at a 96x64 canvas, stereo latents on the release clock."""
+    pipe = meta_h3_pipeline()
+    video_vae, audio_vae = tiny_video_vae(), tiny_audio_vae()
+    for workflow in pipe._pipes.values():
+        workflow.update_components(vae=video_vae, audio_vae=audio_vae)
+    pipe.components["video_vae"], pipe.components["audio_vae"] = video_vae, audio_vae
+    pipe.sample_rate = int(audio_vae.config.sampling_rate)
+    latent_frames = 5 * ((frames - 5) // 17) + 2
+    audio_latents = frames * pipe.sample_rate // FPS // 4
+    state = PipelineState()
+    seeds = (torch.Generator().manual_seed(3), torch.Generator().manual_seed(4))
+    state.set("latents", torch.randn(1, 24, latent_frames, 4, 6, generator=seeds[0]))
+    state.set("audio_latents", torch.randn(2, 8, audio_latents, generator=seeds[1]))
+    state.set("output_type", "pt")
+    return pipe, state
+
+
 def arm_media() -> None:
     print("\n== ordered mixed references, exact clocks, and continuation identity ==")
     check(
@@ -1867,117 +1927,63 @@ def arm_media() -> None:
         bytes([255, 64, 26, 0, 191, 230]),
     )
 
-    class FinishModel:
-        pipe = SimpleNamespace(sample_rate=32000)
-
-        @staticmethod
-        def decode_audio(task: Any, state: Any, *, checks: Any = None) -> tuple[Any, int]:
-            del task
-            return state.audio, 32000
-
-        @staticmethod
-        def decode_video(task: Any, state: Any, *, checks: Any = None) -> Any:
-            del task
-            return state.video
-
-    class FinishOutputs:
-        def __init__(self) -> None:
-            self.continuation = b""
-            self.video_pixels = b""
-            self.video_audio = b""
-            self.fps = 0
-            self.sample_rate = 0
-
-        def save_video(self, pixels: Any, **kwargs: Any) -> VideoAsset:
-            self.video_pixels = bytes(pixels.numpy())
-            self.video_audio = bytes(kwargs["audio"].numpy())
-            self.fps = kwargs["fps"]
-            self.sample_rate = kwargs["sample_rate"]
-            digest = hashlib.sha256(self.video_pixels).hexdigest()
-            return VideoAsset(f"sha256:{digest}")
-
-        def save_image(self, frame: Any, *, format: str) -> ImageAsset:
-            check("continuation encoder format", format, "png")
-            self.continuation = frame.rgb
-            digest = hashlib.sha256(frame.rgb).hexdigest()
-            return ImageAsset(f"sha256:{digest}")
-
-    finish_video = torch.zeros((1, DEFAULT_FRAMES, 3, 2, 3), dtype=torch.float32)
-    finish_video[0, -1] = torch.tensor(
-        [
-            [[1.0, 0.0, 0.25], [0.5, 0.75, 0.0]],
-            [[0.5, 1.0, 0.0], [0.25, 0.75, 1.0]],
-            [[0.25, 0.5, 1.0], [0.0, 0.75, 0.5]],
-        ]
-    )
-    expected_continuation = bytes(
-        [255, 128, 64, 0, 255, 128, 64, 0, 255, 128, 64, 0, 191, 191, 191, 0, 255, 128]
-    )
-    finish_audio = torch.tensor([[[0.0, 0.25, -0.25, 0.5]]], dtype=torch.float32)
+    # The whole tail, for real (h3a-017): tiny official VAEs through the official decode
+    # blocks, the real `Outputs` over a real spool, the runtime's own encoder, probe and
+    # decoder. The sequential reference is the official whole-clip block quantized whole.
+    pipe, state = finish_scaffold(DEFAULT_FRAMES)
+    with torch.no_grad():
+        reference, reference_digest = package._rgb8(torch, pipe.decode_video("fl2va", state))
     schedule = ScheduleFacts("a" * 64, 30, 31, *[character * 64 for character in "bcde"])
-    finish_outputs = FinishOutputs()
-    attempt = fake_attempt("h3-finish-receipt")
+    spool = Path(tempfile.mkdtemp(prefix="h3-finish-"))
+    attempt = fake_attempt("h3-finish-receipt", spool=spool)
     telemetry = fake_telemetry(attempt)
-    package_module = cast(Any, package)
-    original_gate = package_module.pre_encode_gate
-    package_module.pre_encode_gate = lambda *args, **kwargs: ["quality fixture warning"]
-    try:
-        finished = package._finish(
-            cast(Any, FinishModel()),
-            "fl2va",
-            SimpleNamespace(audio=finish_audio, video=finish_video),
-            schedule,
-            duration_s=DEFAULT_DURATION_S,
-            out=cast(Any, finish_outputs),
-            tel=telemetry,
-            cancel=lambda: None,
-        )
-    finally:
-        package_module.pre_encode_gate = original_gate
+    outputs = fake_outputs(attempt)
+    finished = package._finish(
+        package.H3Model.for_test(pipe=pipe),
+        "fl2va",
+        state,
+        schedule,
+        duration_s=DEFAULT_DURATION_S,
+        out=outputs,
+        tel=telemetry,
+        cancel=lambda: None,
+        checks=NumericalChecks(cast(Any, telemetry), pipe.resident),
+    )
     check(
         "finish returns exactly two typed media assets",
-        (type(finished.video), type(finished.continuation_frame)),
-        (VideoAsset, ImageAsset),
+        (type(finished.video), type(finished.continuation_frame), len(outputs.saved)),
+        (VideoAsset, ImageAsset, 2),
     )
+    check("the video is the sink's committed mp4", finished.video.media_type, "video/mp4")
+    log_events = [
+        event
+        for event in telemetry.events
+        if event.kind == "log" and event.name != "h3 numerical check"
+    ]
     check(
-        "finish retains quality warnings with encoded media",
-        finished.warnings,
-        ["quality fixture warning"],
-    )
-    check(
-        "finish continuation preserves the final pre-encode pixel",
-        finish_outputs.continuation,
-        expected_continuation,
-    )
-    red(
-        "first-frame continuation regression",
-        bytes(finish_outputs.video_pixels[: len(expected_continuation)]),
-        finish_outputs.continuation,
-    )
-    check(
-        "finish passes the exact soundtrack and clocks to the video encoder",
-        (finish_outputs.video_audio, finish_outputs.fps, finish_outputs.sample_rate),
-        (bytes(finish_audio[0].numpy()), FPS, 32000),
-    )
-    log_events = [event for event in telemetry.events if event.kind == "log"]
-    check(
-        "finish emits exactly the three ordered proof rows",
+        "finish emits the four ordered proof rows after the integrity verdict",
         [event.name for event in log_events],
-        ["h3 output geometry", "h3 schedule facts", "h3 source digests"],
+        [
+            "h3 output integrity",
+            "h3 output geometry",
+            "h3 schedule facts",
+            "h3 source digests",
+            "h3 container facts",
+        ],
     )
     logs = {event.name: dict(event.fields) for event in log_events}
     check(
         "Runtime-admitted output geometry receipt",
         logs.get("h3 output geometry"),
         {
-            "width": 3,
-            "height": 2,
+            "width": 96,
+            "height": 64,
             "frames": DEFAULT_FRAMES,
             "fps": FPS,
             "requested_duration_s": DEFAULT_DURATION_S,
             "duration_seconds": round(DEFAULT_FRAMES / FPS, 3),
-            "denoise_rows": denoise_rows(DEFAULT_FRAMES, 2, 3),
-            "sample_rate": 32000,
+            "denoise_rows": denoise_rows(DEFAULT_FRAMES, 64, 96),
+            "sample_rate": pipe.sample_rate,
         },
     )
     check(
@@ -1993,16 +1999,59 @@ def arm_media() -> None:
             "transformer_evaluations": 30,
         },
     )
-    expected_pixels = finish_outputs.video_pixels
-    expected_audio = finish_outputs.video_audio
+    waveform = pipe.decode_audio("fl2va", state)[0].to(torch.float32).contiguous()
     check(
-        "Runtime-admitted source digest receipt",
+        "the streamed handoff digests exactly the sequential whole-clip RGB8",
         logs.get("h3 source digests"),
         {
-            "video_pixel_digest": hashlib.sha256(expected_pixels).hexdigest(),
-            "audio_sample_digest": hashlib.sha256(expected_audio).hexdigest(),
-            "continuation_pixel_digest": hashlib.sha256(finish_outputs.continuation).hexdigest(),
+            "video_pixel_digest": reference_digest,
+            "audio_sample_digest": hashlib.sha256(waveform.numpy()).hexdigest(),
+            "continuation_pixel_digest": hashlib.sha256(reference[-1].numpy()).hexdigest(),
         },
+    )
+    facts = logs.get("h3 container facts") or {}
+    check(
+        "the container carries every frame and the whole soundtrack as h264 and aac",
+        (
+            facts.get("video_codec"),
+            facts.get("frame_count"),
+            facts.get("audio_codec"),
+            int(facts.get("audio_decoded_samples") or 0) >= int(waveform.shape[1]),
+        ),
+        ("h264", DEFAULT_FRAMES, "aac", True),
+    )
+    decoded = fake_media_decoder(attempt).value(
+        fake_input(finished.video, attempt=attempt.request_id, max_decoded_bytes=1 << 30)
+    )
+    assert isinstance(decoded, DecodedVideo)
+    played = torch.stack(
+        [
+            torch.frombuffer(bytearray(frame), dtype=torch.uint8).reshape(64, 96, 3)
+            for frame in decoded.frames_rgb
+        ]
+    )
+    error = (played.float() - reference.float()).pow(2).mean()
+    psnr = float(10 * torch.log10(255.0**2 / error))
+    check(
+        "the runtime decodes the mp4 back to the clip's geometry, clock and soundtrack",
+        (
+            decoded.frame_count,
+            (decoded.width, decoded.height),
+            decoded.time_base * decoded.frame_durations[0],
+            None if decoded.soundtrack is None else decoded.soundtrack.channels,
+        ),
+        (DEFAULT_FRAMES, (96, 64), Fraction(1, FPS), 2),
+    )
+    check("the played frames are the source frames within crf 17", psnr > 30, True)
+    observe("container round trip", f"psnr={psnr:.1f} dB bytes={finished.video.size_bytes}")
+    stages = telemetry.stages()
+    check(
+        "the tail's stages are all measured",
+        [
+            name in stages
+            for name in ("decode_audio", "decode_video", "check_output", "encode_outputs")
+        ],
+        [True] * 4,
     )
     check(
         "finish receipt loses and refuses no Runtime observations",
@@ -2010,21 +2059,74 @@ def arm_media() -> None:
         (0, 0),
     )
 
-    # The decode is proven against the length the REQUEST asked for, not against a
-    # constant: a clip of any other length is an integrity refusal.
+    def residue(spool: Path) -> list[str]:
+        return sorted(path.name for path in spool.iterdir() if "video" in path.name)
+
+    def refused_tail(
+        name: str,
+        pipe: Any,
+        state: Any,
+        *,
+        duration_s: int = DEFAULT_DURATION_S,
+        checks: NumericalChecks | None = None,
+        max_output_bytes: int = 256 << 20,
+    ) -> Callable[[], Any]:
+        spool = Path(tempfile.mkdtemp(prefix=f"h3-finish-{name}-"))
+        attempt = fake_attempt(f"h3-finish-{name}", spool=spool, max_output_bytes=max_output_bytes)
+        telemetry = fake_telemetry(attempt)
+
+        def run() -> Any:
+            try:
+                return package._finish(
+                    package.H3Model.for_test(pipe=pipe),
+                    "fl2va",
+                    state,
+                    schedule,
+                    duration_s=duration_s,
+                    out=fake_outputs(attempt),
+                    tel=telemetry,
+                    cancel=lambda: None,
+                    checks=checks,
+                )
+            finally:
+                check(
+                    f"{name}: an abandoned stream leaves no video in the spool",
+                    residue(spool),
+                    [],
+                )
+
+        return run
+
+    # The decode is proven against the length the REQUEST asked for, not a constant.
     refusal(
-        "a decode whose length is not the requested one refuses",
-        lambda: package._finish(
-            cast(Any, FinishModel()),
-            "fl2va",
-            SimpleNamespace(audio=finish_audio, video=finish_video),
-            schedule,
-            duration_s=DURATIONS[1],
-            out=cast(Any, FinishOutputs()),
-            tel=fake_telemetry(fake_attempt("h3-finish-length")),
-            cancel=lambda: None,
-        ),
+        "a clip whose length is not the requested one refuses before a frame decodes",
+        refused_tail("length", pipe, state, duration_s=DURATIONS[1]),
         "output_integrity",
+    )
+    # Finite weights whose products overflow: the resident scan passes, the decode does not.
+    poisoned, poisoned_state = finish_scaffold(DEFAULT_FRAMES)
+    with torch.no_grad():
+        largest = torch.finfo(torch.float32).max
+        poisoned.components["video_vae"].decoder.proj_in.weight.fill_(largest)
+    refusal(
+        "a non-finite chunk is refused at the chunk, before RGB8 erases it",
+        refused_tail("nan", poisoned, poisoned_state),
+        "output_integrity",
+    )
+    refusal(
+        "with numerical checks the observer names it first",
+        refused_tail(
+            "nan-observed",
+            poisoned,
+            poisoned_state,
+            checks=NumericalChecks(cast(Any, fake_telemetry()), poisoned.resident),
+        ),
+        "numerical_nonfinite",
+    )
+    refusal(
+        "the sink's own refusal reaches the decode thread instead of decoding on",
+        refused_tail("bounded", pipe, state, max_output_bytes=4096),
+        "output_too_large",
     )
 
     check("longest single-shot cell", (MAX_FRAMES, FPS), (345, 24))
@@ -2373,55 +2475,54 @@ def arm_resident_fill() -> None:
 
 def arm_output_gates() -> None:
     print("\n== structural refusals and quality observations ==")
-    requested = MediaFacts(width=1, height=1, frames=2, fps=24, sample_rate=24)
-    decoded = torch.zeros((1, 2, 3, 1, 1), dtype=torch.float32)
-    pixels = torch.zeros((2, 1, 1, 3), dtype=torch.uint8)
-    waveform = torch.zeros((1, 2), dtype=torch.float32)
-    poisoned = decoded.clone()
-    poisoned[0, 0, 0, 0, 0] = float("nan")
+    clock = MediaFacts(frames=2, fps=24, sample_rate=24)
     refusal(
-        "NaN is observed before RGB8 erases it",
-        lambda: pre_encode_gate(
-            torch,
-            pixels=pixels,
-            waveform=waveform,
-            video_nonfinite_fraction=package._nonfinite_fraction(torch, poisoned),
-            audio_nonfinite_fraction=0.0,
-            requested=requested,
+        "a non-finite soundtrack refuses before a frame decodes",
+        lambda: refuse_before_encode(
+            waveform=torch.zeros((1, 2)),
+            audio_nonfinite_fraction=0.5,
+            requested=clock,
             tel=fake_telemetry(),
         ),
         "output_integrity",
-    )
-    check(
-        "the uint8 control contains no NaN evidence",
-        bool(torch.isnan(pixels.float()).any()),
-        False,
     )
     refusal(
         "audio outside the one-frame A/V tolerance refuses",
-        lambda: pre_encode_gate(
-            torch,
-            pixels=pixels,
+        lambda: refuse_before_encode(
             waveform=torch.zeros((1, 5)),
-            video_nonfinite_fraction=0.0,
             audio_nonfinite_fraction=0.0,
-            requested=requested,
+            requested=clock,
             tel=fake_telemetry(),
         ),
         "output_integrity",
     )
+    refusal(
+        "a soundtrack that is not (channels, samples) refuses",
+        lambda: refuse_before_encode(
+            waveform=torch.zeros((1, 1, 2)),
+            audio_nonfinite_fraction=0.0,
+            requested=clock,
+            tel=fake_telemetry(),
+        ),
+        "output_integrity",
+    )
+    refuse_before_encode(
+        waveform=torch.zeros((2, 3)),
+        audio_nonfinite_fraction=0.0,
+        requested=clock,
+        tel=fake_telemetry(),
+    )
+    observe("a stereo soundtrack one sample past the clock is within the tolerance")
     # A real quality rejection must remain visible without suppressing an
     # otherwise encodable inference result. Checkpoints are qualified separately.
-    requested = MediaFacts(width=512, height=512, frames=5, fps=24, sample_rate=240)
+    clock = MediaFacts(frames=5, fps=24, sample_rate=240)
     pixels = torch.full((5, 512, 512, 3), 100, dtype=torch.uint8)
     pixels[:, ::16] = 220
-    warnings = pre_encode_gate(
+    warnings = report_after_encode(
         torch,
         pixels=pixels,
         waveform=torch.zeros((2, 50)),
-        video_nonfinite_fraction=0.0,
-        audio_nonfinite_fraction=0.0,
-        requested=requested,
+        requested=clock,
         tel=fake_telemetry(),
     )
     check(
@@ -2435,17 +2536,7 @@ def arm_vae_tiles() -> None:
     """h3a-017: one chunk's tiles decode as one batch, within one ulp of the tile-at-a-time
     decode, on the real VAE class at the release tile geometry (CPU, random weights)."""
     print("\n== tile-batched video VAE decode ==")
-    torch.manual_seed(0)
-    vae = TileBatchedVideoVAE(
-        block_out_channels=(8, 8, 8, 8, 8, 8),
-        layers_per_block=1,
-        norm_num_groups=8,
-        decoder_num_layers=1,
-        decoder_num_attention_heads=2,
-    ).eval()
-    with torch.no_grad():
-        for parameter in vae.parameters():
-            parameter.normal_(0, 0.02)
+    vae = tiny_video_vae()
     check(
         "the served video VAE is the tile-batched class",
         type(meta_h3_pipeline().components["video_vae"]),
@@ -2508,6 +2599,40 @@ def arm_vae_tiles() -> None:
         "a reversed tile order still sits in the sequential error class",
         float((wrong.double() - exact).abs().max()) <= 2 * sequential_error,
         True,
+    )
+
+    # h3a-017 (c): the temporal loop as a generator IS upstream's `_decode`, piece by piece —
+    # bit-identical on the served 5n + 2 grid and on every padding branch off it — so a
+    # chunk may be quantized and encoded while the next one decodes.
+    pieces_on_grid: list[int] = []
+    for latent_frames in (7, 8, 11, 12, 16, 22):
+        seed = torch.Generator().manual_seed(latent_frames)
+        z = torch.randn(1, 24, latent_frames, 4, 6, generator=seed)
+        with torch.no_grad():
+            upstream = AutoencoderKLMiniMaxH3._decode(vae, z)
+            pieces = list(vae.decode_chunks(z))
+            public = vae.decode(z, return_dict=False)[0]
+        streamed = torch.cat(pieces, dim=2)
+        check(
+            f"{latent_frames} latent frames stream exactly as upstream decodes them",
+            (tuple(streamed.shape), torch.equal(streamed, upstream), torch.equal(public, upstream)),
+            (tuple(upstream.shape), True, True),
+        )
+        if latent_frames == 12:
+            pieces_on_grid = [int(piece.shape[2]) for piece in pieces]
+    check(
+        "a 39-frame clip streams two 17-frame chunks and the 5-frame tail",
+        pieces_on_grid,
+        [17, 17, 5],
+    )
+    z = torch.randn(1, 24, 11, 4, 6, generator=torch.Generator().manual_seed(11))
+    with torch.no_grad():
+        untrimmed = torch.cat(list(vae._decode_pieces(z, 2)), dim=2)
+        upstream = AutoencoderKLMiniMaxH3._decode(vae, z)
+    red(
+        "the pieces before the padding hold-back already have upstream's length",
+        int(untrimmed.shape[2]),
+        int(upstream.shape[2]),
     )
 
 
