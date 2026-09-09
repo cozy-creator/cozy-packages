@@ -225,7 +225,7 @@ requires-dist = [
     { name = "cozy-runtime", specifier = ">=0.16.1,<1" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "torch", specifier = ">=2.13,<3", index = "https://download.pytorch.org/whl/cu130" },
+    { name = "torch", specifier = "==2.13.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -526,8 +526,8 @@ wheels = [
 
 [[package]]
 name = "torch"
-version = "2.13.0+cu130"
-source = { registry = "https://download.pytorch.org/whl/cu130" }
+version = "2.13.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cuda-bindings" },
     { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"] },
@@ -545,7 +545,7 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cu130/torch-2.13.0%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:8db7338e6895c3d4bd89a02ff4209507d1f0cf2ffeb3b898538b5a07d1ea8c1e", upload-time = "2026-07-08T20:24:52Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/82/fea946351658e6534db52d2cc12bc53087cbf87f9440c5f180f367c1950b/torch-2.13.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:796633c4cdf0fe2cdced72d8f88f22e73dbcfce83132763162f6d4bff13b820b", size = 526605292, upload-time = "2026-07-08T16:04:22.81Z" },
 ]
 
 [[package]]
