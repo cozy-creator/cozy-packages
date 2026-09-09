@@ -27,6 +27,15 @@ _CURRENT_MODEL_CONFIG = (
     "sha256:c6170ba27c2730a8aad46b1faf07a436140427bd5c1c9457c0d1c31720f8a1db"
 )
 _CURRENT_MODEL_CONFIG_LENGTH = 5817
+#: The committed config under the turbo plan stamps: identical constructor facts, the PDD-8
+#: plan digests in `cozy_h3.timestep_plan_digest`.
+_TURBO_MODEL_CONFIG = (
+    "sha256:003c0e4253751b1ff712dd6bdca27534aeea6df7f7f2e6ca9dfb64449090c67c"
+)
+_ADMITTED_MODEL_CONFIGS: dict[str, int] = {
+    _CURRENT_MODEL_CONFIG: _CURRENT_MODEL_CONFIG_LENGTH,
+    _TURBO_MODEL_CONFIG: _CURRENT_MODEL_CONFIG_LENGTH,
+}
 
 
 def validate_text_conditioner(config: dict[str, Any]) -> None:
@@ -155,11 +164,6 @@ def dual_adaln_pruned_config(
         "video_vae": sections["video_vae"],
     }
     raw = canonical_json.encode(document)
-    if (
-        len(raw) != _CURRENT_MODEL_CONFIG_LENGTH
-        or canonical_json.digest(document) != _CURRENT_MODEL_CONFIG
-    ):
-        raise ValueError(
-            "dual AdaLN-pruned config is not the exact current H3 model config"
-        )
+    if _ADMITTED_MODEL_CONFIGS.get(canonical_json.digest(document)) != len(raw):
+        raise ValueError("dual AdaLN-pruned config is not one of the exact admitted H3 configs")
     return raw

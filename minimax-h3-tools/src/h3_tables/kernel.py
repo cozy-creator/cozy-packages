@@ -18,6 +18,21 @@ Progress = Callable[[int, int], None]
 
 
 @dataclass(frozen=True, slots=True)
+class LowRankAdapter:
+    """`y += scale · up(down(x))` on every block modulation projection.
+
+    The adapted row is computed in the adapter's own inference order (`LoRALinear.forward`:
+    bf16 base output plus the bf16 low-rank update), so a table row is exactly what the
+    dynamic module plus its adapter would emit at that timestep. `norm_out` and the time
+    embedder carry no adapter.
+    """
+
+    rank: int
+    scale: float
+    read: TensorReader
+
+
+@dataclass(frozen=True, slots=True)
 class H3Topology:
     hidden_size: int
     num_layers: int
@@ -106,6 +121,17 @@ def source_shapes(
     return shapes
 
 
+def adapter_shapes(
+    topology: H3Topology, rank: int
+) -> dict[str, tuple[torch.dtype, tuple[int, ...]]]:
+    shapes: dict[str, tuple[torch.dtype, tuple[int, ...]]] = {}
+    for index in range(topology.num_layers):
+        prefix = f"transformer_blocks.{index}.adaln_proj.linear"
+        shapes[f"{prefix}.lora_down"] = (torch.bfloat16, (rank, topology.time_embed_dim))
+        shapes[f"{prefix}.lora_up"] = (torch.bfloat16, (18 * topology.hidden_size, rank))
+    return shapes
+
+
 def _read(
     reader: TensorReader,
     name: str,
@@ -145,6 +171,7 @@ def precompute_tables(
     progress: Progress,
     device: torch.device,
     completed: frozenset[str] = frozenset(),
+    adapter: LowRankAdapter | None = None,
 ) -> None:
     """Precompute one task checkpoint's tables in Diffusers 0.40 operation order.
 
@@ -152,6 +179,7 @@ def precompute_tables(
     enters the process; TensorFS carries it by ObjectRef in the derived snapshot.
     """
     expected = table_shapes(topology, plan)
+    adapted = adapter_shapes(topology, adapter.rank) if adapter is not None else {}
     if not completed <= expected.keys():
         raise ValueError("completed table set contains undeclared keys")
     if completed == expected.keys():
@@ -201,7 +229,14 @@ def precompute_tables(
         prefix = f"transformer_blocks.{index}.adaln_proj.linear"
         weight = _read(read, f"{prefix}.weight", *shapes[f"{prefix}.weight"], device)
         bias = _read(read, f"{prefix}.bias", *shapes[f"{prefix}.bias"], device)
-        dense = F.linear(activated, weight, bias).reshape(-1, 6, topology.hidden_size)
+        dense = F.linear(activated, weight, bias)
+        if adapter is not None:
+            down_name, up_name = f"{prefix}.lora_down", f"{prefix}.lora_up"
+            down = _read(adapter.read, down_name, *adapted[down_name], device)
+            up = _read(adapter.read, up_name, *adapted[up_name], device)
+            dense = dense + adapter.scale * F.linear(F.linear(activated, down), up)
+            del down, up
+        dense = dense.reshape(-1, 6, topology.hidden_size)
         write(
             f"transformer_blocks.{index}.adaln_proj.table",
             dense.index_select(0, sparse_rows),

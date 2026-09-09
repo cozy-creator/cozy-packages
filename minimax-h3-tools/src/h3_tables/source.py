@@ -18,14 +18,28 @@ from cozy_runtime.author import (
     canonical_json,
 )
 
-from .kernel import H3Topology, removed_keys, table_shapes
+from .kernel import H3Topology, adapter_shapes, removed_keys, table_shapes
 from .plans import TimestepPlan
 
 TARGET_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
 
+#: PDD-8's released adapter geometry (`lora_rank` / `lora_alpha` in the safetensors header).
+#: The scale alpha/rank is a training fact the structure cannot carry, so the slice is
+#: admitted at exactly this rank and no other.
+ADAPTER_RANK = 64
+ADAPTER_ALPHA = 64.0
+
 
 class H3FullTransformer(Model[object]):
     """Native H3 source used only for derivation, never inference construction."""
+
+    def load(self, loader: Loader) -> None:
+        del loader
+
+
+class H3TurboAdapter(Model[object]):
+    """PDD acceleration LoRA, granted only for derivation: its `adaln_proj.linear` slice is
+    tabled here; the six inference-time target families and the head bank are not read."""
 
     def load(self, loader: Loader) -> None:
         del loader
@@ -192,6 +206,33 @@ def validate_adaln_pruned_component(
         expected.pop(key)
     expected.update({key: ("bf16", shape) for key, shape in table_shapes(topology, plan).items()})
     return _validate_component(tensors, expected, "AdaLN-pruned")
+
+
+def adapter_slice(structure: WeightsSource, topology: H3Topology) -> tuple[str, tuple[str, ...]]:
+    """The adapter's one component and every key of it the tables never read.
+
+    Refuses unless one component carries the complete bf16 `adaln_proj.linear` LoRA slice
+    at the admitted rank as plain single-role values.
+    """
+    components = {tensor.component for tensor in structure.tensors}
+    if len(components) != 1:
+        raise ValueError(f"an H3 adapter is one component, not {sorted(components)}")
+    component = components.pop()
+    present = {tensor.key: tensor for tensor in structure.tensors}
+    wanted = adapter_shapes(topology, ADAPTER_RANK)
+    for key, (_, shape) in wanted.items():
+        tensor = present.get(key)
+        if (
+            tensor is None
+            or tensor.logical_dtype != "bf16"
+            or tuple(tensor.shape) != shape
+            or tuple((part.name, part.dtype, tuple(part.shape)) for part in tensor.parts)
+            != (("value", "bf16", shape),)
+        ):
+            raise ValueError(
+                f"adapter lacks the bf16 rank-{ADAPTER_RANK} modulation slice {key} {shape}"
+            )
+    return component, tuple(sorted(set(present) - set(wanted)))
 
 
 def full_targets() -> dict[str, WeightsTarget]:

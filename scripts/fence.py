@@ -236,6 +236,18 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "prove an untreated component keeps the SOURCE's exact ObjectRefs in every lane. "
         "Retire when the public fake weights service can construct this native host."
     ),
+    ("scripts/h3-turbo-store-proof.py", "cozy_runtime.author._model"): (
+        "the turbo-table driver constructs the exact-checkpoint job source records Runtime "
+        "builds for `full`, `pruned` and both PDD adapters; for_test permits test:// "
+        "identities only, and this proof needs the real minted manifests. Retire when a "
+        "public native job fixture factory owns it."
+    ),
+    ("scripts/h3-turbo-store-proof.py", "cozy_runtime.internal.weights_sink"): (
+        "the turbo-table driver runs the exact `retable` orchestration through the real "
+        "Runtime weights host and TensorFS writer, and reads the four committed headers back "
+        "to prove the fused rows, the adapter slice by object and inheritance by object. "
+        "Retire when the public fake weights service can construct this native host."
+    ),
     ("scripts/h3-conform.py", "cozy_runtime.internal.residency"): (
         "the warm arms raise Runtime's OWN `ResidencyRefusal` — the class, the typed "
         "`device_shortfall` code and the verbatim detail an H100 produced — so the "

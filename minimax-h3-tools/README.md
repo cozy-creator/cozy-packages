@@ -79,16 +79,34 @@ served step count. FP8 and MXFP8 are independent children of those pruned BF16 t
 components and never derive from each other.
 
 The ordinary `retable` job recomputes only those tables for an existing AdaLN-pruned
-checkpoint of any encoding: `pruned` (the checkpoint to inherit, BF16, FP8 or MXFP8) and
-`full` (the complete BF16 checkpoint whose modulation weights the rows are computed from).
+checkpoint of any encoding, once per admitted table set (`job.TABLE_SETS`): `pruned` (the
+checkpoint to inherit, BF16, FP8 or MXFP8), `full` (the complete BF16 checkpoint whose
+modulation weights the rows are computed from) and the two PDD acceleration LoRAs
+`fl2va_adapter` / `ref2va_adapter` (`alibaba-pai/MiniMax-H3-Acc-LoRAs`, rank 64, alpha 64).
 Every non-table tensor is inherited by reference and nothing is requantized, so widening the
-plan's schedule set costs table bytes only. It emits two outputs from one table pass:
-`adaln-pruned` (the retabled checkpoint, every component inherited from `pruned`) and
-`tables` (a two-DiT table bank derived from `full` with every other row dropped) — a
-transaction may read only the source components its targets derive from, so the bank
-transaction is where the modulation weights are read. The retabled checkpoint commits
-first. It refuses before any read unless `pruned` carries table rows and no dynamic
-modulation weights for both DiTs and `full` carries the exact modulation weights.
+plan's schedule set costs table bytes only. Each set emits a retabled checkpoint and a
+two-DiT table bank derived from `full` with every other row dropped — a transaction reads
+only through source components its targets derive from, so the bank transaction is where
+the modulation weights are read; the retabled checkpoint commits first:
+
+- `launch` → `adaln-pruned` / `tables`: the 30/40/50 union plans, unchanged.
+- `turbo` → `turbo-adaln-pruned` / `turbo-tables`: PDD-8, eight evaluations on
+  `Schedule(9)` at the released shifts 12/3 (the 33-point training grid at its block-4
+  boundaries; the pipeline is called with `num_inference_steps = 9` because the scheduler
+  counts the terminal sigma), 26 block rows and 17 final-normalization rows per task,
+  84,231,168 table bytes. An AdaLN-pruned lane has no `adaln_proj.linear` for an adapter to
+  attach to, so each adapter's `adaln_proj.linear` LoRA slice is fused into the block rows in
+  the adapter's own inference order (`bf16(W·x + b) + bf16(up(down·x))` at scale alpha/rank);
+  the adapter's other six target families and its head bank apply at inference and are not
+  read. The turbo bank also carries each adapter's slice by reference (`fl2va_adapter` /
+  `ref2va_adapter`): the rows its tables were fused from, and the smallest derivation
+  TensorFS admits from a granted source. The turbo checkpoint's config stamps the turbo plan
+  digests (`plans.TURBO_PLAN_DIGESTS`).
+
+It refuses before any read unless `pruned` carries table rows and no dynamic modulation
+weights for both DiTs, `full` carries the exact modulation weights, and each adapter is one
+component carrying the complete bf16 rank-64 slice. `MAX_TABLE_BYTES` is a per-output,
+per-task ceiling; the turbo set uses 7.8 % of it beside the launch set's 95.0 %.
 
 The package declares no GPU, SM, VRAM, or host-RAM guess. Creator derives accelerator-class work
 from the typed model inputs; exact artifact residency and measured request/scratch envelopes drive
@@ -121,6 +139,11 @@ a real TensorFS store, derives three lanes through the real Runtime `WeightsSink
 reads the committed headers back to prove that an untreated component keeps the source's
 exact stored objects in every lane — the property that decides whether a per-component lane
 is affordable at all.
+`scripts/turbo-proof.py` re-derives every committed plan from the package's own composer
+(no Diffusers), proves the turbo grid equals PDD's float64 block boundaries at float32, and
+checks the fused kernel against the reference `LoRALinear.forward` at every plan row on a
+tiny topology; `../../scripts/h3-turbo-store-proof.py` runs the exact `retable` orchestration over a
+tiny `full`/`pruned`/adapter set in a real TensorFS store and reads all four outputs back.
 
 The result preserves the Runtime quantizer's existing weight measurements in
 `weight_fidelity_this_run`, a list of rows naming output slot, component, the treatment that
