@@ -801,7 +801,7 @@ def ref2va(
 _KEYFRAME_MAX_BYTES = 64 * _MIB
 _KEYFRAME_MAX_DECODED_BYTES = 3 * 16_777_216
 
-MAX_SHOTS = 8  # se-014's own bound; eight 14 s cells deliver 2753/24 s.
+MAX_SHOTS = 8  # se-014's own bound: it trims the replayed frame from shots 2-8.
 
 
 class Shot(msgspec.Struct, forbid_unknown_fields=True):
@@ -810,12 +810,13 @@ class Shot(msgspec.Struct, forbid_unknown_fields=True):
     `seed` is explicit and required: cl-021 forbids a hidden same-seed or seed+i policy, so
     the caller freezes every seed in the request or the chain is not reproducible.
 
-    A shot defaults to the LONGEST served cell, not the package default. The two defaults
-    answer different questions: se-047 makes a single clip default to the cheapest length so
-    a caller who says nothing is not billed for the longest one, while a long-form piece has
-    already committed to the spend and pays per SEAM. 14 s (345 frames = 14.375 s, the
-    release ceiling — 15 s snaps over it) halves the seam count against 5 s for ~1.8x the
-    money, and conditioning rows amortise ~2.8x better across it.
+    A shot defaults to the LONGEST served cell, not the package default, and it follows
+    `MAX_DURATION_S` rather than naming a number — whatever the envelope serves is what a
+    long-form shot takes. The two defaults answer different questions: se-047 makes a single
+    clip default to the cheapest length so a caller who says nothing is not billed for the
+    longest one, while a long-form piece has already committed to the spend and pays per
+    SEAM. The longest cell halves the seam count against 5 s for ~1.8x the money, and
+    conditioning rows are a fixed per-segment cost, so they amortise ~2.8x better across it.
     """
 
     prompt: Prompt
