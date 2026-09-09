@@ -39,21 +39,25 @@ plain Python lines are not replayed or skipped by a workflow engine.
 ## SDXL quantization assessment (se-042)
 
 `sdxl_fp8.py` composes native source/conversion/normalization/quantization with
-24 fresh1024² renders (eight prompts × candidate/reference/repeat), activation
+24 fresh 1024² renders (eight prompts × candidate/reference/repeat), activation
 capture, memoized weight/media/capture/quality measurements, a fresh Eval fold,
 and explicit checkpoint/report/release effects. The local `sdxl-assessment` helper
 is an ordinary unpublished Python library, with no App or package.toml; no new
 deployable is introduced. This consumer requires the coordinated public
-Runtime0.14.0, TensorFS0.3.34 and Eval0.7.0 read-only weight cohort.
+Runtime 0.14.0, TensorFS 0.3.34 and Eval 0.7.0 read-only weight cohort.
 
 The committed policy is a **proposal, not ratification**. Read
-[its rationale and calibration requirements](sdxl-assessment/sdxl_assessment_client/policy/README.md)
+[the v2 rationale and calibration requirements](sdxl-assessment/sdxl_assessment_client/policy/ABSOLUTE-PROPOSAL-v2.md)
 before spending on model runs. Source/code edits retain normal memoization rules;
 SDXL inference and its same-seed repeat are never memoized. Missing observations,
-zero repeat floors and unbound learned metrics cannot become a PASS.
+missing declared taps and unbound learned metrics cannot become a PASS. V2 explicitly
+selects absolute activation budgets; the original v1 floor policy remains archived unchanged.
 
-Set the exact owner-held `JUDGE` checkpoint and confirm the image's numerical
-closure (the example pins NumPy2.5.1). Keep `PUBLISH=False` for calibration. Run via
+The script prepares the pinned Qwen 2B judge on its execution machine using ordinary
+memoized source, conversion and normalization calls. It passes the genuine retained
+ModelArtifact to quality measurements. Confirm disk capacity for its first source
+download (approximately 4.25 GB) and converted model, and confirm the image's numerical
+closure (the example pins NumPy 2.5.1). Keep `PUBLISH=False` for calibration. Run via
 `cozy run examples/client-scripts/sdxl_fp8.py --rental-only --await`; do not invoke
 model functions with an external Python harness. The script returns completed
 native report/workload files even for a provisional/failed assessment.

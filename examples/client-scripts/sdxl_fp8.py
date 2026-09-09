@@ -18,15 +18,17 @@ and explicitly selected owner-held judge checkpoint are available.
 from importlib.resources import as_file, files
 
 from cozy_eval.errors import ConfigError
+from cozy_eval.jobs.instrument_config import plan
+from cozy_eval.jobs.normalize_instruments import prepare_instrument
 from cozy_runtime.author import FileAsset, Outputs, ScriptContext
-from cozy_runtime.author.sources import convert_cozytensors, download_civitai
-from sdxl_assessment_client import (
-    Assessment,
-    load_policy,
-    publish,
-    require_approved_policy,
-    retain_report,
+from cozy_runtime.author.sources import (
+    convert_cozytensors,
+    download_civitai,
+    download_huggingface,
+    source_files,
 )
+from sdxl_assessment_client import load_policy, require_approved_policy
+from sdxl_assessment_client.composition import Assessment, publish, retain_report
 
 from sdxl import generate
 from sdxl.normalization import normalize
@@ -35,9 +37,12 @@ from sdxl.operations import quantize
 SOURCE_VERSION = 128078
 SOURCE_FILE = "civitai/files/92696"
 ENCODING = "fp8-rowwise/1"
-# The owner selects an exact already-prepared instrument checkpoint; no implicit download.
-JUDGE = ""
-CONDITIONS_FILE = "conditions.proposed.json"
+# Exact reviewed source/profile already qualified by the owner on CPU. Preparing it
+# on this execution machine establishes a genuine retained ModelArtifact for the judge.
+JUDGE_REPOSITORY = "Qwen/Qwen3-VL-2B-Instruct"
+JUDGE_REVISION = "89644892e4d85e24eaac8bacfd4f463576704203"
+JUDGE_PROFILE = "hf/qwen/qwen3-vl-2b-instruct/bf16/1"
+CONDITIONS_FILE = "conditions.absolute.proposed.v2.json"
 # Review/calibration comes before ratification. Empty means measurement-only.
 APPROVED_CONDITIONS = ""
 PUBLISH = False
@@ -48,15 +53,23 @@ EXPECTED_REVISION = 0
 
 
 async def main(ctx: ScriptContext, *, out: Outputs) -> list[FileAsset]:
-    if not JUDGE:
-        raise ConfigError("set JUDGE to the explicit owner-held evaluation instrument checkpoint")
     with as_file(files("sdxl_assessment_client") / "policy") as directory:
-        policy = load_policy(directory, out, CONDITIONS_FILE)
+        policy = load_policy(directory, conditions_file=CONDITIONS_FILE)
     if PUBLISH:
         require_approved_policy(policy, APPROVED_CONDITIONS)
         if not DESTINATION or not RELEASE:
             raise ConfigError("publication needs an explicit destination and release")
     ctx.log("SDXL eight-prompt assessment; proposed conditions are not admission")
+    metadata_source = await download_huggingface(
+        JUDGE_REPOSITORY, revision=JUDGE_REVISION, files=tuple(plan("qwen2b").files)
+    )
+    metadata = await source_files(metadata_source)
+    judge_source = await download_huggingface(
+        JUDGE_REPOSITORY, revision=JUDGE_REVISION, profiles=(JUDGE_PROFILE,)
+    )
+    judge_raw = await convert_cozytensors(judge_source, profile=JUDGE_PROFILE)
+    judge = await prepare_instrument(source=judge_raw, metadata=metadata, variant="qwen2b")
+    ctx.log(f"Prepared retained judge: {judge.manifest.digest}")
     raw = await download_civitai(SOURCE_VERSION, file=SOURCE_FILE)
     converted = await convert_cozytensors(raw, profile="civitai/sdxl/single-file/1")
     reference = await normalize(source=converted)
@@ -67,7 +80,7 @@ async def main(ctx: ScriptContext, *, out: Outputs) -> list[FileAsset]:
         policy=policy,
         reference=reference,
         candidate=candidate,
-        judge=JUDGE,
+        judge=judge,
     )
     report = await assessment.run()
     report_file, workloads_file = await retain_report(report, policy, out)
