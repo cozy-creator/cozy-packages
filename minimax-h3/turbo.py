@@ -9,9 +9,10 @@ the turbo AdaLN tables by the producer. The head bank collapses offline to one h
 evaluation because the reference's per-step fusion is linear in the weights and its plan
 depends only on the fixed grid.
 
-The overlay is one component per task beside the DiT it patches. Nothing here changes the
+The independent LoRA checkpoint has one component per task. Nothing here changes the
 DiT's own parameters or its destination names: the base functions see the same construction
-with the overlay absent from every forward they run.
+with the overlay absent from every forward they run. The endpoint leases the LoRA and
+base separately and attaches the overlay only for the duration of one turbo sample.
 """
 
 from __future__ import annotations
@@ -174,13 +175,6 @@ class TurboSchedule:
                 code="artifact_config",
             )
         return steps[0]
-
-
-class AbsentOverlay(nn.Module):  # type: ignore[misc]
-    """The overlay component of a lane that serves no turbo function: no tensors, so the
-    base functions' construction, census and residency are what they were."""
-
-    present = False
 
 
 class TurboOverlay(nn.Module):  # type: ignore[misc]
