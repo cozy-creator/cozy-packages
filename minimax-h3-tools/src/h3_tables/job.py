@@ -11,7 +11,6 @@ from typing import Annotated, Any, Literal, get_args
 
 import msgspec
 import torch
-from h3_table_layout import TableLayout
 from cozy_runtime.author import (
     App,
     Context,
@@ -36,6 +35,7 @@ from cozy_runtime.derive.quantization import (
     prepare_quantization,
     quantize_component_into,
 )
+from h3_table_layout import TableLayout
 
 from . import adaln_operations as _adaln_operations
 from . import lanes as _lanes
@@ -1359,12 +1359,7 @@ def restamp(
                         default=None,
                     ),
                 )
-            # UNCONDITIONAL, and this is the whole reason the job exists. The restamp has
-            # two independent effects — the video VAE's bytes and this document — and a
-            # lane whose VAE is already at the destination still needs the document. Gate
-            # the write on `pending` and a lane restamped before the plan assets land can
-            # never be repaired by re-running: the second run would resolve inert and do
-            # nothing. Only the READ is skipped when there is nothing left to cast.
+            # Metadata migration still runs when every VAE operand is already normalized.
             transaction.add_config("model", document)
             receipt = transaction.commit()
     tel.metric("h3.source_bytes", float(stats.source_bytes_read), unit="bytes")

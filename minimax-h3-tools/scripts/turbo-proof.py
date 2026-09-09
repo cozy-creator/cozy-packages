@@ -36,7 +36,7 @@ from h3_tables.kernel import (
     table_bytes,
     table_shapes,
 )
-from h3_tables.model_config import _TURBO_MODEL_CONFIG, dual_adaln_pruned_config
+from h3_tables.model_config import dual_adaln_pruned_config
 from h3_tables.plans import (
     AUDIO_SHIFT,
     LAUNCH_GRID_POINTS,
@@ -186,19 +186,19 @@ def prove_budget(sections: dict[str, dict[str, Any]], turbo: dict[str, Any]) -> 
     )
     raw = dual_adaln_pruned_config(sections, turbo["fl2va"], turbo["ref2va"])
     document = canonical_json.decode(raw)
-    if (
-        canonical_json.digest(document) != _TURBO_MODEL_CONFIG
-        or len(raw) != 5817
-        or not isinstance(document, dict)
-        or document["fl2va_dit"]["cozy_h3"]["timestep_plan_digest"] != TURBO_PLAN_DIGESTS["fl2va"]
-        or document["ref2va_dit"]["cozy_h3"]["timestep_plan_digest"] != TURBO_PLAN_DIGESTS["ref2va"]
+    if any(
+        document[f"{task}_dit"]["cozy_h3"]["table_keys"] != turbo[task].table_keys
+        or "timestep_plan_digest" in document[f"{task}_dit"]["cozy_h3"]
+        for task in TASKS
     ):
-        fail("the turbo model config is not the pinned stamp of the committed config")
+        fail("the turbo model config does not describe its actual table rows")
     launch_ref = parse_declared_plan(job._asset("timestep-plan.ref2va.json"))
-    refuses(
-        "a config mixing launch and turbo plans",
-        lambda: dual_adaln_pruned_config(sections, turbo["fl2va"], launch_ref),
-    )
+    mixed = canonical_json.decode(dual_adaln_pruned_config(sections, turbo["fl2va"], launch_ref))
+    if (
+        mixed["fl2va_dit"]["cozy_h3"]["table_keys"] != turbo["fl2va"].table_keys
+        or mixed["ref2va_dit"]["cozy_h3"]["table_keys"] != launch_ref.table_keys
+    ):
+        fail("independent task tables lost their own row meanings")
     committed = canonical_json.decode(job._asset("model-config.json"))
     rebuilt = canonical_json.decode(dual_adaln_pruned_config(sections, launch, launch_ref))
     if canonical_json.digest(committed) != canonical_json.digest(rebuilt):
@@ -507,8 +507,12 @@ def prove_orchestration(sections: dict[str, dict[str, Any]]) -> None:
     ]:
         fail(f"the resumed attempt ran {recorder.events}")
     turbo_config = canonical_json.decode(recorder.configs["turbo-adaln-pruned"])
-    if canonical_json.digest(turbo_config) != _TURBO_MODEL_CONFIG:
-        fail("the turbo checkpoint config is not the pinned turbo model config")
+    if any(
+        turbo_config[f"{task}_dit"]["cozy_h3"]["table_keys"]
+        != job._production_plan(task, job.TABLE_SETS[1]).table_keys
+        for task in TASKS
+    ):
+        fail("the turbo checkpoint config does not describe its actual table rows")
     by_name = {row.table_set: row for row in result.table_sets}
     if (
         [row.table_set for row in result.table_sets] != ["launch", "turbo"]
