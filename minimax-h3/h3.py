@@ -179,7 +179,7 @@ class H3VideoOutput(msgspec.Struct):
 
     video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",))]
     continuation_frame: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
-    warnings: list[str] = msgspec.field(default_factory=list)
+    warnings: list[str]
 
 
 def preflight_reference_media(
