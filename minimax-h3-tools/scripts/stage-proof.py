@@ -205,8 +205,8 @@ def main() -> None:
     slots = tuple(job.LANES)
     for failure, retained in (
         ("tables:ref2va", slots[:1]),
-        ("quantize:fp8-adaln-pruned", slots[:2]),
-        ("quantize:mxfp8-adaln-pruned", slots[:3]),
+        ("quantize:fp8-pruned", slots[:2]),
+        ("quantize:mxfp8-pruned", slots[:3]),
     ):
         recorder = Recorder()
         try:

@@ -208,9 +208,9 @@ def arm_census() -> None:
     ceilings = {output.name: output.max_new_bytes for output in job.LANE_OUTPUTS}
     shipped = {
         "bf16-full": 65536,
-        "bf16-adaln-pruned": 2147614720,
-        "fp8-adaln-pruned": 70867091456,
-        "mxfp8-adaln-pruned": 70867091456,
+        "bf16-pruned": 2147614720,
+        "fp8-pruned": 70867091456,
+        "mxfp8-pruned": 70867091456,
     }
     if ceilings != shipped:
         _fail(f"lane ceilings changed: {ceilings}")

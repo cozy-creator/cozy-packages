@@ -131,11 +131,11 @@ _check_table_budget(MAX_TABLE_BYTES)
 MAX_VIDEO_VAE_BYTES = 12 << 30
 LANE_OUTPUTS = (
     WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES + MAX_VIDEO_VAE_BYTES),
-    WeightsOutput("bf16-adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),
-    WeightsOutput("fp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
-    WeightsOutput("mxfp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
+    WeightsOutput("bf16-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),
+    WeightsOutput("fp8-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
+    WeightsOutput("mxfp8-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
 )
-LaneName = Literal["bf16-full", "bf16-adaln-pruned", "fp8-adaln-pruned", "mxfp8-adaln-pruned"]
+LaneName = Literal["bf16-full", "bf16-pruned", "fp8-pruned", "mxfp8-pruned"]
 
 
 def _check_lane_outputs() -> None:

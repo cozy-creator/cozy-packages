@@ -45,9 +45,9 @@ of the community licence, which is a reviewed act rather than a caller choice.
 | lane | modulation | per-component treatment |
 |---|---|---|
 | `bf16-full` | full | none — every component inherited |
-| `bf16-adaln-pruned` | AdaLN-pruned | none |
-| `fp8-adaln-pruned` | AdaLN-pruned | both DiTs `fp8-rowwise/1` |
-| `mxfp8-adaln-pruned` | AdaLN-pruned | both DiTs `mxfp8/1` |
+| `bf16-pruned` | AdaLN-pruned | none |
+| `fp8-pruned` | AdaLN-pruned | both DiTs `fp8-rowwise/1` |
+| `mxfp8-pruned` | AdaLN-pruned | both DiTs `mxfp8/1` |
 
 A component a lane does not name is **inherited by reference**: TensorFS copies its tensor
 metadata and ObjectRefs unchanged through the zero-read/zero-hash inherit gate, so the
@@ -65,7 +65,7 @@ ceiling disagrees with its treatments.
 Two components are refused outright. **`mxfp8/1` on any new lane**: `RowwiseNativeLeaf`
 predicates `cuda.sm89+`, but `MicroScaledNativeLeaf` predicates the EQUALITY `cuda.sm120`,
 so mxfp8 executes on no H100/H200/B200 and degrades to dequant plus a bf16 GEMM;
-`mxfp8-adaln-pruned` is grandfathered by name and nothing else may join it. **The
+`mxfp8-pruned` is grandfathered by name and nothing else may join it. **The
 `audio_vae`, by name**: 637 of its 1,087 rows are rank-3 — including the BigVGAN decoder's
 344 `weight_norm` `weight_g`/`weight_v` parameters — and the rank-2 encoding cannot
 represent any of them; the only six rank-2 float weights the component carries are the
@@ -175,7 +175,7 @@ continues to consume a checkpoint with only the original five components.
 
 Old `1.0.0-rc.2` AdaLN checkpoints may still carry the retired `frames:345` plan
 identity. Before turbo preparation or current ordinary serving, run the `restamp`
-job through Creator with `model.lane=paul/minimax-h3@1.0.0-rc.2/fp8-adaln-pruned`.
+job through Creator with `model.lane=paul/minimax-h3@1.0.0-rc.2/fp8-pruned`.
 It resolves only the exact historical frame-only plan or the current known plan,
 verifies table geometry, and replaces their opaque stamps with explicit ordered
 table-row labels. Already explicit valid layouts are preserved. All tensor objects,
