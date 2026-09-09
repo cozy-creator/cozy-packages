@@ -413,9 +413,29 @@ uv pip install --python .venv-check/bin/python \
 .venv-check/bin/python scripts/fence.py
 .venv-check/bin/python -m mypy
 .venv-check/bin/ruff check anima/ minimax-h3/ minimax-h3-tools/ sdxl/ scripts/ examples/
-test "$(.venv-check/bin/cozy-runtime --json --dir minimax-h3 describe)" = "$(cat minimax-h3/metadata/package-interface.json)"
-test "$(.venv-check/bin/cozy-runtime --json --dir sdxl describe)" = "$(cat sdxl/metadata/package-interface.json)"
 ```
+
+`scripts/fence.py` prints one line per fence and exits non-zero on the first red one. Read the
+EXIT CODE, not the count of green lines: the count is the same whether or not a later fence
+ran red.
+
+The committed interface snapshots are NOT checkable from this shared environment. Each
+`metadata/package-interface.json` is emitted by that package's own LOCKED `cozy-runtime`, and
+different runtime versions emit different documents — 0.11.1 adds an `invocable` key that
+0.7.0 and 0.10.0 do not. The four packages lock different versions, so a shared environment
+reports a mismatch for every one of them, which reads as interface drift rather than as the
+wrong interpreter. Compare from the package's own venv, as CI does:
+
+```bash
+cd <package> && uv sync --locked && cd ..
+described=$(<package>/.venv/bin/cozy-runtime --json --dir <package> describe) || exit 1
+test "$described" = "$(cat <package>/metadata/package-interface.json)"
+```
+
+`describe` is captured first because a failed or absent command prints nothing, and empty
+output compares unequal — indistinguishable from drift unless the exit status is checked.
+CI covers all four packages (`minimax-h3` in the H3 job, the rest in the per-package matrix),
+so a local run that skips one is not evidence about it.
 
 The H3 project environment is reproduced only from its committed lock:
 
