@@ -2,7 +2,7 @@
 
 Diffusers' `_decode_clip` lays a grid of equal 256 px tiles (64 px minimum overlap) over
 the chunk and runs the ViT decoder once per tile: at 1344x768 that is a 4x7 grid, 28
-batch-1 forwards per chunk and ~560 per 345-frame clip, each too small to fill the card
+batch-1 forwards per chunk and ~590 per 362-frame clip, each too small to fill the card
 (19.4 s on an H100). Every tile is the same size — `_split_tiles` pushes the slack into
 the overlaps, never into a shorter edge tile — and the decoder is batch-independent: a
 ViT over `(B, S, C)` tokens whose norms reduce over the last dimension only, whose
