@@ -19,8 +19,8 @@ from cozy_runtime.author import (
     WeightsSourceTensor,
     canonical_json,
 )
-from h3_table_layout import TableLayout
 from h3_tables import job
+from h3_tables._table_layout import TableLayout
 from h3_tables.adaln_operations import _bank_config, _validate_body_config
 from h3_tables.kernel import H3Topology, table_shapes
 from h3_tables.legacy_config import upgrade_legacy_table_config

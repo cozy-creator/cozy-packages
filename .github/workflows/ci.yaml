@@ -16,18 +16,19 @@ jobs:
           version: "0.12.7"
       - run: uv python install 3.12
 
-      # H3 zero-byte native grafts and caller helpers require Runtime 0.12.0 in static checks too.
+      # Check the same Runtime contract required by the H3 serving and producer packages.
       # The light checks need no model libraries. Locked environments below also
       # qualify installed-wheel imports and execution against each exact dependency set.
       - name: Environment
         run: |
           uv venv --python 3.12
           uv pip install --refresh-package cozy-runtime \
-            "cozy-runtime>=0.12.0,<1" \
+            "cozy-runtime>=0.15.0,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences
         run: uv run --no-project python scripts/fence.py
+      - run: uv run --no-project python scripts/sync-h3-table-layout.py
 
       - name: Lint
         run: >-
@@ -93,6 +94,8 @@ jobs:
 
       - name: Arms
         run: minimax-h3/.venv/bin/python scripts/h3-conform.py
+      - name: PDD Ulysses parity at degrees two and four
+        run: minimax-h3/.venv/bin/python scripts/h3-turbo-cp-proof.py
 
       - name: Diagnostic hooks preserve outputs and stop explicitly
         run: PYTHONPATH=minimax-h3 minimax-h3/.venv/bin/python scripts/h3-activation-proof.py
@@ -182,7 +185,6 @@ jobs:
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/order-proof.py
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/stage-proof.py
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/full-source-proof.py
-          minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/turbo-proof.py
           minimax-h3-tools/.venv/bin/python scripts/h3-turbo-store-proof.py
           minimax-h3-tools/.venv/bin/python scripts/h3-adaln-resume-proof.py
           minimax-h3-tools/.venv/bin/python scripts/h3-adaln-binding-proof.py

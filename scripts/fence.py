@@ -162,6 +162,18 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    (
+        "scripts/h3-turbo-cp-proof.py",
+        "cozy_runtime.internal.parallel",
+    ): "Verify actual PDD hooks and component scopes under Runtime's Ulysses installation.",
+    (
+        "scripts/h3-turbo-store-proof.py",
+        "cozy_runtime.author._model",
+    ): "Bind native source manifests for the overlay integration proof.",
+    (
+        "scripts/h3-turbo-store-proof.py",
+        "cozy_runtime.internal.weights_sink",
+    ): "Exercise the real native transaction host, including resume and grafts.",
     ("scripts/h3-longform-proof.py", "cozy_runtime.author._calls"): (
         "the long-form driver builds the real child broker so the chain is proven through "
         "Runtime's own call exchange rather than a fake. Retire when a public child-call "
@@ -234,18 +246,6 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "the lane driver runs per-component cast/encode treatments through the real "
         "Runtime weights host and TensorFS writer, and reads the committed headers back to "
         "prove an untreated component keeps the SOURCE's exact ObjectRefs in every lane. "
-        "Retire when the public fake weights service can construct this native host."
-    ),
-    ("scripts/h3-turbo-store-proof.py", "cozy_runtime.author._model"): (
-        "the turbo-table driver constructs the exact-checkpoint job source records Runtime "
-        "builds for `full`, `pruned` and both PDD adapters; for_test permits test:// "
-        "identities only, and this proof needs the real minted manifests. Retire when a "
-        "public native job fixture factory owns it."
-    ),
-    ("scripts/h3-turbo-store-proof.py", "cozy_runtime.internal.weights_sink"): (
-        "the turbo-table driver runs the exact `retable` orchestration through the real "
-        "Runtime weights host and TensorFS writer, and reads the four committed headers back "
-        "to prove the fused rows, the adapter slice by object and inheritance by object. "
         "Retire when the public fake weights service can construct this native host."
     ),
     ("scripts/h3-conform.py", "cozy_runtime.internal.residency"): (

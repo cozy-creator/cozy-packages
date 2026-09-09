@@ -9,8 +9,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from cozy_runtime.author import UnsupportedInput, canonical_json
-from h3_table_layout import TableLayout
 
+from ._table_layout import TableLayout
 from .plans import TASKS, Task, TimestepPlan
 
 _LEGACY_345_PLANS: dict[Task, str] = {
