@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "status": "proposed-not-ratified",
+  "authored": "2026-09-09",
+  "conditions_digest": "sha256:5f28766b07b4e9eb149a4915065a346b1accbd5a01786c4e65230115d2feb12e",
+  "supersedes_for_new_experiments": "sha256:f5a81118737691b5357b20c91d18916c6b4d47910d8be319cda13a9746719268",
+  "workload_digest": "sha256:4408300f4b7abc30c140ed90cae9192539f1bfb0bbe1e6162bc9fdfacf938428",
+  "files": {
+    "conditions.absolute.proposed.v2.json": "sha256:5f28766b07b4e9eb149a4915065a346b1accbd5a01786c4e65230115d2feb12e",
+    "workloads.json": "sha256:99ee74b3e8308eab174f4788f1eb164e08a0e1484f0cf52ca28f3dc0e3488f47",
+    "checklists.json": "sha256:c3d59f48f24b25880f312abe5b382fc5a67e87fad1e650a63c78fd81690f1c8e"
+  }
+}

@@ -234,7 +234,7 @@ ASSET_DIGESTS = {
 TOKEN_CORPUS_DIGEST = "47759c8d2e1a24944edb8f712c7ffe66b650aa3481352487970bcdb3cd55fa58"
 
 
-def dit_config(task: str, modulation: str = "full") -> dict[str, object]:
+def dit_config(task: str, modulation: str = "full") -> dict[str, Any]:
     plan = canonical_timestep_plan(cast(Any, task))
     extension: dict[str, Any] = {"task": task, "modulation": modulation}
     if modulation == "adaln-pruned":

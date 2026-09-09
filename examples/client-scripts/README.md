@@ -34,3 +34,54 @@ requirements for later checkpoints.
 Completed memoized operations and independently retained partial work can be reused
 by a new script on the same worker. A script itself starts from `main()` each time;
 plain Python lines are not replayed or skipped by a workflow engine.
+
+
+## SDXL quantization assessment (se-042)
+
+`sdxl_fp8.py` composes native source/conversion/normalization/quantization with
+24 fresh 1024² renders (eight prompts × candidate/reference/repeat), activation
+capture, memoized weight/media/capture/quality measurements, a fresh Eval fold,
+and explicit checkpoint/report/release effects. The local `sdxl-assessment` helper
+is an unpublished Python library with no package.toml or deployment. Its local App
+registers only the example calibration controls. This consumer requires the coordinated public
+Runtime 0.14.1, TensorFS 0.3.36 and Eval 0.7.0 read-only weight cohort.
+
+The committed policy is a **proposal, not ratification**. Read
+[the v2 rationale and calibration requirements](sdxl-assessment/sdxl_assessment_client/policy/ABSOLUTE-PROPOSAL-v2.md)
+before spending on model runs. Source/code edits retain normal memoization rules;
+SDXL inference and its same-seed repeat are never memoized. Missing observations,
+missing declared taps and unbound learned metrics cannot become a PASS. V2 explicitly
+selects absolute activation budgets; the original v1 floor policy remains archived unchanged.
+
+The script prepares the pinned Qwen 2B judge on its execution machine using ordinary
+memoized source, conversion and normalization calls. It passes the genuine retained
+ModelArtifact to quality measurements. Confirm disk capacity for its first source
+download (approximately 4.25 GB) and converted model, and confirm the image's numerical
+closure (NumPy 2.5.1, Torch 2.13.0 and torchvision 0.28.0 for the selected CUDA 13.0 image).
+Both scripts and the editable helper carry locks over public Runtime 0.14.1, TensorFS
+0.3.36 and Eval 0.7.0; only adjacent authored source remains editable. Keep
+`PUBLISH=False` for calibration. Run via
+`cozy run examples/client-scripts/sdxl_fp8.py --rental-only --await`; do not invoke
+model functions with an external Python harness. The script returns completed
+native report/workload files even for a provisional/failed assessment.
+
+Publication additionally requires an explicitly ratified conditions digest,
+destination, release, lane and revision expectation. The client checks this policy
+before work when publication is requested, checks the complete report after the
+measurements, uploads only the candidate, attaches its actual report/workload bytes,
+checks the Hub verdict, then performs revision-guarded release publication. No
+publication follows FAIL, INDETERMINATE or an unratified policy. The adapter does
+not open a dummy weights transaction; Eval's weight leaf receives actual granted
+manifest-only Models through Runtime's read-only WeightsReader service.
+
+`sdxl_calibration.py` runs one explicitly selected calibration or held-out control
+cell. Its separate prompt banks cover null, quantized and genuine native UNet ×2
+weight arms, wrong-object/color generations and blur/flat pixel controls. See
+[control evidence and review procedure](sdxl-assessment/sdxl_assessment_client/controls/README.md).
+All expected labels remain authored and unreviewed; its private control jobs have a
+local App under examples and are never added to the deployed SDXL App. The driver
+returns actual review files/facts, never publishes, and refuses an unfrozen held-out
+policy. Calibration, held-out and final-admission prompt/seed sets are disjoint.
+
+No SDXL render, model-quality verdict or release is claimed by these source changes.
+The producer and full real-model qualification remain separate tracker evidence.
