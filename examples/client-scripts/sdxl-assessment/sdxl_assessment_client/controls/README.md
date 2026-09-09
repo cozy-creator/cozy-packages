@@ -15,7 +15,7 @@ cozy run examples/client-scripts/sdxl_calibration.py --rental-only --await
 The editable helper is captured automatically; no package publication or manual
 installation is part of this workflow. It has one local App to register private control
 jobs and no package.toml or deployment. Creator's pyproject-only library capture fix
-must be present, together with public Runtime 0.14.1 / TensorFS 0.3.34 / Eval 0.7.
+must be present, together with public Runtime 0.14.1 / TensorFS 0.3.36 / Eval 0.7.
 
 `null`, `quantized`, and `scale_x2` each perform eight prompts × three fresh arms on
 the same worker. Null supplies the reference artifact to all three arms. Quantized uses
