@@ -1,6 +1,19 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime==0.16.2", "minimax-h3-tools==2.11.0", "torch==2.13.0+cu130", "cuda-bindings==13.0.3", "cuda-pathfinder==1.2.2", "filelock==3.29.7", "fsspec==2026.6.0", "numpy==2.5.1", "nvidia-nvjitlink==13.2.78", "packaging==26.2", "setuptools==81.0.0", "tensorfs==0.3.38"]
+# dependencies = [
+#   "cozy-runtime==0.16.2",
+#   "minimax-h3-tools==2.11.0",
+#   "torch==2.13.0+cu130",
+#   "cuda-bindings==13.0.3",
+#   "cuda-pathfinder==1.2.2",
+#   "filelock==3.29.7",
+#   "fsspec==2026.6.0",
+#   "numpy==2.5.1",
+#   "nvidia-nvjitlink==13.2.78",
+#   "packaging==26.2",
+#   "setuptools==81.0.0",
+#   "tensorfs==0.3.38",
+# ]
 # [tool.uv.sources]
 # default-groups = []
 # minimax-h3-tools = {path = "../../minimax-h3-tools", editable = true}
