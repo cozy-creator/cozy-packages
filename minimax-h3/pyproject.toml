@@ -3,7 +3,7 @@ name = "minimax-h3"
 version = "1.13.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "cozy-runtime[media]>=0.16.0,<1",
+    "cozy-runtime[media]>=0.16.5,<1",
     "cozy-eval>=0.3.2,<1",
     "diffusers==0.40.0",
     "hf-xet==1.6.0",

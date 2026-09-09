@@ -67,7 +67,7 @@ from transformers import (
 from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
 from conditioner import build_text_conditioner
 from h3_table_layout import TableLayout
-from turbo import ATTENTION_KWARG, TURBO_BANK, TurboOverlay, TurboSchedule
+from turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK, TurboOverlay, TurboSchedule
 from vae_tiles import TileBatchedVideoVAE
 
 #: A trunk is one DiT and its conditioning workflow; a task is one served function — the
@@ -1136,7 +1136,7 @@ class OfficialH3Pipeline:
                 required=True,
             )
 
-    def warm_dit(self, task: Task) -> None:
+    def warm_dit(self, task: Task, *, overlay: TurboOverlay | None = None) -> None:
         """One dry forward of this task's DiT over a packed sequence of every modality.
 
         Not a generation (h3a-018 #709: an H3 warm case would be a 30-step request, and the
@@ -1152,7 +1152,11 @@ class OfficialH3Pipeline:
         dit = self.components[_DIT_COMPONENT[_TRUNK[task]]]
         schedule = self._plans[task].schedules[0]
         bank = _BANK[task]
-        selector = {} if bank is None else {"attention_kwargs": {ATTENTION_KWARG: bank}}
+        selector = (
+            {}
+            if bank is None
+            else {"attention_kwargs": {ATTENTION_KWARG: bank, OVERLAY_KWARG: overlay}}
+        )
         rows, tags = _WARM_ROWS, (_WARM_VIDEO_TAG, _WARM_TEXT_TAG, _WARM_AUDIO_TAG)
         packed = rows * len(tags)
         anchor = dit.rope.inv_freq
@@ -1331,39 +1335,51 @@ def _trunk_task(task: Task, trunk: Trunk) -> Task:
     return task
 
 
-class OfficialH3TurboPipeline(OfficialH3Pipeline):
-    """One checkpoint containing the base roots and both permanent PDD overlays."""
+class OfficialH3TurboLoRA:
+    """The standalone adapter's two roots, independent of the base checkpoint."""
 
     def __init__(self, config: Config) -> None:
         mapping = config.mapping()
-        expected = _WEIGHTED_CONFIG_SECTIONS | _OVERLAY_CONFIG_SECTIONS
-        if set(mapping) != expected:
+        if set(mapping) != _OVERLAY_CONFIG_SECTIONS:
             raise ConformanceError(
-                "a turbo checkpoint requires the five base roots and both PDD overlays",
+                "a turbo LoRA checkpoint contains exactly fl2va_turbo and ref2va_turbo",
                 code="artifact_config",
             )
-        base = {name: mapping[name] for name in _WEIGHTED_CONFIG_SECTIONS}
-        layouts = {trunk: _overlay_spec(mapping, trunk) for trunk in _TRUNKS}
-        if any(spec[1] != "adaln-pruned" for spec in _dit_specs(base).values()):
-            raise ConformanceError("turbo requires an AdaLN-pruned base", code="artifact_config")
-        super().__init__(Config(base))
+        self.specs = {trunk: _overlay_spec(mapping, trunk) for trunk in _TRUNKS}
         overlays = {
             trunk: _build_overlay(
-                self.components[_DIT_COMPONENT[trunk]],
-                self._dit_specs[trunk][0],
+                self.specs[trunk][0],
                 canonical_timestep_plan("fl2va_turbo" if trunk == "fl2va" else "ref2va_turbo"),
-                layouts[trunk],
+                self.specs[trunk][1],
             )
             for trunk in _TRUNKS
         }
         _validate_dual_topology(overlays, _OVERLAY_COMPONENT)
-        for trunk, overlay in overlays.items():
-            self.components[_OVERLAY_COMPONENT[trunk]] = overlay
-            self.components[_DIT_COMPONENT[trunk]].attach_overlay(TURBO_BANK, overlay)
+        self.components = {_OVERLAY_COMPONENT[trunk]: value for trunk, value in overlays.items()}
+
+    def overlay(self, base: OfficialH3Pipeline, trunk: Trunk) -> TurboOverlay:
+        config, structure, _layout = base._dit_specs[trunk]
+        if structure != "adaln-pruned" or config != self.specs[trunk][0]:
+            raise ConformanceError(
+                "turbo LoRA and AdaLN-pruned base must have the same DiT configuration",
+                code="artifact_config",
+            )
+        return self.components[_OVERLAY_COMPONENT[trunk]]
 
 
-def build_h3_turbo_pipeline(config: Config) -> OfficialH3TurboPipeline:
-    return OfficialH3TurboPipeline(config)
+def build_h3_turbo_base(config: Config) -> OfficialH3Pipeline:
+    """The ordinary five-root artifact, with its turbo consumers installed before fill."""
+    specs = _dit_specs(_artifact_sections(config.mapping()))
+    if any(structure != "adaln-pruned" for _config, structure, _layout in specs.values()):
+        raise ConformanceError("turbo requires an AdaLN-pruned base", code="artifact_config")
+    pipe = OfficialH3Pipeline(config)
+    for name in _DIT_COMPONENT.values():
+        pipe.components[name].install_lora_consumers()
+    return pipe
+
+
+def build_h3_turbo_lora(config: Config) -> OfficialH3TurboLoRA:
+    return OfficialH3TurboLoRA(config)
 
 
 def build_h3_pipeline(config: Config) -> OfficialH3Pipeline:
@@ -1492,7 +1508,9 @@ def _build_dit(config: Mapping[str, Any], structure: str, layout: TableLayout | 
     return _apply_transformer_dtype(transformer)
 
 
-def _overlay_spec(mapping: Mapping[str, object], trunk: Trunk) -> TableLayout:
+def _overlay_spec(
+    mapping: Mapping[str, object], trunk: Trunk
+) -> tuple[dict[str, Any], TableLayout]:
     """Only the released rank-64 PDD-8 adapter is supported."""
     component = _OVERLAY_COMPONENT[trunk]
     section = _section(mapping, component)
@@ -1512,7 +1530,7 @@ def _overlay_spec(mapping: Mapping[str, object], trunk: Trunk) -> TableLayout:
         "pdd_num_steps": 32,
         "pdd_block_size": 4,
     }
-    if section or extension != expected:
+    if not section or extension != expected:
         raise ConformanceError(
             f"artifact config {component!r} is not the released rank-64 PDD-8 overlay",
             code="artifact_config",
@@ -1520,12 +1538,12 @@ def _overlay_spec(mapping: Mapping[str, object], trunk: Trunk) -> TableLayout:
         )
     (schedule,) = plan.schedules
     layout.require(schedule.video_timesteps, schedule.audio_timesteps)
-    return layout
+    return section, layout
 
 
 def _build_overlay(
-    dit: Any, config: Mapping[str, Any], plan: TimestepPlan, layout: TableLayout
-) -> Any:
+    config: Mapping[str, Any], plan: TimestepPlan, layout: TableLayout
+) -> TurboOverlay:
     (schedule,) = plan.schedules
     timesteps, block_keys = layout.timesteps, layout.block_keys
     overlay = TurboOverlay.from_official_config(
@@ -1535,10 +1553,11 @@ def _build_overlay(
         schedule=TurboSchedule(schedule.video_timesteps, schedule.audio_timesteps),
         table_timesteps=timesteps,
         table_block_keys=block_keys,
-        block_table_dtype=dit.transformer_blocks[0].adaln_proj.table.dtype,
-        final_table_dtype=dit.norm_out.table.dtype,
+        block_table_dtype=torch.bfloat16,
+        final_table_dtype=torch.bfloat16,
     )
-    return overlay.eval()
+    overlay.eval()
+    return overlay
 
 
 def _validate_dual_topology(members: Mapping[Trunk, Any], names: Mapping[Trunk, str]) -> None:

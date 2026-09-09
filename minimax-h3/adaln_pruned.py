@@ -26,7 +26,8 @@ from torch.nn import functional as F
 from turbo import (
     ATTENTION_KWARG,
     LORA_FAMILIES,
-    TABLED_FAMILY,
+    OVERLAY_KWARG,
+    TURBO_BANK,
     TurboArming,
     TurboOverlay,
     _LoRAHook,
@@ -189,31 +190,28 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
         for name in ("proj_out", "audio_proj_out"):
             head = cast(nn.Linear, getattr(self, name))
             setattr(self, name, _SelectableHead(head.in_features, head.out_features))
-        self._overlays: dict[str, TurboOverlay] = {}
         self._arming: TurboArming | None = None
+        self._lora_hooks_installed = False
         self.register_forward_pre_hook(self._arm, with_kwargs=True)
         self.register_forward_hook(self._disarm, always_call=True)
 
-    def attach_overlay(self, bank: str, overlay: TurboOverlay) -> None:
-        """Make `bank` servable: a forward naming it in `attention_kwargs` reads `overlay`.
-        The overlay stays its own component; nothing here enters this DiT's state dict."""
-        sites = [(path, self.get_submodule(path)) for path, _ in overlay.lora_sites()]
-        for path, _ in sites:
-            if TABLED_FAMILY in path or not path.endswith(LORA_FAMILIES):
-                raise ConformanceError(
-                    f"unsupported turbo LoRA site: {path}", code="artifact_config"
-                )
-        if not self._overlays:
-            for path, site in sites:
+    def install_lora_consumers(self) -> None:
+        """Install once during turbo-capable construction, before Runtime fill/fusion."""
+        if self._lora_hooks_installed:
+            return
+        for path, site in self.named_modules():
+            if path.startswith(
+                ("token_refiner.refiner_blocks.", "transformer_blocks.")
+            ) and path.endswith(LORA_FAMILIES):
                 site.register_forward_hook(_LoRAHook(self, path))
-        self._overlays[bank] = overlay
+        self._lora_hooks_installed = True
 
     def _arm(
         self,
         module: nn.Module,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
-    ) -> None:
+    ) -> tuple[tuple[Any, ...], dict[str, Any]] | None:
         del module
         self._release()
         names = (
@@ -238,7 +236,7 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
                     "a turbo forward needs typed timestep, timestep_indices and token_tags",
                     code="artifact_config",
                 )
-            return  # Diffusers' inherited forward owns its ordinary argument diagnostics.
+            return None  # Diffusers owns its ordinary argument diagnostics.
         assert isinstance(timestep, torch.Tensor)
         assert isinstance(timestep_indices, torch.Tensor)
         assert isinstance(token_tags, torch.Tensor)
@@ -250,10 +248,15 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
         tables: Any = self
         try:
             if bank is not None:
-                overlay = self._overlays.get(bank)
-                if overlay is None:
+                overlay = selector.get(OVERLAY_KWARG) if isinstance(selector, Mapping) else None
+                if (
+                    bank != TURBO_BANK
+                    or not isinstance(overlay, TurboOverlay)
+                    or not self._lora_hooks_installed
+                ):
                     raise ConformanceError(
-                        f"this construction serves no {bank!r} bank",
+                        f"bank {bank!r} requires a turbo-capable base and prepared "
+                        "overlay component",
                         code="artifact_config",
                         fields=["attention_kwargs", ATTENTION_KWARG],
                     )
@@ -272,6 +275,16 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
         except Exception:
             self._release()
             raise
+        if isinstance(selector, Mapping) and OVERLAY_KWARG in selector:
+            # The package consumes these keys; Diffusers attention processors receive
+            # only their own options. The caller's dictionary is never mutated.
+            cleaned = {
+                key: value
+                for key, value in selector.items()
+                if key not in (ATTENTION_KWARG, OVERLAY_KWARG)
+            }
+            return args, {**kwargs, "attention_kwargs": cleaned}
+        return None
 
     def _engage(self, overlay: TurboOverlay, step: int) -> None:
         self._arming = TurboArming(overlay, step)

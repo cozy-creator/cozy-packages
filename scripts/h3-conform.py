@@ -145,6 +145,7 @@ from official import (  # noqa: E402
 from turbo import (  # noqa: E402
     ATTENTION_KWARG,
     LORA_FAMILIES,
+    OVERLAY_KWARG,
     TURBO_BANK,
     LoRAFactors,
     TurboHeads,
@@ -3183,23 +3184,43 @@ def arm_interface() -> None:
             ("int", {"ge": min(DURATIONS), "le": max(DURATIONS)}, "optional"),
         )
         turbo = name.endswith("_turbo")
-        model_slot = entry["models"][0]
-        check(f"{name} one complete model", len(entry["models"]), 1)
-        check(f"{name} model class", model_slot["class"], "H3TurboModel" if turbo else "H3Model")
-        check(f"{name} encoded leaves", model_slot["encoded_leaves"], "accept")
-        component_use = model_slot["component_use"]
+        models = entry["models"]
         trunk = name.removesuffix("_turbo")
-        lease = [f"{trunk}_dit", f"{trunk}_turbo"] if turbo else [f"{trunk}_dit"]
-        check(f"{name} complete sampling lease", component_use[f"sample_{trunk}"], lease)
-        check(f"{name} complete warm lease", component_use[f"warm_{trunk}"], lease)
+        if turbo:
+            check(f"{name} has separately bound base and LoRA models", len(models), 2)
+            base_slot, lora_slot = models
+            check(f"{name} base model class", base_slot["class"], "H3TurboBase")
+            check(f"{name} LoRA model class", lora_slot["class"], "H3TurboLoRA")
+            check(
+                f"{name} base turbo sampling lease",
+                base_slot["component_use"][f"sample_{trunk}_turbo"],
+                [f"{trunk}_dit"],
+            )
+            check(
+                f"{name} LoRA sampling lease",
+                lora_slot["component_use"][f"sample_{trunk}"],
+                [f"{trunk}_turbo"],
+            )
+            check(
+                f"{name} does not advertise uncalled turbo warm scopes",
+                any("warm" in method for method in lora_slot["component_use"]),
+                False,
+            )
+            component_use = {**base_slot["component_use"], **lora_slot["component_use"]}
+            model_slots = models
+        else:
+            check(f"{name} one complete model", len(models), 1)
+            model_slots = models
+            component_use = models[0]["component_use"]
+        for model_slot in model_slots:
+            check(
+                f"{name} {model_slot['class']} encoded leaves",
+                model_slot["encoded_leaves"],
+                "accept",
+            )
         roots = {"fl2va_dit", "ref2va_dit", "text_encoder", "video_vae", "audio_vae"}
         if turbo:
             roots.update(("fl2va_turbo", "ref2va_turbo"))
-            check(
-                f"{name} requires an explicit combined checkpoint",
-                "default_ladder" in model_slot,
-                False,
-            )
         check(
             f"{name} declared roots",
             {value for values in component_use.values() for value in values},
@@ -3958,7 +3979,7 @@ def arm_turbo_forward() -> None:
             "audio_proj_out.bias",
         },
     )
-    pruned.attach_overlay(TURBO_BANK, overlay)
+    pruned.install_lora_consumers()
 
     base_forward = turbo_forward(0, schedule)
     before = pruned(**base_forward)
@@ -3985,7 +4006,9 @@ def arm_turbo_forward() -> None:
                     sum(isinstance(hook, _LoRAHook) for hook in module._forward_hooks.values())
                 )
             )
-            got = pruned(**forward, attention_kwargs={ATTENTION_KWARG: TURBO_BANK})
+            got = pruned(
+                **forward, attention_kwargs={ATTENTION_KWARG: TURBO_BANK, OVERLAY_KWARG: overlay}
+            )
             handle.remove()
         hooked.append(seen)
         agree.append(
@@ -4015,19 +4038,23 @@ def arm_turbo_forward() -> None:
     stale = tiny_overlay(TURBO_CONFIG)
     stale.load_state_dict(overlay.state_dict())
     fill_tables(full, stale, turbo_timesteps, turbo_keys)
-    pruned.attach_overlay(TURBO_BANK, stale)
+    with torch.no_grad():
+        for block in stale.transformer_blocks:
+            block.adaln_proj.table.zero_()
+        stale.norm_out.table.zero_()
     forward = turbo_forward(3, schedule)
     reference.proj_out.plan = reference_pdd_plan(video_steps, 12, 4).float()
     reference.audio_proj_out.plan = reference_pdd_plan(audio_steps, 12, 4).float()
     with torch.no_grad():
         want = reference(**forward)
-        got = pruned(**forward, attention_kwargs={ATTENTION_KWARG: TURBO_BANK})
+        got = pruned(
+            **forward, attention_kwargs={ATTENTION_KWARG: TURBO_BANK, OVERLAY_KWARG: stale}
+        )
     red(
         "tables without the adaln_proj slice do not reproduce the reference",
         all(torch.allclose(a, b, rtol=2e-5, atol=2e-6) for a, b in zip(got, want, strict=True)),
         True,
     )
-    pruned.attach_overlay(TURBO_BANK, overlay)
 
     refusal(
         "a turbo forward at a base-only timestep refuses",
@@ -4080,35 +4107,36 @@ def turbo_h3_config() -> dict[str, Any]:
         dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
     )
     for trunk in ("fl2va", "ref2va"):
-        document[f"{trunk}_turbo"] = {
-            "cozy_h3": {
-                "task": trunk,
-                "modulation": "adaln-pruned",
-                "distillation": "pdd",
-                "table_keys": canonical_json.decode(
-                    canonical_timestep_plan(cast(Any, f"{trunk}_turbo")).canonical_bytes()
-                )["table_keys"],
-                "lora_rank": PDD_HEADER["lora_rank"],
-                "lora_alpha": PDD_HEADER["lora_alpha"],
-                "pdd_num_steps": PDD_HEADER["pdd_num_steps"],
-                "pdd_block_size": PDD_HEADER["pdd_block_size"],
-            }
+        overlay = copy.deepcopy(document[f"{trunk}_dit"])
+        overlay["cozy_h3"] = {
+            "task": trunk,
+            "modulation": "adaln-pruned",
+            "distillation": "pdd",
+            "table_keys": canonical_json.decode(
+                canonical_timestep_plan(cast(Any, f"{trunk}_turbo")).canonical_bytes()
+            )["table_keys"],
+            "lora_rank": PDD_HEADER["lora_rank"],
+            "lora_alpha": PDD_HEADER["lora_alpha"],
+            "pdd_num_steps": PDD_HEADER["pdd_num_steps"],
+            "pdd_block_size": PDD_HEADER["pdd_block_size"],
         }
+        document[f"{trunk}_turbo"] = overlay
     return cast(dict[str, Any], document)
 
 
 def arm_turbo_artifact() -> None:
-    """Separate exact base/turbo constructors, one model scope for each turbo forward."""
+    """Separate exact base/turbo constructors and independent Runtime census scopes."""
     document = turbo_h3_config()
     base_only = {name: value for name, value in document.items() if not name.endswith("_turbo")}
+    overlay_only = {name: value for name, value in document.items() if name.endswith("_turbo")}
     refusal(
         "ordinary construction rejects turbo roots",
         lambda: OfficialH3Pipeline(Config(document)),
         "artifact_config",
     )
     refusal(
-        "turbo construction requires both overlays",
-        lambda: official.OfficialH3TurboPipeline(Config(base_only)),
+        "LoRA construction requires both overlay roots",
+        lambda: official.OfficialH3TurboLoRA(Config({"fl2va_turbo": overlay_only["fl2va_turbo"]})),
         "artifact_config",
     )
     for field, value in (
@@ -4118,7 +4146,7 @@ def arm_turbo_artifact() -> None:
         ("pdd_block_size", 2),
         ("task", "ref2va"),
     ):
-        changed = copy.deepcopy(document)
+        changed = copy.deepcopy(overlay_only)
         changed["fl2va_turbo"]["cozy_h3"][field] = value
         refusal(
             f"unsupported PDD {field} refuses",
@@ -4126,11 +4154,11 @@ def arm_turbo_artifact() -> None:
             "artifact_config",
         )
     with torch.device("meta"):
-        base = OfficialH3Pipeline(Config(base_only))
-        turbo = official.OfficialH3TurboPipeline(Config(document))
+        base = official.build_h3_turbo_base(Config(base_only))
+        lora = official.OfficialH3TurboLoRA(Config(overlay_only))
     check("ordinary model has exactly five real roots", set(base.components), set(base_only))
-    check("turbo model has exactly seven real roots", set(turbo.components), set(document))
-    for cls, config in ((package.H3Model, base_only), (package.H3TurboModel, document)):
+    check("turbo LoRA has exactly two overlay roots", set(lora.components), set(overlay_only))
+    for cls, config in ((package.H3TurboBase, base_only), (package.H3TurboLoRA, overlay_only)):
         derived = derive(cls(), Artifact("constructor-audit", {}, Config(config)))
         check(
             f"{cls.__name__} Runtime census matches its exact checkpoint",
@@ -4138,82 +4166,15 @@ def arm_turbo_artifact() -> None:
             set(config),
         )
     for trunk in ("fl2va", "ref2va"):
-        dit, overlay = turbo.components[f"{trunk}_dit"], turbo.components[f"{trunk}_turbo"]
+        dit = base.components[f"{trunk}_dit"]
+        overlay = lora.components[f"{trunk}_turbo"]
         check(
-            f"{trunk} overlay attached during construction",
-            dit._overlays[TURBO_BANK] is overlay,
-            True,
-        )
-        check(
-            f"{trunk} no overlay aliases in DiT census",
-            any("lora" in name for name in dit.state_dict()),
-            False,
-        )
-        check(
-            f"{trunk} permanent leaf hook",
+            f"{trunk} base installs permanent LoRA consumers",
             len(dit.transformer_blocks[0].attn.to_q._forward_hooks),
             1,
         )
-        check(f"{trunk} head geometry", tuple(overlay.proj_out.weight.shape), (8, 96, 5376))
-        check(f"{trunk} final table dtype", overlay.norm_out.table.dtype, dit.norm_out.table.dtype)
-        check(
-            f"{trunk} block table dtype",
-            overlay.transformer_blocks[0].adaln_proj.table.dtype,
-            dit.transformer_blocks[0].adaln_proj.table.dtype,
-        )
-    # Real small DiTs exercise the permanent hooks and complete warm scopes without a
-    # second Model, borrowed state, or any nullable component.
-    base_full = tiny_dit()
-    with torch.no_grad():
-        for parameter in base_full.parameters():
-            parameter.normal_(0, 0.02)
-    tiny = {}
-    banks: dict[str, list[Any]] = {trunk: [] for trunk in ("fl2va", "ref2va")}
-    for trunk in ("fl2va", "ref2va"):
-        config = dict(base_full.config)
-        plan = canonical_timestep_plan(trunk)
-        timesteps, block_keys = plan.table_layout()
-        dit = AdaLNPrunedMiniMaxH3Transformer.from_official_config(
-            config, table_timesteps=timesteps, table_block_keys=block_keys
-        )
-        turbo_plan = canonical_timestep_plan(f"{trunk}_turbo")
-        bank = official._build_overlay(
-            dit,
-            config,
-            turbo_plan,
-            TableLayout.parse(canonical_json.decode(turbo_plan.canonical_bytes())["table_keys"]),
-        )
-        # Shape and schedule proof; zero finite coefficients keep this independent of
-        # the separate full PDD numerical equivalence arm.
-        with torch.no_grad():
-            for parameter in dit.parameters():
-                parameter.zero_()
-            for parameter in bank.parameters():
-                parameter.zero_()
-        dit.attach_overlay(TURBO_BANK, bank)
-
-        def record(module: Any, args: Any, kwargs: Any, trunk: str = trunk) -> None:
-            banks[trunk].append((kwargs.get("attention_kwargs") or {}).get(ATTENTION_KWARG))
-
-        dit.register_forward_pre_hook(record, with_kwargs=True)
-        turbo.components[f"{trunk}_dit"] = dit
-        turbo.components[f"{trunk}_turbo"] = bank
-        tiny[trunk] = dit
-    model = package.H3TurboModel.for_test(pipe=turbo)
-    warm_with_fakes(model)
-    check(
-        "turbo warm uses one full scope per trunk",
-        [(c.method, c.components) for c in model.harness.calls],
-        [
-            ("warm_fl2va", ("fl2va_dit", "fl2va_turbo")),
-            ("warm_ref2va", ("ref2va_dit", "ref2va_turbo")),
-        ],
-    )
-    check(
-        "both real warm forwards select turbo",
-        banks,
-        {"fl2va": [TURBO_BANK], "ref2va": [TURBO_BANK]},
-    )
+        check(f"{trunk} overlay has independent weights", id(dit) != id(overlay), True)
+        check(f"{trunk} overlay head geometry", tuple(overlay.proj_out.weight.shape), (8, 96, 5376))
 
 
 ARMS = {

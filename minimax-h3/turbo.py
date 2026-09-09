@@ -27,6 +27,7 @@ from torch.nn import functional as F
 #: The forward-call selector: `attention_kwargs={ATTENTION_KWARG: TURBO_BANK}` names the bank
 #: one DiT forward serves. Absent, the forward is the base's, whatever overlay is attached.
 ATTENTION_KWARG = "cozy_h3_bank"
+OVERLAY_KWARG = "cozy_h3_overlay"
 TURBO_BANK = "turbo"
 #: The families applied at inference, as the checkpoint names them under a block.
 LORA_FAMILIES = ("to_q", "to_k", "to_v", "to_out.0", "ff.net.0.proj", "ff.net.2")
