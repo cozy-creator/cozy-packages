@@ -14,7 +14,8 @@ factors through the same modules; every other forward reads the base tables it a
 from __future__ import annotations
 
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any, ClassVar, cast
 
 import torch
@@ -190,6 +191,18 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
         """Make `bank` servable: a forward naming it in `attention_kwargs` reads `overlay`.
         The overlay stays its own component; nothing here enters this DiT's state dict."""
         self._overlays[bank] = overlay
+
+    @contextmanager
+    def use_overlay(self, bank: str, overlay: TurboOverlay) -> Iterator[None]:
+        """Borrow a separately loaded LoRA for one admitted sample, without retaining it."""
+        if bank in self._overlays:
+            raise ConformanceError("an overlay is already active", code="artifact_config")
+        self.attach_overlay(bank, overlay)
+        try:
+            yield
+        finally:
+            self._release()
+            del self._overlays[bank]
 
     def _arm(
         self,

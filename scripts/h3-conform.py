@@ -17,7 +17,7 @@ import sys
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import redirect_stderr
+from contextlib import nullcontext, redirect_stderr
 from dataclasses import replace
 from fractions import Fraction
 from functools import partial
@@ -2933,7 +2933,7 @@ def arm_interface() -> None:
             ["ref2va_dit", "ref2va_turbo"],
         ),
     }
-    for name, (fields, leased) in expected.items():
+    for name, (fields, _leased) in expected.items():
         entry = entries[name]
         check(
             f"{name} request fields",
@@ -2968,8 +2968,26 @@ def arm_interface() -> None:
         check(f"{name} carries no retired stamps member", "stamps" in entry["models"][0], False)
         check(f"{name} slot admits encoded leaves", entry["models"][0]["encoded_leaves"], "accept")
         component_use = entry["models"][0]["component_use"]
-        check(f"{name} sampling lease", component_use[f"sample_{name}"], leased)
-        check(f"{name} warm lease", component_use[f"warm_{name}"], leased)
+        trunk = name.removesuffix("_turbo")
+        check(f"{name} base sampling lease", component_use[f"sample_{name}"], [f"{trunk}_dit"])
+        check(f"{name} base warm lease", component_use[f"warm_{trunk}"], [f"{trunk}_dit"])
+        check(
+            f"{name} base requires no LoRA components",
+            {value for values in component_use.values() for value in values},
+            {"fl2va_dit", "ref2va_dit", "text_encoder", "video_vae", "audio_vae"},
+        )
+        if name.endswith("_turbo"):
+            lora_slot = entry["models"][1]
+            check(f"{name} separate LoRA slot", lora_slot["path"], f"{name}.models.lora")
+            check(f"{name} typed LoRA", lora_slot["class"], "H3TurboLoRA")
+            check(
+                f"{name} unbound LoRA has no invented default", "default_ladder" in lora_slot, False
+            )
+            check(
+                f"{name} LoRA sampling lease", lora_slot["component_use"][f"sample_{trunk}"], [name]
+            )
+        else:
+            check(f"{name} no LoRA slot", len(entry["models"]), 1)
         check(f"{name} media capability", "media_decode" in surfaces[name].capabilities, True)
         check(
             f"{name} exact customer result fields",
@@ -3876,48 +3894,43 @@ def turbo_h3_config() -> dict[str, Any]:
     return cast(dict[str, Any], document)
 
 
-def _overlay_specs_of(document: dict[str, Any]) -> Any:
-    return official._overlay_specs(document, official._dit_specs(document))
-
-
-def _bank_recorder(seen: list[Any]) -> Callable[..., None]:
-    def record(module: Any, args: Any, kwargs: Any) -> None:
-        seen.append((kwargs.get("attention_kwargs") or {}).get(ATTENTION_KWARG))
-
-    return record
+def turbo_lora_config(document: dict[str, Any]) -> dict[str, Any]:
+    """An independent checkpoint needs its own topology, not its base's tensor roots."""
+    return {
+        f"{trunk}_turbo": {
+            **copy.deepcopy(document[f"{trunk}_turbo"]),
+            "transformer": official._dit_spec(document, trunk)[0],
+        }
+        for trunk in ("fl2va", "ref2va")
+    }
 
 
 def arm_turbo_artifact() -> None:
-    print("\n== PDD-8: the overlay is two components of the AdaLN-pruned lane ==")
+    print("\n== PDD-8: the LoRA is an independent checkpoint and required model slot ==")
     document = turbo_h3_config()
     base_only = {name: value for name, value in document.items() if not name.endswith("_turbo")}
+    overlay_config = turbo_lora_config(document)
     check(
-        "a lane without overlays is the dual contract",
+        "base config retains its five components",
         set(official._artifact_sections(base_only)),
         set(base_only),
     )
-    check(
-        "a lane with both overlays is admitted",
-        set(official._artifact_sections(document)),
-        set(document),
-    )
     refusal(
-        "one overlay without the other refuses",
-        lambda: official._artifact_sections(
-            {k: v for k, v in document.items() if k != "ref2va_turbo"}
-        ),
+        "base config rejects embedded overlays",
+        lambda: official._artifact_sections(document),
         "artifact_config",
     )
-    specs = official._overlay_specs(document, official._dit_specs(document))
-    check(
-        "both overlay specs bind the turbo plans",
-        {trunk: spec.plan.digest for trunk, spec in specs.items() if spec is not None},
-        {trunk: TURBO_PLAN_DIGESTS[f"{trunk}_turbo"] for trunk in ("fl2va", "ref2va")},
+    refusal(
+        "LoRA config rejects base component roots",
+        lambda: official.OfficialH3TurboLoRA(Config(document)),
+        "artifact_config",
     )
-    check(
-        "no overlay section means no spec",
-        official._overlay_specs(base_only, official._dit_specs(base_only)),
-        {"fl2va": None, "ref2va": None},
+    refusal(
+        "LoRA config requires both trunks",
+        lambda: official.OfficialH3TurboLoRA(
+            Config({"fl2va_turbo": overlay_config["fl2va_turbo"]})
+        ),
+        "artifact_config",
     )
     for field, value in (
         ("timestep_plan_digest", f"sha256:{PLAN_DIGESTS['fl2va']}"),
@@ -3927,62 +3940,36 @@ def arm_turbo_artifact() -> None:
         ("pdd_num_steps", 33),
         ("lora_rank", 0),
     ):
-        changed = copy.deepcopy(document)
+        changed = copy.deepcopy(overlay_config)
         changed["fl2va_turbo"]["cozy_h3"][field] = value
         refusal(
             f"overlay {field}={value!r} refuses",
-            partial(_overlay_specs_of, changed),
+            partial(official._overlay_spec, changed, "fl2va"),
             "artifact_config",
         )
-    changed = copy.deepcopy(document)
-    changed["fl2va_turbo"]["cozy_h3"]["lora_targets"] = PDD_HEADER["lora_targets"]
-    refusal(
-        "an unclosed overlay section refuses",
-        lambda: official._overlay_specs(changed, official._dit_specs(changed)),
-        "artifact_config",
-    )
-    full_document = canonical_json.decode(
-        dual_full_config(
-            parse_production_config(
-                (ROOT / "minimax-h3-tools/src/h3_tables/assets/model-config.json").read_bytes()
-            )
-        )
-    )
-    full_document.update({name: document[name] for name in ("fl2va_turbo", "ref2va_turbo")})
-    refusal(
-        "an overlay over FULL DiTs refuses: its adaln_proj slice is tabled",
-        lambda: official._overlay_specs(full_document, official._dit_specs(full_document)),
-        "artifact_config",
-    )
-
     with torch.device("meta"):
-        pipe = OfficialH3Pipeline(Config(document))
+        pipe = OfficialH3Pipeline(Config(base_only))
+        lora = official.OfficialH3TurboLoRA(Config(overlay_config))
+    check("base construction has exactly five weighted roots", set(pipe.components), set(base_only))
     check(
-        "seven components: the five base ones and one overlay per trunk",
-        sorted(pipe.components),
-        [
-            "audio_vae",
-            "fl2va_dit",
-            "fl2va_turbo",
-            "ref2va_dit",
-            "ref2va_turbo",
-            "text_encoder",
-            "video_vae",
-        ],
+        "LoRA construction has only overlay roots",
+        set(lora.components),
+        {"fl2va_turbo", "ref2va_turbo"},
     )
-    check("every task is served", [pipe.serves(task) for task in official._TASKS], [True] * 4)
+    derived = derive(package.H3TurboLoRA(), Artifact("turbo-lora", {}, Config(overlay_config)))
     check(
-        "turbo tasks bind the turbo plan, base tasks the base plan",
-        (pipe._plans["fl2va_turbo"].digest, pipe._plans["fl2va"].digest),
-        (TURBO_PLAN_DIGESTS["fl2va_turbo"], PLAN_DIGESTS["fl2va"]),
+        "Runtime derives only the independently bound LoRA destinations",
+        {row.component for row in derived.destination_sets},
+        {"fl2va_turbo", "ref2va_turbo"},
     )
-    overlay = pipe.components["fl2va_turbo"]
+    overlay = lora.components["fl2va_turbo"]
     state = overlay.state_dict()
-    check("overlay destinations at the release widths", len(state), 50 * 12 + 2 * 12 + 50 + 1 + 4)
+    check("overlay destinations at release widths", len(state), 50 * 12 + 2 * 12 + 50 + 1 + 4)
+    dit = pipe.components["fl2va_dit"]
     for family, (down, up) in PDD_FACTOR_SHAPES.items():
         prefix = f"transformer_blocks.7.{'attn.' if family.startswith('to_') else ''}{family}"
         check(
-            f"{family} factors are the adapter file's bf16 [rank, in] / [out, rank]",
+            f"{family} factor geometry and dtype",
             (
                 tuple(state[f"{prefix}.lora_down"].shape),
                 tuple(state[f"{prefix}.lora_up"].shape),
@@ -3990,19 +3977,8 @@ def arm_turbo_artifact() -> None:
             ),
             (down, up, "torch.bfloat16"),
         )
-    dit = pipe.components["fl2va_dit"]
     check(
-        "eight collapsed heads in the base heads' float32",
-        (
-            tuple(state["proj_out.weight"].shape),
-            tuple(state["audio_proj_out.weight"].shape),
-            str(state["proj_out.bias"].dtype),
-            str(dit.proj_out.weight.dtype),
-        ),
-        ((8, 96, 5376), (8, 32, 5376), "torch.float32", "torch.float32"),
-    )
-    check(
-        "turbo tables in the base tables' shape family and dtype",
+        "overlay tables match base dtype and geometry",
         (
             tuple(state["transformer_blocks.0.adaln_proj.table"].shape),
             tuple(state["norm_out.table"].shape),
@@ -4013,129 +3989,88 @@ def arm_turbo_artifact() -> None:
         ((TURBO_BLOCK_ROWS, 6, 5376), (TURBO_FINAL_ROWS, 2, 5376), True, True),
     )
     check(
-        "the DiT's own destinations do not change with the overlay attached",
-        any("lora" in name for name in dit.state_dict()),
-        False,
-    )
-    check("the overlay is what the turbo bank serves", dit._overlays[TURBO_BANK] is overlay, True)
-    check(
-        "overlay MiB per trunk: the design's <= 0.9 GB",
+        "overlay MiB per trunk",
         sum(v.numel() * v.element_size() for v in state.values()) // 2**20,
         761,
     )
-
-    with torch.device("meta"):
-        bare = OfficialH3Pipeline(Config(base_only))
+    original = tuple(dit.state_dict())
+    with pipe.turbo_overlay("fl2va", lora):
+        check(
+            "scope selects the independently loaded overlay",
+            dit._overlays[TURBO_BANK] is overlay,
+            True,
+        )
+        check("LoRA never becomes a base destination", tuple(dit.state_dict()) == original, True)
+    check("normal execution retains no LoRA reference", dit._overlays, {})
+    try:
+        with pipe.turbo_overlay("fl2va", lora):
+            raise RuntimeError("cancelled sample")
+    except RuntimeError:
+        pass
     check(
-        "without overlays the components are still constructed, empty",
-        (
-            type(bare.components["fl2va_turbo"]).__name__,
-            len(bare.components["fl2va_turbo"].state_dict()),
-        ),
-        ("AbsentOverlay", 0),
+        "failed sample releases overlay reference and arming",
+        (dit._overlays, dit._arming),
+        ({}, None),
     )
-    check(
-        "without overlays only the base tasks are served",
-        [bare.serves(task) for task in official._TASKS],
-        [True, True, False, False],
-    )
-    interface = json.loads((H3 / "metadata" / "package-interface.json").read_text())
-    declared = {
-        name
-        for entry in interface["entrypoints"]
-        for names in entry["models"][0]["component_use"].values()
-        for name in names
-    }
-    check(
-        "every declared component exists on a lane without overlays",
-        declared <= set(bare.components),
-        True,
-    )
+    changed = copy.deepcopy(overlay_config)
+    for section in changed.values():
+        section["transformer"]["hidden_size"] += 1
+    lora.architectures["fl2va"] = changed["fl2va_turbo"]["transformer"]
     refusal(
-        "a turbo request on a lane without the overlay refuses typed before any block runs",
-        lambda: bare.start_fl2va(
-            prompt="x",
-            first_frame=None,
-            last_frame=None,
-            generator=torch.Generator(),
-            steps=8,
-            frames=124,
-            task="fl2va_turbo",
-        ),
+        "mismatched LoRA architecture refuses",
+        lambda: pipe.turbo_overlay("fl2va", lora).__enter__(),
         "artifact_config",
     )
+    lora.architectures["fl2va"] = overlay_config["fl2va_turbo"]["transformer"]
+    pipe._dit_specs["fl2va"] = (pipe._dit_specs["fl2va"][0], "full", pipe._dit_specs["fl2va"][2])
     refusal(
-        "a trunk mismatch refuses",
-        lambda: bare.start_fl2va(
-            prompt="x",
-            first_frame=None,
-            last_frame=None,
-            generator=torch.Generator(),
-            steps=8,
-            frames=124,
-            task="ref2va_turbo",
-        ),
+        "LoRA over FULL refuses before sample",
+        lambda: pipe.turbo_overlay("fl2va", lora).__enter__(),
         "artifact_config",
     )
-    refusal(
-        "a base step count on a turbo task refuses",
-        lambda: pipe.start_fl2va(
-            prompt="x",
-            first_frame=None,
-            last_frame=None,
-            generator=torch.Generator(),
-            steps=30,
-            frames=124,
-            task="fl2va_turbo",
-        ),
-        "steps",
-    )
-    check(
-        "t2va_turbo is the keyframe-free workflow of fl2va_turbo",
-        (
-            pipe._workflow("fl2va_turbo", PipelineState()),
-            pipe._workflow("ref2va_turbo", PipelineState()),
-        ),
-        ("t2va_turbo", "ref2va_turbo"),
+    pipe._dit_specs["fl2va"] = (
+        pipe._dit_specs["fl2va"][0],
+        "adaln-pruned",
+        pipe._dit_specs["fl2va"][2],
     )
 
-    print("\n== PDD-8: warm offers the turbo functions only where the overlay exists ==")
-    tiny = {
-        name: tiny_pruned_dit(dict(tiny_dit().config), name.removesuffix("_dit"))
-        for name in _DIT_COMPONENT.values()
-    }
-    banks: dict[str, list[Any]] = {}
-    for name, dit in tiny.items():
-        pipe.components[name] = dit
-        overlay = tiny_overlay(dict(tiny_dit().config))
-        pipe.components[name.replace("_dit", "_turbo")] = overlay
-        dit.attach_overlay(TURBO_BANK, overlay)
-        dit.register_forward_pre_hook(_bank_recorder(banks.setdefault(name, [])), with_kwargs=True)
     model = package.H3Model.for_test(pipe=pipe)
-    warm_with_fakes(model)
-    check(
-        "four scopes, base then turbo per trunk",
-        [call.method for call in model.harness.calls],
-        ["warm_fl2va", "warm_fl2va_turbo", "warm_ref2va", "warm_ref2va_turbo"],
+    adapter = package.H3TurboLoRA.for_test(pipe=lora)
+    scopes: list[Any] = []
+
+    def denoise(task: str, state: Any, **kwargs: Any) -> Any:
+        scopes.append(
+            (task, model._cozy_active, adapter._cozy_active, dit._overlays[TURBO_BANK] is overlay)
+        )
+        return "sampled"
+
+    cast(Any, pipe).denoise = denoise
+    checks: Any = SimpleNamespace(
+        component=lambda *args: None, forwards=lambda *args: nullcontext()
     )
     check(
-        "the overlay is leased in the DiT's own scope",
-        model.harness.components(),
-        ("fl2va_dit", "fl2va_turbo", "ref2va_dit", "ref2va_turbo"),
+        "LoRA sampling dispatches through both public scopes",
+        adapter.sample_fl2va(
+            model, None, on_step=lambda _: None, cancel=lambda: None, checks=checks
+        ),
+        "sampled",
     )
     check(
-        "each DiT ran one base and one turbo dry forward",
-        banks,
-        {"fl2va_dit": [None, TURBO_BANK], "ref2va_dit": [None, TURBO_BANK]},
+        "both model leases remain active inside denoising",
+        scopes,
+        [
+            (
+                "fl2va_turbo",
+                ("sample_fl2va_turbo", ("fl2va_dit",)),
+                ("sample_fl2va", ("fl2va_turbo",)),
+                True,
+            )
+        ],
     )
-    for name, dit in tiny.items():
-        bare.components[name] = dit
-    bare_model = package.H3Model.for_test(pipe=bare)
-    warm_with_fakes(bare_model)
     check(
-        "without overlays warm offers the base scopes only",
-        [call.method for call in bare_model.harness.calls],
-        ["warm_fl2va", "warm_ref2va"],
+        "sample releases both model scopes and LoRA reference",
+        (model._cozy_active, adapter._cozy_active, dit._overlays),
+        (None, None, {}),
     )
 
 
