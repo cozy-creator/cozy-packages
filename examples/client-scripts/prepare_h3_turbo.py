@@ -11,7 +11,7 @@
 #   "numpy==2.5.1",
 #   "nvidia-nvjitlink==13.2.78",
 #   "packaging==26.2",
-#   "setuptools==81.0.0",
+#   "setuptools==84.0.0",
 #   "tensorfs==0.3.38",
 # ]
 # [tool.uv]
