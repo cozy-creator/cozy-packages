@@ -1178,6 +1178,45 @@ def arm_graph_and_dtypes() -> None:
         len(video_vae.state_dict()),
         len(served),
     )
+    # The restamp emits its config from package assets, so a half-restamped wheel could
+    # write a checkpoint that only refuses at CONSTRUCTION, on a rented pod. These are the
+    # emit-time refusals that turn that into a job-time one.
+    from h3_tables import job as producer  # noqa: PLC0415
+    from h3_tables.model_config import (  # noqa: PLC0415
+        dual_adaln_pruned_config,
+        dual_full_config,
+    )
+    from h3_tables.model_config import parse_production_config as _sections  # noqa: PLC0415
+
+    producer_sections = _sections(producer._asset("model-config.json"))
+    emitted = {
+        "adaln-pruned": dual_adaln_pruned_config(
+            producer_sections,
+            producer._production_plan("fl2va"),
+            producer._production_plan("ref2va"),
+        ),
+        "full": dual_full_config(producer_sections),
+    }
+    for modulation, document in emitted.items():
+        producer._check_emitted_config(document, modulation)
+    check("both emitted configs pass the restamp's own check", sorted(emitted), ["adaln-pruned", "full"])
+    refusal(
+        "a pruned document emitted as a FULL lane refuses on the closed cozy_h3 shape",
+        lambda: producer._check_emitted_config(emitted["adaln-pruned"], "full"),
+        "h3_restamp_config_shape",
+    )
+    refusal(
+        "a FULL document emitted as a pruned lane refuses on the closed cozy_h3 shape",
+        lambda: producer._check_emitted_config(emitted["full"], "adaln-pruned"),
+        "h3_restamp_config_shape",
+    )
+    skewed = canonical_json.decode(emitted["adaln-pruned"])
+    skewed["fl2va_dit"]["cozy_h3"]["timestep_plan_digest"] = f"sha256:{'0' * 64}"
+    refusal(
+        "a config asset that disagrees with the timestep-plan asset refuses at emit",
+        lambda: producer._check_emitted_config(canonical_json.encode(skewed), "adaln-pruned"),
+        "h3_restamp_plan_skew",
+    )
     check("audio VAE state count", len(audio_vae.state_dict()), 1087)
     check("audio VAE parameter destinations", len(dict(audio_vae.named_parameters())), 832)
     red("uniform bf16 transformer cast", transformer_counts, Counter({"torch.bfloat16": 638}))

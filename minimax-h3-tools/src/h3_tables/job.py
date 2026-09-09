@@ -12,6 +12,7 @@ from typing import Annotated, Any, Literal, get_args
 import msgspec
 import torch
 from cozy_runtime.author import (
+    canonical_json,
     App,
     Context,
     Telemetry,
@@ -929,6 +930,52 @@ def _source_modulation(source: WeightsSource, sections: Mapping[str, dict[str, A
     return verdicts.pop()
 
 
+
+def _check_emitted_config(document: bytes, modulation: str) -> None:
+    """Refuse a config document this package cannot stand behind, BEFORE it is written.
+
+    The document is emitted from package assets, so its correctness depends on which
+    `minimax-h3-tools` is deployed rather than on anything the request declares. Left
+    unchecked, a stale wheel writes a checkpoint that looks fine and refuses at
+    CONSTRUCTION — `artifact config 'fl2va_dit' 'timestep_plan_digest' is ..., expected
+    ...` — discovered at serve time on a rented pod. This is the same comparison
+    `official.py:_validate_model_contract` makes later, made here for the price of one
+    decode of 5,817 bytes (se-053).
+
+    The `cozy_h3` structure is CLOSED on the serving side, and the two modulations do not
+    carry the same keys: a FULL lane has no plan to stamp, so its extension is two keys,
+    and an AdaLN-pruned one is three. A three-key FULL document is exactly the shape a
+    closed check catches late and expensively.
+    """
+    value = canonical_json.decode(document)
+    fields = {"task", "modulation"} | (
+        {"timestep_plan_digest"} if modulation == "adaln-pruned" else set()
+    )
+    for task, component in TARGET_COMPONENT.items():
+        extension = value[component]["cozy_h3"]
+        if set(extension) != fields:
+            raise UnsupportedInput(
+                f"emitted {component} cozy_h3 is {sorted(extension)}, and a {modulation} "
+                f"lane carries exactly {sorted(fields)}",
+                code="h3_restamp_config_shape",
+            )
+        if extension["modulation"] != modulation:
+            raise UnsupportedInput(
+                f"emitted {component} declares modulation {extension['modulation']!r} for a "
+                f"{modulation} source",
+                code="h3_restamp_config_shape",
+            )
+        if modulation == "adaln-pruned":
+            expected = _production_plan(task).digest
+            if extension["timestep_plan_digest"] != expected:
+                raise UnsupportedInput(
+                    f"emitted {component} stamps plan {extension['timestep_plan_digest']} "
+                    f"but this package's {task} plan is {expected}; the config asset and the "
+                    "timestep-plan asset disagree, so the wheel is half-restamped",
+                    code="h3_restamp_plan_skew",
+                )
+
+
 @app.job(
     name="restamp",
     weights=(
@@ -995,6 +1042,7 @@ def restamp(
             sections, _production_plan("fl2va"), _production_plan("ref2va")
         )
     )
+    _check_emitted_config(document, modulation)
     order = current_order(_asset("whole-order.json"))
     rows = _full_order(sections, order.rows) if modulation == "full" else order.rows
 
@@ -1034,6 +1082,12 @@ def restamp(
                         default=None,
                     ),
                 )
+            # UNCONDITIONAL, and this is the whole reason the job exists. The restamp has
+            # two independent effects — the video VAE's bytes and this document — and a
+            # lane whose VAE is already at the destination still needs the document. Gate
+            # the write on `pending` and a lane restamped before the plan assets land can
+            # never be repaired by re-running: the second run would resolve inert and do
+            # nothing. Only the READ is skipped when there is nothing left to cast.
             transaction.add_config("model", document)
             receipt = transaction.commit()
     tel.metric("h3.source_bytes", float(stats.source_bytes_read), unit="bytes")
