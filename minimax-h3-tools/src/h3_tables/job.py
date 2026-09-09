@@ -683,7 +683,14 @@ def lanes(
                         output_slot=name,
                         component=component,
                         treatment=selection.treatment.describe(),
-                        **msgspec.to_builtins(stats),
+                        # Runtime observations are capped at eight fields. Keep the
+                        # complete fidelity record in the typed result; the live log
+                        # carries only the bounded counters an operator needs.
+                        cast_keys=stats.cast_keys,
+                        encoded_keys=stats.encoded_keys,
+                        reused_keys=stats.reused_keys,
+                        source_bytes_read=stats.source_bytes_read,
+                        new_bytes_written=stats.new_bytes_written,
                     )
                 # Keep a finished checkpoint replayable if a later lane fails.
                 transaction.add_config("model", configs[LANES[name].modulation])
