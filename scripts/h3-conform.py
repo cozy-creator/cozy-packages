@@ -3894,7 +3894,7 @@ def arm_turbo_artifact() -> None:
     specs = official._overlay_specs(document, official._dit_specs(document))
     check(
         "both overlay specs bind the turbo plans",
-        {trunk: spec.plan.digest for trunk, spec in specs.items() if spec is not None},
+        {trunk: spec.digest for trunk, spec in specs.items() if spec is not None},
         {trunk: TURBO_PLAN_DIGESTS[f"{trunk}_turbo"] for trunk in ("fl2va", "ref2va")},
     )
     check(
@@ -3909,6 +3909,9 @@ def arm_turbo_artifact() -> None:
         ("distillation", "dmd"),
         ("pdd_num_steps", 33),
         ("lora_rank", 0),
+        ("lora_rank", 32),
+        ("lora_alpha", 32.0),
+        ("pdd_block_size", 2),
     ):
         changed = copy.deepcopy(document)
         changed["fl2va_turbo"]["cozy_h3"][field] = value

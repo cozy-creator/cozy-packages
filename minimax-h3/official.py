@@ -993,7 +993,7 @@ class OfficialH3Pipeline:
         self._blocks = blocks
         self._pipes = pipes
         self._plans: dict[Task, TimestepPlan] = {
-            task: dit_specs[_TRUNK[task]][2] if spec is None else spec.plan
+            task: dit_specs[_TRUNK[task]][2] if spec is None else spec
             for task in _TASKS
             for spec in (overlay_specs[_TRUNK[task]] if _BANK[task] else None,)
         }
@@ -1481,41 +1481,11 @@ def _build_dit(config: Mapping[str, Any], structure: str, plan: TimestepPlan) ->
     return _apply_transformer_dtype(transformer)
 
 
-@dataclass(frozen=True, slots=True)
-class OverlaySpec:
-    """One turbo overlay section, closed: the trunk it patches, the turbo plan its tables
-    are keyed to, and the PDD constants its factors and heads were built with."""
-
-    task: Trunk
-    plan: TimestepPlan
-    lora_rank: int
-    lora_alpha: float
-    pdd_num_steps: int
-    pdd_block_size: int
-
-
-_OVERLAY_FIELDS = {
-    "task",
-    "modulation",
-    "distillation",
-    "timestep_plan_digest",
-    "lora_rank",
-    "lora_alpha",
-    "pdd_num_steps",
-    "pdd_block_size",
-}
-
-
-def _overlay_spec(mapping: Mapping[str, object], trunk: Trunk) -> OverlaySpec:
+def _overlay_spec(mapping: Mapping[str, object], trunk: Trunk) -> TimestepPlan:
+    """Only the released rank-64 PDD-8 adapter is supported."""
     component = _OVERLAY_COMPONENT[trunk]
     section = _section(mapping, component)
     extension = section.pop("cozy_h3", None)
-    if section or not isinstance(extension, Mapping) or set(extension) != _OVERLAY_FIELDS:
-        raise ConformanceError(
-            f"artifact config {component!r} is not one closed cozy_h3 turbo overlay",
-            code="artifact_config",
-            fields=[component, "cozy_h3"],
-        )
     task: Task = "fl2va_turbo" if trunk == "fl2va" else "ref2va_turbo"
     plan = canonical_timestep_plan(task)
     expected: dict[str, object] = {
@@ -1523,43 +1493,24 @@ def _overlay_spec(mapping: Mapping[str, object], trunk: Trunk) -> OverlaySpec:
         "modulation": "adaln-pruned",
         "distillation": _DISTILLATION,
         "timestep_plan_digest": f"sha256:{plan.digest}",
+        "lora_rank": 64,
+        "lora_alpha": 64.0,
+        "pdd_num_steps": 32,
+        "pdd_block_size": 4,
     }
-    for name, want in expected.items():
-        if extension[name] != want:
-            raise ConformanceError(
-                f"artifact config {component!r} {name!r} is {extension[name]!r}, expected {want!r}",
-                code="artifact_config",
-                fields=[component, "cozy_h3", name],
-            )
-    counts = {name: extension[name] for name in ("lora_rank", "pdd_num_steps", "pdd_block_size")}
-    alpha = extension["lora_alpha"]
-    if (
-        any(not isinstance(value, int) or value <= 0 for value in counts.values())
-        or not isinstance(alpha, int | float)
-        or not math.isfinite(alpha)
-        or alpha <= 0
-        or counts["pdd_num_steps"] != counts["pdd_block_size"] * plan.steps[0]
-    ):
+    if section or extension != expected:
         raise ConformanceError(
-            f"artifact config {component!r} PDD constants do not describe the turbo plan's "
-            f"{plan.steps[0]} evaluations",
+            f"artifact config {component!r} is not the released rank-64 PDD-8 overlay",
             code="artifact_config",
             fields=[component, "cozy_h3"],
         )
-    return OverlaySpec(
-        trunk,
-        plan,
-        int(counts["lora_rank"]),
-        float(alpha),
-        int(counts["pdd_num_steps"]),
-        int(counts["pdd_block_size"]),
-    )
+    return plan
 
 
 def _overlay_specs(
     mapping: Mapping[str, object],
     dit_specs: Mapping[Trunk, tuple[dict[str, Any], str, TimestepPlan]],
-) -> dict[Trunk, OverlaySpec | None]:
+) -> dict[Trunk, TimestepPlan | None]:
     if not set(mapping) & _OVERLAY_CONFIG_SECTIONS:
         return dict.fromkeys(_TRUNKS)
     if {spec[1] for spec in dit_specs.values()} != {"adaln-pruned"}:
@@ -1571,15 +1522,15 @@ def _overlay_specs(
     return {trunk: _overlay_spec(mapping, trunk) for trunk in _TRUNKS}
 
 
-def _build_overlay(dit: Any, config: Mapping[str, Any], spec: OverlaySpec | None) -> Any:
-    if spec is None:
+def _build_overlay(dit: Any, config: Mapping[str, Any], plan: TimestepPlan | None) -> Any:
+    if plan is None:
         return AbsentOverlay()
-    (schedule,) = spec.plan.schedules
-    timesteps, block_keys = spec.plan.table_layout()
+    (schedule,) = plan.schedules
+    timesteps, block_keys = plan.table_layout()
     overlay = TurboOverlay.from_official_config(
         config,
-        rank=spec.lora_rank,
-        alpha=spec.lora_alpha,
+        rank=64,
+        alpha=64.0,
         schedule=TurboSchedule(schedule.video_timesteps, schedule.audio_timesteps),
         table_timesteps=timesteps,
         table_block_keys=block_keys,
