@@ -44,7 +44,7 @@ def rank(rank: int, degree: int, rendezvous: str) -> None:
     with torch.no_grad():
         expected = dit(**inputs)
     torch.distributed.init_process_group(
-        "gloo", init_method=rendezvous, rank=rank, world_size=degree
+        "cpu:gloo", init_method=rendezvous, rank=rank, world_size=degree
     )
     try:
         cp.install_context_parallel(
