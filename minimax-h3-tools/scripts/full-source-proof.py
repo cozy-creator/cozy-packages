@@ -98,7 +98,7 @@ def main() -> None:
         for component in job.TARGET_COMPONENT.values()
         for tensor in quantization.tensors
     )
-    for lane_name in ("bf16-adaln-pruned", "fp8-adaln-pruned", "mxfp8-adaln-pruned"):
+    for lane_name in ("bf16-pruned", "fp8-pruned", "mxfp8-pruned"):
         encoding = lanes.LANES[lane_name].components.get("fl2va_dit")
         old = pruned(lane_name, original)
         raw = pruned(lane_name, selected)

@@ -974,9 +974,9 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
 
 
 _DEFAULT_MODEL_LADDER = [
-    {"gpu": "H100", "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-adaln-pruned"},
-    {"gpu": "B200", "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-adaln-pruned"},
-    {"gpu": "5090", "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-adaln-pruned"},
+    {"gpu": "H100", "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
+    {"gpu": "B200", "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
+    {"gpu": "5090", "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
 ]
 
 

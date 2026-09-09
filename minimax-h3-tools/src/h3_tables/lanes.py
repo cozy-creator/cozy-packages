@@ -72,9 +72,9 @@ DIT_COMPONENTS = frozenset(TARGET_COMPONENT.values())
 #: served on the card we serve is not a lane, so no new one may use it.
 SERVABLE_ENCODINGS = frozenset({"fp8-rowwise/1"})
 
-#: The exact, named exception: `mxfp8-adaln-pruned` predates the rule above and is still
+#: The exact, named exception: `mxfp8-pruned` predates the rule above and is still
 #: published. It is grandfathered BY NAME, so adding any other mxfp8 lane refuses.
-UNSERVABLE_LANE = "mxfp8-adaln-pruned"
+UNSERVABLE_LANE = "mxfp8-pruned"
 
 #: Components no lane may treat, and why. This is a refusal BY NAME, not by shape, because
 #: the shape rule does not catch it. Of the audio VAE's 1,087 rows, 637 are rank-3 — 344 of
@@ -277,9 +277,9 @@ def lane_treatments(lane: Lane) -> Mapping[str, Treatment]:
 #: int8 (proto-001 candidate H failed on flicker) and never mxfp8.
 LANES: Mapping[str, Lane] = {
     "bf16-full": Lane("full"),
-    "bf16-adaln-pruned": Lane("adaln-pruned"),
-    "fp8-adaln-pruned": Lane("adaln-pruned", _both_dits(_DIT_FP8)),
-    "mxfp8-adaln-pruned": Lane("adaln-pruned", _both_dits(_DIT_MXFP8)),
+    "bf16-pruned": Lane("adaln-pruned"),
+    "fp8-pruned": Lane("adaln-pruned", _both_dits(_DIT_FP8)),
+    "mxfp8-pruned": Lane("adaln-pruned", _both_dits(_DIT_MXFP8)),
 }
 
 

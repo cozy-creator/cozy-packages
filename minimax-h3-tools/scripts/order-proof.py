@@ -184,9 +184,9 @@ def main() -> None:
     # Every lane's targets now come from its catalogue row, so this proof drives the exact
     # declaration path the job does rather than a second spelling of it.
     dits = _dit_structure(sections)
-    pruned = _targets_of("bf16-adaln-pruned", sections, tables, full_targets, dits, quantization)
-    fp8 = _targets_of("fp8-adaln-pruned", sections, tables, full_targets, dits, quantization)
-    mxfp8 = _targets_of("mxfp8-adaln-pruned", sections, tables, full_targets, dits, quantization)
+    pruned = _targets_of("bf16-pruned", sections, tables, full_targets, dits, quantization)
+    fp8 = _targets_of("fp8-pruned", sections, tables, full_targets, dits, quantization)
+    mxfp8 = _targets_of("mxfp8-pruned", sections, tables, full_targets, dits, quantization)
 
     measured_bytes: dict[str, int] = {}
     for task, source, component in (
