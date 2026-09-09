@@ -23,20 +23,29 @@ from cozy_runtime.derive.quantization import (
 from h3_tables import lanes as lane_recipes
 from h3_tables.job import (
     FP8_SPEC,
+    LAUNCH_SET,
     MAX_TABLE_BYTES,
     MXFP8_SPEC,
     PLAIN_SPEC,
+    TABLE_SETS,
     _full_order,
     _full_targets,
     _lane_targets,
+    _plans,
     _retable_targets,
     _table_additions,
+    _topologies,
 )
-from h3_tables.kernel import H3Topology, removed_keys, source_shapes, table_shapes
+from h3_tables.kernel import H3Topology, adapter_shapes, removed_keys, source_shapes, table_shapes
 from h3_tables.model_config import parse_production_config
 from h3_tables.order import current_order
 from h3_tables.plans import parse_declared_plan, parse_plan
-from h3_tables.source import official_full_specs, source_only_keys, text_source_only_keys
+from h3_tables.source import (
+    ADAPTER_RANK,
+    official_full_specs,
+    source_only_keys,
+    text_source_only_keys,
+)
 
 PROJECT = Path(__file__).resolve().parents[1]
 ASSETS = PROJECT / "src/h3_tables/assets"
@@ -64,7 +73,8 @@ def structure(rows: list[tuple[str, str, str, tuple[int, ...]]]) -> WeightsSourc
 
 def prove_retable(sections: dict[str, dict[str, object]]) -> None:
     """The retable declarations edit only table keys and refuse the wrong sources."""
-    tables = _table_additions(sections)
+    topologies = _topologies(sections)
+    tables = _table_additions(topologies, _plans(LAUNCH_SET))
     shared = [(c, f"{c}.w", "f32", (1,)) for c in ("text_encoder", "video_vae", "audio_vae")]
     pruned_rows, full_rows = list(shared), list(shared)
     for task, section in (("fl2va", "transformer"), ("ref2va", "transformer_ref")):
@@ -77,11 +87,11 @@ def prove_retable(sections: dict[str, dict[str, object]]) -> None:
             (component, key, {"torch.float32": "f32", "torch.bfloat16": "bf16"}[str(dtype)], shape)
             for key, (dtype, shape) in source_shapes(topology).items()
         ]
-    bank, retabled = _retable_targets(
-        structure(pruned_rows), structure(full_rows), sections, tables
+    bank, retabled, trailing = _retable_targets(
+        structure(pruned_rows), structure(full_rows), topologies, tables
     )
-    if set(bank) != {"fl2va_dit", "ref2va_dit"}:
-        raise RuntimeError("the table bank must hold exactly both DiTs")
+    if set(bank) != {"fl2va_dit", "ref2va_dit"} or trailing:
+        raise RuntimeError("an unadapted table bank must hold exactly both DiTs")
     for task in ("fl2va", "ref2va"):
         component = f"{task}_dit"
         target = retabled[component]
@@ -106,10 +116,58 @@ def prove_retable(sections: dict[str, dict[str, object]]) -> None:
         ("full lacks modulation", pruned_rows, full_rows[:-1]),
     ):
         try:
-            _retable_targets(structure(bad_pruned), structure(bad_full), sections, tables)
+            _retable_targets(structure(bad_pruned), structure(bad_full), topologies, tables)
         except ValueError:
             continue
         raise RuntimeError(f"retable accepted a source with {name}")
+
+    slice_rows = [
+        ("model", key, "bf16", shape)
+        for key, (_, shape) in adapter_shapes(topologies["fl2va"], ADAPTER_RANK).items()
+    ]
+    decoys = [
+        ("model", "transformer_blocks.0.attn.to_q.lora_down", "bf16", (ADAPTER_RANK, 5376)),
+        ("model", "proj_out.weight", "bf16", (32, 64, 5376)),
+    ]
+    adapters = {
+        task: structure([*decoys[:1], *slice_rows, *decoys[1:]]) for task in ("fl2va", "ref2va")
+    }
+    bank, retabled, trailing = _retable_targets(
+        structure(pruned_rows), structure(full_rows), topologies, tables, adapters
+    )
+    if set(bank) != {"fl2va_dit", "ref2va_dit", "fl2va_adapter", "ref2va_adapter"}:
+        raise RuntimeError("an adapted table bank must carry both adapter slices")
+    for task in ("fl2va", "ref2va"):
+        target = bank[f"{task}_adapter"]
+        kept = [(f"{task}_adapter", key) for _, key, *_ in slice_rows]
+        if (
+            target.source != f"{task}_adapter"
+            or target.source_component != "model"
+            or set(target.drop) != {key for _, key, *_ in decoys}
+            or target.add
+            or [row for row in trailing if row[0] == f"{task}_adapter"] != kept
+        ):
+            raise RuntimeError(f"{task} adapter target is not the exact adaln slice by reference")
+    if len(trailing) != 2 * len(slice_rows) or len(slice_rows) != 100:
+        raise RuntimeError("the adapted bank order must trail exactly the 100 slice rows per task")
+    first = slice_rows[0][1]
+    for name, bad in (
+        ("a missing slice row", [*decoys, *slice_rows[1:]]),
+        ("the wrong rank", [*decoys, *slice_rows[1:], ("model", first, "bf16", (63, 2688))]),
+        ("an f32 slice", [*decoys, *slice_rows[1:], ("model", first, "f32", (64, 2688))]),
+        ("two components", [*decoys, *slice_rows, ("other", "x", "bf16", (1,))]),
+    ):
+        try:
+            _retable_targets(
+                structure(pruned_rows),
+                structure(full_rows),
+                topologies,
+                tables,
+                {"fl2va": structure(bad), "ref2va": adapters["ref2va"]},
+            )
+        except ValueError:
+            continue
+        raise RuntimeError(f"retable accepted an adapter with {name}")
 
 
 def _dit_structure(sections: dict[str, Any]) -> tuple[WeightsSourceTensor, ...]:
@@ -171,7 +229,7 @@ def main() -> None:
         ):
             raise RuntimeError(f"{component} lost its direct full source mapping")
 
-    tables = _table_additions(sections)
+    tables = _table_additions(_topologies(sections), _plans(LAUNCH_SET))
     prove_retable(sections)
     quantization = prepare_quantization(h3_quantization_plan())
     if (
@@ -247,6 +305,16 @@ def main() -> None:
         refuse(canonical_json.encode(changed), task)
         if plan.steps != (30, 40, 50):
             raise RuntimeError(f"{task} plan serves {plan.steps}, expected 30/40/50 steps")
+        turbo_raw = (ASSETS / f"timestep-plan.{task}.turbo.json").read_bytes()
+        turbo = parse_declared_plan(turbo_raw, digests=TABLE_SETS[1].digests)
+        turbo_shapes = table_shapes(topology, turbo)
+        turbo_bytes = sum(2 * shape[0] * shape[1] * shape[2] for shape in turbo_shapes.values())
+        if turbo.steps != (8,) or len(turbo_shapes) != 51 or turbo_bytes > MAX_TABLE_BYTES:
+            raise RuntimeError(
+                f"{task} turbo plan is {turbo.steps}/{len(turbo_shapes)}/{turbo_bytes} bytes"
+            )
+        measured_bytes[f"{task}-turbo"] = turbo_bytes
+        refuse(turbo_raw, task)
 
     package_interface = json.loads((PROJECT / "metadata" / "package-interface.json").read_bytes())
     if "model_productions" in package_interface:
@@ -285,17 +353,18 @@ def main() -> None:
     if {row["path"] for row in retable["models"]} != {
         "retable.models.full",
         "retable.models.pruned",
+        "retable.models.fl2va_adapter",
+        "retable.models.ref2va_adapter",
     } or {output["output_id"] for output in retable["weights_outputs"]} != {
-        "adaln-pruned",
-        "tables",
+        slot for table_set in TABLE_SETS for slot in (table_set.checkpoint, table_set.bank)
     }:
-        raise RuntimeError("retable changed its two typed sources or two outputs")
+        raise RuntimeError("retable changed its four typed sources or four outputs")
     print(
         f"H3 LANE CONTRACT PASS jobs={len(jobs)} graphs=0 outputs={len(outputs)} full_rows=3968 "
         "task_rows=583 shared_text_drop=156 quantized_per_task=313 tables_per_task=51 "
         f"table_bytes_per_task={measured_bytes} table_budget_per_task={MAX_TABLE_BYTES} "
         "source_drop=rope dynamic_drops_per_task=106 "
-        "direct_siblings=1 changed_plan=refused steps=30/40/50"
+        "direct_siblings=1 changed_plan=refused steps=30/40/50 turbo_steps=8"
     )
 
 

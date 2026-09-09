@@ -118,7 +118,15 @@ class Recorder:
         return transaction.commit()
 
     def tables(
-        self, task: str, _ctx: Any, _source: Any, active: dict[str, Any], _tel: Any, _range: Any
+        self,
+        task: str,
+        _plan: Any,
+        _topology: Any,
+        _ctx: Any,
+        _source: Any,
+        active: dict[str, Any],
+        _tel: Any,
+        _range: Any,
     ) -> tuple[int, int]:
         event = "tables:" + task
         self.events.append(event)
