@@ -2,7 +2,10 @@
 name = "sdxl-assessment-client"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
-dependencies = ["cozy-runtime==0.14.1", "cozy-eval[jobs,weights,judge]==0.7.0"]
+dependencies = [
+    "cozy-runtime==0.14.1", "tensorfs==0.3.34", "cozy-eval[jobs,weights,judge]==0.7.0",
+    "numpy==2.5.1", "torch==2.13.0", "torchvision==0.28.0",
+]
 
 [project.entry-points."cozy.application"]
 default = "sdxl_assessment_client.control_jobs:app"
@@ -13,3 +16,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sdxl_assessment_client"]
+
+[tool.uv]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]

@@ -57,7 +57,10 @@ The script prepares the pinned Qwen 2B judge on its execution machine using ordi
 memoized source, conversion and normalization calls. It passes the genuine retained
 ModelArtifact to quality measurements. Confirm disk capacity for its first source
 download (approximately 4.25 GB) and converted model, and confirm the image's numerical
-closure (the example pins NumPy 2.5.1). Keep `PUBLISH=False` for calibration. Run via
+closure (NumPy 2.5.1, Torch 2.13.0 and torchvision 0.28.0 for the selected CUDA 13.0 image).
+Both scripts and the editable helper carry locks over public Runtime 0.14.1, TensorFS
+0.3.34 and Eval 0.7.0; only adjacent authored source remains editable. Keep
+`PUBLISH=False` for calibration. Run via
 `cozy run examples/client-scripts/sdxl_fp8.py --rental-only --await`; do not invoke
 model functions with an external Python harness. The script returns completed
 native report/workload files even for a provisional/failed assessment.
