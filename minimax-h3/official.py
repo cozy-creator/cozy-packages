@@ -896,7 +896,9 @@ class OfficialH3Pipeline:
         }
         _validate_dual_dit_topology(dits)
         text_encoder = build_text_conditioner(_section(mapping, "text_encoder"))
-        video_vae = TileBatchedVideoVAE.from_config(_section(mapping, "video_vae")).eval()
+        video_vae = _apply_video_vae_dtype(
+            TileBatchedVideoVAE.from_config(_section(mapping, "video_vae"))
+        )
         audio_vae = AutoencoderKLMiniMaxH3Audio.from_config(_section(mapping, "audio_vae")).eval()
         for task in _TASKS:
             _validate_model_contract(pipes[task], dits[task], video_vae, audio_vae)
@@ -1401,6 +1403,27 @@ def _apply_transformer_dtype(transformer: Any) -> Any:
         dtype = torch.float32 if name in transformer._keep_in_fp32_modules else torch.bfloat16
         component.to(dtype=dtype)
     return transformer.eval()
+
+
+def _apply_video_vae_dtype(vae: Any) -> Any:
+    """Store the decode-side GEMM operands at the dtype the release decode already uses.
+
+    `MiniMaxH3VideoDecodeStep` decodes under `torch.autocast(float16)`, so every decoder
+    conv/linear weight is rounded f32->f16 per op whatever it is stored as: storing that
+    rounding is bit-exact for those ops and halves the component. Nothing else moves.
+    The encode path (`encode_vae_condition`) has no autocast and stays float32, norms,
+    biases and register tokens are what autocast itself keeps in float32, and
+    `decoder.rope.inv_freq` is a config-derived buffer float16 could not restore.
+    """
+    weights = [
+        parameter
+        for name, parameter in vae.decoder.named_parameters()
+        if name.rsplit(".", 1)[-1] == "weight" and parameter.dim() >= 2
+    ]
+    weights.append(vae.post_quant_conv.weight)
+    for parameter in weights:
+        parameter.data = parameter.data.to(dtype=torch.float16)
+    return vae.eval()
 
 
 def _validate_model_contract(pipe: Any, transformer: Any, video_vae: Any, audio_vae: Any) -> None:

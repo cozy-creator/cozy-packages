@@ -109,6 +109,7 @@ from official import (  # noqa: E402
     ScheduleFacts,
     _aligned_soundtrack,
     _apply_transformer_dtype,
+    _apply_video_vae_dtype,
     _artifact_sections,
     _as_float32,
     _dit_specs,
@@ -1119,10 +1120,42 @@ def arm_graph_and_dtypes() -> None:
         Counter({"torch.bfloat16": 626, "torch.float32": 12}),
     )
     check(
-        "video VAE remains fp32",
+        "video VAE constructs uniformly fp32",
         Counter(str(value.dtype) for value in video_vae.state_dict().values()),
         Counter({"torch.float32": 703}),
     )
+    with torch.device("meta"):
+        cast_vae = _apply_video_vae_dtype(AutoencoderKLMiniMaxH3())
+    cast_state = cast_vae.state_dict()
+    cast_counts = Counter(str(value.dtype) for value in cast_state.values())
+    check(
+        "video VAE stores the fp16-autocast decode operands at fp16",
+        cast_counts,
+        Counter({"torch.float32": 484, "torch.float16": 219}),
+    )
+    check(
+        "video VAE encode side stays fp32 - encode_vae_condition has no autocast",
+        sorted(
+            name
+            for name, value in cast_state.items()
+            if value.dtype is torch.float16 and name.startswith(("encoder.", "quant_conv."))
+        ),
+        [],
+    )
+    check(
+        "video VAE rotary buffer stays fp32",
+        str(cast_vae.decoder.rope.inv_freq.dtype),
+        "torch.float32",
+    )
+    check(
+        "video VAE destination bytes",
+        (
+            sum(value.numel() * 4 for value in cast_state.values()),
+            sum(value.numel() * value.element_size() for value in cast_state.values()),
+        ),
+        (10_415_475_936, 5_570_955_360),
+    )
+    red("uniform fp16 video VAE cast", cast_counts, Counter({"torch.float16": 703}))
     check("audio VAE state count", len(audio_vae.state_dict()), 1087)
     check("audio VAE parameter destinations", len(dict(audio_vae.named_parameters())), 832)
     red("uniform bf16 transformer cast", transformer_counts, Counter({"torch.bfloat16": 638}))
