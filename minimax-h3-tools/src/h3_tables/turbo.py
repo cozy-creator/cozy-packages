@@ -1,4 +1,4 @@
-"""Build the two PDD-8 overlays alongside an unchanged AdaLN-pruned H3 body."""
+"""Build a standalone PDD-8 adapter with LoRA factors, modulation tables and heads."""
 
 from __future__ import annotations
 
@@ -27,15 +27,10 @@ from cozy_runtime.author import (
 from .adaln_operations import (
     PLAIN,
     _asset,
-    _body_kind,
-    _plan,
     _sections,
-    _validate_body_config,
     _validate_generators,
-    _validate_table_rows,
 )
 from .kernel import H3Topology, LowRankAdapter, adapter_shapes, precompute_tables, table_shapes
-from .order import current_order
 from .plans import Task, TimestepPlan, parse_plan
 from .source import H3FullTransformer
 
@@ -193,14 +188,12 @@ def _produce(
     weights: WeightsSink,
     *,
     full: H3FullTransformer,
-    source: H3FullTransformer,
     adapters: dict[Task, H3FullTransformer],
     configs: dict[str, Any],
     topologies: dict[Task, H3Topology],
-    order: tuple[tuple[str, str], ...],
 ) -> ModelArtifact:
-    """One native transaction; base roles and LoRA factors inherit their exact objects."""
-    source_models: dict[str, H3FullTransformer] = {"source": source, "full": full}
+    """One adapter transaction; LoRA factors inherit their exact source objects."""
+    source_models: dict[str, H3FullTransformer] = {"full": full}
     source_models.update({str(task): model for task, model in adapters.items()})
     structures = {name: weights.structure(model) for name, model in source_models.items()}
     plans = {task: turbo_plan(task) for task in TASKS}
@@ -210,8 +203,8 @@ def _produce(
         )
         for task in TASKS
     }
-    targets = {component: WeightsTarget("source", component) for component in configs}
-    output_order = list(order)
+    targets: dict[str, WeightsTarget] = {}
+    output_order: list[tuple[str, str]] = []
     for task in TASKS:
         component = f"{task}_turbo"
         specs = overlay_shapes(configs[f"{task}_dit"], plans[task])
@@ -242,9 +235,10 @@ def _produce(
             },
         )
         output_order.extend((component, key) for key in specs)
-    config = dict(configs)
+    config = {}
     for task in TASKS:
         config[f"{task}_turbo"] = {
+            **configs[f"{task}_dit"],
             "cozy_h3": {
                 "task": task,
                 "modulation": "adaln-pruned",
@@ -254,7 +248,7 @@ def _produce(
                 "lora_alpha": float(RANK),
                 "pdd_num_steps": NUM_STEPS,
                 "pdd_block_size": BLOCK_SIZE,
-            }
+            },
         }
     raw = canonical_json.encode(config)
     with weights.open(
@@ -311,23 +305,18 @@ def _produce(
 async def prepare_turbo(
     ctx: Context,
     *,
-    source: H3FullTransformer,
     full: H3FullTransformer,
     fl2va_adapter: H3FullTransformer,
     ref2va_adapter: H3FullTransformer,
     weights: WeightsSink,
     tel: Telemetry,
 ) -> ModelArtifact:
-    """Add PDD-8 components to an assembled pruned BF16, FP8 or MXFP8 model."""
-    body = weights.structure(source)
-    if not _body_kind(body):
-        raise UnsupportedInput("PDD overlays require an AdaLN-pruned body")
-    base_plans = _validate_body_config(weights, source, True)
-    for task in TASKS:
-        if base_plans[task] != _plan(task).table_keys:
-            raise UnsupportedInput("PDD overlays require the current base timestep tables")
-        _validate_table_rows(body, task, bank=False)
+    """Prepare a PDD-8 adapter independently of any quantized base checkpoint."""
     sections = _sections()
+    configs = {
+        f"{task}_dit": sections["transformer" if task == "fl2va" else "transformer_ref"]
+        for task in TASKS
+    }
     topologies = {
         task: H3Topology.from_config(
             sections["transformer" if task == "fl2va" else "transformer_ref"]
@@ -340,10 +329,8 @@ async def prepare_turbo(
         ctx,
         tel,
         weights,
-        source=source,
         full=full,
         adapters={"fl2va": fl2va_adapter, "ref2va": ref2va_adapter},
-        configs=canonical_json.decode(weights.config(source, "model")),
+        configs=configs,
         topologies=topologies,
-        order=current_order(_asset("whole-order.json")).rows,
     )

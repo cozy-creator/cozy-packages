@@ -63,14 +63,12 @@ CONFIG = {
 }
 TOPOLOGY = H3Topology(8, 2, 8, 12, 4)
 CONFIGS = {f"{task}_dit": CONFIG for task in TASKS}
-ORDER = tuple((f"{task}_dit", "base.weight") for task in TASKS)
 
 
 @invocable(memoize=True)
 async def mini_turbo(
     ctx: Context,
     *,
-    source: H3FullTransformer,
     full: H3FullTransformer,
     fl2va_adapter: H3FullTransformer,
     ref2va_adapter: H3FullTransformer,
@@ -81,12 +79,10 @@ async def mini_turbo(
         ctx,
         tel,
         weights,
-        source=source,
         full=full,
         adapters={"fl2va": fl2va_adapter, "ref2va": ref2va_adapter},
         configs=CONFIGS,
         topologies=dict.fromkeys(TASKS, TOPOLOGY),
-        order=ORDER,
     )
 
 
@@ -229,7 +225,6 @@ def main() -> None:
         }
         for task in TASKS
     }
-    body_values = {f"{task}_dit": {"base.weight": torch.randn(8, 8).bfloat16()} for task in TASKS}
     adapters = {}
     for task in TASKS:
         shapes = {
@@ -250,7 +245,6 @@ def main() -> None:
         root = Path(area)
         store = tensorfs.Store.init(root / "store")
         sources = {
-            "source": mint(store, "source", body_values),
             "full": mint(store, "full", full_values),
             **{f"{task}_adapter": mint(store, task, adapters[task]) for task in TASKS},
         }
@@ -300,15 +294,11 @@ def main() -> None:
         actual = header(store, result.result)
         if len(sys.argv) > 1:
             reference_check(sys.argv[1], store, actual, full_values, adapters)
-        base = header(store, sources["source"])
         assert set(actual["components"]) == {
-            "fl2va_dit",
-            "ref2va_dit",
             "fl2va_turbo",
             "ref2va_turbo",
         }
         for task in TASKS:
-            assert actual["components"][f"{task}_dit"] == base["components"][f"{task}_dit"]
             original = header(store, sources[f"{task}_adapter"])["components"]["adapter"]
             overlay = actual["components"][f"{task}_turbo"]
             assert set(overlay) == set(overlay_shapes(CONFIG, turbo_plan(task)))
@@ -319,7 +309,7 @@ def main() -> None:
         print(
             json.dumps(
                 {
-                    "base_components_unchanged": True,
+                    "adapter_only_checkpoint": True,
                     "factor_objects_inherited": True,
                     "resume_equals_clean": True,
                     "replay_identical": True,
