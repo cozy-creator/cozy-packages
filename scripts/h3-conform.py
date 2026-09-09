@@ -232,7 +232,7 @@ ASSET_DIGESTS = {
 TOKEN_CORPUS_DIGEST = "47759c8d2e1a24944edb8f712c7ffe66b650aa3481352487970bcdb3cd55fa58"
 
 
-def dit_config(task: str, modulation: str = "full") -> dict[str, object]:
+def dit_config(task: str, modulation: str = "full") -> dict[str, Any]:
     plan = canonical_timestep_plan(cast(Any, task))
     extension: dict[str, Any] = {"task": task, "modulation": modulation}
     if modulation == "adaln-pruned":
@@ -308,10 +308,12 @@ def arm_checkpoint_table_layout() -> None:
     config["fl2va_dit"]["cozy_h3"]["table_keys"] = extra
     check(
         "checkpoint can add rows without a package change",
-        len(official._dit_spec(config, "fl2va")[2].block_keys),
+        len(cast(TableLayout, official._dit_spec(config, "fl2va")[2]).block_keys),
         len(layout.block_keys) + 1,
     )
-    trunks = {task: torch.nn.Module() for task in ("fl2va", "ref2va")}
+    trunks: dict[Literal["fl2va", "ref2va"], Any] = {
+        task: torch.nn.Module() for task in ("fl2va", "ref2va")
+    }
     for index, model in enumerate(trunks.values()):
         model.norm_out = _AdaLNPrunedOutputTable(
             torch.nn.Identity(), hidden_size=2, timestep_count=len(layout.timesteps) + index
@@ -327,7 +329,7 @@ def arm_checkpoint_table_layout() -> None:
         "artifact_config",
     )
 
-    corruptions = (
+    corruptions: tuple[tuple[str, Callable[[dict[str, Any]], None]], ...] = (
         ("missing layout", lambda value: value.clear()),
         ("noncontiguous index", lambda value: value["block_modulation"][0].update(index=1)),
         ("boolean index", lambda value: value["block_modulation"][0].update(index=False)),
