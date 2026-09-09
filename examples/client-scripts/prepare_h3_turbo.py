@@ -24,7 +24,10 @@ The three input holds inherit native objects without rewriting tensor data.
 The reusable producer owns PDD arithmetic; this script owns composition and publication.
 """
 
-from cozy_runtime.author import Model, WeightsConfig, WeightsSink, WeightsTarget
+from collections.abc import Awaitable, Callable
+from typing import cast
+
+from cozy_runtime.author import Model, ModelArtifact, WeightsConfig, WeightsSink, WeightsTarget
 from cozy_runtime.author.publication import publish_release, upload_checkpoint
 from h3_tables.turbo import prepare_turbo
 
@@ -35,7 +38,7 @@ async def main(
     fl2va_adapter: Model[object],
     ref2va_adapter: Model[object],
     weights: WeightsSink,
-):
+) -> dict[str, str]:
     inputs = {}
     for slot, output, model in (
         ("full", "full_input", full),
@@ -53,7 +56,9 @@ async def main(
             order=tuple((row.component, row.key) for row in structure.tensors),
         ).artifact
 
-    turbo = await prepare_turbo(**inputs)
+    # Managed calls accept artifact references and inject the implementation services.
+    produce = cast(Callable[..., Awaitable[ModelArtifact]], prepare_turbo)
+    turbo = await produce(**inputs)
     checkpoint = await upload_checkpoint(turbo, destination="paul/minimax-h3-turbo-lora")
     release = await publish_release(
         destination="paul/minimax-h3-turbo-lora",
