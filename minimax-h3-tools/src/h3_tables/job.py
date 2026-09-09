@@ -446,14 +446,20 @@ def _requested(payload: LaneRequest) -> tuple[str, ...]:
     return tuple(name for name in LANES if name in selected)
 
 
-def _computes(lane: Lane) -> bool:
-    """Whether the lane needs a table pass or a treatment pass before it can commit.
+def _settles_first(lane: Lane, selections: Mapping[str, Selection]) -> bool:
+    """Whether this lane can finish before any table or encoding pass runs.
 
-    Never `lane.components` alone: the producer-wide normalisations are treatments the
-    lane did not author, and a FULL lane that authors nothing still has to cast the video
-    VAE before it can commit.
+    The property being kept is retention, not idleness: a lane settles first so that an
+    interrupted table pass cannot strand a checkpoint that was already complete. Before the
+    producer-wide video VAE normalisation a FULL lane did no work at all and this read
+    `not lane.components`; now it has one cast, which is cheap, local to a component no
+    later pass touches, and no reason to hold the lane behind two table passes. So the test
+    is what the lane still NEEDS — a table pass, or an encoding — and not whether it has
+    any work at all.
     """
-    return lane.modulation == "adaln-pruned" or bool(lane_treatments(lane))
+    return lane.modulation != "adaln-pruned" and not any(
+        selection.plan is not None for selection in selections.values()
+    )
 
 
 def _bands(count: int, start: float, stop: float) -> list[tuple[float, float]]:
@@ -612,10 +618,27 @@ def lanes(
             for name, transaction in transactions.items()
             if not transaction.replayed
         }
-        # A lane that computes nothing is a pure declaration; it settles first so its
-        # retention never depends on a later lane's table or encoding pass.
-        for name in [n for n in active if not _computes(LANES[n])]:
+        # A lane needing neither a table pass nor an encoding settles first, so its
+        # retention never depends on a later lane's. Its casts run here rather than in the
+        # loop below, because the point is to be finished BEFORE the expensive passes.
+        for name in [n for n in active if _settles_first(LANES[n], selections[n])]:
             transaction = active.pop(name)
+            with tel.stage(name, overall_range=(0.0, 0.0)):
+                for component, selection in selections[name].items():
+                    stats = _treat(
+                        transaction,
+                        ctx,
+                        tel,
+                        quant_request,
+                        selection=selection,
+                        source=full_targets[component].source,
+                    )
+                    source_bytes += stats.source_bytes_read
+                    fidelity.append(
+                        WeightFidelity(
+                            name, component, selection.treatment.describe(), stats
+                        )
+                    )
             transaction.add_config("model", configs[LANES[name].modulation])
             receipts[name] = transaction.commit()
 
