@@ -14,8 +14,9 @@
 #   "setuptools==81.0.0",
 #   "tensorfs==0.3.38",
 # ]
-# [tool.uv.sources]
+# [tool.uv]
 # default-groups = []
+# [tool.uv.sources]
 # minimax-h3-tools = {path = "../../minimax-h3-tools", editable = true}
 # torch = {index = "pytorch-cu130"}
 # [[tool.uv.index]]
