@@ -7,6 +7,7 @@ from typing import Any
 
 import msgspec
 import torch
+from h3_table_layout import TableLayout
 from cozy_runtime.author import (
     Context,
     ModelArtifact,
@@ -116,7 +117,7 @@ def _bindings(weights: WeightsSink, source: H3FullTransformer) -> dict[str, str]
 
 def _validate_body_config(
     weights: WeightsSink, source: H3FullTransformer, pruned: bool
-) -> dict[str, str]:
+) -> dict[str, dict[str, Any]]:
     if set(weights.structure(source).configs) != {"model"}:
         raise UnsupportedInput(
             "H3 body requires its single construction config", code="adaln_config"
@@ -134,7 +135,7 @@ def _validate_body_config(
         raise UnsupportedInput(
             "H3 pruned config has an unexpected component set", code="adaln_config"
         )
-    plans: dict[str, str] = {}
+    layouts: dict[str, dict[str, Any]] = {}
     for task, component in TARGET_COMPONENT.items():
         row = value.get(component)
         if not isinstance(row, dict):
@@ -144,22 +145,23 @@ def _validate_body_config(
             not isinstance(stamp, dict)
             or set(stamp)
             not in (
-                {"task", "modulation", "timestep_plan_digest"},
-                {"task", "modulation", "timestep_plan_digest", _BINDING},
+                {"task", "modulation", "table_keys"},
+                {"task", "modulation", "table_keys", _BINDING},
             )
             or stamp["task"] != task
             or stamp["modulation"] != "adaln-pruned"
-            or not isinstance(stamp["timestep_plan_digest"], str)
+            or not isinstance(stamp["table_keys"], dict)
         ):
             raise UnsupportedInput(
-                "H3 pruned config has no exact task/schedule stamp", code="adaln_config"
+                "H3 pruned config has no task/table metadata", code="adaln_config"
             )
-        plans[task] = stamp["timestep_plan_digest"]
+        layouts[task] = stamp["table_keys"]
+        TableLayout.parse(layouts[task])
         # A previous supported bank may be replaced while keeping constructor facts.
         row["cozy_h3"] = expected[component]["cozy_h3"]
     if value != expected:
         raise UnsupportedInput("H3 pruned body changed its constructor facts", code="adaln_config")
-    return plans
+    return layouts
 
 
 def _validate_generators(
@@ -217,10 +219,10 @@ async def select_adaln_weights(
 ) -> Selection:
     ctx.raise_if_cancelled()
     pruned = _body_kind(weights.structure(source))
-    plans = _validate_body_config(weights, source, pruned)
+    layouts = _validate_body_config(weights, source, pruned)
     if pruned:
         _bindings(weights, source)
-        if plans[task] != _plan(task).digest:
+        if layouts[task] != _plan(task).table_keys:
             raise UnsupportedInput(
                 "retabling a previous schedule requires the full generating_model",
                 code="adaln_generating_weights",
@@ -247,7 +249,7 @@ def _bank_config(task: Task, projection: str) -> bytes:
             "schema": "h3-adaln-bank/1",
             "task": task,
             "projection": projection,
-            "plan": _plan(task).digest,
+            "table_keys": _plan(task).table_keys,
             "dtype": "bf16",
             "numerics": _NUMERICS,
         }
@@ -381,7 +383,7 @@ def _bank_projection(
     if not isinstance(value, dict) or not isinstance(value.get("projection"), str):
         raise UnsupportedInput("AdaLN bank has no generating-weight binding", code="adaln_binding")
     projection = str(value["projection"])
-    if weights.config(bank, _METADATA) != _bank_config(task, projection):
+    if value != canonical_json.decode(_bank_config(task, projection)):
         raise UnsupportedInput(
             "AdaLN bank task, schedule or numerical contract differs", code="adaln_binding"
         )
