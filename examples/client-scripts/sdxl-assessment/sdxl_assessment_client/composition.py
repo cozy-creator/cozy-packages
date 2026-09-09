@@ -7,8 +7,8 @@ from typing import Any
 
 import msgspec
 from cozy_eval import contract
-from cozy_eval.activations import ActivationMeasurements, read_activation_pair
-from cozy_eval.assessment import Environment, Rendered, assess_lane, seal
+from cozy_eval.activations import ActivationMeasurements, ActivationPairFacts, read_activation_pair
+from cozy_eval.assessment import AssessmentReport, Environment, Rendered, assess_lane, seal
 from cozy_eval.conditions import Workload
 from cozy_eval.errors import ConfigError, DataError
 from cozy_eval.jobs import (
@@ -19,13 +19,24 @@ from cozy_eval.jobs import (
     measure_weights,
 )
 from cozy_eval.jobs.measurements import ImageSource
-from cozy_eval.measurement_facts import VideoMeasurements, read_media, read_pair
+from cozy_eval.measurement_facts import (
+    MediaFacts,
+    PairFacts,
+    VideoMeasurements,
+    read_media,
+    read_pair,
+)
 from cozy_eval.outputs import Arm, OutputScores, score_outputs
 from cozy_eval.protocol import Verdict
 from cozy_eval.quality_facts import read_quality
 from cozy_eval.weights import read_weights
 from cozy_runtime.author import ActivationCapture, FileAsset, ModelArtifact, Outputs, Tree
-from cozy_runtime.author.publication import attach_assessment, publish_release, upload_checkpoint
+from cozy_runtime.author.publication import (
+    ReleaseReceipt,
+    attach_assessment,
+    publish_release,
+    upload_checkpoint,
+)
 
 from .configuration import Policy, require_publishable, validate_policy
 
@@ -109,7 +120,7 @@ class Assessment:
     async def activations(
         self, reference: Sequence[str], repeat: Sequence[str], candidate: Sequence[str]
     ) -> ActivationMeasurements:
-        async def pairs(paths: Sequence[str]):
+        async def pairs(paths: Sequence[str]) -> tuple[ActivationPairFacts, ...]:
             rows = []
             for left, right in zip(reference, paths, strict=True):
                 measured = await measure_activation_pair(
@@ -123,14 +134,14 @@ class Assessment:
     async def outputs(
         self, reference: Arm, repeat: Arm, candidate: Arm, **options: Any
     ) -> OutputScores:
-        async def singles(arm: Arm):
+        async def singles(arm: Arm) -> tuple[MediaFacts, ...]:
             rows = []
             for path in arm.media:
                 measured = await measure_media(media=ImageSource(self.images[path]))
                 rows.append(read_media(measured.facts.read_bytes()))
             return tuple(rows)
 
-        async def pairs(arm: Arm):
+        async def pairs(arm: Arm) -> tuple[PairFacts, ...]:
             rows = []
             for left, right in zip(reference.media, arm.media, strict=True):
                 measured = await compare_media(
@@ -170,7 +181,7 @@ class Assessment:
             quality_measurements=tuple(quality),
         )
 
-    async def run(self):
+    async def run(self) -> AssessmentReport:
         # The read-only measurement is a normal memoized Eval leaf. ModelArtifact
         # inputs become granted manifest-only Models; no writer or dummy output opens.
         measured = await measure_weights(reference=self.reference, candidate=self.candidate)
@@ -210,7 +221,7 @@ async def publish(
     release: str,
     lane: str,
     expected_revision: int | None = None,
-):
+) -> ReleaseReceipt:
     require_publishable(report, policy, approved_conditions)
     if report.subject.candidate_checkpoint != candidate.manifest.digest:
         raise ConfigError("publication candidate differs from the assessed checkpoint")

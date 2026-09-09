@@ -80,7 +80,7 @@ def load_policy(
 
 def require_approved_policy(policy: Policy, approved_conditions: str) -> str:
     validate_policy(policy)
-    expected = conditions_digest(policy.conditions)
+    expected: str = conditions_digest(policy.conditions)
     if not approved_conditions or approved_conditions != expected:
         raise ConfigError("publication requires the explicitly ratified conditions digest")
     return expected

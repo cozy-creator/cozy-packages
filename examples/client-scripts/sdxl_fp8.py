@@ -15,12 +15,14 @@ may reuse work. Run through the local Creator CLI after the declared public coho
 and explicitly selected owner-held judge checkpoint are available.
 """
 
+from collections.abc import Awaitable, Callable
 from importlib.resources import as_file, files
+from typing import cast
 
 from cozy_eval.errors import ConfigError
 from cozy_eval.jobs.instrument_config import plan
 from cozy_eval.jobs.normalize_instruments import prepare_instrument
-from cozy_runtime.author import FileAsset, Outputs, ScriptContext
+from cozy_runtime.author import FileAsset, ModelArtifact, Outputs, ScriptContext
 from cozy_runtime.author.sources import (
     convert_cozytensors,
     download_civitai,
@@ -72,8 +74,11 @@ async def main(ctx: ScriptContext, *, out: Outputs) -> list[FileAsset]:
     ctx.log(f"Prepared retained judge: {judge.manifest.digest}")
     raw = await download_civitai(SOURCE_VERSION, file=SOURCE_FILE)
     converted = await convert_cozytensors(raw, profile="civitai/sdxl/single-file/1")
-    reference = await normalize(source=converted)
-    candidate = await quantize(source=reference, encoding=ENCODING)
+    # The caller surface omits services injected into the admitted child signature.
+    normalize_call = cast(Callable[..., Awaitable[ModelArtifact]], normalize)
+    quantize_call = cast(Callable[..., Awaitable[ModelArtifact]], quantize)
+    reference = await normalize_call(source=converted)
+    candidate = await quantize_call(source=reference, encoding=ENCODING)
     assessment = Assessment(
         generate=generate,
         out=out,
