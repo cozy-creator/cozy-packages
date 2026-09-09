@@ -32,45 +32,12 @@ TURBO_BANK = "turbo"
 LORA_FAMILIES = ("to_q", "to_k", "to_v", "to_out.0", "ff.net.0.proj", "ff.net.2")
 #: The family the producer bakes into the turbo tables; refused on the overlay by name.
 TABLED_FAMILY = "adaln_proj.linear"
-#: Rows per low-rank chunk under an fp8 operand: bounds the dequantized transient the down
-#: projection reads, never the accumulated output (which is written in place).
-_LORA_ROW_CHUNK = 8192
-
-
-def pdd_time_grid(shift: float, num_steps: int) -> torch.Tensor:
-    """The reference's ascending float64 grid `0 = t_0 < ... < t_N = 1` of one modality."""
-    sigma = torch.linspace(1.0, 0.0, num_steps + 1, dtype=torch.float64)
-    return 1.0 - shift * sigma / (1 + (shift - 1) * sigma)
-
-
-def pdd_head_plan(shift: float, num_steps: int, block_size: int) -> torch.Tensor:
-    """`[evaluations, num_steps]`: row `k` weights the heads of block `k` by their share of
-    the block's span, the reference's `pdd_sampling_plan` for every block at once."""
-    if block_size < 1 or num_steps % block_size:
-        raise ValueError(f"pdd_num_steps={num_steps} is not a multiple of block {block_size}")
-    step_sizes = pdd_time_grid(shift, num_steps).diff()
-    plan = torch.zeros(num_steps // block_size, num_steps, dtype=torch.float64)
-    for index in range(num_steps // block_size):
-        start = index * block_size
-        span = step_sizes[start : start + block_size]
-        plan[index, start : start + block_size] = span / span.sum()
-    return plan
-
-
-def collapse_head_bank(
-    weight: torch.Tensor, bias: torch.Tensor, plan: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """`[N, out, in]` heads -> `[evaluations, out, in]`: the reference's per-step
-    `einsum("pn,noi->poi", plan, W)` taken once, in float64, stored float32."""
-    if weight.ndim != 3 or bias.shape != weight.shape[:2] or plan.shape[1] != weight.shape[0]:
-        raise ValueError("head bank, bias and plan do not describe one N-interval head")
-    fused = torch.einsum("pn,noi->poi", plan, weight.to(torch.float64))
-    fused_bias = torch.einsum("pn,no->po", plan, bias.to(torch.float64))
-    return fused.to(torch.float32), fused_bias.to(torch.float32)
+#: Bound the rounded up-projection transient while retaining the original input precision.
+_LORA_ROW_CHUNK = 256
 
 
 class LoRAFactors(nn.Module):  # type: ignore[misc]
-    """One site's rank-`r` factors; the update accumulates IN PLACE into the base output."""
+    """One site's rank-`r` factors over the original tensor operand."""
 
     def __init__(self, in_features: int, out_features: int, rank: int, scale: float) -> None:
         super().__init__()
@@ -78,43 +45,37 @@ class LoRAFactors(nn.Module):  # type: ignore[misc]
         self.lora_up = nn.Parameter(torch.empty(out_features, rank, dtype=torch.bfloat16))
         self.scale = scale
 
-    def accumulate(self, x: Any, out: torch.Tensor) -> None:
-        """`out += scale * up(down(x))` without a second `[rows, out]` tensor: `down(x)` is
-        `[rows, rank]` and the up projection lands through `addmm_`. `x` is the base site's
-        operand — a tensor, or the fp8 row-quantized operand a fused epilogue hands a leaf."""
+    def accumulate(self, x: torch.Tensor, out: torch.Tensor) -> None:
+        """Preserve the reference's BF16 update rounding, with bounded row chunks."""
+        if not isinstance(x, torch.Tensor):
+            raise ValueError("a LoRA update requires the original tensor operand")
         if not out.is_contiguous():
             raise ValueError("a LoRA update accumulates into a contiguous base output only")
         flat = out.view(-1, out.shape[-1])
-        up = self.lora_up.t().to(flat.dtype)
-        for start, rows in _operand_rows(x):
-            partial = F.linear(rows, self.lora_down.to(rows.dtype)).to(flat.dtype)
-            flat[start : start + rows.shape[0]].addmm_(partial, up, alpha=self.scale)
-
-
-def _operand_rows(x: Any) -> Iterator[tuple[int, torch.Tensor]]:
-    """`(row offset, [rows, in] bf16)` chunks of one site's input, dequantizing an fp8
-    row-quantized operand (`payload * scale` per row) chunk by chunk."""
-    if isinstance(x, torch.Tensor):
-        yield 0, x.reshape(-1, x.shape[-1])
-        return
-    payload, scale = x.payload, x.scale
-    for start in range(0, int(payload.shape[0]), _LORA_ROW_CHUNK):
-        chunk = payload[start : start + _LORA_ROW_CHUNK]
-        rows = chunk.to(torch.float32).mul_(scale[start : start + _LORA_ROW_CHUNK])
-        yield start, rows.to(torch.bfloat16)
+        inputs = x.reshape(-1, x.shape[-1])
+        for start in range(0, int(inputs.shape[0]), _LORA_ROW_CHUNK):
+            rows = inputs[start : start + _LORA_ROW_CHUNK]
+            partial = F.linear(rows, self.lora_down.to(rows.dtype))
+            update = F.linear(partial, self.lora_up.to(rows.dtype)).to(flat.dtype)
+            # addmm_ fuses the up projection and sum, skipping the BF16 update's
+            # rounding. Chunked linear + add_ matches the released adapter.
+            flat[start : start + rows.shape[0]].add_(self.scale * update)
 
 
 class _LoRAHook:
-    """Bound to one site for one forward; removed with the DiT's own forward hook."""
+    """A permanent consumer hook, inactive for base forwards."""
 
-    __slots__ = ("factors",)
+    __slots__ = ("owner", "path")
 
-    def __init__(self, factors: LoRAFactors) -> None:
-        self.factors = factors
+    def __init__(self, owner: Any, path: str) -> None:
+        self.owner = owner
+        self.path = path
 
     def __call__(self, module: nn.Module, args: tuple[Any, ...], out: torch.Tensor) -> None:
         del module
-        self.factors.accumulate(args[0], out)
+        armed = self.owner._arming
+        if armed is not None:
+            armed.overlay.get_submodule(self.path).accumulate(args[0], out)
 
 
 class _Site(nn.Module):  # type: ignore[misc]
@@ -321,24 +282,8 @@ class TurboArming:
     """What one DiT forward under the turbo bank reads: set by the DiT's pre-hook from the
     forward's own `attention_kwargs`, cleared by its forward hook, never request state."""
 
-    __slots__ = ("hooks", "overlay", "step")
+    __slots__ = ("overlay", "step")
 
     def __init__(self, overlay: TurboOverlay, step: int) -> None:
         self.overlay = overlay
         self.step = step
-        self.hooks: list[Any] = []
-
-    def attach(self, dit: Any) -> None:
-        for path, factors in self.overlay.lora_sites():
-            site = dit.get_submodule(path)
-            if TABLED_FAMILY in path or not path.endswith(LORA_FAMILIES):
-                raise ConformanceError(
-                    f"turbo overlay names a LoRA site outside the six inference families: {path}",
-                    code="artifact_config",
-                )
-            self.hooks.append(site.register_forward_hook(_LoRAHook(factors)))
-
-    def detach(self) -> None:
-        for handle in self.hooks:
-            handle.remove()
-        self.hooks.clear()

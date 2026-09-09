@@ -67,6 +67,7 @@ from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference
 from diffusers.modular_pipelines.minimax_h3.before_denoise import MiniMaxH3SetTimestepsStep
 from diffusers.modular_pipelines.minimax_h3.denoise import MiniMaxH3LoopSchedulerStep
 from PIL import Image as PILImage
+from torch.nn import functional as F
 from torch.utils._python_dispatch import TorchDispatchMode
 from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
@@ -89,6 +90,7 @@ from h3_tables.model_config import (  # noqa: E402
 from h3_tables.order import current_order, full_order  # noqa: E402
 from h3_tables.plans import parse_plan  # noqa: E402
 from h3_tables.source import official_full_specs  # noqa: E402
+from h3_tables.turbo import collapse_head_bank, pdd_head_plan, pdd_time_grid  # noqa: E402
 
 import h3 as package  # noqa: E402
 import official  # noqa: E402
@@ -140,9 +142,6 @@ from turbo import (  # noqa: E402
     TurboOverlay,
     TurboSchedule,
     _LoRAHook,
-    collapse_head_bank,
-    pdd_head_plan,
-    pdd_time_grid,
 )
 from vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
 
@@ -3598,20 +3597,20 @@ def arm_turbo_lora() -> None:
         factors.lora_up.copy_(torch.randn(out_features, rank) * 0.1)
     x = torch.randn(1, rows, width).bfloat16()
     base = torch.randn(1, rows, out_features).bfloat16()
-    down, up = factors.lora_down.float(), factors.lora_up.float()
-    expected = base.float() + x.float().reshape(rows, width) @ down.t() @ up.t()
+    down, up = factors.lora_down, factors.lora_up
+    expected = base + F.linear(F.linear(x, down), up)
     out = base.clone()
     with _Allocations(x, out, factors.lora_down, factors.lora_up) as allocations:
         factors.accumulate(x, out)
     check(
-        "bf16 operand: the update landed (to bf16 rounding of the sum)",
-        torch.allclose(out.float(), expected, rtol=1e-2, atol=1e-1),
+        "bf16 operand: the update preserves the reference rounding",
+        torch.equal(out, expected),
         True,
     )
     check(
-        "bf16 operand: the largest allocation is the [rows, rank] projection",
-        max(allocations.sizes),
-        rows * rank,
+        "bf16 operand: every transient is bounded to 256 rows",
+        max(allocations.sizes) <= 256 * max(width, out_features),
+        True,
     )
     red(
         "a materialised [rows, out] update would be larger",
@@ -3619,27 +3618,11 @@ def arm_turbo_lora() -> None:
         True,
     )
 
-    scale = (x.reshape(rows, width).float().abs().amax(dim=-1, keepdim=True) / 448.0).clamp(
-        min=1e-12
+    refusal(
+        "a prequantized operand cannot silently change the LoRA computation",
+        lambda: factors.accumulate(SimpleNamespace(payload=x, scale=1.0), base.clone()),
+        "ValueError",
     )
-    payload = (x.reshape(rows, width).float() / scale).clamp(-448.0, 448.0).to(torch.float8_e4m3fn)
-    operand = SimpleNamespace(payload=payload, scale=scale, shape=tuple(x.shape))
-    dequantized = payload.float() * scale
-    expected = base.float() + dequantized.bfloat16().float() @ down.t() @ up.t()
-    out = base.clone()
-    with _Allocations(x, out, payload, scale, factors.lora_down, factors.lora_up) as allocations:
-        factors.accumulate(operand, out)
-    check(
-        "fp8 row-quantized operand: the update is computed from the dequantized rows",
-        torch.allclose(out.float(), expected, rtol=1e-2, atol=1e-1),
-        True,
-    )
-    check(
-        "fp8 operand: no allocation reaches [rows, out]",
-        max(allocations.sizes) < rows * out_features,
-        True,
-    )
-    observe("fp8 operand: largest transient", f"{max(allocations.sizes)} values (chunked dequant)")
     refusal(
         "an output that is not a plain row-major buffer refuses rather than copying",
         lambda: factors.accumulate(x, base.transpose(1, 2).contiguous().transpose(1, 2)),
@@ -3777,13 +3760,13 @@ def arm_turbo_forward() -> None:
     )
     check("one LoRA hook stood on a site during each turbo forward", hooked, [[1]] * 8)
     check(
-        "no LoRA hook outlives its forward",
+        "one permanent hook per site remains installed",
         sum(
             isinstance(hook, _LoRAHook)
             for module in pruned.modules()
             for hook in module._forward_hooks.values()
         ),
-        0,
+        len(paths),
     )
     check(
         "after eight turbo forwards a base forward is bit-identical to before",

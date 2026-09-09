@@ -23,7 +23,14 @@ from diffusers import MiniMaxH3Transformer3DModel
 from torch import nn
 from torch.nn import functional as F
 
-from turbo import ATTENTION_KWARG, TurboArming, TurboOverlay
+from turbo import (
+    ATTENTION_KWARG,
+    LORA_FAMILIES,
+    TABLED_FAMILY,
+    TurboArming,
+    TurboOverlay,
+    _LoRAHook,
+)
 
 
 class _Armed:
@@ -184,11 +191,20 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
         self._overlays: dict[str, TurboOverlay] = {}
         self._arming: TurboArming | None = None
         self.register_forward_pre_hook(self._arm, with_kwargs=True)
-        self.register_forward_hook(self._disarm)
+        self.register_forward_hook(self._disarm, always_call=True)
 
     def attach_overlay(self, bank: str, overlay: TurboOverlay) -> None:
         """Make `bank` servable: a forward naming it in `attention_kwargs` reads `overlay`.
         The overlay stays its own component; nothing here enters this DiT's state dict."""
+        sites = [(path, self.get_submodule(path)) for path, _ in overlay.lora_sites()]
+        for path, _ in sites:
+            if TABLED_FAMILY in path or not path.endswith(LORA_FAMILIES):
+                raise ConformanceError(
+                    f"unsupported turbo LoRA site: {path}", code="artifact_config"
+                )
+        if not self._overlays:
+            for path, site in sites:
+                site.register_forward_hook(_LoRAHook(self, path))
         self._overlays[bank] = overlay
 
     def _arm(
@@ -257,7 +273,6 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
 
     def _engage(self, overlay: TurboOverlay, step: int) -> None:
         self._arming = TurboArming(overlay, step)
-        self._arming.attach(self)
         self.time_proj._armed = _Armed(overlay)
         for block, source in zip(self.transformer_blocks, overlay.transformer_blocks, strict=True):
             block.adaln_proj._armed = _Armed(source.adaln_proj)
@@ -273,9 +288,7 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
 
     def _release(self) -> None:
         """Every forward starts disarmed, whatever the previous one left behind."""
-        if self._arming is not None:
-            self._arming.detach()
-            self._arming = None
+        self._arming = None
         self.time_proj._armed = None
         for block in self.transformer_blocks:
             block.adaln_proj._armed = None

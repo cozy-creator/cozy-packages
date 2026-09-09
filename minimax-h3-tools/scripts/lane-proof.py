@@ -158,11 +158,7 @@ def _targets(lane: lanes.Lane, granted: dict[str, WeightsSource]) -> dict[str, W
         for component, treatment in lane.components.items()
     }
     targets: dict[str, WeightsTarget] = job._lane_targets(
-        lane,
-        sections,
-        job._table_additions(job._topologies(sections), job._plans(job.LAUNCH_SET)),
-        full_targets,
-        selections,
+        lane, sections, job._table_additions(sections), full_targets, selections
     )
     return targets
 
@@ -171,7 +167,7 @@ def arm_census() -> None:
     print("arm A — lane declarations over the exact H3 census")
     granted = full_source_structures()
     sections = parse_production_config(job._asset("model-config.json"))
-    tables = job._table_additions(job._topologies(sections), job._plans(job.LAUNCH_SET))
+    tables = job._table_additions(sections)
     table_rows = {task: len(rows) for task, rows in tables.items()}
     if set(table_rows.values()) != {51}:
         _fail(f"table additions are {table_rows}, expected 51 rows per task")
