@@ -1,9 +1,9 @@
 [project]
 name = "minimax-h3-tools"
-version = "2.10.0"
+version = "2.11.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "cozy-runtime>=0.15.0,<1",
+    "cozy-runtime>=0.16.1,<1",
     "msgspec>=0.19",
     "numpy>=1.26",
     "torch>=2.13,<3",
@@ -27,6 +27,14 @@ organization = "paul"
 
 [tool.uv]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [tool.mypy]
 python_version = "3.12"
