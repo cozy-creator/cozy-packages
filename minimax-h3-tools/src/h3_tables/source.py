@@ -19,9 +19,9 @@ from cozy_runtime.author import (
 )
 
 from .kernel import H3Topology, adapter_shapes, removed_keys, table_shapes
-from .plans import TimestepPlan
+from .plans import Task, TimestepPlan
 
-TARGET_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
+TARGET_COMPONENT: Mapping[Task, str] = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
 
 #: PDD-8's released adapter geometry (`lora_rank` / `lora_alpha` in the safetensors header).
 #: The scale alpha/rank is a training fact the structure cannot carry, so the slice is

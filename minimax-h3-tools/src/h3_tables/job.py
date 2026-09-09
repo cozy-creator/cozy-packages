@@ -91,7 +91,7 @@ FP8_SPEC = "sha256:c4be0120fb4548306b134f6ee07eb2545a363bc140a005af1ef6543c790cf
 MXFP8_SPEC = "sha256:7e9b1ad8f2e5ddd236a4d4303042d632a96eadef4f25d44eb0fb63124cec7cfd"
 
 SOURCE_READ_CHUNK = 32 << 20
-SOURCE_SECTION = {"fl2va": "transformer", "ref2va": "transformer_ref"}
+SOURCE_SECTION: Mapping[Task, str] = {"fl2va": "transformer", "ref2va": "transformer_ref"}
 TORCH_DTYPE = {"bf16": torch.bfloat16, "f32": torch.float32}
 CUDA = torch.device("cuda")
 
