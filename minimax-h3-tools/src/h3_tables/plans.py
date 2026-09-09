@@ -18,8 +18,8 @@ from cozy_runtime.author import canonical_json
 Task = Literal["fl2va", "ref2va"]
 
 LAUNCH_PLAN_DIGESTS: dict[Task, str] = {
-    "fl2va": "sha256:8cd647f223acb56f864773e1a86bd8bcc0bb8d7a1c83ce2de33b7209844dd049",
-    "ref2va": "sha256:3ec1b8e59c8b5dc74a4656d299d25ae206249cbd2b3f90b3c2981f8123b1b4ac",
+    "fl2va": "sha256:9a48803d17d7bb5499ca8c018f60c86c9890eb91496249ac7cb199bc9e45201e",
+    "ref2va": "sha256:565a164cbf0cefa58d4976cb4c84887cf9807cc7c4be62263d5e0e0c5d9bc50e",
 }
 
 _TOP_LEVEL = {
@@ -29,7 +29,6 @@ _TOP_LEVEL = {
     "table_order",
     "final_norm_row_index",
     "fps",
-    "frames",
     "row_timestep_reduction",
     "scalar_encoding",
     "scheduler_semantics",
@@ -183,7 +182,6 @@ def parse_plan(raw: bytes, *, task: str, launch: bool = True) -> TimestepPlan:
         "adaln_row_index": "timestep_index*3+modality_tag",
         "final_norm_row_index": "timestep_index",
         "table_order": "first-distinct-evaluation-class-occurrence",
-        "frames": 345,
         "fps": 24,
     }
     for name, expected in fixed.items():

@@ -78,7 +78,10 @@ FPS = 24
 #: construction if the artifact config drifts (`_validate_model_contract`).
 FRAMES_PER_CHUNK = 17
 LATENTS_PER_CHUNK = 5
-#: The official generated-clip envelope in seconds, as the pipeline declares it.
+#: The clip envelope the upstream pipeline declares, in seconds. A DEPENDENCY fact we read
+#: and pin, not a serving policy we choose: `_validate_model_contract` refuses if the
+#: installed library moves either bound. What this release serves is the frame envelope
+#: below, because frames are the real constraint.
 MIN_DURATION = 5.0
 MAX_DURATION = 15.0
 #: Packed-sequence geometry: the VAE's spatial compression, the DiT's patch, and the
@@ -120,14 +123,36 @@ def frames_for(duration_s: int) -> int:
     return int(align_num_frames(duration_s * FPS, FRAMES_PER_CHUNK, LATENTS_PER_CHUNK))
 
 
+#: The envelope this release serves, on the video VAE's own `17n + 5` grid. It is stated in
+#: FRAMES because frames are what constrains: the grid decides what decodes, and the clock
+#: only reads it. Each bound is a declared second carried onto the grid by the same upward
+#: snap a request gets, so the ceiling is the top grid point of a 15-second model rather than
+#: a clock reading that a legal grid point overshoots. The grid has no point at
+#: `15.0 * 24 = 360`, so a ceiling held in seconds makes a 15-second model structurally
+#: incapable of a 15-second clip — the defect se-053 removes.
+MIN_FRAMES = frames_for(math.ceil(MIN_DURATION))
+MAX_FRAMES = frames_for(math.floor(MAX_DURATION))
+#: The frame envelope restated in the units the upstream blocks compare in. Both official
+#: layout blocks compute `aligned_frames / fps` and refuse it outside
+#: `[min_duration, max_duration]`, so the ceiling has to reach the top grid point in seconds
+#: or 362 frames refuses upstream. Upstream's own floor already tolerates exactly this snap
+#: (124 frames = 5.167 s passes a 5.0 s floor); only its ceiling does not, and that asymmetry
+#: is an oversight rather than a capability bound — v1's ie#658 shipped, billed and
+#: pixel-checked the 362-frame cell, and nothing mechanical stands behind the bare
+#: `return 15.0`: RoPE is per request and both VAEs are chunked convolutions. Handed to the
+#: blocks through `_ScopedPipeline`, so the override is per request, visible, and revertible
+#: the day the library states its ceiling in frames.
+_CEILING_S = MAX_FRAMES / FPS
+
+
 def supported_durations() -> tuple[int, ...]:
     """The whole seconds this release serves: those whose snapped frame count lands inside
-    the official envelope. 4 s snaps to 107 frames (4.458 s, under the floor) and 15 s to
-    362 (15.083 s, over the ceiling), so the set is 5..14 s = 124..345 frames."""
+    the frame envelope. 4 s snaps to 107 frames (below `MIN_FRAMES`) and 16 s to 396 (above
+    `MAX_FRAMES`), so the set is 5..15 s = 124..362 frames."""
     return tuple(
         seconds
-        for seconds in range(1, 1 + math.ceil(MAX_DURATION))
-        if MIN_DURATION <= frames_for(seconds) / FPS <= MAX_DURATION
+        for seconds in range(1, 1 + math.floor(MAX_DURATION))
+        if MIN_FRAMES <= frames_for(seconds) <= MAX_FRAMES
     )
 
 
@@ -147,10 +172,6 @@ def assert_duration_envelope(served: tuple[int, int]) -> None:
             f"contiguous {served[0]}..{served[1]} this release admits",
             code="artifact_config",
         )
-
-
-#: The longest clip this release generates; the geometry the committed plans are stamped with.
-MAX_FRAMES = frames_for(max(supported_durations()))
 
 
 def denoise_rows(frames: int, height: int, width: int) -> int:
@@ -391,10 +412,10 @@ class TimestepPlan:
             "adaln_row_index": "timestep_index*3+modality_tag",
             "final_norm_row_index": "timestep_index",
             "table_order": "first-distinct-evaluation-class-occurrence",
-            # The geometry stamp. A plan holds one row per (timestep, modality) and no row
-            # depends on the frame count, so this names the release's longest clip rather
-            # than constraining anything a request may ask for.
-            "frames": MAX_FRAMES,
+            # A plan holds one row per (timestep, modality) and no row depends on the frame
+            # count, so it carries no frame stamp: se-047 kept one and it made the release's
+            # longest clip a digest input, which is why raising the ceiling to 362 costs a
+            # retable at all. Removed here so a length can never bind a checkpoint again.
             "fps": FPS,
             "video_shift": _float_hex(self.video_shift),
             "audio_shift": _float_hex(self.audio_shift),
@@ -1018,8 +1039,12 @@ class OfficialH3Pipeline:
             if task == "ref2va":
                 # Only setup uses this per-request geometry. A view leaves the shared
                 # pipeline unchanged, even if preprocessing raises or calls overlap.
+                # `ref2va` setup is the one before-encode block that also gates on the
+                # seconds ceiling, so it is scoped here as well as at denoise.
                 edges = _ImageEdges(pipe.config, image_short_edges)
-                pipe = _ScopedPipeline(pipe, overrides={"config": edges})
+                pipe = _ScopedPipeline(
+                    pipe, overrides={"config": edges, "max_duration": _CEILING_S}
+                )
             self._run_with(task, pipe, "before_encode", state)
             if edges is not None:
                 edges.settle()
@@ -1114,6 +1139,7 @@ class OfficialH3Pipeline:
             overrides={
                 "scheduler": MiniMaxH3Scheduler(shift=12.0),
                 "audio_scheduler": MiniMaxH3Scheduler(shift=3.0),
+                "max_duration": _CEILING_S,
             },
         )
         # The selected upstream workflow owns the ordered preparation steps.
@@ -1426,14 +1452,17 @@ def _validate_model_contract(pipe: Any, transformer: Any, video_vae: Any, audio_
             code="artifact_config",
             fields=["video_vae"],
         )
-    # The length envelope this release admits is the pipeline's own; a library that moves
-    # either bound would silently change which durations the wire enum serves.
+    # These four are hard-coded properties of the installed library, so this can only fire
+    # when the DEPENDENCY moves — never on artifact drift, which is why it is not an
+    # `artifact_config` refusal. It is the tripwire under `_CEILING_S`: the override is
+    # calibrated against a ceiling of exactly 15.0, and a library that restated its bounds
+    # must be re-read before we keep overriding them.
     envelope = (pipe.fps, pipe.min_duration, pipe.max_duration, pipe.audio_channels)
     if envelope != (FPS, MIN_DURATION, MAX_DURATION, AUDIO_CHANNELS):
         raise ConformanceError(
-            f"official H3 clip envelope is {envelope}, expected "
+            f"installed Diffusers states the H3 clip envelope as {envelope}, expected "
             f"{(FPS, MIN_DURATION, MAX_DURATION, AUDIO_CHANNELS)}",
-            code="artifact_config",
+            code="dependency_drift",
             fields=["pipeline"],
         )
 

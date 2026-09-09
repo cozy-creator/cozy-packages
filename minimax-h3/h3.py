@@ -112,11 +112,13 @@ Steps = Annotated[
 # the envelope is served, and the SHORTEST is the default — a caller that says nothing pays
 # the cheapest clip, not the longest (se-047).
 # Declared, because the wire IS the declaration: `describe` reads this file and runs none of
-# it (#713). `assert_duration_envelope` refuses unless the official 17n+5 snap and the
-# official envelope serve exactly these whole seconds, so the pair below cannot drift from
-# the geometry it advertises.
+# it (#713). `assert_duration_envelope` refuses unless the official 17n+5 snap and the frame
+# envelope serve exactly these whole seconds, so the pair below cannot drift from the
+# geometry it advertises. The ceiling is 15: 362 frames is the top of the `17n + 5` grid a
+# 15-second model reaches, and delivering it needs the scoped ceiling in `official.py`
+# (se-053), because upstream states its own bound in seconds and the grid has no 360.
 MIN_DURATION_S = 5
-MAX_DURATION_S = 14
+MAX_DURATION_S = 15
 assert_duration_envelope((MIN_DURATION_S, MAX_DURATION_S))
 DEFAULT_DURATION_S = MIN_DURATION_S
 DurationSeconds = Annotated[

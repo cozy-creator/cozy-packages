@@ -35,6 +35,7 @@ from h3 import (
 from h3_activation_trace import ACTIVE_TRACE, ActivationTrace, FirstStepCaptured
 from h3_resident_samples import resident_hashes
 from official import (
+    MAX_FRAMES,
     NumericalChecks,
     OfficialH3Pipeline,
     ReferencePolicyFacts,
@@ -110,8 +111,10 @@ def roundtrip(
     tel: Telemetry,
 ) -> tuple[Any, dict[str, str]]:
     """Observe resident VAE data before and after normal component staging."""
-    if frames not in (22, 345):
-        raise ValueError("H3 VAE diagnostic supports 22 or 345 frames")
+    # One short chunk and the release's longest clip, which follows the frame envelope
+    # rather than restating it.
+    if frames not in (22, MAX_FRAMES):
+        raise ValueError(f"H3 VAE diagnostic supports 22 or {MAX_FRAMES} frames")
     ctx.raise_if_cancelled()
     if cycle:
         with tel.stage("vae_encode"):

@@ -80,6 +80,7 @@ from h3_tables.plans import parse_plan  # noqa: E402
 from h3_tables.source import official_full_specs  # noqa: E402
 
 import h3 as package  # noqa: E402
+import official as official_module  # noqa: E402
 from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer  # noqa: E402
 from conditioner import build_text_conditioner, text_conditioner_config  # noqa: E402
 from gates import MediaFacts, pre_encode_gate  # noqa: E402
@@ -91,6 +92,7 @@ from official import (  # noqa: E402
     MAX_DURATION,
     MAX_FRAMES,
     MIN_DURATION,
+    MIN_FRAMES,
     REFERENCE_IMAGE_SHORT_EDGE,
     NumericalChecks,
     OfficialH3Pipeline,
@@ -131,8 +133,8 @@ FAIL = "  FAIL "
 _failures = 0
 
 PLAN_DIGESTS = {
-    "fl2va": "8cd647f223acb56f864773e1a86bd8bcc0bb8d7a1c83ce2de33b7209844dd049",
-    "ref2va": "3ec1b8e59c8b5dc74a4656d299d25ae206249cbd2b3f90b3c2981f8123b1b4ac",
+    "fl2va": "9a48803d17d7bb5499ca8c018f60c86c9890eb91496249ac7cb199bc9e45201e",
+    "ref2va": "565a164cbf0cefa58d4976cb4c84887cf9807cc7c4be62263d5e0e0c5d9bc50e",
 }
 # Exact float32 vectors per served step count, banked against Diffusers 0.40.
 VECTOR_DIGESTS = {
@@ -392,7 +394,7 @@ def arm_schedule() -> None:
             dict(reversed(list(parsed.items()))), indent=2, ensure_ascii=False
         ).encode()
         check(f"{task} formatting-invariant identity", timestep_plan_digest(reordered), plan.digest)
-        changed = dict(parsed, frames=parsed["frames"] + 1)
+        changed = dict(parsed, fps=parsed["fps"] + 1)
         red(
             f"{task} meaning changes identity",
             timestep_plan_digest(json.dumps(changed).encode()),
@@ -776,11 +778,11 @@ def arm_clip_length() -> None:
     # `tokens_chunk_size` latents, so a decodable clip is `17n + 5` frames long. The
     # envelope is the pipeline's own [min_duration, max_duration]; the served set is every
     # whole second whose snapped count lands inside it.
-    check("served whole seconds", DURATIONS, tuple(range(5, 15)))
+    check("served whole seconds", DURATIONS, tuple(range(5, 16)))
     check(
         "each second's frame count",
         [frames_for(seconds) for seconds in DURATIONS],
-        [124, 158, 175, 192, 226, 243, 277, 294, 328, 345],
+        [124, 158, 175, 192, 226, 243, 277, 294, 328, 345, 362],
     )
     check(
         "every served count is on the 17n + 5 grid",
@@ -793,24 +795,45 @@ def arm_clip_length() -> None:
         [True] * len(DURATIONS),
     )
     check(
-        "the envelope holds for every served second",
-        [MIN_DURATION <= frames_for(seconds) / FPS <= MAX_DURATION for seconds in DURATIONS],
+        "the frame envelope holds for every served second",
+        [MIN_FRAMES <= frames_for(seconds) <= MAX_FRAMES for seconds in DURATIONS],
         [True] * len(DURATIONS),
     )
     check(
         "the two seconds just outside the served set",
         [
             (seconds, frames_for(seconds), round(frames_for(seconds) / FPS, 3))
-            for seconds in (4, 15)
+            for seconds in (4, 16)
         ],
-        [(4, 107, 4.458), (15, 362, 15.083)],
+        [(4, 107, 4.458), (16, 396, 16.5)],
     )
     check(
-        "and neither lands inside the envelope",
-        [MIN_DURATION <= frames_for(seconds) / FPS <= MAX_DURATION for seconds in (4, 15)],
+        "and neither lands inside the frame envelope",
+        [MIN_FRAMES <= frames_for(seconds) <= MAX_FRAMES for seconds in (4, 16)],
         [False, False],
     )
-    check("the longest served clip", MAX_FRAMES, 345)
+    check("the served frame envelope", (MIN_FRAMES, MAX_FRAMES), (124, 362))
+    # Derived, not invented: each bound is a declared second carried onto the grid by the
+    # same upward snap a request gets, so the envelope cannot drift from what the library
+    # declares even though it is no longer expressed in the library's units.
+    check(
+        "the frame envelope is the declared seconds carried onto the grid",
+        (MIN_FRAMES, MAX_FRAMES),
+        (frames_for(int(MIN_DURATION)), frames_for(int(MAX_DURATION))),
+    )
+    # The ceiling is the top grid point of a 15-second model, and it is NOT the clock reading
+    # the declared ceiling would give: 362 frames is 15.083 s. Stating the envelope in frames
+    # is what admits it; stating it in seconds is what excluded it for the whole of se-047.
+    check(
+        "the ceiling overshoots the declared seconds, and is served anyway",
+        (round(MAX_FRAMES / FPS, 3), MAX_FRAMES / FPS > MAX_DURATION, MAX_FRAMES % 17),
+        (15.083, True, 5),
+    )
+    check(
+        "the grid has no point at the declared ceiling",
+        (int(MAX_DURATION * FPS) % 17, frames_for(15)),
+        (360 % 17, 362),
+    )
 
     # Every length end to end through the official preparation blocks, at the release
     # canvas: the packed sequence the DiT would attend over is exactly what `denoise_rows`
@@ -821,7 +844,16 @@ def arm_clip_length() -> None:
     class ReachedDenoise(Exception):
         pass
 
-    def prepare(frames: int) -> Any:
+    def prepare(frames: int, *, ceiling_override: bool = True) -> Any:
+        # `ceiling_override=False` restores upstream's own seconds ceiling for one call, so
+        # an arm can show what the official block does without `_CEILING_S` in place.
+        if not ceiling_override:
+            restore = official_module._CEILING_S
+            official_module._CEILING_S = MAX_DURATION
+            try:
+                return prepare(frames)
+            finally:
+                official_module._CEILING_S = restore
         state = pipe.start_fl2va(
             prompt="Three friends walk in a garden.",
             first_frame=None,
@@ -854,10 +886,40 @@ def arm_clip_length() -> None:
         )
         del state
 
-    # The bounds are upstream's, not ours: one grid step outside the wire enum in either
-    # direction is refused by the official block itself.
-    for name, frames in (("below the floor", frames_for(4)), ("above the ceiling", frames_for(15))):
-        refusal(f"a clip {name} refuses in the official preparation", partial(prepare, frames))
+    # The floor is upstream's: one grid step below the wire enum is refused by the official
+    # block itself, and we do not override that.
+    refusal(
+        "a clip below the floor refuses in the official preparation",
+        partial(prepare, frames_for(4)),
+    )
+    # The CEILING is ours, deliberately (se-053). Both official layout blocks hold the
+    # ceiling against `aligned_frames / fps`, and the `17n + 5` grid has no point at
+    # `15.0 * 24 = 360` — so upstream's own bound makes a 15-second model structurally
+    # incapable of a 15-second clip, while its floor tolerates exactly the same upward snap
+    # (124 frames = 5.167 s passes a 5.0 s floor). That asymmetry is an oversight, not a
+    # capability bound: v1's ie#658 shipped, billed and pixel-checked the 362-frame cell.
+    # `_CEILING_S` hands the blocks the ceiling in the units the grid actually has, per
+    # request, through the same `_ScopedPipeline` seam the schedulers and image edges use.
+    # These two arms are the override's evidence: WITHOUT it the top served length refuses
+    # upstream, WITH it the same length prepares.
+    ceiling = frames_for(max(DURATIONS))
+    refusal(
+        "the top served length refuses upstream when the ceiling is left in seconds",
+        partial(prepare, ceiling, ceiling_override=False),
+    )
+    state = prepare(ceiling)
+    check(
+        "and prepares under the scoped frame ceiling",
+        (int(state.num_frames), int(state.latents.shape[0]) + int(state.audio_latents.shape[0])),
+        (362, denoise_rows(362, CANVAS_HEIGHT, CANVAS_WIDTH)),
+    )
+    del state
+    # One grid step ABOVE the ceiling still refuses — the override raises the bound to the
+    # top grid point, it does not remove it.
+    refusal(
+        "a clip above the served ceiling refuses in the official preparation",
+        partial(prepare, frames_for(16)),
+    )
 
     field = get_type_hints(package.FirstLastFrameToVideoInput, include_extras=True)["duration_s"]
     check(
@@ -865,7 +927,7 @@ def arm_clip_length() -> None:
         [msgspec.convert(seconds, type=field) for seconds in DURATIONS],
         list(DURATIONS),
     )
-    for invalid in (0, 4, 15, 60):
+    for invalid in (0, 4, 16, 60):
         refusal(
             f"an unserved length {invalid} refuses typed at decode",
             partial(msgspec.convert, invalid, type=field),
@@ -2027,9 +2089,9 @@ def arm_media() -> None:
         "output_integrity",
     )
 
-    check("longest single-shot cell", (MAX_FRAMES, FPS), (345, 24))
-    check("eight-shot de-duplicated frame count", 8 * MAX_FRAMES - 7, 2753)
-    check("eight-shot exact duration", Fraction(8 * MAX_FRAMES - 7, FPS), Fraction(2753, 24))
+    check("longest single-shot cell", (MAX_FRAMES, FPS), (362, 24))
+    check("eight-shot de-duplicated frame count", 8 * MAX_FRAMES - 7, 2889)
+    check("eight-shot exact duration", Fraction(8 * MAX_FRAMES - 7, FPS), Fraction(2889, 24))
 
 
 class _NumericalTelemetry:
