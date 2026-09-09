@@ -845,6 +845,7 @@ class _VideoStream:
             self._encode = self._pool.submit(self._out.save_video_stream, self._events())
         if (
             self.pixels is None
+            or channels != 3
             or (height, width) != tuple(self.pixels.shape[1:3])
             or self.landed + frames > self._frames
         ):
@@ -911,6 +912,7 @@ class _VideoStream:
             landed = self.pixels[start:stop]
             self._digest.update(landed.numpy())
             for index in range(start, stop):
+                self._check_encoding()
                 yield DecodedVideoFrame(
                     width=width,
                     height=height,
@@ -924,9 +926,13 @@ class _VideoStream:
             covered = min(samples, stop * self._sample_rate // FPS)
             yield from self._audio(submitted, covered)
             submitted = covered
+        self._check_encoding()
+        yield from self._audio(submitted, samples)
+
+    def _check_encoding(self) -> None:
         if self._abandoned:
             raise OutputError("the decode abandoned the video stream", code="output_integrity")
-        yield from self._audio(submitted, samples)
+        self._cancel()
 
     def _audio(self, start: int, stop: int) -> Iterator[DecodedAudioChunk]:
         if stop <= start:

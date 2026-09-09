@@ -23,6 +23,7 @@ from fractions import Fraction
 from functools import partial
 from importlib.resources import files
 from pathlib import Path
+from threading import Event, get_ident
 from types import SimpleNamespace
 from typing import Any, Literal, cast, get_type_hints
 
@@ -35,6 +36,7 @@ from cozy_runtime.author import (
     AudioAsset,
     Cancelled,
     Config,
+    Context,
     DecodedAudio,
     DecodedVideo,
     Image,
@@ -2370,6 +2372,88 @@ def arm_media() -> None:
     check("eight-shot exact duration", Fraction(8 * MAX_FRAMES - 7, FPS), Fraction(2889, 24))
 
 
+def arm_video_stream() -> None:
+    """Reject changed channels, decoder infinities and cancellation through the real sink."""
+
+    def stream_at(spool: Path, frames: int, cancel: Callable[[], None]) -> Any:
+        attempt = fake_attempt("tail-integrity", spool=spool)
+        return package._VideoStream(
+            torch,
+            fake_outputs(attempt),
+            frames=frames,
+            waveform=torch.zeros(2, frames * 24000 // FPS),
+            sample_rate=24000,
+            cancel=cancel,
+            progress=lambda _: None,
+        )
+
+    with tempfile.TemporaryDirectory(prefix="h3-stream-channels-") as directory:
+        spool = Path(directory)
+        stream = stream_at(spool, 2, lambda: None)
+        try:
+            stream.push(torch.full((1, 3, 16, 16), 0.5))
+            refusal(
+                "later grayscale chunks cannot silently broadcast into RGB",
+                lambda: stream.push(torch.full((1, 1, 16, 16), 0.25)),
+                "output_integrity",
+            )
+        finally:
+            stream.abandon()
+        check("channel refusal leaves no partial video", list(spool.iterdir()), [])
+
+    pipe, state = finish_scaffold(39)
+    injected = False
+
+    def infinity(_module: Any, _args: Any, output: Any) -> Any:
+        nonlocal injected
+        if not injected:
+            output = output.clone()
+            # This frame survives temporal padding and lies outside the overlap blend.
+            output[:, :, 8, 0, 0] = float("inf")
+            injected = True
+        return output
+
+    handle = pipe.components["video_vae"].decoder.register_forward_hook(infinity)
+    with tempfile.TemporaryDirectory(prefix="h3-stream-infinity-") as directory:
+        spool = Path(directory)
+        stream = stream_at(spool, 39, lambda: None)
+
+        def encode() -> Any:
+            pipe.decode_video_chunks("fl2va", state, stream.push)
+            return stream.finish()
+
+        try:
+            refusal("decoder infinity refuses before clipping", encode, "output_integrity")
+        finally:
+            stream.abandon()
+            handle.remove()
+        check("the real decoder emitted the planted infinity", injected, True)
+        check("infinity refusal leaves no partial video", list(spool.iterdir()), [])
+
+    caller = get_ident()
+    cancelled = Event()
+    context = Context("tail-encoding", float("inf"), _cancel=cancelled.is_set)
+
+    def cancel_in_encoder() -> None:
+        # Hold the sink at its first cancellation check until the caller signals the
+        # real Context. This avoids a timing race with the two-frame encode.
+        if get_ident() != caller:
+            cancelled.wait()
+        context.raise_if_cancelled()
+
+    with tempfile.TemporaryDirectory(prefix="h3-stream-cancel-") as directory:
+        spool = Path(directory)
+        stream = stream_at(spool, 2, cancel_in_encoder)
+        try:
+            stream.push(torch.full((2, 3, 16, 16), 0.5))
+            cancelled.set()
+            refusal("encoding observes cancellation", stream.finish, "cancelled")
+        finally:
+            cancelled.set()
+            stream.abandon()
+        check("cancelled encoding leaves no partial video", list(spool.iterdir()), [])
+
+
 class _NumericalTelemetry:
     def __init__(self) -> None:
         self.rows: list[dict[str, Any]] = []
@@ -4091,6 +4175,7 @@ ARMS = {
     "adaln-pruned": arm_adaln_pruned,
     "processor": arm_processor,
     "media": arm_media,
+    "video-stream": arm_video_stream,
     "gates": arm_output_gates,
     "numerics": arm_numerics,
     "resident-fill": arm_resident_fill,
