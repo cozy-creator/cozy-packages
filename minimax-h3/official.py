@@ -66,11 +66,38 @@ from transformers import (
 
 from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
 from conditioner import build_text_conditioner
+from turbo import ATTENTION_KWARG, TURBO_BANK, AbsentOverlay, TurboOverlay, TurboSchedule
 from vae_tiles import TileBatchedVideoVAE
 
-Task = Literal["fl2va", "ref2va"]
-_TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
-_WORKFLOW_TASKS: dict[str, Task] = {"t2va": "fl2va", "fl2va": "fl2va", "ref2va": "ref2va"}
+#: A trunk is one DiT and its conditioning workflow; a task is one served function — the
+#: trunk's official plan, or the trunk under the turbo bank's fixed 8-evaluation plan.
+Trunk = Literal["fl2va", "ref2va"]
+Task = Literal["fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo"]
+_TRUNKS: tuple[Trunk, ...] = ("fl2va", "ref2va")
+_TASKS: tuple[Task, ...] = ("fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo")
+_TRUNK: dict[Task, Trunk] = {
+    "fl2va": "fl2va",
+    "ref2va": "ref2va",
+    "fl2va_turbo": "fl2va",
+    "ref2va_turbo": "ref2va",
+}
+_BANK: dict[Task, str | None] = {
+    "fl2va": None,
+    "ref2va": None,
+    "fl2va_turbo": TURBO_BANK,
+    "ref2va_turbo": TURBO_BANK,
+}
+#: Six workflows over four tasks. `t2va` is the keyframe-free payload shape of `fl2va`, and
+#: `t2va_turbo` is the same shape of `fl2va_turbo`; each turbo workflow runs the official
+#: block graph of its base name with the trunk DiT armed under the turbo bank.
+_WORKFLOW_TASKS: dict[str, Task] = {
+    "t2va": "fl2va",
+    "fl2va": "fl2va",
+    "ref2va": "ref2va",
+    "t2va_turbo": "fl2va_turbo",
+    "fl2va_turbo": "fl2va_turbo",
+    "ref2va_turbo": "ref2va_turbo",
+}
 
 FPS = 24
 #: The video VAE's temporal chunking: `clip_length` pixel frames per chunk keeping
@@ -102,8 +129,13 @@ _WEIGHTED_CONFIG_SECTIONS = {
     "text_encoder",
     "video_vae",
 }
-_DIT_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
-_DIFFUSERS_DIT = {"fl2va": "transformer", "ref2va": "transformer_ref"}
+#: The turbo overlay components: present as a pair on a lane that serves the turbo
+#: functions, absent as a pair on one that does not. Never one without the other.
+_OVERLAY_CONFIG_SECTIONS = {"fl2va_turbo", "ref2va_turbo"}
+_DIT_COMPONENT: dict[Trunk, str] = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
+_OVERLAY_COMPONENT: dict[Trunk, str] = {"fl2va": "fl2va_turbo", "ref2va": "ref2va_turbo"}
+_DIFFUSERS_DIT: dict[Trunk, str] = {"fl2va": "transformer", "ref2va": "transformer_ref"}
+_DISTILLATION = "pdd"
 _ASSETS = Path(__file__).resolve().parent
 #: The dry warm forward (`warm_dit`): rows per modality, and the modality tags the DiT
 #: reads off `token_tags`. Eight rows is the smallest count that still runs both patch
@@ -265,13 +297,13 @@ class TimestepPlan:
     layout the checkpoint must contain.
     """
 
-    task: Task
+    task: Trunk
     video_shift: float
     audio_shift: float
     schedules: tuple[Schedule, ...]
 
     def __post_init__(self) -> None:
-        if self.task not in ("fl2va", "ref2va"):
+        if self.task not in _TRUNKS:
             raise ValueError(f"unknown MiniMax-H3 task {self.task!r}")
         if any(
             not math.isfinite(shift) or shift <= 0 or shift != _as_float32(shift)
@@ -471,9 +503,12 @@ def validate_reference_policy(kinds: Sequence[str]) -> ReferencePolicyFacts:
     return facts
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=len(_TASKS))
 def canonical_timestep_plan(task: Task) -> TimestepPlan:
-    """Read and self-verify the committed official-oracle plan without a tensor device."""
+    """Read and self-verify the committed official-oracle plan without a tensor device.
+
+    A turbo task's plan is stamped with its TRUNK, because the producer tables one trunk's
+    modulation rows at it; the file name carries the task."""
     raw = (_ASSETS / "timestep-plans" / f"{task}.json").read_bytes()
     try:
         document = canonical_json.decode(raw)
@@ -496,7 +531,7 @@ def canonical_timestep_plan(task: Task) -> TimestepPlan:
                 )
             )
         plan = TimestepPlan(
-            task=task,
+            task=_TRUNK[task],
             video_shift=float.fromhex(document["video_shift"]),
             audio_shift=float.fromhex(document["audio_shift"]),
             schedules=tuple(schedules),
@@ -509,11 +544,19 @@ def canonical_timestep_plan(task: Task) -> TimestepPlan:
 
 
 def supported_steps() -> tuple[int, ...]:
-    """The denoise step counts both committed plans serve."""
-    steps = {task: canonical_timestep_plan(task).steps for task in _TASKS}
+    """The denoise step counts both committed base plans serve."""
+    steps = {trunk: canonical_timestep_plan(trunk).steps for trunk in _TRUNKS}
     if len(set(steps.values())) != 1:
         raise ValueError("the FL2VA and Ref2VA plans must serve the same denoise step counts")
     return steps["fl2va"]
+
+
+def turbo_steps() -> int:
+    """The one evaluation count both committed turbo plans fix; there is no other."""
+    steps = {task: canonical_timestep_plan(task).steps for task in _TASKS if _BANK[task]}
+    if len(set(steps.values())) != 1 or any(len(value) != 1 for value in steps.values()):
+        raise ValueError("the turbo plans must each fix exactly one, shared, evaluation count")
+    return steps["fl2va_turbo"][0]
 
 
 def reference_image_size(
@@ -887,21 +930,33 @@ class OfficialH3Pipeline:
 
     def __init__(self, config: Config) -> None:
         mapping = _artifact_sections(config.mapping())
-        blocks = {name: MiniMaxH3Blocks().get_workflow(name) for name in _WORKFLOW_TASKS}
+        blocks = {
+            name: MiniMaxH3Blocks().get_workflow(_diffusers_workflow(name))
+            for name in _WORKFLOW_TASKS
+        }
         pipes = {name: MiniMaxH3ModularPipeline(blocks=block) for name, block in blocks.items()}
         dit_specs = _dit_specs(mapping)
         dits = {
-            task: _build_dit(upstream, structure, plan)
-            for task, (upstream, structure, plan) in dit_specs.items()
+            trunk: _build_dit(upstream, structure, plan)
+            for trunk, (upstream, structure, plan) in dit_specs.items()
         }
-        _validate_dual_dit_topology(dits)
+        _validate_dual_topology(dits, _DIT_COMPONENT)
+        overlay_specs = _overlay_specs(mapping, dit_specs)
+        overlays = {
+            trunk: _build_overlay(dits[trunk], dit_specs[trunk][0], spec)
+            for trunk, spec in overlay_specs.items()
+        }
+        _validate_dual_topology(overlays, _OVERLAY_COMPONENT)
+        for trunk, overlay in overlays.items():
+            if overlay.present:
+                dits[trunk].attach_overlay(TURBO_BANK, overlay)
         text_encoder = build_text_conditioner(_section(mapping, "text_encoder"))
         video_vae = _apply_video_vae_dtype(
             TileBatchedVideoVAE.from_config(_section(mapping, "video_vae"))
         )
         audio_vae = AutoencoderKLMiniMaxH3Audio.from_config(_section(mapping, "audio_vae")).eval()
-        for task in _TASKS:
-            _validate_model_contract(pipes[task], dits[task], video_vae, audio_vae)
+        for trunk in _TRUNKS:
+            _validate_model_contract(pipes[trunk], dits[trunk], video_vae, audio_vae)
         tokenizer, processor = _processor()
 
         for workflow, task in _WORKFLOW_TASKS.items():
@@ -913,16 +968,19 @@ class OfficialH3Pipeline:
                 audio_vae=audio_vae,
                 scheduler=MiniMaxH3Scheduler(shift=12.0),
                 audio_scheduler=MiniMaxH3Scheduler(shift=3.0),
-                **{_DIFFUSERS_DIT[task]: dits[task]},
+                **{_DIFFUSERS_DIT[_TRUNK[task]]: dits[_TRUNK[task]]},
             )
 
         # Runtime reads this mapping and nothing under ``pipe`` when deriving/filling
         # checkpoint destinations. Config-only processors and schedulers are deliberately
         # absent; ``video_vae`` is the artifact name while official Diffusers calls it
-        # ``vae``.
+        # ``vae``. A turbo overlay is a component beside the DiT it patches, carrying
+        # nothing on a lane that serves no turbo function.
         self.components: dict[str, Any] = {
             "fl2va_dit": dits["fl2va"],
             "ref2va_dit": dits["ref2va"],
+            "fl2va_turbo": overlays["fl2va"],
+            "ref2va_turbo": overlays["ref2va"],
             "text_encoder": text_encoder,
             "video_vae": video_vae,
             "audio_vae": audio_vae,
@@ -934,7 +992,28 @@ class OfficialH3Pipeline:
         self.sample_rate = int(audio_vae.config.sampling_rate)
         self._blocks = blocks
         self._pipes = pipes
-        self._plans = {task: spec[2] for task, spec in dit_specs.items()}
+        self._plans: dict[Task, TimestepPlan] = {
+            task: dit_specs[_TRUNK[task]][2] if spec is None else spec.plan
+            for task in _TASKS
+            for spec in (overlay_specs[_TRUNK[task]] if _BANK[task] else None,)
+        }
+        self._served = {
+            task for task in _TASKS if not _BANK[task] or overlays[_TRUNK[task]].present
+        }
+
+    def serves(self, task: Task) -> bool:
+        """Whether the bound artifact carries what `task` runs on: every base task, and a
+        turbo task only when its trunk's overlay component is present."""
+        return task in self._served
+
+    def _require_served(self, task: Task) -> None:
+        if task not in self._served:
+            component = _OVERLAY_COMPONENT[_TRUNK[task]]
+            raise ConformanceError(
+                f"this artifact carries no {component} component, so it cannot serve {task}",
+                code="artifact_config",
+                fields=[component],
+            )
 
     def generator(self, source: object) -> Any:
         """Adapt Runtime's public request generator to Diffusers' torch generator."""
@@ -971,12 +1050,13 @@ class OfficialH3Pipeline:
         generator: Any,
         steps: int,
         frames: int,
+        task: Task = "fl2va",
     ) -> Any:
         # With no anchor, state the official default canvas. With an anchor, leaving the
         # dimensions absent makes the first supplied keyframe the geometry authority.
         height, width = (768, 1344) if first_frame is None and last_frame is None else (None, None)
         return self._start(
-            "fl2va",
+            _trunk_task(task, "fl2va"),
             prompt=prompt,
             generator=generator,
             steps=steps,
@@ -996,11 +1076,12 @@ class OfficialH3Pipeline:
         steps: int,
         frames: int,
         reference_image_short_edges: Sequence[int],
+        task: Task = "ref2va",
     ) -> Any:
         """``reference_image_short_edges`` is one resolved edge per image reference, in
         packed order; the official setup step resizes each image to its own."""
         return self._start(
-            "ref2va",
+            _trunk_task(task, "ref2va"),
             prompt=prompt,
             generator=generator,
             steps=steps,
@@ -1020,6 +1101,7 @@ class OfficialH3Pipeline:
         image_short_edges: Sequence[int] = (),
         **values: Any,
     ) -> Any:
+        self._require_served(task)
         # The plan, not the request, spells the official grid: `steps` transformer
         # evaluations are the schedule's grid points less the terminal zero.
         schedule = self._plans[task].schedule(steps)
@@ -1032,13 +1114,18 @@ class OfficialH3Pipeline:
             "output_type": "pt",
             **values,
         }
+        bank = _BANK[task]
+        if bank is not None:
+            # Every DiT forward of this request names the bank it is served under; the
+            # official loop hands `attention_kwargs` to the transformer call unchanged.
+            fixed["attention_kwargs"] = {ATTENTION_KWARG: bank}
         for name, value in fixed.items():
             state.set(name, value)
         workflow = self._workflow(task, state)
         if "before_encode" in self._blocks[workflow].sub_blocks:
             pipe = self._pipes[workflow]
             edges = None
-            if task == "ref2va":
+            if _TRUNK[task] == "ref2va":
                 # Only setup uses this per-request geometry. A view leaves the shared
                 # pipeline unchanged, even if preprocessing raises or calls overlap.
                 # `ref2va` setup is the one before-encode block that also gates on the
@@ -1093,8 +1180,11 @@ class OfficialH3Pipeline:
         from. Inputs are zeros off the DiT's own rotary buffer, so nothing names a device
         and no generator moves; outputs are dropped.
         """
-        dit = self.components[_DIT_COMPONENT[task]]
+        self._require_served(task)
+        dit = self.components[_DIT_COMPONENT[_TRUNK[task]]]
         schedule = self._plans[task].schedules[0]
+        bank = _BANK[task]
+        selector = {} if bank is None else {"attention_kwargs": {ATTENTION_KWARG: bank}}
         rows, tags = _WARM_ROWS, (_WARM_VIDEO_TAG, _WARM_TEXT_TAG, _WARM_AUDIO_TAG)
         packed = rows * len(tags)
         anchor = dit.rope.inv_freq
@@ -1119,6 +1209,7 @@ class OfficialH3Pipeline:
                 ),
                 position_ids=anchor.new_zeros(packed, 3, dtype=torch.int64),
                 return_dict=False,
+                **selector,
                 **{
                     name: anchor.new_tensor(list(value), dtype=torch.int64)
                     for name, value in rowwise.items()
@@ -1137,7 +1228,7 @@ class OfficialH3Pipeline:
         blocks = self._blocks[self._workflow(task, state)].sub_blocks
         scoped = _ScopedPipeline(
             self._pipes[self._workflow(task, state)],
-            self.components[_DIT_COMPONENT[task]],
+            self.components[_DIT_COMPONENT[_TRUNK[task]]],
             overrides={
                 "scheduler": MiniMaxH3Scheduler(shift=12.0),
                 "audio_scheduler": MiniMaxH3Scheduler(shift=3.0),
@@ -1174,7 +1265,7 @@ class OfficialH3Pipeline:
             _, block_state = loop.loop_step(scoped, block_state, i=index, t=timestep)
             if checks is not None:
                 checks.tensors(
-                    f"{_DIT_COMPONENT[task]}.updated.{index}",
+                    f"{_DIT_COMPONENT[_TRUNK[task]]}.updated.{index}",
                     [
                         ("latents", block_state.latents),
                         ("audio_latents", block_state.audio_latents),
@@ -1250,9 +1341,26 @@ class OfficialH3Pipeline:
 
     @staticmethod
     def _workflow(task: Task, state: Any) -> str:
-        if task == "fl2va" and state.get("image") is None and state.get("last_image") is None:
-            return "t2va"
+        if (
+            _TRUNK[task] == "fl2va"
+            and state.get("image") is None
+            and state.get("last_image") is None
+        ):
+            return task.replace("fl2va", "t2va")
         return task
+
+
+def _diffusers_workflow(workflow: str) -> str:
+    """The official block graph a cozy workflow runs: turbo shares its base name's."""
+    return workflow.removesuffix("_turbo")
+
+
+def _trunk_task(task: Task, trunk: Trunk) -> Task:
+    if _TRUNK[task] != trunk:
+        raise ConformanceError(
+            f"{task} is not a {trunk} task", code="artifact_config", fields=["task"]
+        )
+    return task
 
 
 def build_h3_pipeline(config: Config) -> OfficialH3Pipeline:
@@ -1270,9 +1378,11 @@ def _section(mapping: Mapping[str, object], name: str) -> dict[str, Any]:
 
 def _artifact_sections(mapping: Mapping[str, object]) -> Mapping[str, object]:
     present = set(mapping)
-    if present != _WEIGHTED_CONFIG_SECTIONS:
-        missing = sorted(_WEIGHTED_CONFIG_SECTIONS - present)
-        unexpected = sorted(present - _WEIGHTED_CONFIG_SECTIONS)
+    overlays = present & _OVERLAY_CONFIG_SECTIONS
+    expected = _WEIGHTED_CONFIG_SECTIONS | (_OVERLAY_CONFIG_SECTIONS if overlays else set())
+    if present != expected:
+        missing = sorted(expected - present)
+        unexpected = sorted(present - expected)
         raise ConformanceError(
             f"artifact config sections differ from the uniform dual FULL contract: "
             f"missing={missing}, unexpected={unexpected}",
@@ -1283,7 +1393,7 @@ def _artifact_sections(mapping: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _dit_spec(
-    mapping: Mapping[str, object], task: Task
+    mapping: Mapping[str, object], task: Trunk
 ) -> tuple[dict[str, Any], str, TimestepPlan]:
     component = _DIT_COMPONENT[task]
     upstream = _section(mapping, component)
@@ -1341,8 +1451,8 @@ def _dit_spec(
 
 def _dit_specs(
     mapping: Mapping[str, object],
-) -> dict[Task, tuple[dict[str, Any], str, TimestepPlan]]:
-    specs = {task: _dit_spec(mapping, task) for task in _TASKS}
+) -> dict[Trunk, tuple[dict[str, Any], str, TimestepPlan]]:
+    specs = {trunk: _dit_spec(mapping, trunk) for trunk in _TRUNKS}
     if len({spec[1] for spec in specs.values()}) != 1:
         raise ConformanceError(
             "FL2VA and Ref2VA DiTs use different modulation structures",
@@ -1371,14 +1481,123 @@ def _build_dit(config: Mapping[str, Any], structure: str, plan: TimestepPlan) ->
     return _apply_transformer_dtype(transformer)
 
 
-def _validate_dual_dit_topology(dits: Mapping[Task, Any]) -> None:
+@dataclass(frozen=True, slots=True)
+class OverlaySpec:
+    """One turbo overlay section, closed: the trunk it patches, the turbo plan its tables
+    are keyed to, and the PDD constants its factors and heads were built with."""
+
+    task: Trunk
+    plan: TimestepPlan
+    lora_rank: int
+    lora_alpha: float
+    pdd_num_steps: int
+    pdd_block_size: int
+
+
+_OVERLAY_FIELDS = {
+    "task",
+    "modulation",
+    "distillation",
+    "timestep_plan_digest",
+    "lora_rank",
+    "lora_alpha",
+    "pdd_num_steps",
+    "pdd_block_size",
+}
+
+
+def _overlay_spec(mapping: Mapping[str, object], trunk: Trunk) -> OverlaySpec:
+    component = _OVERLAY_COMPONENT[trunk]
+    section = _section(mapping, component)
+    extension = section.pop("cozy_h3", None)
+    if section or not isinstance(extension, Mapping) or set(extension) != _OVERLAY_FIELDS:
+        raise ConformanceError(
+            f"artifact config {component!r} is not one closed cozy_h3 turbo overlay",
+            code="artifact_config",
+            fields=[component, "cozy_h3"],
+        )
+    task: Task = "fl2va_turbo" if trunk == "fl2va" else "ref2va_turbo"
+    plan = canonical_timestep_plan(task)
+    expected: dict[str, object] = {
+        "task": trunk,
+        "modulation": "adaln-pruned",
+        "distillation": _DISTILLATION,
+        "timestep_plan_digest": f"sha256:{plan.digest}",
+    }
+    for name, want in expected.items():
+        if extension[name] != want:
+            raise ConformanceError(
+                f"artifact config {component!r} {name!r} is {extension[name]!r}, expected {want!r}",
+                code="artifact_config",
+                fields=[component, "cozy_h3", name],
+            )
+    counts = {name: extension[name] for name in ("lora_rank", "pdd_num_steps", "pdd_block_size")}
+    alpha = extension["lora_alpha"]
+    if (
+        any(not isinstance(value, int) or value <= 0 for value in counts.values())
+        or not isinstance(alpha, int | float)
+        or not math.isfinite(alpha)
+        or alpha <= 0
+        or counts["pdd_num_steps"] != counts["pdd_block_size"] * plan.steps[0]
+    ):
+        raise ConformanceError(
+            f"artifact config {component!r} PDD constants do not describe the turbo plan's "
+            f"{plan.steps[0]} evaluations",
+            code="artifact_config",
+            fields=[component, "cozy_h3"],
+        )
+    return OverlaySpec(
+        trunk,
+        plan,
+        int(counts["lora_rank"]),
+        float(alpha),
+        int(counts["pdd_num_steps"]),
+        int(counts["pdd_block_size"]),
+    )
+
+
+def _overlay_specs(
+    mapping: Mapping[str, object],
+    dit_specs: Mapping[Trunk, tuple[dict[str, Any], str, TimestepPlan]],
+) -> dict[Trunk, OverlaySpec | None]:
+    if not set(mapping) & _OVERLAY_CONFIG_SECTIONS:
+        return dict.fromkeys(_TRUNKS)
+    if {spec[1] for spec in dit_specs.values()} != {"adaln-pruned"}:
+        raise ConformanceError(
+            "a turbo overlay patches AdaLN-pruned DiTs only: its adaln_proj slice is tabled",
+            code="artifact_config",
+            fields=sorted(_OVERLAY_CONFIG_SECTIONS),
+        )
+    return {trunk: _overlay_spec(mapping, trunk) for trunk in _TRUNKS}
+
+
+def _build_overlay(dit: Any, config: Mapping[str, Any], spec: OverlaySpec | None) -> Any:
+    if spec is None:
+        return AbsentOverlay()
+    (schedule,) = spec.plan.schedules
+    timesteps, block_keys = spec.plan.table_layout()
+    overlay = TurboOverlay.from_official_config(
+        config,
+        rank=spec.lora_rank,
+        alpha=spec.lora_alpha,
+        schedule=TurboSchedule(schedule.video_timesteps, schedule.audio_timesteps),
+        table_timesteps=timesteps,
+        table_block_keys=block_keys,
+        block_table_dtype=dit.transformer_blocks[0].adaln_proj.table.dtype,
+        final_table_dtype=dit.norm_out.table.dtype,
+    )
+    return overlay.eval()
+
+
+def _validate_dual_topology(members: Mapping[Trunk, Any], names: Mapping[Trunk, str]) -> None:
     """Prove one architecture instantiated twice for two independent weight identities."""
-    fl2va, ref2va = dits["fl2va"], dits["ref2va"]
+    fl2va, ref2va = members["fl2va"], members["ref2va"]
+    fields = [names["fl2va"], names["ref2va"]]
     if fl2va is ref2va:
         raise ConformanceError(
             "FL2VA and Ref2VA component names alias one module instance",
             code="artifact_config",
-            fields=["fl2va_dit", "ref2va_dit"],
+            fields=fields,
         )
 
     def topology(module: Any) -> tuple[tuple[str, tuple[int, ...], str], ...]:
@@ -1389,10 +1608,15 @@ def _validate_dual_dit_topology(dits: Mapping[Task, Any]) -> None:
 
     if type(fl2va) is not type(ref2va) or topology(fl2va) != topology(ref2va):
         raise ConformanceError(
-            "FL2VA and Ref2VA DiTs do not have one identical class and destination topology",
+            "FL2VA and Ref2VA components do not have one identical class and destination "
+            "topology",
             code="artifact_config",
-            fields=["fl2va_dit", "ref2va_dit"],
+            fields=fields,
         )
+
+
+def _validate_dual_dit_topology(dits: Mapping[Trunk, Any]) -> None:
+    _validate_dual_topology(dits, _DIT_COMPONENT)
 
 
 def _apply_transformer_dtype(transformer: Any) -> Any:
