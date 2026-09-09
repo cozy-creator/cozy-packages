@@ -437,6 +437,12 @@ output compares unequal — indistinguishable from drift unless the exit status 
 CI covers all four packages (`minimax-h3` in the H3 job, the rest in the per-package matrix),
 so a local run that skips one is not evidence about it.
 
+Do not copy the matrix job's `--no-install-project` for this. That flag is right for what CI
+uses it for — proving the locked dependency stack imports, and `describe`, which is static and
+needs no installed project — but a venv built with it cannot import the package's own modules,
+so the tools proofs die with `ModuleNotFoundError`. The H3 job omits the flag for that reason.
+Sync without it locally, or a missing install reads as a broken proof.
+
 The H3 project environment is reproduced only from its committed lock:
 
 ```bash
