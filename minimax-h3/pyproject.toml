@@ -3,14 +3,14 @@ name = "minimax-h3"
 version = "1.10.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    # 0.11.2 is a WINDOW, not a floor with a habitual ceiling. Below it, `invocable_interface`
-    # refuses the entrypoint metadata Creator itself provisions (a `list` default is not a
-    # canonical field value there) and no job on this release can be discovered. At 0.12.0 the
-    # runtime adds the `commit_file` and `source_files` native source operations, which no
-    # Creator build has adopted — its embedded native-source document still names three — so
-    # every job refuses with `child_interface: native source interface changed`. Raise the
-    # ceiling when Creator's `internal/nativeinterface/source.json` carries those operations.
-    "cozy-runtime[media]>=0.11.2,<0.12",
+    # A WINDOW, not a floor with a habitual ceiling, and the reason is the native source
+    # interface: a job refuses `child_interface: native source interface changed` unless the
+    # runtime's operation set digests equal Creator's embedded
+    # `internal/nativeinterface/source.json`. The 0.11 window's retirement condition — that
+    # Creator adopt `commit_file` and `source_files` — is MET: Creator's document now names
+    # all five operations (cl-198), and Creator refuses a host runtime below 0.12.0 outright.
+    # Raise the ceiling again when Creator's document next changes.
+    "cozy-runtime[media]>=0.12.0,<0.13",
     "cozy-eval>=0.3.2,<1",
     "diffusers==0.40.0",
     "hf-xet==1.6.0",
