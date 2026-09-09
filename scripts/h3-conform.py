@@ -2601,6 +2601,88 @@ def arm_interface() -> None:
             [field["name"] for field in entry["result"]["fields"]],
             ["video", "continuation_frame", "warnings"],
         )
+    print("\n== long-form composition ==")
+    jobs = {entry["name"]: entry for entry in interface["jobs"]}
+    check(
+        "composition and its shot are jobs, beside the untouched actions",
+        set(jobs),
+        {"long_form", "segment"},
+    )
+    # The one property decision #601 turns on: the composer holds NO device while its shots
+    # render. A model slot here would make one attempt hold eight shots.
+    check("long_form declares no model slot", "models" in jobs["long_form"], False)
+    check(
+        "segment holds the H3 model for exactly one shot",
+        jobs["segment"]["models"][0]["class"],
+        "H3Model",
+    )
+    check(
+        "segment is child-callable by its exact module and export",
+        (jobs["segment"]["invocable"]["module"], jobs["segment"]["invocable"]["export"]),
+        ("h3", "segment"),
+    )
+    check(
+        "a shot's identity is frozen in its own request",
+        [field["name"] for field in jobs["segment"]["request"]["fields"]],
+        ["payload", "model"],
+    )
+    # A child call names its whole intent: only the opening frame may be omitted, because a
+    # default would put a value into the intent digest that the caller never wrote.
+    check(
+        "a shot's prompt, seed, length and steps are all named, never defaulted",
+        sorted(jobs["segment"]["invocable"]["defaults"]),
+        ["request/model", "request/payload/first_frame"],
+    )
+    check(
+        "long_form request fields",
+        [field["name"] for field in jobs["long_form"]["request"]["fields"]],
+        [
+            "shots",
+            "subject_definitions",
+            "overall_soundscape",
+            "non_diegetic_music",
+            "steps",
+            "opening_frame",
+        ],
+    )
+    check(
+        "long_form reports the delivered prefix and the shot that stopped it",
+        [field["name"] for field in jobs["long_form"]["result"]["fields"]],
+        [
+            "segments",
+            "requested",
+            "delivered_frames",
+            "fps",
+            "failed_index",
+            "failure_code",
+            "failure_detail",
+            "warnings",
+        ],
+    )
+    check(
+        "a shot list is bounded by what the assembler accepts",
+        next(
+            field["constraints"]
+            for field in jobs["long_form"]["request"]["fields"]
+            if field["name"] == "shots"
+        ),
+        {"max_length": package.MAX_SHOTS, "min_length": 2},
+    )
+    check(
+        "a long-form shot defaults to the longest served cell, not the cheapest",
+        package.Shot(prompt="x", seed=1).duration_s,
+        package.MAX_DURATION_S,
+    )
+    check(
+        "and that cell is longer than the single-clip default",
+        package.MAX_DURATION_S > package.DEFAULT_DURATION_S,
+        True,
+    )
+    check(
+        "one replayed frame leaves the chain at every seam",
+        package.segment_clock([14, 14, 14, 14, 14, 14, 14, 14]),
+        ([0, 345, 689, 1033, 1377, 1721, 2065, 2409], 2753),
+    )
     check("H3 permits Runtime encoded linear leaves", package.H3Model.__encoded_leaves__, "accept")
     check(
         "reference files bind to the explicit Assets parameter",

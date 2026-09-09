@@ -162,6 +162,15 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    ("scripts/h3-longform-proof.py", "cozy_runtime.author._calls"): (
+        "the long-form driver builds the real child broker so the chain is proven through "
+        "Runtime's own call exchange rather than a fake. Retire when a public child-call "
+        "harness can construct a broker."
+    ),
+    ("scripts/h3-longform-proof.py", "cozy_runtime.author._assets"): (
+        "the same driver grants the previous shot's bytes to the next child the way the "
+        "worker does. Retire with the same public child-call harness."
+    ),
     ("scripts/sdxl-normalization-proof.py", "cozy_runtime.author._model"): (
         "the normalization driver constructs the exact-checkpoint source Runtime admits; "
         "for_test permits test:// identities only. Retire with a public native job fixture."
