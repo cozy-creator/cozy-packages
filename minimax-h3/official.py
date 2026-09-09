@@ -943,7 +943,7 @@ class OfficialH3Pipeline:
         _validate_dual_topology(dits, _DIT_COMPONENT)
         text_encoder = build_text_conditioner(_section(mapping, "text_encoder"))
         video_vae = _apply_video_vae_dtype(
-            TileBatchedVideoVAE.from_config(_section(mapping, "video_vae"))
+            TileBatchedVideoVAE.from_config(_section(mapping, "video_vae")), config
         )
         audio_vae = AutoencoderKLMiniMaxH3Audio.from_config(_section(mapping, "audio_vae")).eval()
         for trunk in _TRUNKS:
@@ -1593,32 +1593,33 @@ def _apply_transformer_dtype(transformer: Any) -> Any:
     return transformer.eval()
 
 
-def _apply_video_vae_dtype(vae: Any) -> Any:
-    """Store the decode-side GEMM operands at the dtype the release decode already uses.
+def _apply_video_vae_dtype(vae: Any, config: Config | None = None) -> Any:
+    """Construct decode operands in their checkpoint dtype before Runtime's census.
 
-    `decode_video_chunks` runs the decode under `torch.autocast(float16)` — as
-    `MiniMaxH3VideoDecodeStep` does, and h3a-017 kept — so every decoder conv/linear weight
-    is rounded f32->f16 per op whatever it is stored as: storing that rounding is bit-exact
-    for those ops and halves the component. Nothing else moves. The encode path
-    (`encode_vae_condition`) has no autocast and stays float32, norms, biases and register
-    tokens are what autocast itself keeps in float32, and `decoder.rope.inv_freq` is a
-    config-derived buffer float16 could not restore.
-
-    `vae_tiles.decode_chunks` casts the incoming latents to `next(decoder.parameters())
-    .dtype`, so the ORDER of the decoder's parameters is load-bearing here: the first one
-    is `register_tokens`, which this cast leaves at float32, and a conformance arm pins
-    that. It would be bit-exact either way — the first op to see the latents is a conv,
-    which autocast rounds to float16 regardless — but a silent dtype change to a tensor
-    this function does not touch is not something to leave to parameter ordering.
+    Both original FP32 and pre-rounded FP16 matrix weights run under the same FP16
+    decode autocast. Loading must preserve their supplied logical dtype and price the
+    actual residency, rather than requiring a checkpoint rewrite. Encoder, norms,
+    biases, register tokens and config-derived RoPE retain their FP32 contract.
+    Config-only construction defaults to the original FP32 architecture.
     """
+    config = config or Config({})
     weights = [
-        parameter
+        (f"decoder.{name}", parameter)
         for name, parameter in vae.decoder.named_parameters()
         if name.rsplit(".", 1)[-1] == "weight" and parameter.dim() >= 2
     ]
-    weights.append(vae.post_quant_conv.weight)
-    for parameter in weights:
-        parameter.data = parameter.data.to(dtype=torch.float16)
+    weights.append(("post_quant_conv.weight", vae.post_quant_conv.weight))
+    supported = {"f32": torch.float32, "f16": torch.float16}
+    for name, parameter in weights:
+        key = f"video_vae.{name}"
+        dtype = config.tensor_dtype(key, default="f32")
+        if dtype not in supported:
+            raise ConformanceError(
+                f"{key} uses unsupported dtype {dtype!r}; expected f32 or f16",
+                code="artifact_dtype",
+                fields=[key],
+            )
+        parameter.data = parameter.data.to(dtype=supported[dtype])
     return vae.eval()
 
 
