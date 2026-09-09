@@ -79,6 +79,7 @@ from h3_tables.order import current_order, full_order  # noqa: E402
 from h3_tables.plans import parse_plan  # noqa: E402
 from h3_tables.source import official_full_specs  # noqa: E402
 
+import assembly  # noqa: E402
 import h3 as package  # noqa: E402
 from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer  # noqa: E402
 from conditioner import build_text_conditioner, text_conditioner_config  # noqa: E402
@@ -2604,9 +2605,20 @@ def arm_interface() -> None:
     print("\n== long-form composition ==")
     jobs = {entry["name"]: entry for entry in interface["jobs"]}
     check(
-        "composition and its shot are jobs, beside the untouched actions",
+        "composition, its shot and the assembler are jobs, beside the untouched actions",
         set(jobs),
-        {"long_form", "segment"},
+        {"long_form", "segment", "assemble_video"},
+    )
+    # h3a-024 §6.2a: assembly is the chain's second half and holds no device either, so a
+    # composition parent may await it as an ordinary CPU-only child.
+    check("assemble_video declares no model slot", "models" in jobs["assemble_video"], False)
+    check(
+        "assemble_video is child-callable by its exact module and export",
+        (
+            jobs["assemble_video"]["invocable"]["module"],
+            jobs["assemble_video"]["invocable"]["export"],
+        ),
+        ("assembly", "assemble_video"),
     )
     # The one property decision #601 turns on: the composer holds NO device while its shots
     # render. A model slot here would make one attempt hold eight shots.
@@ -2666,7 +2678,16 @@ def arm_interface() -> None:
             for field in jobs["long_form"]["request"]["fields"]
             if field["name"] == "shots"
         ),
-        {"max_length": package.MAX_SHOTS, "min_length": 2},
+        {"max_length": assembly.MAX_SHOTS, "min_length": 2},
+    )
+    check(
+        "and the assembler's own bound is that same one number",
+        next(
+            field["constraints"]
+            for field in jobs["assemble_video"]["request"]["fields"][0]["type"]["fields"]
+            if field["name"] == "videos"
+        ),
+        {"max_length": assembly.MAX_SHOTS, "min_length": 2},
     )
     check(
         "a long-form shot defaults to the longest served cell, not the cheapest",

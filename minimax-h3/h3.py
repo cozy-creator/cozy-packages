@@ -47,6 +47,7 @@ from cozy_runtime.author import (
 )
 from msgspec.structs import replace
 
+from assembly import MAX_SHOTS, assemble_video
 from gates import MediaFacts, pre_encode_gate
 from official import (
     FPS,
@@ -102,7 +103,15 @@ if (
     != SUPPORTED_STEPS
 ):
     raise ValueError("H3 task plans declare different supported step counts")
-DEFAULT_STEPS = min(SUPPORTED_STEPS)
+# DECLARED, for the same reason the duration envelope below is (#713): `describe` READS this
+# file and runs none of it. `min(SUPPORTED_STEPS)` is a CALL, so the static reader folds it to
+# nothing while the importing reader folds it to 30 — and a provisioned interface that omits a
+# default the installed package carries is a typed `stale_package_interface`, which blocks
+# every job on the release. The plans stay the authority: this is checked against them, and
+# the pair cannot drift.
+DEFAULT_STEPS = 30
+if min(SUPPORTED_STEPS) != DEFAULT_STEPS:
+    raise ValueError("H3's declared default step count is not the cheapest served schedule")
 Steps = Annotated[
     Literal[SUPPORTED_STEPS],  # type: ignore[valid-type]
     msgspec.Meta(description="Denoise steps (transformer evaluations); fewer is faster."),
@@ -801,7 +810,6 @@ def ref2va(
 _KEYFRAME_MAX_BYTES = 64 * _MIB
 _KEYFRAME_MAX_DECODED_BYTES = 3 * 16_777_216
 
-MAX_SHOTS = 8  # se-014's own bound: it trims the replayed frame from shots 2-8.
 
 
 class Shot(msgspec.Struct, forbid_unknown_fields=True):
@@ -1113,3 +1121,9 @@ async def long_form(
 
 
 app.job(long_form)
+
+
+# Assembly is the second half of the chain and lives in this package for the same reason
+# `long_form` does (h3a-024 §6.2): it holds no device, declares no model, and its 2..8 bound
+# IS `MAX_SHOTS`. `emits_media` because it commits the assembled MP4.
+app.job(assemble_video, emits_media=True)
