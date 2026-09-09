@@ -125,7 +125,7 @@ async def run_control(
             else:
                 corrupt_call = cast(Callable[..., Any], corrupt_media)
                 call = corrupt_call(image=original, kind=case)
-                image = await call
+                image = (await call).image
                 transformation = {
                     "request_id": call.request_id,
                     "kind": case,

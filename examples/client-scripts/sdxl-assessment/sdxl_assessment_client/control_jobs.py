@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import Annotated, Literal
 
+import msgspec
 import numpy as np
 from cozy_runtime.author import (
     App,
@@ -34,6 +35,10 @@ MAX_NEW_BYTES = 16 << 30
 CHUNK_BYTES = 4 << 20
 BLUR_RADIUS = 8.0
 FLAT_RGB = (127, 127, 127)
+
+
+class MediaControl(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    image: ImageAsset
 
 
 @invocable(memoize=True)
@@ -122,7 +127,7 @@ async def corrupt_media(
     kind: Literal["blur", "flat"],
     decoder: MediaDecoder,
     out: Outputs,
-) -> ImageAsset:
+) -> MediaControl:
     """Produce declared pixel controls from a real retained reference image."""
     ctx.raise_if_cancelled()
     frame = decoder.decode_image(image)
@@ -134,7 +139,7 @@ async def corrupt_media(
     else:
         raise UnsupportedInput("unknown media corruption control")
     ctx.raise_if_cancelled()
-    return out.save_image(ImageFrame(frame.width, frame.height, changed.tobytes()))
+    return MediaControl(out.save_image(ImageFrame(frame.width, frame.height, changed.tobytes())))
 
 
 app = App()
