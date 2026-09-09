@@ -91,7 +91,7 @@ from h3_tables.model_config import (  # noqa: E402
     parse_production_config,
 )
 from h3_tables.order import current_order, full_order  # noqa: E402
-from h3_tables.plans import parse_plan  # noqa: E402
+from h3_tables.plans import TASKS, parse_plan  # noqa: E402
 from h3_tables.source import TARGET_COMPONENT, official_full_specs  # noqa: E402
 from h3_tables.turbo import collapse_head_bank, pdd_head_plan, pdd_time_grid  # noqa: E402
 
@@ -290,7 +290,7 @@ def arm_checkpoint_table_layout() -> None:
     wrong = run_rows(shuffled, block_values, final_values)
     red("moving labels without table rows changes output", torch.equal(original[0], wrong[0]), True)
 
-    config = {"fl2va_dit": dit_config("fl2va", "adaln-pruned")}
+    config: dict[str, Any] = {"fl2va_dit": dit_config("fl2va", "adaln-pruned")}
     config["fl2va_dit"]["cozy_h3"]["table_keys"] = reordered
     check(
         "serving constructor accepts arbitrary checkpoint row order",
@@ -308,12 +308,14 @@ def arm_checkpoint_table_layout() -> None:
         }
     )
     config["fl2va_dit"]["cozy_h3"]["table_keys"] = extra
+    extended = official._dit_spec(config, "fl2va")[2]
+    assert extended is not None
     check(
         "checkpoint can add rows without a package change",
-        len(official._dit_spec(config, "fl2va")[2].block_keys),
+        len(extended.block_keys),
         len(layout.block_keys) + 1,
     )
-    trunks = {task: torch.nn.Module() for task in ("fl2va", "ref2va")}
+    trunks = {task: torch.nn.Module() for task in TASKS}
     for index, model in enumerate(trunks.values()):
         model.norm_out = _AdaLNPrunedOutputTable(
             torch.nn.Identity(), hidden_size=2, timestep_count=len(layout.timesteps) + index
@@ -329,7 +331,7 @@ def arm_checkpoint_table_layout() -> None:
         "artifact_config",
     )
 
-    corruptions = (
+    corruptions: tuple[tuple[str, Callable[[Any], None]], ...] = (
         ("missing layout", lambda value: value.clear()),
         ("noncontiguous index", lambda value: value["block_modulation"][0].update(index=1)),
         ("boolean index", lambda value: value["block_modulation"][0].update(index=False)),
@@ -1372,7 +1374,7 @@ def arm_graph_and_dtypes() -> None:
                 "frames": 345,
             }
         )
-    plans = {task: producer._production_plan(task) for task in ("fl2va", "ref2va")}
+    plans = {task: producer._production_plan(task) for task in TASKS}
     migrated = upgrade_legacy_table_config(canonical_json.encode(old), plans)
     check(
         "restamp preserves exact historical row meanings", migrated, canonical_json.encode(document)

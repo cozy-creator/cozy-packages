@@ -25,14 +25,14 @@ checkpoint as a substitute for the full BF16 source.
 Pruned checkpoint configs describe the ordered AdaLN rows as `cozy_h3.table_keys`:
 each final-normalization row names an exact float32 timestep, and each block-modulation
 row names a timestep and modality. Sampling-plan hashes remain generation provenance;
-they do not decide serving compatibility. The shared parser comes from the ordinary
-`minimax-h3` dependency, so producer and inference validate the same metadata.
+they do not decide serving compatibility. Producer and inference use byte-identical
+copies of the same small row-label parser, checked by CI.
 
 `restamp` preserves explicit valid row labels and validates them against the stored table
 dimensions. For the original checkpoint stamps it first proves the old 345-frame plan
 has identical ordered rows, then replaces its legacy digest with those labels. Unknown
-or changed historical plans require regenerating the tables. This metadata upgrade uses
-the same transaction as video-VAE normalization, inheriting all other tensor objects.
+or changed historical plans require regenerating the tables. This metadata upgrade
+inherits every tensor object and does not normalize video-VAE precision.
 
 ## Lanes
 
@@ -176,10 +176,15 @@ continues to consume a checkpoint with only the original five components.
 Old `1.0.0-rc.2` AdaLN checkpoints may still carry the retired `frames:345` plan
 identity. Before turbo preparation or current ordinary serving, run the `restamp`
 job through Creator with `model.lane=paul/minimax-h3@1.0.0-rc.2/fp8-adaln-pruned`.
-It accepts only the exact historical frame-only plan or the current plan, verifies
-table geometry, and changes only the two plan digest strings. All tensor objects,
+It resolves only the exact historical frame-only plan or the current known plan,
+verifies table geometry, and replaces their opaque stamps with explicit ordered
+table-row labels. Already explicit valid layouts are preserved. All tensor objects,
 including the video VAE's precision, are inherited unchanged. Other old plans
 require real retabling from their generating model; `restamp` refuses them.
+
+The small row-label parser is maintained in `minimax-h3/h3_table_layout.py` and
+copied byte-for-byte into the producer. `scripts/sync-h3-table-layout.py` verifies
+the copy in CI, avoiding a private package-index dependency for pure validation.
 
 `scripts/h3-turbo-store-proof.py` verifies native inheritance, cancellation, replay,
 and component contents. With the pinned upstream `minimax_h3_pdd.py` supplied as an

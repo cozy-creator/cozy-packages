@@ -163,6 +163,14 @@ def public_runtime_surface(module: str) -> bool:
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
     (
+        "scripts/h3-restamp-native-proof.py",
+        "cozy_runtime.author._model",
+    ): "Bind the native source checkpoint for the metadata-only migration proof.",
+    (
+        "scripts/h3-restamp-native-proof.py",
+        "cozy_runtime.internal.weights_sink",
+    ): "Run the real native checkpoint transaction and compare all retained tensor objects.",
+    (
         "scripts/h3-turbo-cp-proof.py",
         "cozy_runtime.internal.parallel",
     ): "Verify actual PDD hooks and component scopes under Runtime's Ulysses installation.",

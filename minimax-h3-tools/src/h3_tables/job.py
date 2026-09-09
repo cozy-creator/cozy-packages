@@ -1005,7 +1005,7 @@ def restamp(
         sources={"lane": lane},
         targets={component: WeightsTarget("lane", component) for component in components},
         configs={"model": WeightsConfig(data=document, length=len(document))},
-        order=current_order(_asset("whole-order.json")).rows,
+        order=tuple((row.component, row.key) for row in granted.tensors),
     ) as transaction:
         if transaction.replayed:
             return _receipt(transaction).artifact

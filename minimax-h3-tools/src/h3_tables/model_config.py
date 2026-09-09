@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any, cast
 
 from cozy_runtime.author import canonical_json
-from h3_table_layout import TableLayout
 
 from ._table_layout import TableLayout
 from .kernel import H3Topology
@@ -47,20 +46,12 @@ def parse_full_config(raw: bytes) -> dict[str, dict[str, Any]]:
     sections: dict[str, dict[str, Any]] = {}
     for name, section in value.items():
         if not isinstance(section, dict):
-            raise TypeError(
-                f"official H3 model config section {name!r} is not a mapping"
-            )
+            raise TypeError(f"official H3 model config section {name!r} is not a mapping")
         sections[name] = cast(dict[str, Any], section)
     fl = {k: v for k, v in sections["transformer"].items() if k != "_diffusers_version"}
-    ref = {
-        k: v
-        for k, v in sections["transformer_ref"].items()
-        if k != "_diffusers_version"
-    }
+    ref = {k: v for k, v in sections["transformer_ref"].items() if k != "_diffusers_version"}
     if fl != ref:
-        raise ValueError(
-            "FL2VA and Ref2VA do not declare one identical DiT architecture config"
-        )
+        raise ValueError("FL2VA and Ref2VA do not declare one identical DiT architecture config")
     H3Topology.from_config(fl)
     validate_text_conditioner(sections["text_encoder"])
     return sections
@@ -72,11 +63,13 @@ def parse_production_config(raw: bytes) -> dict[str, dict[str, Any]]:
         value = canonical_json.decode(raw)
     except ValueError as exc:
         raise ValueError("production H3 model config is not JSON") from exc
-    if (
-        not isinstance(value, dict)
-        or set(value)
-        != {"fl2va_dit", "ref2va_dit", "text_encoder", "video_vae", "audio_vae"}
-    ):
+    if not isinstance(value, dict) or set(value) != {
+        "fl2va_dit",
+        "ref2va_dit",
+        "text_encoder",
+        "video_vae",
+        "audio_vae",
+    }:
         raise ValueError("model config is not a dual-task H3 config")
     sections: dict[str, dict[str, Any]] = {}
     stamps: tuple[tuple[str, str, Task], ...] = (
@@ -124,9 +117,7 @@ def dual_full_config(sections: dict[str, dict[str, Any]]) -> bytes:
     return canonical_json.encode(document)
 
 
-def task_config(
-    sections: dict[str, dict[str, Any]], plan: TimestepPlan
-) -> dict[str, Any]:
+def task_config(sections: dict[str, dict[str, Any]], plan: TimestepPlan) -> dict[str, Any]:
     source_name = "transformer" if plan.task == "fl2va" else "transformer_ref"
     component = "fl2va_dit" if plan.task == "fl2va" else "ref2va_dit"
     config = dict(sections[source_name])

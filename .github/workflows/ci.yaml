@@ -186,6 +186,8 @@ jobs:
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/stage-proof.py
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/full-source-proof.py
           minimax-h3-tools/.venv/bin/python scripts/h3-turbo-store-proof.py
+          minimax-h3-tools/.venv/bin/python scripts/h3-restamp-native-proof.py
+          minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/table-metadata-proof.py
           minimax-h3-tools/.venv/bin/python scripts/h3-adaln-resume-proof.py
           minimax-h3-tools/.venv/bin/python scripts/h3-adaln-binding-proof.py
           minimax-h3-tools/.venv/bin/python scripts/tensorfs_seeds.py
