@@ -3202,14 +3202,9 @@ def arm_interface() -> None:
                 [f"{trunk}_turbo"],
             )
             check(
-                f"{name} base turbo warm lease",
-                base_slot["component_use"][f"warm_{trunk}_turbo"],
-                [f"{trunk}_dit"],
-            )
-            check(
-                f"{name} LoRA warm lease",
-                lora_slot["component_use"][f"warm_{trunk}"],
-                [f"{trunk}_turbo"],
+                f"{name} does not advertise uncalled turbo warm scopes",
+                any("warm" in method for method in lora_slot["component_use"]),
+                False,
             )
             component_use = {**base_slot["component_use"], **lora_slot["component_use"]}
             model_slots = models

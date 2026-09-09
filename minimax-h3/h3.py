@@ -376,15 +376,6 @@ class H3TurboBase(H3Model, encoded_leaves="accept", fusion="accept"):
     ) -> ScheduleFacts:
         return turbo_lora.sample_ref2va(self, state, on_step=on_step, cancel=cancel, checks=checks)
 
-    @uses_components("fl2va_dit")
-    def warm_fl2va_turbo(self, turbo_lora: H3TurboLoRA) -> None:
-        turbo_lora.warm_fl2va(self.pipe)
-
-    @uses_components("ref2va_dit")
-    def warm_ref2va_turbo(self, turbo_lora: H3TurboLoRA) -> None:
-        turbo_lora.warm_ref2va(self.pipe)
-
-
 @sequence_parallel(degrees=(2, 4))
 class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
     """Independent PDD weights, replicated alongside the base on every CP rank."""
@@ -396,14 +387,6 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
 
     def unload(self, loader: Loader) -> None:
         return None
-
-    @uses_components("fl2va_turbo")
-    def warm_fl2va(self, base: OfficialH3Pipeline) -> None:
-        base.warm_dit("fl2va_turbo", overlay=self.pipe.overlay(base, "fl2va"))
-
-    @uses_components("ref2va_turbo")
-    def warm_ref2va(self, base: OfficialH3Pipeline) -> None:
-        base.warm_dit("ref2va_turbo", overlay=self.pipe.overlay(base, "ref2va"))
 
     @uses_components("fl2va_turbo")
     def sample_fl2va(
