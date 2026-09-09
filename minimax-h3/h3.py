@@ -82,6 +82,7 @@ from official import (
     turbo_steps,
     validate_reference_policy,
 )
+from turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK
 
 app = App()
 
@@ -426,8 +427,6 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
         cancel: Any,
         checks: NumericalChecks,
     ) -> ScheduleFacts:
-        from turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK
-
         task: Task = "fl2va_turbo" if trunk == "fl2va" else "ref2va_turbo"
         overlay = self.pipe.overlay(base.pipe, trunk)
         root = base.pipe.components[f"{trunk}_dit"]
