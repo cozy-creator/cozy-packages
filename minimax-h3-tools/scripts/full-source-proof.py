@@ -77,7 +77,7 @@ def main() -> None:
     assert selected == original
     assert native.calls == {dits.checkpoint_ref: 1, shared.checkpoint_ref: 1}
 
-    tables = job._table_additions(sections)
+    tables = job._table_additions(job._topologies(sections), job._plans(job.LAUNCH_SET))
     quantization = prepare_quantization(h3_quantization_plan())
     def pruned(lane_name: str, full_targets: dict[str, Any]) -> dict[str, Any]:
         lane = lanes.LANES[lane_name]

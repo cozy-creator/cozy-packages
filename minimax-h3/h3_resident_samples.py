@@ -3,6 +3,9 @@
 Expected persistent values name checkpoint 9b743990...a23cd and were compared with
 original HF42ed227e carrier bytes. Final AdaLN tables name that published checkpoint;
 the VAE rotary expectation comes from its exact Diffusers0.40 constructor/config.
+The two float16 VAE subjects are the same published bytes rounded once at build:
+the decode-side GEMM operands are stored at the dtype its float16 autocast
+computes in, so the round is the one autocast would have done per op.
 This module never opens a Store or writes weights. It observes CPU tensors too,
 so its byte contract can be tested independently of CUDA placement.
 """
@@ -129,16 +132,16 @@ _SAMPLES: dict[str, tuple[_Sample, ...]] = {
         ),
         _Sample(
             "post_quant_conv.weight",
-            "f32",
+            "f16",
             (24, 24, 1, 1, 1),
-            "cbf1865066e0b7b7b582d0b0e80dfad086c20f0b3c39f01ddd5789aa22ecb700",
+            "18eb82b85abfd04a597dc04d2b4da91219bf87d5195f9f5451043a2d40404b7f",
             0,
         ),
         _Sample(
             "decoder.proj_in.weight",
-            "f32",
+            "f16",
             (2048, 24),
-            "9df43d1b5be0bdfbea5c6ed7a03647ff16ed74b9c74c88f1d92e297088995c16",
+            "2ba960c84dfd3fddaa91043ca56e07200100a54574f5fbf0c5ab63e59b8d21b5",
             0,
         ),
         _Sample(
@@ -187,7 +190,7 @@ def resident_hashes(component: str, module: Any) -> tuple[dict[str, str], dict[s
         raise ValueError(f"unsupported resident sample component: {component}")
     actual: dict[str, str] = {}
     expected: dict[str, str] = {}
-    dtypes = {"f32": torch.float32, "bf16": torch.bfloat16}
+    dtypes = {"f32": torch.float32, "f16": torch.float16, "bf16": torch.bfloat16}
     for sample in _SAMPLES[component]:
         name = f"{component}/{sample.key}"
         expected[name] = sample.sha256

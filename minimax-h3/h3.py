@@ -75,6 +75,7 @@ from official import (
     frames_for,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
+    turbo_steps,
     validate_reference_policy,
 )
 
@@ -111,6 +112,8 @@ if (
 ):
     raise ValueError("H3 task plans declare different supported step counts")
 DEFAULT_STEPS = min(SUPPORTED_STEPS)
+#: PDD-8: what the turbo functions run, fixed by their plans and absent from their wire.
+TURBO_STEPS = turbo_steps()
 Steps = Annotated[
     Literal[SUPPORTED_STEPS],  # type: ignore[valid-type]
     msgspec.Meta(description="Denoise steps (transformer evaluations); fewer is faster."),
@@ -156,13 +159,27 @@ class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     duration_s: DurationSeconds = DEFAULT_DURATION_S
 
 
+# The turbo functions carry no `steps`: PDD-8 fixes eight transformer evaluations, so the
+# parameter is unrepresentable on the wire rather than refused at runtime.
+class FirstLastFrameToVideoTurboInput(msgspec.Struct, forbid_unknown_fields=True):
+    prompt: Prompt
+    seed: int | None = None
+    duration_s: DurationSeconds = DEFAULT_DURATION_S
+
+
+class ReferenceMediaToVideoTurboInput(msgspec.Struct, forbid_unknown_fields=True):
+    prompt: Prompt
+    seed: int | None = None
+    duration_s: DurationSeconds = DEFAULT_DURATION_S
+
+
 class H3VideoOutput(msgspec.Struct):
     """The catalog wire shape. Checkpoint, plan, geometry, and digest facts remain
     attempt observations (se-012): they ride Telemetry, never the customer result."""
 
     video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",))]
     continuation_frame: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
-    warnings: list[str] = msgspec.field(default_factory=list)
+    warnings: list[str]
 
 
 def preflight_reference_media(
@@ -170,6 +187,17 @@ def preflight_reference_media(
 ) -> ReferencePolicyFacts:
     """Refuse cross-field count errors before Runtime hydrates a single asset."""
     del payload
+    return _reference_policy(assets)
+
+
+def preflight_reference_media_turbo(
+    payload: ReferenceMediaToVideoTurboInput, assets: ReferenceAssets
+) -> ReferencePolicyFacts:
+    del payload
+    return _reference_policy(assets)
+
+
+def _reference_policy(assets: ReferenceAssets) -> ReferencePolicyFacts:
     kinds = [assets.info(index).kind for index in range(len(assets))]
     try:
         return validate_reference_policy(kinds)
@@ -220,7 +248,15 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept
         skipped while the other is still warmed — consent, not requirement, the shape
         h3a-015 gave the fused lane itself.
         """
-        for warm_one in (self.warm_fl2va, self.warm_ref2va):
+        warmers: dict[Task, Callable[[], None]] = {
+            "fl2va": self.warm_fl2va,
+            "fl2va_turbo": self.warm_fl2va_turbo,
+            "ref2va": self.warm_ref2va,
+            "ref2va_turbo": self.warm_ref2va_turbo,
+        }
+        for task, warm_one in warmers.items():
+            if not self.pipe.serves(task):
+                continue  # a lane without the overlay components serves no turbo function
             ctx.raise_if_cancelled()
             try:
                 warm_one()
@@ -240,6 +276,17 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept
     @uses_components("ref2va_dit")
     def warm_ref2va(self) -> None:
         self.pipe.warm_dit("ref2va")
+
+    # The turbo functions lease the overlay IN the scope of the DiT it patches, so the
+    # stager sees one set (`h3-turbo-serving.md` §1): a base->turbo switch stages only the
+    # overlay, and a turbo->base switch stages nothing.
+    @uses_components("fl2va_dit", "fl2va_turbo")
+    def warm_fl2va_turbo(self) -> None:
+        self.pipe.warm_dit("fl2va_turbo")
+
+    @uses_components("ref2va_dit", "ref2va_turbo")
+    def warm_ref2va_turbo(self) -> None:
+        self.pipe.warm_dit("ref2va_turbo")
 
     @uses_components("text_encoder")
     def condition_text(self, task: Task, state: Any, *, checks: NumericalChecks) -> None:
@@ -279,15 +326,15 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept
         return self.pipe.decode_video_chunks(task, state, observed)
 
     @uses_components("video_vae")
-    def condition_fl2va_media(self, state: Any, *, checks: NumericalChecks) -> None:
+    def condition_fl2va_media(self, task: Task, state: Any, *, checks: NumericalChecks) -> None:
         checks.component("video_vae", self.pipe.components["video_vae"])
-        self.pipe.condition_media("fl2va", state, checks=checks)
+        self.pipe.condition_media(task, state, checks=checks)
 
     @uses_components("video_vae", "audio_vae")
-    def condition_ref2va_media(self, state: Any, *, checks: NumericalChecks) -> None:
+    def condition_ref2va_media(self, task: Task, state: Any, *, checks: NumericalChecks) -> None:
         for name in ("video_vae", "audio_vae"):
             checks.component(name, self.pipe.components[name])
-        self.pipe.condition_media("ref2va", state, checks=checks)
+        self.pipe.condition_media(task, state, checks=checks)
 
     @uses_components("fl2va_dit")
     def sample_fl2va(
@@ -306,6 +353,30 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept
         checks.component("ref2va_dit", root)
         with checks.forwards(root, "ref2va_dit"):
             return self.pipe.denoise("ref2va", state, on_step=on_step, cancel=cancel, checks=checks)
+
+    @uses_components("fl2va_dit", "fl2va_turbo")
+    def sample_fl2va_turbo(
+        self, state: Any, *, on_step: Any, cancel: Any, checks: NumericalChecks
+    ) -> ScheduleFacts:
+        root = self.pipe.components["fl2va_dit"]
+        checks.component("fl2va_dit", root)
+        checks.component("fl2va_turbo", self.pipe.components["fl2va_turbo"])
+        with checks.forwards(root, "fl2va_dit"):
+            return self.pipe.denoise(
+                "fl2va_turbo", state, on_step=on_step, cancel=cancel, checks=checks
+            )
+
+    @uses_components("ref2va_dit", "ref2va_turbo")
+    def sample_ref2va_turbo(
+        self, state: Any, *, on_step: Any, cancel: Any, checks: NumericalChecks
+    ) -> ScheduleFacts:
+        root = self.pipe.components["ref2va_dit"]
+        checks.component("ref2va_dit", root)
+        checks.component("ref2va_turbo", self.pipe.components["ref2va_turbo"])
+        with checks.forwards(root, "ref2va_dit"):
+            return self.pipe.denoise(
+                "ref2va_turbo", state, on_step=on_step, cancel=cancel, checks=checks
+            )
 
 
 def _keyframe_roles(assets: KeyframeAssets) -> tuple[int | None, int | None]:
@@ -863,43 +934,23 @@ def fl2va(
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
-    ctx.raise_if_cancelled()
-    view = model.for_request(ctx, seed=payload.seed)
-    checks = NumericalChecks(tel, model.pipe.resident)
-    with tel.stage("prepare", overall_range=(0.00, 0.03)):
-        first_index, last_index = _keyframe_roles(assets)
-        first = _keyframe_image(assets, first_index, field="first")
-        last = _keyframe_image(assets, last_index, field="last")
-        state = model.pipe.start_fl2va(
-            prompt=payload.prompt,
-            first_frame=first,
-            last_frame=last,
-            generator=model.pipe.generator(view.generator),
-            steps=payload.steps,
-            frames=frames_for(payload.duration_s),
-        )
-    with tel.stage("condition_text", overall_range=(0.03, 0.08)):
-        model.condition_text("fl2va", state, checks=checks)
-    if first is not None or last is not None:
-        with tel.stage("condition_media", overall_range=(0.08, 0.15)):
-            model.condition_fl2va_media(state, checks=checks)
-    with tel.stage("denoise", overall_range=(0.15, 0.85)):
-        schedule = model.sample_fl2va(
-            state,
-            on_step=tel.step_callback(payload.steps, stage="denoise", overall_range=(0.15, 0.85)),
-            cancel=ctx.raise_if_cancelled,
-            checks=checks,
-        )
-    return _finish(
-        model,
-        "fl2va",
-        state,
-        schedule,
-        duration_s=payload.duration_s,
-        out=out,
-        tel=tel,
-        cancel=ctx.raise_if_cancelled,
-        checks=checks,
+    return _keyframes_to_video(
+        ctx, "fl2va", payload, assets, model, out, tel, steps=payload.steps
+    )
+
+
+@app.entrypoint(defaults={"model": _DEFAULT_MODEL_LADDER})
+def fl2va_turbo(
+    ctx: Context,
+    payload: FirstLastFrameToVideoTurboInput,
+    assets: KeyframeAssets,
+    model: H3Model,
+    out: Outputs,
+    tel: Telemetry,
+) -> H3VideoOutput:
+    """`fl2va` under PDD-8: the same keyframes and prompt, eight transformer evaluations."""
+    return _keyframes_to_video(
+        ctx, "fl2va_turbo", payload, assets, model, out, tel, steps=TURBO_STEPS
     )
 
 
@@ -913,8 +964,96 @@ def ref2va(
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
-    ctx.raise_if_cancelled()
     del facts
+    return _references_to_video(
+        ctx, "ref2va", payload, assets, model, out, tel, steps=payload.steps
+    )
+
+
+@app.entrypoint(
+    preflight=preflight_reference_media_turbo, defaults={"model": _DEFAULT_MODEL_LADDER}
+)
+def ref2va_turbo(
+    ctx: Context,
+    payload: ReferenceMediaToVideoTurboInput,
+    assets: ReferenceAssets,
+    facts: Preflight[ReferencePolicyFacts],
+    model: H3Model,
+    out: Outputs,
+    tel: Telemetry,
+) -> H3VideoOutput:
+    """`ref2va` under PDD-8: the same references and prompt, eight transformer evaluations."""
+    del facts
+    return _references_to_video(
+        ctx, "ref2va_turbo", payload, assets, model, out, tel, steps=TURBO_STEPS
+    )
+
+
+def _keyframes_to_video(
+    ctx: Context,
+    task: Task,
+    payload: FirstLastFrameToVideoInput | FirstLastFrameToVideoTurboInput,
+    assets: KeyframeAssets,
+    model: H3Model,
+    out: Outputs,
+    tel: Telemetry,
+    *,
+    steps: int,
+) -> H3VideoOutput:
+    ctx.raise_if_cancelled()
+    view = model.for_request(ctx, seed=payload.seed)
+    checks = NumericalChecks(tel, model.pipe.resident)
+    with tel.stage("prepare", overall_range=(0.00, 0.03)):
+        first_index, last_index = _keyframe_roles(assets)
+        first = _keyframe_image(assets, first_index, field="first")
+        last = _keyframe_image(assets, last_index, field="last")
+        state = model.pipe.start_fl2va(
+            prompt=payload.prompt,
+            first_frame=first,
+            last_frame=last,
+            generator=model.pipe.generator(view.generator),
+            steps=steps,
+            frames=frames_for(payload.duration_s),
+            task=task,
+        )
+    with tel.stage("condition_text", overall_range=(0.03, 0.08)):
+        model.condition_text(task, state, checks=checks)
+    if first is not None or last is not None:
+        with tel.stage("condition_media", overall_range=(0.08, 0.15)):
+            model.condition_fl2va_media(task, state, checks=checks)
+    sample = model.sample_fl2va_turbo if task == "fl2va_turbo" else model.sample_fl2va
+    with tel.stage("denoise", overall_range=(0.15, 0.85)):
+        schedule = sample(
+            state,
+            on_step=tel.step_callback(steps, stage="denoise", overall_range=(0.15, 0.85)),
+            cancel=ctx.raise_if_cancelled,
+            checks=checks,
+        )
+    return _finish(
+        model,
+        task,
+        state,
+        schedule,
+        duration_s=payload.duration_s,
+        out=out,
+        tel=tel,
+        cancel=ctx.raise_if_cancelled,
+        checks=checks,
+    )
+
+
+def _references_to_video(
+    ctx: Context,
+    task: Task,
+    payload: ReferenceMediaToVideoInput | ReferenceMediaToVideoTurboInput,
+    assets: ReferenceAssets,
+    model: H3Model,
+    out: Outputs,
+    tel: Telemetry,
+    *,
+    steps: int,
+) -> H3VideoOutput:
+    ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
     checks = NumericalChecks(tel, model.pipe.resident)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
@@ -931,9 +1070,10 @@ def ref2va(
             prompt=payload.prompt,
             references=references,
             generator=model.pipe.generator(view.generator),
-            steps=payload.steps,
+            steps=steps,
             frames=frames_for(payload.duration_s),
             reference_image_short_edges=sizing.edges,
+            task=task,
         )
         for index, reference in enumerate(state.normalized_references):
             if reference.kind == "image":
@@ -948,19 +1088,20 @@ def ref2va(
                     height=height,
                 )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
-        model.condition_text("ref2va", state, checks=checks)
+        model.condition_text(task, state, checks=checks)
     with tel.stage("condition_media", overall_range=(0.08, 0.15)):
-        model.condition_ref2va_media(state, checks=checks)
+        model.condition_ref2va_media(task, state, checks=checks)
+    sample = model.sample_ref2va_turbo if task == "ref2va_turbo" else model.sample_ref2va
     with tel.stage("denoise", overall_range=(0.15, 0.85)):
-        schedule = model.sample_ref2va(
+        schedule = sample(
             state,
-            on_step=tel.step_callback(payload.steps, stage="denoise", overall_range=(0.15, 0.85)),
+            on_step=tel.step_callback(steps, stage="denoise", overall_range=(0.15, 0.85)),
             cancel=ctx.raise_if_cancelled,
             checks=checks,
         )
     return _finish(
         model,
-        "ref2va",
+        task,
         state,
         schedule,
         duration_s=payload.duration_s,
@@ -1182,7 +1323,7 @@ async def segment(
         model.condition_text("fl2va", state, checks=checks)
     if first is not None:
         with tel.stage("condition_media", overall_range=(0.08, 0.15)):
-            model.condition_fl2va_media(state, checks=checks)
+            model.condition_fl2va_media("fl2va", state, checks=checks)
     with tel.stage("denoise", overall_range=(0.15, 0.85)):
         schedule = model.sample_fl2va(
             state,
