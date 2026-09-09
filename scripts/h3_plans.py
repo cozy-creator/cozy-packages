@@ -2,11 +2,14 @@
 """Derive the committed MiniMax-H3 timestep plans from the official Diffusers scheduler.
 
     python scripts/h3_plans.py 30 40 50
+    python scripts/h3_plans.py --turbo 8
 
 Each argument is a denoise step count (transformer evaluations); its sigma grid is
 `MiniMaxH3Scheduler.set_timesteps(steps + 1)` per modality, exactly as the official
 pipeline spaces `num_inference_steps`. Writes both task plans for the serving package and
 the producer, and restamps the producer's model config with the new plan identities.
+`--turbo` writes the serving package's `<task>_turbo.json` plans only: one fixed schedule,
+stamped with the trunk task, which the turbo overlay's tables are keyed to.
 """
 
 from __future__ import annotations
@@ -27,11 +30,11 @@ sys.path.insert(0, str(H3))
 from cozy_runtime.author import canonical_json  # noqa: E402
 from diffusers import MiniMaxH3Scheduler  # noqa: E402
 
-from official import Schedule, Task, TimestepPlan  # noqa: E402
+from official import Schedule, TimestepPlan, Trunk  # noqa: E402
 
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
-TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
+TASKS: tuple[Trunk, ...] = ("fl2va", "ref2va")
 
 
 def official_schedule(steps: int) -> Schedule:
@@ -94,14 +97,19 @@ def _restamp_constants(digests: dict[str, str], config_digest: str, length: int)
 
 
 def main(arguments: list[str]) -> None:
-    steps = sorted({int(value) for value in arguments})
-    if not steps:
+    turbo = "--turbo" in arguments
+    steps = sorted({int(value) for value in arguments if value != "--turbo"})
+    if not steps or (turbo and len(steps) != 1):
         raise SystemExit(__doc__)
     schedules = tuple(official_schedule(count) for count in steps)
     digests: dict[str, str] = {}
     for task in TASKS:
         plan = TimestepPlan(task, VIDEO_SHIFT, AUDIO_SHIFT, schedules)
         raw = plan.canonical_bytes()
+        if turbo:
+            (H3 / "timestep-plans" / f"{task}_turbo.json").write_bytes(raw)
+            print(f"{task}_turbo: sha256:{plan.digest} steps={plan.steps}")
+            continue
         (H3 / "timestep-plans" / f"{task}.json").write_bytes(raw)
         (TOOLS / f"timestep-plan.{task}.json").write_bytes(raw)
         digests[task] = f"sha256:{plan.digest}"
@@ -110,6 +118,8 @@ def main(arguments: list[str]) -> None:
             f"{task}: {digests[task]} steps={plan.steps} "
             f"final_rows={len(final_rows)} block_rows={len(block_rows)}"
         )
+    if turbo:
+        return
 
     config_path = TOOLS / "model-config.json"
     config = canonical_json.decode(config_path.read_bytes())

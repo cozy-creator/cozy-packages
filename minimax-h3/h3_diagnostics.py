@@ -35,6 +35,8 @@ from h3 import (
 from h3_activation_trace import ACTIVE_TRACE, ActivationTrace, FirstStepCaptured
 from h3_resident_samples import resident_hashes
 from official import (
+    _DIT_COMPONENT,
+    _TRUNK,
     MAX_FRAMES,
     NumericalChecks,
     OfficialH3Pipeline,
@@ -171,7 +173,7 @@ class TracePipeline(OfficialH3Pipeline):
         trace = ACTIVE_TRACE.get()
         if trace is None:
             raise RuntimeError("diagnostic capture context is absent")
-        with trace.observe(self.components[f"{task}_dit"]):
+        with trace.observe(self.components[_DIT_COMPONENT[_TRUNK[task]]]):
             result = super().denoise(
                 task, state, on_step=trace.step_callback(on_step), cancel=cancel, checks=checks
             )
