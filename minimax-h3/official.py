@@ -1618,7 +1618,11 @@ def _validate_dual_topology(members: Mapping[Trunk, Any], names: Mapping[Trunk, 
                 name,
                 tuple(
                     int(value)
-                    for value in (tensor.shape[1:] if name.endswith(".table") else tensor.shape)
+                    for value in (
+                        tensor.shape[1:]
+                        if name == "norm_out.table" or name.endswith(".adaln_proj.table")
+                        else tensor.shape
+                    )
                 ),
                 str(tensor.dtype),
             )

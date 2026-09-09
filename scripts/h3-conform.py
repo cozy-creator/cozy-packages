@@ -292,17 +292,15 @@ def arm_checkpoint_table_layout() -> None:
     config["fl2va_dit"]["cozy_h3"]["table_keys"] = reordered
     check(
         "serving constructor accepts arbitrary checkpoint row order",
-        official._dit_spec(config, "fl2va")[2],
-        shuffled,
+        official._dit_spec(config, "fl2va")[2] == shuffled,
+        True,
     )
     extra = copy.deepcopy(document)
-    extra["final_normalization"].append(
-        {"index": len(layout.timesteps), "timestep": float(0.125).hex()}
-    )
+    extra["final_normalization"].append({"index": len(layout.timesteps), "timestep": (0.125).hex()})
     extra["block_modulation"].append(
         {
             "index": len(layout.block_keys),
-            "timestep": float(0.125).hex(),
+            "timestep": (0.125).hex(),
             "modality": "video",
             "modality_tag": 0,
         }
@@ -313,6 +311,21 @@ def arm_checkpoint_table_layout() -> None:
         len(official._dit_spec(config, "fl2va")[2].block_keys),
         len(layout.block_keys) + 1,
     )
+    trunks = {task: torch.nn.Module() for task in ("fl2va", "ref2va")}
+    for index, model in enumerate(trunks.values()):
+        model.norm_out = _AdaLNPrunedOutputTable(
+            torch.nn.Identity(), hidden_size=2, timestep_count=len(layout.timesteps) + index
+        )
+    official._validate_dual_dit_topology(trunks)
+    check("trunks may have independent table row counts", True, True)
+    trunks["ref2va"].norm_out = _AdaLNPrunedOutputTable(
+        torch.nn.Identity(), hidden_size=3, timestep_count=len(layout.timesteps)
+    )
+    refusal(
+        "independent row counts do not weaken feature-axis validation",
+        partial(official._validate_dual_dit_topology, trunks),
+        "artifact_config",
+    )
 
     corruptions = (
         ("missing layout", lambda value: value.clear()),
@@ -321,7 +334,7 @@ def arm_checkpoint_table_layout() -> None:
         ("nonfinite value", lambda value: value["final_normalization"][0].update(timestep="inf")),
         (
             "inexact float32",
-            lambda value: value["final_normalization"][0].update(timestep=float(0.1).hex()),
+            lambda value: value["final_normalization"][0].update(timestep=(0.1).hex()),
         ),
         ("unknown modality", lambda value: value["block_modulation"][0].update(modality_tag=3)),
         (
@@ -330,7 +343,7 @@ def arm_checkpoint_table_layout() -> None:
         ),
         (
             "unbound final row",
-            lambda value: value["block_modulation"][0].update(timestep=float(0.125).hex()),
+            lambda value: value["block_modulation"][0].update(timestep=(0.125).hex()),
         ),
         (
             "duplicate final row",
