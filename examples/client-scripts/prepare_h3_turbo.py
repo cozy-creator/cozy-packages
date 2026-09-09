@@ -4,6 +4,12 @@
 # [tool.uv.sources]
 # minimax-h3-tools = {path = "../../minimax-h3-tools", editable = true}
 # torch = {index = "pytorch-cu130"}
+# constraint-dependencies = [
+#   "cuda-bindings==13.0.3", "cuda-pathfinder==1.2.2",
+#   "filelock==3.29.7", "fsspec==2026.6.0", "numpy==2.5.1",
+#   "nvidia-nvjitlink==13.2.78", "packaging==26.2", "setuptools==81.0.0",
+#   "tensorfs==0.3.38",
+# ]
 # [[tool.uv.index]]
 # name = "pytorch-cu130"
 # url = "https://download.pytorch.org/whl/cu130"
