@@ -28,9 +28,11 @@ from .adaln_operations import (
     PLAIN,
     _asset,
     _body_kind,
+    _plan,
     _sections,
     _validate_body_config,
     _validate_generators,
+    _validate_table_rows,
 )
 from .kernel import H3Topology, LowRankAdapter, adapter_shapes, precompute_tables, table_shapes
 from .order import current_order
@@ -317,9 +319,14 @@ async def prepare_turbo(
     tel: Telemetry,
 ) -> ModelArtifact:
     """Add PDD-8 components to an assembled pruned BF16, FP8 or MXFP8 model."""
-    if not _body_kind(weights.structure(source)):
+    body = weights.structure(source)
+    if not _body_kind(body):
         raise UnsupportedInput("PDD overlays require an AdaLN-pruned body")
-    _validate_body_config(weights, source, True)
+    base_plans = _validate_body_config(weights, source, True)
+    for task in TASKS:
+        if base_plans[task] != _plan(task).digest:
+            raise UnsupportedInput("PDD overlays require the current base timestep tables")
+        _validate_table_rows(body, task, bank=False)
     sections = _sections()
     topologies = {
         task: H3Topology.from_config(
