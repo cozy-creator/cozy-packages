@@ -1173,6 +1173,40 @@ class OfficialH3Pipeline:
         self._run(task, "decode.video", state, component="video_vae")
         return state.videos
 
+    def decode_video_chunks(
+        self, task: Task, state: Any, on_chunk: Callable[[Any], None]
+    ) -> int:
+        """`decode.video` with the VAE's temporal chunks handed out as they finish (h3a-017).
+
+        Upstream's `MiniMaxH3VideoDecodeStep` denormalizes the latents, decodes under
+        float16 autocast over the float32 VAE, and reverts the ImageNet normalization on
+        the whole clip. This is that arithmetic per chunk, under the same request-local
+        device scope: `on_chunk` receives each `(t, 3, H, W)` float32 piece in [0, 1], in
+        order, and their concatenation is bit-for-bit the block's `videos[0]`. Returns the
+        frame count.
+        """
+        workflow = self._workflow(task, state)
+        components = _ScopedPipeline(self._pipes[workflow], self.components["video_vae"])
+        device = components._execution_device
+        vae = components.vae
+        latents_mean = torch.tensor(vae.config.latents_mean, device=device).view(1, -1, 1, 1, 1)
+        latents_std = torch.tensor(vae.config.latents_std, device=device).view(1, -1, 1, 1, 1)
+        pixel_mean = torch.tensor(components.pixel_mean, device=device).view(1, -1, 1, 1, 1)
+        pixel_std = torch.tensor(components.pixel_std, device=device).view(1, -1, 1, 1, 1)
+        frames = 0
+        with torch.no_grad():
+            chunks = vae.decode_chunks(state.latents * latents_std + latents_mean)
+            while True:
+                with torch.autocast(
+                    device_type=device.type, dtype=torch.float16, enabled=device.type == "cuda"
+                ):
+                    chunk = next(chunks, None)
+                if chunk is None:
+                    return frames
+                video = (chunk.float() * pixel_std + pixel_mean).clamp(0, 1)
+                frames += int(video.shape[2])
+                on_chunk(video[0].permute(1, 0, 2, 3))
+
     def _run(self, task: Task, name: str, state: Any, *, component: str | None = None) -> None:
         workflow = self._workflow(task, state)
         pipe = (
