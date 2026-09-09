@@ -68,7 +68,7 @@ child_app.job(segment, emits_media=True)
 
 
 def _drive(
-    shots: list[h3.Shot], *, fail_at: int, spool: Path
+    shots: list[h3.Shot], *, fail_at: int, spool: Path, opening: str | None = None
 ) -> tuple[Any, Any, list[dict[str, Any]]]:
     """Run `long_form` against a real broker whose children really execute."""
     real = next(s for s in describe(h3.app) if s.name == "segment")
@@ -183,10 +183,29 @@ def _drive(
             non_diegetic_music="None.",
         )
     )
+    # The parent's OWN granted input: an opening frame the caller supplies, which shot 1
+    # continues off exactly as later shots continue off the shot before them.
+    parent_grants: dict[str, GrantedInput] = {}
+    if opening is not None:
+        wire["opening_frame"] = opening
+        local = spool / f"{opening.split(':')[1]}.png"
+        parent_grants["opening_frame"] = GrantedInput(
+            input_id="opening_frame",
+            local=local,
+            media_type="image/png",
+            digest=opening,
+            length=local.stat().st_size,
+        )
     result, outcome, _ = attempt(
         h3.app.get("long_form"),
         wire,
-        Invocation("parent", spool / "parent", time.monotonic() + 120, calls=broker),
+        Invocation(
+            "parent",
+            spool / "parent",
+            time.monotonic() + 120,
+            calls=broker,
+            assets=parent_grants,
+        ),
     )
     return result, outcome, calls
 
@@ -244,12 +263,23 @@ def main() -> None:
             s.continuation_frame_digest for s in out.segments[:2]
         ]
 
+        # --- 4. an opening frame: shot 1 continues off it like any other shot --------
+        opening = out.segments[0].continuation_frame_digest
+        opened, outcome, calls = _drive(
+            shots[:2], fail_at=-1, spool=spool, opening=opening
+        )
+        assert outcome.terminal == "succeeded", outcome
+        first = json.loads(calls[0]["payload"])["payload"]
+        assert first["first_frame"] == opening, first
+        assert opened.result.segments[0].first_frame_digest == opening
+
         # --- the opening shot failing leaves nothing to deliver, and says so ----------
         result, outcome, _ = _drive(shots, fail_at=0, spool=spool)
         assert result is None and outcome.terminal != "succeeded", outcome
 
     print("PASS  4 shots -> 4 ordinary child calls, digest-bound, clock 493/24 s")
     print("PASS  shot 3 fails -> 2 delivered, prefix identical, clock 247/24 s")
+    print("PASS  an opening frame is shot 1's first frame, by digest")
     print("PASS  shot 1 fails -> refused, nothing to deliver")
 
 
