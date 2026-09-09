@@ -1282,9 +1282,9 @@ class OfficialH3Pipeline:
         Upstream's `MiniMaxH3VideoDecodeStep` denormalizes the latents, decodes under
         float16 autocast over the float32 VAE, and reverts the ImageNet normalization on
         the whole clip. This is that arithmetic per chunk, under the same request-local
-        device scope: `on_chunk` receives each `(t, 3, H, W)` float32 piece in [0, 1], in
-        order, and their concatenation is bit-for-bit the block's `videos[0]`. Returns the
-        frame count.
+        device scope. `on_chunk` receives each `(t, 3, H, W)` float32 piece before clipping,
+        so integrity checks can reject infinities before RGB8 conversion clamps them.
+        Valid pixels match the official block after clipping. Returns the frame count.
         """
         workflow = self._workflow(task, state)
         components = _ScopedPipeline(self._pipes[workflow], self.components["video_vae"])
@@ -1304,7 +1304,7 @@ class OfficialH3Pipeline:
                     chunk = next(chunks, None)
                 if chunk is None:
                     return frames
-                video = (chunk.float() * pixel_std + pixel_mean).clamp(0, 1)
+                video = chunk.float() * pixel_std + pixel_mean
                 frames += int(video.shape[2])
                 on_chunk(video[0].permute(1, 0, 2, 3))
 
