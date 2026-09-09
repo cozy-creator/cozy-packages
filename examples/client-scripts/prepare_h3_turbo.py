@@ -8,11 +8,6 @@
 # default-groups = []
 # [tool.uv.sources]
 # minimax-h3-tools = {path = "../../minimax-h3-tools", editable = true}
-# torch = {index = "pytorch-cu130"}
-# [[tool.uv.index]]
-# name = "pytorch-cu130"
-# url = "https://download.pytorch.org/whl/cu130"
-# explicit = true
 # [tool.cozy.models]
 # full = "paul/minimax-h3@1.0.0-h3-audit.1/bf16-full"
 # fl2va_adapter = "paul/minimax-h3@1.0.0-h3-audit.1/fl2va-adapter"
