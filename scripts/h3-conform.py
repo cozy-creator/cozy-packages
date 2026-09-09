@@ -93,10 +93,16 @@ from h3_tables.source import official_full_specs  # noqa: E402
 import h3 as package  # noqa: E402
 import official  # noqa: E402
 import official as official_module  # noqa: E402
-from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer  # noqa: E402
+from adaln_pruned import (  # noqa: E402
+    AdaLNPrunedMiniMaxH3Transformer,
+    _AdaLNPrunedBlockTable,
+    _AdaLNPrunedOutputTable,
+    _AdaLNPrunedTimestepLookup,
+)
 from conditioner import build_text_conditioner, text_conditioner_config  # noqa: E402
 from gates import MediaFacts, refuse_before_encode, report_after_encode  # noqa: E402
 from h3_order import construction_order, encode_order  # noqa: E402
+from h3_table_layout import TableLayout  # noqa: E402
 from official import (  # noqa: E402
     _DIT_COMPONENT,
     FPS,
@@ -228,10 +234,139 @@ TOKEN_CORPUS_DIGEST = "47759c8d2e1a24944edb8f712c7ffe66b650aa3481352487970bcdb3c
 
 def dit_config(task: str, modulation: str = "full") -> dict[str, object]:
     plan = canonical_timestep_plan(cast(Any, task))
-    extension = {"task": task, "modulation": modulation}
+    extension: dict[str, Any] = {"task": task, "modulation": modulation}
     if modulation == "adaln-pruned":
-        extension["timestep_plan_digest"] = f"sha256:{plan.digest}"
+        extension["table_keys"] = canonical_json.decode(plan.canonical_bytes())["table_keys"]
     return {"cozy_h3": extension}
+
+
+def arm_checkpoint_table_layout() -> None:
+    """Row labels travel with table values; no package digest determines their meaning."""
+    plan = canonical_timestep_plan("fl2va")
+    document = canonical_json.decode(plan.canonical_bytes())["table_keys"]
+    layout = TableLayout.parse(document)
+    for schedule in plan.schedules:
+        layout.require(schedule.video_timesteps, schedule.audio_timesteps)
+    reordered = copy.deepcopy(document)
+    for rows in reordered.values():
+        rows.reverse()
+        for index, row in enumerate(rows):
+            row["index"] = index
+    shuffled = TableLayout.parse(reordered)
+    for schedule in plan.schedules:
+        shuffled.require(schedule.video_timesteps, schedule.audio_timesteps)
+
+    # Exercise the real inference lookup and projections with labelled, nontrivial
+    # values. Reverse each checkpoint tensor with its labels: its output must agree.
+    block_values = torch.arange(len(layout.block_keys) * 12, dtype=torch.float32).reshape(-1, 6, 2)
+    final_values = torch.arange(len(layout.timesteps) * 4, dtype=torch.float32).reshape(-1, 2, 2)
+    requested = torch.tensor(layout.timesteps)
+
+    def run_rows(labels: TableLayout, block: torch.Tensor, final: torch.Tensor) -> tuple[Any, Any]:
+        lookup = _AdaLNPrunedTimestepLookup(labels.timesteps)
+        projection = _AdaLNPrunedBlockTable(
+            hidden_size=2, timestep_count=len(labels.timesteps), keys=labels.block_keys
+        )
+        output = _AdaLNPrunedOutputTable(
+            torch.nn.Identity(), hidden_size=2, timestep_count=len(labels.timesteps)
+        )
+        with torch.no_grad():
+            projection.table.copy_(block)
+            output.table.copy_(final)
+        indexes = lookup(requested)
+        projected = torch.stack(projection(indexes), dim=1).reshape(-1, 3, 6, 2)
+        selected = torch.stack([projected[row, tag] for row, tag in layout.block_keys])
+        normalized = output(torch.ones(len(requested), 2), indexes, torch.arange(len(requested)))
+        return selected, normalized
+
+    original = run_rows(layout, block_values, final_values)
+    reordered_output = run_rows(shuffled, block_values.flip(0), final_values.flip(0))
+    for name, old, new in zip(
+        ("block modulation", "final normalization"), original, reordered_output, strict=True
+    ):
+        check(f"checkpoint row reordering preserves {name}", torch.equal(old, new), True)
+    wrong = run_rows(shuffled, block_values, final_values)
+    red("moving labels without table rows changes output", torch.equal(original[0], wrong[0]), True)
+
+    config = {"fl2va_dit": dit_config("fl2va", "adaln-pruned")}
+    config["fl2va_dit"]["cozy_h3"]["table_keys"] = reordered
+    check(
+        "serving constructor accepts arbitrary checkpoint row order",
+        official._dit_spec(config, "fl2va")[2] == shuffled,
+        True,
+    )
+    extra = copy.deepcopy(document)
+    extra["final_normalization"].append({"index": len(layout.timesteps), "timestep": (0.125).hex()})
+    extra["block_modulation"].append(
+        {
+            "index": len(layout.block_keys),
+            "timestep": (0.125).hex(),
+            "modality": "video",
+            "modality_tag": 0,
+        }
+    )
+    config["fl2va_dit"]["cozy_h3"]["table_keys"] = extra
+    check(
+        "checkpoint can add rows without a package change",
+        len(official._dit_spec(config, "fl2va")[2].block_keys),
+        len(layout.block_keys) + 1,
+    )
+    trunks = {task: torch.nn.Module() for task in ("fl2va", "ref2va")}
+    for index, model in enumerate(trunks.values()):
+        model.norm_out = _AdaLNPrunedOutputTable(
+            torch.nn.Identity(), hidden_size=2, timestep_count=len(layout.timesteps) + index
+        )
+    official._validate_dual_dit_topology(trunks)
+    check("trunks may have independent table row counts", True, True)
+    trunks["ref2va"].norm_out = _AdaLNPrunedOutputTable(
+        torch.nn.Identity(), hidden_size=3, timestep_count=len(layout.timesteps)
+    )
+    refusal(
+        "independent row counts do not weaken feature-axis validation",
+        partial(official._validate_dual_dit_topology, trunks),
+        "artifact_config",
+    )
+
+    corruptions = (
+        ("missing layout", lambda value: value.clear()),
+        ("noncontiguous index", lambda value: value["block_modulation"][0].update(index=1)),
+        ("boolean index", lambda value: value["block_modulation"][0].update(index=False)),
+        ("nonfinite value", lambda value: value["final_normalization"][0].update(timestep="inf")),
+        (
+            "inexact float32",
+            lambda value: value["final_normalization"][0].update(timestep=(0.1).hex()),
+        ),
+        ("unknown modality", lambda value: value["block_modulation"][0].update(modality_tag=3)),
+        (
+            "mislabeled modality",
+            lambda value: value["block_modulation"][0].update(modality="audio"),
+        ),
+        (
+            "unbound final row",
+            lambda value: value["block_modulation"][0].update(timestep=(0.125).hex()),
+        ),
+        (
+            "duplicate final row",
+            lambda value: value["final_normalization"][1].update(
+                timestep=value["final_normalization"][0]["timestep"]
+            ),
+        ),
+        (
+            "duplicate block row",
+            lambda value: value["block_modulation"][1].update(
+                **{**value["block_modulation"][0], "index": 1}
+            ),
+        ),
+    )
+    for name, change in corruptions:
+        value = copy.deepcopy(document)
+        change(value)
+        refusal(name, partial(TableLayout.parse, value), "artifact_config")
+    refusal(
+        "an uncovered requested timestep refuses",
+        lambda: layout.require([0.125], [0.0]),
+        "artifact_config",
+    )
 
 
 def arm_producer_configs() -> None:
@@ -259,7 +394,7 @@ def arm_producer_configs() -> None:
         for component, task in (("fl2va_dit", "fl2va"), ("ref2va_dit", "ref2va")):
             for field, value in (
                 ("task", "ref2va" if task == "fl2va" else "fl2va"),
-                ("timestep_plan_digest", "sha256:" + "0" * 64),
+                ("table_keys", {}),
             ):
                 changed = canonical_json.decode(raw)
                 changed[component]["cozy_h3"][field] = value
@@ -270,9 +405,9 @@ def arm_producer_configs() -> None:
                 )
             if structure == "adaln-pruned":
                 changed = canonical_json.decode(raw)
-                del changed[component]["cozy_h3"]["timestep_plan_digest"]
+                del changed[component]["cozy_h3"]["table_keys"]
                 refusal(
-                    f"{component} pruned tables need their plan digest",
+                    f"{component} pruned tables need their row labels",
                     partial(_dit_specs, changed),
                     "artifact_config",
                 )
@@ -1147,9 +1282,9 @@ def arm_graph_and_dtypes() -> None:
         "artifact_config",
     )
     wrong_plan = dit_config("fl2va", "adaln-pruned")
-    cast(dict[str, Any], wrong_plan["cozy_h3"])["timestep_plan_digest"] = "sha256:" + "0" * 64
+    cast(dict[str, Any], wrong_plan["cozy_h3"])["table_keys"] = {}
     refusal(
-        "an AdaLN-pruned plan digest is exact artifact config",
+        "an AdaLN-pruned checkpoint needs valid row labels",
         lambda: _dit_specs({**full_sections, "fl2va_dit": wrong_plan}),
         "artifact_config",
     )
@@ -1255,7 +1390,7 @@ def arm_graph_and_dtypes() -> None:
         "h3_restamp_config_shape",
     )
     skewed = canonical_json.decode(emitted["adaln-pruned"])
-    skewed["fl2va_dit"]["cozy_h3"]["timestep_plan_digest"] = f"sha256:{'0' * 64}"
+    skewed["fl2va_dit"]["cozy_h3"]["table_keys"] = {}
     refusal(
         "a config asset that disagrees with the timestep-plan asset refuses at emit",
         lambda: producer._check_emitted_config(canonical_json.encode(skewed), "adaln-pruned"),
@@ -3884,7 +4019,9 @@ def turbo_h3_config() -> dict[str, Any]:
                 "task": trunk,
                 "modulation": "adaln-pruned",
                 "distillation": "pdd",
-                "timestep_plan_digest": f"sha256:{TURBO_PLAN_DIGESTS[f'{trunk}_turbo']}",
+                "table_keys": canonical_json.decode(
+                    canonical_timestep_plan(cast(Any, f"{trunk}_turbo")).canonical_bytes()
+                )["table_keys"],
                 "lora_rank": PDD_HEADER["lora_rank"],
                 "lora_alpha": PDD_HEADER["lora_alpha"],
                 "pdd_num_steps": PDD_HEADER["pdd_num_steps"],
@@ -3933,7 +4070,7 @@ def arm_turbo_artifact() -> None:
         "artifact_config",
     )
     for field, value in (
-        ("timestep_plan_digest", f"sha256:{PLAN_DIGESTS['fl2va']}"),
+        ("table_keys", {}),
         ("task", "ref2va"),
         ("modulation", "full"),
         ("distillation", "dmd"),
@@ -4075,6 +4212,7 @@ def arm_turbo_artifact() -> None:
 
 
 ARMS = {
+    "checkpoint-table-layout": arm_checkpoint_table_layout,
     "turbo-plan": arm_turbo_plan,
     "turbo-heads": arm_turbo_heads,
     "turbo-lora": arm_turbo_lora,
