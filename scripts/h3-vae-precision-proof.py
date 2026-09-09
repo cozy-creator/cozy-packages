@@ -22,6 +22,7 @@ from collections import Counter
 from pathlib import Path
 
 import torch
+from cozy_runtime.author import Config
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "minimax-h3"))
@@ -37,6 +38,22 @@ from official import (  # noqa: E402
     frames_for,
 )
 from vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
+
+
+def _half_decode_config(module: torch.nn.Module) -> Config:
+    return Config(
+        {},
+        tensor_dtypes={
+            f"video_vae.{name}": "f16"
+            if (
+                name == "post_quant_conv.weight"
+                or (name.startswith("decoder.") and name.endswith(".weight") and value.dim() >= 2)
+            )
+            else "f32"
+            for name, value in module.state_dict().items()
+        },
+    )
+
 
 # Full length, both cells the release has shipped or is shipping: `frames_for` snaps whole
 # seconds onto the VAE's own 17n+5 grid and `video_latent_num_frames` maps those to 5n+2,
@@ -68,7 +85,7 @@ def main() -> None:
     with torch.no_grad():
         for parameter in baseline.parameters():
             parameter.normal_(0, 0.02)
-    cast = _apply_video_vae_dtype(copy.deepcopy(baseline))
+    cast = _apply_video_vae_dtype(copy.deepcopy(baseline), _half_decode_config(baseline))
     uniform = copy.deepcopy(baseline).half().eval()
 
     ratio = baseline.spatial_compression_ratio
@@ -83,9 +100,7 @@ def main() -> None:
     cells: dict[int, dict[str, object]] = {}
     for seconds in CELLS:
         pixel_frames = frames_for(seconds)
-        latent_frames = video_latent_num_frames(
-            pixel_frames, FRAMES_PER_CHUNK, LATENTS_PER_CHUNK
-        )
+        latent_frames = video_latent_num_frames(pixel_frames, FRAMES_PER_CHUNK, LATENTS_PER_CHUNK)
         latents = torch.randn(
             1,
             baseline.config.latent_channels,
@@ -105,9 +120,7 @@ def main() -> None:
                 pieces = []
                 chunks = module.decode_chunks(latents)
                 while True:
-                    with torch.autocast(
-                        device_type=device.type, dtype=torch.float16, enabled=True
-                    ):
+                    with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=True):
                         piece = next(chunks, None)
                     if piece is None:
                         break
@@ -136,9 +149,7 @@ def main() -> None:
     latents = None
 
     # `encode_vae_condition` has no autocast, so the encode side must not move at all.
-    pixels = torch.randn(
-        1, 3, 5, 128, 128, generator=torch.Generator().manual_seed(2)
-    ).to(device)
+    pixels = torch.randn(1, 3, 5, 128, 128, generator=torch.Generator().manual_seed(2)).to(device)
     encoded: dict[str, torch.Tensor] = {}
     for name, module in (("baseline", baseline), ("cast", cast)):
         module.to(device)
@@ -194,8 +205,9 @@ def main() -> None:
                 "torch": torch.__version__,
                 "cells": cells,
                 "tile_grid": [len(rows[0]), len(columns[0])],
-                "census": {name: _census(m) for name, m in
-                           (("baseline", baseline), ("cast", cast))},
+                "census": {
+                    name: _census(m) for name, m in (("baseline", baseline), ("cast", cast))
+                },
                 "release_operand_shapes_swept": swept,
                 "release_operand_shapes_mismatched": mismatched,
                 "decode_bit_exact": bit_exact,

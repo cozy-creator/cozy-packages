@@ -1305,7 +1305,19 @@ def arm_graph_and_dtypes() -> None:
         Counter({"torch.float32": 703}),
     )
     with torch.device("meta"):
-        cast_vae = _apply_video_vae_dtype(AutoencoderKLMiniMaxH3())
+        supplied = {
+            f"video_vae.{name}": "f16" if decode_operand(name, tuple(value.shape)) else "f32"
+            for name, value in video_vae.state_dict().items()
+        }
+        cast_vae = _apply_video_vae_dtype(
+            AutoencoderKLMiniMaxH3(), Config({}, tensor_dtypes=supplied)
+        )
+        original_vae = _apply_video_vae_dtype(AutoencoderKLMiniMaxH3())
+    check(
+        "video VAE accepts original FP32 without checkpoint rewriting",
+        Counter(str(value.dtype) for value in original_vae.state_dict().values()),
+        Counter({"torch.float32": 703}),
+    )
     cast_state = cast_vae.state_dict()
     cast_counts = Counter(str(value.dtype) for value in cast_state.values())
     check(
