@@ -103,11 +103,27 @@ _DIT_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
 _DIFFUSERS_DIT = {"fl2va": "transformer", "ref2va": "transformer_ref"}
 _ASSETS = Path(__file__).resolve().parent
 #: The dry warm forward (`warm_dit`): rows per modality, and the modality tags the DiT
-#: reads off `token_tags`. Eight rows is the smallest count that still runs both patch
-#: projections, the refiner, the packed block stack and its glue at least once; the noise
-#: levels are the plan's own first evaluation, so an AdaLN-pruned table holds every
-#: (timestep, modality) pair the step gathers.
-_WARM_ROWS = 8
+#: reads off `token_tags`. The count runs both patch projections, the refiner, the packed
+#: block stack and its glue at least once; the noise levels are the plan's own first
+#: evaluation, so an AdaLN-pruned table holds every (timestep, modality) pair the step
+#: gathers.
+#:
+#: WAS 8 (24 packed rows), which was the smallest count that touched every module — and
+#: that turned out to be the wrong thing to minimise. A warm forward is only worth running
+#: if it pays what the first REQUEST would otherwise pay, and an attention kernel does not
+#: necessarily take the same path at 24 rows as at the 37k-109k a real packed sequence
+#: carries: kernels tile attention in blocks of 128 rows and select a different variant
+#: below one full block, so a 24-row warm can leave the request's own variant unpaid
+#: (h3a-024 measured exactly that — a ~5 s cost that moved off the warm and onto a
+#: customer's first request, on one architecture and not another, which is the worst shape
+#: a latency outlier can have).
+#:
+#: 96 puts 288 rows through attention: more than two full 128-row blocks, the same margin
+#: and the same reason as the runtime's own attention self-check. This says nothing about
+#: WHICH kernel serves — the runtime chooses that and this package must never know — only
+#: that the warm crosses the shape threshold kernels are built around. It is still a dry
+#: forward over a few hundred rows against a request's tens of thousands.
+_WARM_ROWS = 96
 _WARM_VIDEO_TAG, _WARM_TEXT_TAG, _WARM_AUDIO_TAG = 0, 1, 2
 
 

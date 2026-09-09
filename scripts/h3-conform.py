@@ -2819,7 +2819,9 @@ def arm_warm() -> None:
     )
     check("both entrypoint DiTs leased", model.harness.components(), ("fl2va_dit", "ref2va_dit"))
     for task, rows in packed.items():
-        check(f"{task} dry forward (video rows, packed rows, timesteps)", rows, [(8, 24, 2)])
+        # 288 packed rows, not 24: a warm has to cross the 128-row block boundary attention
+        # kernels tile on, or it pays for a kernel variant no request uses (h3a-024).
+        check(f"{task} dry forward (video rows, packed rows, timesteps)", rows, [(96, 288, 2)])
 
     # The AdaLN-pruned structure REFUSES a (timestep, modality) pair its plan never
     # tabulated, so the dry step's noise levels are a contract, not a convenience: the
