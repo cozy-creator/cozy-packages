@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 """CUDA proof that the video VAE's fp16 decode operands are bit-exact.
 
-`MiniMaxH3VideoDecodeStep` decodes under `torch.autocast(float16)` (decoders.py), so every
-decoder conv/linear weight is rounded f32->f16 per op whatever it is stored as.
+`official.py:decode_video_chunks` decodes under `torch.autocast(float16)`, so every decoder
+conv/linear weight is rounded f32->f16 per op whatever it is stored as.
 `_apply_video_vae_dtype` stores that rounding, which must therefore change nothing at all.
+The arms pull `vae_tiles.decode_chunks` under that autocast, which is the SERVED path since
+h3a-017 rather than the equivalent `decode()`.
 
 The proof runs the RELEASE decode geometry at full clip length (345 pixel frames -> 102
 latent frames, 1344x768, the 4x7 release tile grid) on the real `TileBatchedVideoVAE`
@@ -96,9 +98,22 @@ def main() -> None:
         for name, module in (("baseline", baseline), ("cast", cast), ("uniform", uniform)):
             module.to(device)
             with torch.no_grad():
-                # The two lines MiniMaxH3VideoDecodeStep runs, verbatim.
-                with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=True):
-                    frames = module.decode(latents, return_dict=False)[0]
+                # The SERVED path since h3a-017: `decode_video_chunks` pulls
+                # `vae_tiles.decode_chunks` under this autocast, one temporal chunk at a
+                # time. Testing `decode()` would test an equivalent path, not the shipped
+                # one, so the chunks are pulled and concatenated here exactly as it does.
+                pieces = []
+                chunks = module.decode_chunks(latents)
+                while True:
+                    with torch.autocast(
+                        device_type=device.type, dtype=torch.float16, enabled=True
+                    ):
+                        piece = next(chunks, None)
+                    if piece is None:
+                        break
+                    pieces.append(piece)
+                frames = torch.cat(pieces, dim=2)
+                del pieces
                 # To HOST before widening. `.float()` on device is a second full-size copy
                 # -- 3.98 GiB at the 15 s cell -- and it OOMs an 8 GB card on the
                 # INSTRUMENTATION after the decode itself has already succeeded (se-053).

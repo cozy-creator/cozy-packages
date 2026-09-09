@@ -1149,6 +1149,14 @@ def arm_graph_and_dtypes() -> None:
         str(cast_vae.decoder.rope.inv_freq.dtype),
         "torch.float32",
     )
+    # `vae_tiles.decode_chunks` keys the incoming latents' dtype off the decoder's FIRST
+    # parameter, so parameter order decides what the served path casts them to.
+    first_name, first_parameter = next(iter(cast_vae.decoder.named_parameters()))
+    check(
+        "the decoder's first parameter is a float32 one, which decode_chunks reads",
+        (first_name, str(first_parameter.dtype)),
+        ("register_tokens", "torch.float32"),
+    )
     check(
         "video VAE destination bytes",
         (

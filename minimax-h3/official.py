@@ -1408,12 +1408,20 @@ def _apply_transformer_dtype(transformer: Any) -> Any:
 def _apply_video_vae_dtype(vae: Any) -> Any:
     """Store the decode-side GEMM operands at the dtype the release decode already uses.
 
-    `MiniMaxH3VideoDecodeStep` decodes under `torch.autocast(float16)`, so every decoder
-    conv/linear weight is rounded f32->f16 per op whatever it is stored as: storing that
-    rounding is bit-exact for those ops and halves the component. Nothing else moves.
-    The encode path (`encode_vae_condition`) has no autocast and stays float32, norms,
-    biases and register tokens are what autocast itself keeps in float32, and
-    `decoder.rope.inv_freq` is a config-derived buffer float16 could not restore.
+    `decode_video_chunks` runs the decode under `torch.autocast(float16)` — as
+    `MiniMaxH3VideoDecodeStep` does, and h3a-017 kept — so every decoder conv/linear weight
+    is rounded f32->f16 per op whatever it is stored as: storing that rounding is bit-exact
+    for those ops and halves the component. Nothing else moves. The encode path
+    (`encode_vae_condition`) has no autocast and stays float32, norms, biases and register
+    tokens are what autocast itself keeps in float32, and `decoder.rope.inv_freq` is a
+    config-derived buffer float16 could not restore.
+
+    `vae_tiles.decode_chunks` casts the incoming latents to `next(decoder.parameters())
+    .dtype`, so the ORDER of the decoder's parameters is load-bearing here: the first one
+    is `register_tokens`, which this cast leaves at float32, and a conformance arm pins
+    that. It would be bit-exact either way — the first op to see the latents is a conv,
+    which autocast rounds to float16 regardless — but a silent dtype change to a tensor
+    this function does not touch is not something to leave to parameter ordering.
     """
     weights = [
         parameter
