@@ -16,14 +16,14 @@ jobs:
           version: "0.12.7"
       - run: uv python install 3.12
 
-      # H3's function-authored defaults require Runtime 0.10.0 in static checks too.
+      # H3 zero-byte native grafts and caller helpers require Runtime 0.12.0 in static checks too.
       # The light checks need no model libraries. Locked environments below also
       # qualify installed-wheel imports and execution against each exact dependency set.
       - name: Environment
         run: |
           uv venv --python 3.12
-          uv pip install \
-            "cozy-runtime>=0.10.0,<1" \
+          uv pip install --refresh-package cozy-runtime \
+            "cozy-runtime>=0.12.0,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences
@@ -184,7 +184,6 @@ jobs:
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/full-source-proof.py
           minimax-h3-tools/.venv/bin/python scripts/h3-adaln-resume-proof.py
           minimax-h3-tools/.venv/bin/python scripts/h3-adaln-binding-proof.py
-          minimax-h3-tools/.venv/bin/python scripts/h3-adaln-interface-proof.py
           minimax-h3-tools/.venv/bin/python scripts/tensorfs_seeds.py
         env:
           PYTHONPATH: minimax-h3-tools/src
@@ -194,3 +193,9 @@ jobs:
           uv build --project ${{ matrix.package }} --wheel --out-dir dist/packages/${{ matrix.package }}
           uv pip install --python ${{ matrix.package }}/.venv/bin/python --no-deps dist/packages/${{ matrix.package }}/*.whl
           ${{ matrix.package }}/.venv/bin/python -P scripts/package_import.py ${{ matrix.package }} --installed
+
+      - name: H3 caller overlay preserves its installed helper and sibling interfaces
+        if: matrix.package == 'minimax-h3-tools'
+        run: >-
+          minimax-h3-tools/.venv/bin/python -P scripts/h3-adaln-interface-proof.py
+          --implementation-wheel dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl

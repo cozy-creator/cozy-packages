@@ -260,7 +260,6 @@ def main() -> None:
         "lanes",
         "retable",
         "quantize-artifact",
-        "precompute-adaln",
         "apply-adaln",
         "compute-adaln-tables",
         "select-adaln-weights",

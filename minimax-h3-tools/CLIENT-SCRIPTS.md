@@ -1,7 +1,8 @@
 # H3 preparation from a client script
 
-The managed exports are `h3_tables.operations.assemble_full`, `precompute_adaln`,
-and `quantize`. The composition stays in ordinary unpublished Python:
+`h3_tables.operations.precompute_adaln` is an ordinary async Python helper.
+It composes managed operations alongside `assemble_full` and `quantize` in an
+unpublished client script:
 
 ```python
 from h3_tables.operations import assemble_full, precompute_adaln, quantize
@@ -14,17 +15,21 @@ async def main(ctx):
     mxfp8 = await quantize(source=pruned, encoding="mxfp8/1")
 ```
 
+This client-script path requires Runtime 0.12 or newer for its source-preserving
+caller overlay and native attachments that add no tensor bytes.
+
 The current captured plan is the approved union of 30, 40 and 50 denoising steps.
 `timesteps` selects a supported step count; the retained BF16 bank supports all
 three. Other schedules refuse until their package plan and serving contract are
 qualified. The argument does not silently invent a new scheduler.
 
-`precompute_adaln` runs as a CPU orchestration job with inert artifact references.
-It invokes two inexpensive generating-weight projections, two independently
-memoized table computations and one native metadata attachment. It never holds a
-GPU while awaiting a GPU child. Generated caller interfaces import no Torch or
-model implementation. Each table computation checkpoints completed block tables
-and final normalization; a retry skips their projections and source-weight reads.
+`precompute_adaln` runs in the calling script; it needs no `ctx` argument or
+separate job invocation. It invokes two inexpensive generating-weight projections,
+two independently memoized table computations and one native metadata attachment.
+Runtime's caller overlay preserves this helper and the package's plan assets;
+each leaf operation runs with its own managed services and cancellation checks.
+Each table computation checkpoints completed block tables and final normalization;
+a retry skips their projections and source-weight reads.
 
 Projection content contains only the task's original generating weights and
 required topology. Changes to unrelated body weights therefore preserve the
@@ -44,3 +49,5 @@ removed weights cannot be recovered from a table's shape.
 The native operation, small CPU math and generated-interface proofs are
 `scripts/h3-adaln-{binding,resume,interface}-proof.py`. They do not establish
 production GPU numerical quality or a paid remote pipeline qualification.
+The interface driver takes `--implementation-wheel` pointing to the built tools
+wheel and verifies its real caller overlay before exercising the helper's leaf calls.
