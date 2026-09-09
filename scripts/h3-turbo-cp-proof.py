@@ -33,14 +33,17 @@ def rank(rank: int, degree: int, rendezvous: str) -> None:
             parameter.normal_(0, 0.02)
         for parameter in overlay.parameters():
             parameter.normal_(0, 0.02)
-    dit.attach_overlay(fixture["TURBO_BANK"], overlay)
+    dit.install_lora_consumers()
     dit.set_attention_backend("native")
-    pipe = object.__new__(fixture["official"].OfficialH3TurboPipeline)
+    pipe = object.__new__(fixture["official"].OfficialH3Pipeline)
     pipe.components = {"fl2va_dit": dit, "fl2va_turbo": overlay}
-    model = fixture["package"].H3TurboModel.for_test(pipe=pipe)
+    model = fixture["package"].H3TurboBase.for_test(pipe=pipe)
     schedule = overlay.schedule
     inputs = fixture["turbo_forward"](0, schedule)
-    inputs["attention_kwargs"] = {fixture["ATTENTION_KWARG"]: fixture["TURBO_BANK"]}
+    inputs["attention_kwargs"] = {
+        fixture["ATTENTION_KWARG"]: fixture["TURBO_BANK"],
+        fixture["OVERLAY_KWARG"]: overlay,
+    }
     with torch.no_grad():
         expected = dit(**inputs)
     torch.distributed.init_process_group(
@@ -54,7 +57,7 @@ def rank(rank: int, degree: int, rendezvous: str) -> None:
         )
         with (
             torch.no_grad(),
-            model._cozy_scope("sample_fl2va", ("fl2va_dit", "fl2va_turbo")),
+            model._cozy_scope("sample_fl2va_turbo", ("fl2va_dit",)),
             cp.gated_call(),
         ):
             actual = dit(**inputs)
