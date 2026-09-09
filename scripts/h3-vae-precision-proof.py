@@ -24,12 +24,20 @@ import torch
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "minimax-h3"))
 
-from official import _apply_video_vae_dtype  # noqa: E402
+from official import (  # noqa: E402
+    FRAMES_PER_CHUNK,
+    LATENTS_PER_CHUNK,
+    _apply_video_vae_dtype,
+    frames_for,
+    video_latent_num_frames,
+)
+
 from vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
 
-# 14.375 s at 24 fps is 345 pixel frames; the 17n+5 grid maps them to 5n+2 = 102 latent
-# frames, and 1344x768 divides by the 16-pixel spatial ratio into 84x48.
-LATENT_FRAMES = 102
+# Full length, both cells the release has shipped or is shipping: `frames_for` snaps whole
+# seconds onto the VAE's own 17n+5 grid and `video_latent_num_frames` maps those to 5n+2,
+# so nothing here hard-codes 102 or 107. 1344x768 divides by the 16-pixel spatial ratio.
+CELLS = (14, 15)
 CANVAS = (768, 1344)
 
 
@@ -68,24 +76,47 @@ def main() -> None:
     )
     assert len(rows[0]) * len(columns[0]) == TILE_BATCH, "not the release tile grid"
 
-    latents = torch.randn(
-        1,
-        baseline.config.latent_channels,
-        LATENT_FRAMES,
-        CANVAS[0] // ratio,
-        CANVAS[1] // ratio,
-        generator=torch.Generator().manual_seed(1),
-    ).to(device)
-
-    decoded: dict[str, torch.Tensor] = {}
-    for name, module in (("baseline", baseline), ("cast", cast), ("uniform", uniform)):
-        module.to(device)
-        with torch.no_grad():
-            # The two lines MiniMaxH3VideoDecodeStep runs, verbatim.
-            with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=True):
-                decoded[name] = module.decode(latents, return_dict=False)[0].float().cpu()
-        module.to("cpu")
+    cells: dict[int, dict[str, object]] = {}
+    for seconds in CELLS:
+        pixel_frames = frames_for(seconds)
+        latent_frames = video_latent_num_frames(
+            pixel_frames, FRAMES_PER_CHUNK, LATENTS_PER_CHUNK
+        )
+        latents = torch.randn(
+            1,
+            baseline.config.latent_channels,
+            latent_frames,
+            CANVAS[0] // ratio,
+            CANVAS[1] // ratio,
+            generator=torch.Generator().manual_seed(1),
+        ).to(device)
+        decoded: dict[str, torch.Tensor] = {}
+        for name, module in (("baseline", baseline), ("cast", cast), ("uniform", uniform)):
+            module.to(device)
+            with torch.no_grad():
+                # The two lines MiniMaxH3VideoDecodeStep runs, verbatim.
+                with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=True):
+                    frames = module.decode(latents, return_dict=False)[0]
+                # To HOST before widening. `.float()` on device is a second full-size copy
+                # -- 3.98 GiB at the 15 s cell -- and it OOMs an 8 GB card on the
+                # INSTRUMENTATION after the decode itself has already succeeded (se-053).
+                decoded[name] = frames.cpu().float()
+            del frames
+            module.to("cpu")
+            torch.cuda.empty_cache()
+        cells[seconds] = {
+            "latent_frames": latent_frames,
+            "pixel_frames": pixel_frames,
+            "decoded_shape": list(decoded["baseline"].shape),
+            "decode_bit_exact": torch.equal(decoded["baseline"], decoded["cast"]),
+            "red_uniform_half_bit_exact": torch.equal(decoded["baseline"], decoded["uniform"]),
+            "red_uniform_half_max_abs": float(
+                (decoded["baseline"] - decoded["uniform"]).abs().max()
+            ),
+        }
+        del decoded
         torch.cuda.empty_cache()
+    latents = None
 
     # `encode_vae_condition` has no autocast, so the encode side must not move at all.
     pixels = torch.randn(
@@ -136,16 +167,15 @@ def main() -> None:
         del module, sample, wide, narrow
     torch.cuda.empty_cache()
 
-    bit_exact = torch.equal(decoded["baseline"], decoded["cast"])
-    uniform_exact = torch.equal(decoded["baseline"], decoded["uniform"])
+    bit_exact = all(bool(cell["decode_bit_exact"]) for cell in cells.values())
+    uniform_exact = any(bool(cell["red_uniform_half_bit_exact"]) for cell in cells.values())
     encode_exact = torch.equal(encoded["baseline"], encoded["cast"])
     print(
         json.dumps(
             {
                 "device": torch.cuda.get_device_name(0),
                 "torch": torch.__version__,
-                "latent_shape": list(latents.shape),
-                "decoded_shape": list(decoded["baseline"].shape),
+                "cells": cells,
                 "tile_grid": [len(rows[0]), len(columns[0])],
                 "census": {name: _census(m) for name, m in
                            (("baseline", baseline), ("cast", cast))},
@@ -154,9 +184,6 @@ def main() -> None:
                 "decode_bit_exact": bit_exact,
                 "encode_bit_exact": encode_exact,
                 "red_uniform_half_bit_exact": uniform_exact,
-                "red_uniform_half_max_abs": float(
-                    (decoded["baseline"] - decoded["uniform"]).abs().max()
-                ),
             },
             indent=2,
         )
