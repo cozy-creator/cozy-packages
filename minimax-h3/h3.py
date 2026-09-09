@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from fractions import Fraction
+from functools import partial
 from typing import Annotated, Any, Literal
 
 import msgspec
@@ -66,13 +67,14 @@ from official import (
     REFERENCE_IMAGE_SHORT_EDGE,
     NumericalChecks,
     OfficialH3Pipeline,
-    OfficialH3TurboPipeline,
+    OfficialH3TurboLoRA,
     ReferencePolicyFacts,
     ScheduleFacts,
     Task,
     assert_duration_envelope,
     build_h3_pipeline,
-    build_h3_turbo_pipeline,
+    build_h3_turbo_base,
+    build_h3_turbo_lora,
     denoise_rows,
     frames_for,
     reference_image_vision_tokens,
@@ -343,43 +345,105 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept
 
 
 @sequence_parallel(degrees=(2, 4))
-class H3TurboModel(H3Model, encoded_leaves="accept", fusion="accept"):
-    """The base model and PDD overlays share one construction and residency scope."""
+class H3TurboBase(H3Model, encoded_leaves="accept", fusion="accept"):
+    """The five-root base checkpoint with construction-time turbo consumers."""
 
     def load(self, loader: Loader) -> None:
-        self.pipe = loader.construct(OfficialH3TurboPipeline, factory=build_h3_turbo_pipeline)
+        self.pipe = loader.construct(OfficialH3Pipeline, factory=build_h3_turbo_base)
 
-    @uses_components("fl2va_dit", "fl2va_turbo")
-    def warm_fl2va(self) -> None:
-        self.pipe.warm_dit("fl2va_turbo")
+    @uses_components("fl2va_dit")
+    def sample_fl2va_turbo(
+        self,
+        state: Any,
+        *,
+        turbo_lora: H3TurboLoRA,
+        on_step: Any,
+        cancel: Any,
+        checks: NumericalChecks,
+    ) -> ScheduleFacts:
+        return turbo_lora.sample_fl2va(self, state, on_step=on_step, cancel=cancel, checks=checks)
 
-    @uses_components("ref2va_dit", "ref2va_turbo")
-    def warm_ref2va(self) -> None:
-        self.pipe.warm_dit("ref2va_turbo")
+    @uses_components("ref2va_dit")
+    def sample_ref2va_turbo(
+        self,
+        state: Any,
+        *,
+        turbo_lora: H3TurboLoRA,
+        on_step: Any,
+        cancel: Any,
+        checks: NumericalChecks,
+    ) -> ScheduleFacts:
+        return turbo_lora.sample_ref2va(self, state, on_step=on_step, cancel=cancel, checks=checks)
 
-    @uses_components("fl2va_dit", "fl2va_turbo")
+    @uses_components("fl2va_dit")
+    def warm_fl2va_turbo(self, turbo_lora: H3TurboLoRA) -> None:
+        turbo_lora.warm_fl2va(self.pipe)
+
+    @uses_components("ref2va_dit")
+    def warm_ref2va_turbo(self, turbo_lora: H3TurboLoRA) -> None:
+        turbo_lora.warm_ref2va(self.pipe)
+
+
+@sequence_parallel(degrees=(2, 4))
+class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
+    """Independent PDD weights, replicated alongside the base on every CP rank."""
+
+    pipe: OfficialH3TurboLoRA
+
+    def load(self, loader: Loader) -> None:
+        self.pipe = loader.construct(OfficialH3TurboLoRA, factory=build_h3_turbo_lora)
+
+    def unload(self, loader: Loader) -> None:
+        return None
+
+    @uses_components("fl2va_turbo")
+    def warm_fl2va(self, base: OfficialH3Pipeline) -> None:
+        base.warm_dit("fl2va_turbo", overlay=self.pipe.overlay(base, "fl2va"))
+
+    @uses_components("ref2va_turbo")
+    def warm_ref2va(self, base: OfficialH3Pipeline) -> None:
+        base.warm_dit("ref2va_turbo", overlay=self.pipe.overlay(base, "ref2va"))
+
+    @uses_components("fl2va_turbo")
     def sample_fl2va(
-        self, state: Any, *, on_step: Any, cancel: Any, checks: NumericalChecks
+        self, base: H3Model, state: Any, *, on_step: Any, cancel: Any, checks: NumericalChecks
     ) -> ScheduleFacts:
-        root = self.pipe.components["fl2va_dit"]
-        checks.component("fl2va_dit", root)
-        checks.component("fl2va_turbo", self.pipe.components["fl2va_turbo"])
-        with checks.forwards(root, "fl2va_dit"):
-            return self.pipe.denoise(
-                "fl2va_turbo", state, on_step=on_step, cancel=cancel, checks=checks
-            )
+        return self._sample(base, "fl2va", state, on_step=on_step, cancel=cancel, checks=checks)
 
-    @uses_components("ref2va_dit", "ref2va_turbo")
+    @uses_components("ref2va_turbo")
     def sample_ref2va(
-        self, state: Any, *, on_step: Any, cancel: Any, checks: NumericalChecks
+        self, base: H3Model, state: Any, *, on_step: Any, cancel: Any, checks: NumericalChecks
     ) -> ScheduleFacts:
-        root = self.pipe.components["ref2va_dit"]
-        checks.component("ref2va_dit", root)
-        checks.component("ref2va_turbo", self.pipe.components["ref2va_turbo"])
-        with checks.forwards(root, "ref2va_dit"):
-            return self.pipe.denoise(
-                "ref2va_turbo", state, on_step=on_step, cancel=cancel, checks=checks
-            )
+        return self._sample(base, "ref2va", state, on_step=on_step, cancel=cancel, checks=checks)
+
+    def _sample(
+        self,
+        base: H3Model,
+        trunk: Literal["fl2va", "ref2va"],
+        state: Any,
+        *,
+        on_step: Any,
+        cancel: Any,
+        checks: NumericalChecks,
+    ) -> ScheduleFacts:
+        from turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK
+
+        task: Task = "fl2va_turbo" if trunk == "fl2va" else "ref2va_turbo"
+        overlay = self.pipe.overlay(base.pipe, trunk)
+        root = base.pipe.components[f"{trunk}_dit"]
+        checks.component(f"{trunk}_dit", root)
+        checks.component(f"{trunk}_turbo", overlay)
+        original = state.attention_kwargs
+        state.attention_kwargs = {
+            **(original or {}),
+            ATTENTION_KWARG: TURBO_BANK,
+            OVERLAY_KWARG: overlay,
+        }
+        try:
+            with checks.forwards(root, f"{trunk}_dit"):
+                return base.pipe.denoise(task, state, on_step=on_step, cancel=cancel, checks=checks)
+        finally:
+            state.attention_kwargs = original
 
 
 def _keyframe_roles(assets: KeyframeAssets) -> tuple[int | None, int | None]:
@@ -951,13 +1015,22 @@ def fl2va_turbo(
     ctx: Context,
     payload: FirstLastFrameToVideoTurboInput,
     assets: KeyframeAssets,
-    model: H3TurboModel,
+    base_model: H3TurboBase,
+    turbo_lora: H3TurboLoRA,
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
     """`fl2va` under PDD-8: the same keyframes and prompt, eight transformer evaluations."""
     return _keyframes_to_video(
-        ctx, "fl2va_turbo", payload, assets, model, out, tel, steps=TURBO_STEPS
+        ctx,
+        "fl2va_turbo",
+        payload,
+        assets,
+        base_model,
+        out,
+        tel,
+        steps=TURBO_STEPS,
+        turbo_lora=turbo_lora,
     )
 
 
@@ -983,14 +1056,23 @@ def ref2va_turbo(
     payload: ReferenceMediaToVideoTurboInput,
     assets: ReferenceAssets,
     facts: Preflight[ReferencePolicyFacts],
-    model: H3TurboModel,
+    base_model: H3TurboBase,
+    turbo_lora: H3TurboLoRA,
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
     """`ref2va` under PDD-8: the same references and prompt, eight transformer evaluations."""
     del facts
     return _references_to_video(
-        ctx, "ref2va_turbo", payload, assets, model, out, tel, steps=TURBO_STEPS
+        ctx,
+        "ref2va_turbo",
+        payload,
+        assets,
+        base_model,
+        out,
+        tel,
+        steps=TURBO_STEPS,
+        turbo_lora=turbo_lora,
     )
 
 
@@ -1004,6 +1086,7 @@ def _keyframes_to_video(
     tel: Telemetry,
     *,
     steps: int,
+    turbo_lora: H3TurboLoRA | None = None,
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
@@ -1026,7 +1109,11 @@ def _keyframes_to_video(
     if first is not None or last is not None:
         with tel.stage("condition_media", overall_range=(0.08, 0.15)):
             model.condition_fl2va_media(task, state, checks=checks)
-    sample = model.sample_fl2va
+    if turbo_lora is None:
+        sample = model.sample_fl2va
+    else:
+        assert isinstance(model, H3TurboBase)
+        sample = partial(model.sample_fl2va_turbo, turbo_lora=turbo_lora)
     with tel.stage("denoise", overall_range=(0.15, 0.85)):
         schedule = sample(
             state,
@@ -1057,6 +1144,7 @@ def _references_to_video(
     tel: Telemetry,
     *,
     steps: int,
+    turbo_lora: H3TurboLoRA | None = None,
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
@@ -1096,7 +1184,11 @@ def _references_to_video(
         model.condition_text(task, state, checks=checks)
     with tel.stage("condition_media", overall_range=(0.08, 0.15)):
         model.condition_ref2va_media(task, state, checks=checks)
-    sample = model.sample_ref2va
+    if turbo_lora is None:
+        sample = model.sample_ref2va
+    else:
+        assert isinstance(model, H3TurboBase)
+        sample = partial(model.sample_ref2va_turbo, turbo_lora=turbo_lora)
     with tel.stage("denoise", overall_range=(0.15, 0.85)):
         schedule = sample(
             state,
