@@ -2650,12 +2650,9 @@ def arm_interface() -> None:
         [field["name"] for field in jobs["long_form"]["result"]["fields"]],
         [
             "segments",
-            "delivered",
             "requested",
-            "complete",
             "delivered_frames",
-            "seconds_numerator",
-            "seconds_denominator",
+            "fps",
             "failed_index",
             "failure_code",
             "failure_detail",

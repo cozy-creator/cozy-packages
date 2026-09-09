@@ -205,7 +205,7 @@ def main() -> None:
         result, outcome, calls = _drive(shots, fail_at=-1, spool=spool)
         assert outcome.terminal == "succeeded", outcome
         out = result.result
-        assert out.complete and out.delivered == 4 and out.requested == 4, out
+        assert out.failed_index == -1 and len(out.segments) == 4 and out.requested == 4, out
         assert len(calls) == 4, len(calls)
 
         # 2. every hand-off is the previous shot's continuation frame, by digest
@@ -227,21 +227,18 @@ def main() -> None:
         # 4. the clock: 124 frames a shot, one replayed frame off every seam
         assert [s.start_frame for s in out.segments] == [0, 124, 247, 370], out.segments
         assert out.delivered_frames == 4 * 124 - 3 == 493, out.delivered_frames
-        assert Fraction(out.seconds_numerator, out.seconds_denominator) == Fraction(493, 24)
+        assert Fraction(out.delivered_frames, out.fps) == Fraction(493, 24)
 
         # --- 3. a shot fails: the prefix survives ------------------------------------
         result, outcome, calls = _drive(shots, fail_at=2, spool=spool)
         assert outcome.terminal == "succeeded", outcome
         partial = result.result
-        assert not partial.complete, partial
-        assert partial.delivered == 2 and partial.requested == 4, partial
+        assert len(partial.segments) == 2 and partial.requested == 4, partial
         assert partial.failed_index == 2 and partial.failure_code == "child.failed", partial
         assert len(partial.segments) == 2
         # the delivered prefix is a real, assemblable two-shot video with its own exact clock
         assert partial.delivered_frames == 2 * 124 - 1 == 247, partial.delivered_frames
-        assert Fraction(partial.seconds_numerator, partial.seconds_denominator) == Fraction(
-            247, 24
-        )
+        assert Fraction(partial.delivered_frames, partial.fps) == Fraction(247, 24)
         # and it is the SAME prefix the complete run produced — the hand-off is deterministic
         assert [s.continuation_frame_digest for s in partial.segments] == [
             s.continuation_frame_digest for s in out.segments[:2]

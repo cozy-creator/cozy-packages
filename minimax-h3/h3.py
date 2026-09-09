@@ -859,7 +859,6 @@ class SegmentOutput(msgspec.Struct):
 class SegmentReceipt(msgspec.Struct):
     """What a delivered shot contributes to the assembly and to a resume."""
 
-    index: int
     seed: int
     duration_s: int
     frames: int
@@ -897,15 +896,17 @@ class LongFormOutput(msgspec.Struct):
     addressable — this result says which ones, in what order, and on what clock. A failed
     shot names itself and leaves the shots before it intact and assemblable: a chain that
     only pays out when every shot lands turns one bad segment into a total loss.
+
+    Nothing here restates anything else. `segments` carries how many landed and in what
+    order, `failed_index` is -1 exactly when every shot did, and the delivered length is
+    the exact rational `delivered_frames / fps` — the clock a master audio track must
+    match to within one AAC frame or be refused.
     """
 
     segments: list[SegmentReceipt]
-    delivered: int
     requested: int
-    complete: bool
     delivered_frames: int
-    seconds_numerator: int
-    seconds_denominator: int
+    fps: int
     failed_index: int
     failure_code: str
     failure_detail: str
@@ -1070,7 +1071,6 @@ async def long_form(
             break
         receipts.append(
             SegmentReceipt(
-                index=index,
                 seed=shot.seed,
                 duration_s=shot.duration_s,
                 frames=frames_for(shot.duration_s),
@@ -1101,12 +1101,9 @@ async def long_form(
     )
     return LongFormOutput(
         segments=receipts,
-        delivered=len(receipts),
         requested=len(payload.shots),
-        complete=failed_index < 0,
         delivered_frames=delivered_frames,
-        seconds_numerator=delivered_frames,
-        seconds_denominator=FPS,
+        fps=FPS,
         failed_index=failed_index,
         failure_code=failure_code,
         failure_detail=failure_detail,
