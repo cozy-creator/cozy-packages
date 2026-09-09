@@ -25,6 +25,7 @@ from cozy_runtime.author import (
     WeightsTarget,
     WeightsTensor,
     WeightsTransaction,
+    canonical_json,
 )
 from cozy_runtime.derive.quantization import (
     MAX_OUTPUT_BYTES,
@@ -38,7 +39,15 @@ from . import adaln_operations as _adaln_operations
 from . import lanes as _lanes
 from .kernel import H3Topology, removed_keys, source_shapes, table_bytes, table_shapes
 from .kernel import precompute_tables as compute_tables
-from .lanes import LANES, Lane, Selection, lane_max_new_bytes, write_cast
+from .lanes import (
+    COMPONENT_MAX_NEW_BYTES,
+    LANES,
+    Lane,
+    Selection,
+    lane_max_new_bytes,
+    lane_treatments,
+    write_cast,
+)
 from .model_config import (
     dual_adaln_pruned_config,
     dual_full_config,
@@ -108,16 +117,30 @@ _check_table_budget(MAX_TABLE_BYTES)
 #: ceiling equal to what the lane's own treatments imply. Adding a lane is one catalogue
 #: row, one line here and one `LaneName` member; getting any of the three wrong refuses at
 #: import, before a worker is ever asked to produce anything.
+#: Every lane carries the producer-wide video VAE normalisation, so every ceiling below
+#: includes that component's own bound — including `bf16-full`, which authors nothing.
+#:
+#: Spelled as a literal, not as `COMPONENT_MAX_NEW_BYTES["video_vae"]`, because cr-114's
+#: static reader folds the decorator from SOURCE over a closed vocabulary and refuses a
+#: subscript: `describe` fails the whole package with `static_computed` rather than
+#: guessing. The catalogue is still the authority — the equality below is checked at
+#: import, so the two cannot drift; only the spelling is duplicated.
+MAX_VIDEO_VAE_BYTES = 12 << 30
 LANE_OUTPUTS = (
-    WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES),
-    WeightsOutput("bf16-adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES),
-    WeightsOutput("fp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES),
-    WeightsOutput("mxfp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES),
+    WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES + MAX_VIDEO_VAE_BYTES),
+    WeightsOutput("bf16-adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),
+    WeightsOutput("fp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
+    WeightsOutput("mxfp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
 )
 LaneName = Literal["bf16-full", "bf16-adaln-pruned", "fp8-adaln-pruned", "mxfp8-adaln-pruned"]
 
 
 def _check_lane_outputs() -> None:
+    if COMPONENT_MAX_NEW_BYTES["video_vae"] != MAX_VIDEO_VAE_BYTES:
+        raise ValueError(
+            f"the declared video VAE bound {MAX_VIDEO_VAE_BYTES} is not the catalogue's "
+            f"{COMPONENT_MAX_NEW_BYTES['video_vae']}"
+        )
     declared = {output.name: output.max_new_bytes for output in LANE_OUTPUTS}
     if set(declared) != set(LANES) or set(get_args(LaneName)) != set(LANES):
         raise ValueError(
@@ -423,9 +446,20 @@ def _requested(payload: LaneRequest) -> tuple[str, ...]:
     return tuple(name for name in LANES if name in selected)
 
 
-def _computes(lane: Lane) -> bool:
-    """Whether the lane needs a table pass or a treatment pass before it can commit."""
-    return lane.modulation == "adaln-pruned" or bool(lane.components)
+def _settles_first(lane: Lane, selections: Mapping[str, Selection]) -> bool:
+    """Whether this lane can finish before any table or encoding pass runs.
+
+    The property being kept is retention, not idleness: a lane settles first so that an
+    interrupted table pass cannot strand a checkpoint that was already complete. Before the
+    producer-wide video VAE normalisation a FULL lane did no work at all and this read
+    `not lane.components`; now it has one cast, which is cheap, local to a component no
+    later pass touches, and no reason to hold the lane behind two table passes. So the test
+    is what the lane still NEEDS — a table pass, or an encoding — and not whether it has
+    any work at all.
+    """
+    return lane.modulation != "adaln-pruned" and not any(
+        selection.plan is not None for selection in selections.values()
+    )
 
 
 def _bands(count: int, start: float, stop: float) -> list[tuple[float, float]]:
@@ -537,7 +571,7 @@ def lanes(
                 ),
                 dit_plan=dit_plan,
             )
-            for component, treatment in LANES[name].components.items()
+            for component, treatment in lane_treatments(LANES[name]).items()
         }
         for name in requested
     }
@@ -584,10 +618,27 @@ def lanes(
             for name, transaction in transactions.items()
             if not transaction.replayed
         }
-        # A lane that computes nothing is a pure declaration; it settles first so its
-        # retention never depends on a later lane's table or encoding pass.
-        for name in [n for n in active if not _computes(LANES[n])]:
+        # A lane needing neither a table pass nor an encoding settles first, so its
+        # retention never depends on a later lane's. Its casts run here rather than in the
+        # loop below, because the point is to be finished BEFORE the expensive passes.
+        for name in [n for n in active if _settles_first(LANES[n], selections[n])]:
             transaction = active.pop(name)
+            with tel.stage(name, overall_range=(0.0, 0.0)):
+                for component, selection in selections[name].items():
+                    stats = _treat(
+                        transaction,
+                        ctx,
+                        tel,
+                        quant_request,
+                        selection=selection,
+                        source=full_targets[component].source,
+                    )
+                    source_bytes += stats.source_bytes_read
+                    fidelity.append(
+                        WeightFidelity(
+                            name, component, selection.treatment.describe(), stats
+                        )
+                    )
             transaction.add_config("model", configs[LANES[name].modulation])
             receipts[name] = transaction.commit()
 
@@ -659,7 +710,7 @@ def lanes(
             LaneReceipt(
                 lane=name,
                 modulation=LANES[name].modulation,
-                treated_components=sorted(LANES[name].components),
+                treated_components=sorted(lane_treatments(LANES[name])),
                 tensorfs_receipt_digest=receipts[name].tensorfs_receipt_digest,
                 weights_transaction_id=receipts[name].weights_transaction_id,
                 replayed=receipts[name].replayed,
@@ -858,3 +909,235 @@ app.job(
 app.job(assemble_full_artifact, name="assemble-full-artifact", weights=(WeightsOutput("model", 0),))
 
 app.job(_adaln_operations.retable_adaln, name="retable-adaln", weights=(WeightsOutput("model", 0),))
+
+
+class RestampResult(msgspec.Struct):
+    """What one restamp re-emitted, and what it inherited untouched."""
+
+    weights_transaction_id: str
+    tensorfs_receipt_digest: str
+    replayed: bool
+    modulation: str
+    inherited_components: tuple[str, ...]
+    normalised_components: tuple[str, ...]
+    cast_keys: int
+    reused_keys: int
+    cast_worst_relative_frobenius: float | None
+    source_bytes_read: int
+    new_bytes_written: int
+
+
+def _source_modulation(source: WeightsSource, sections: Mapping[str, dict[str, Any]]) -> str:
+    """Read the source's own modulation off its DiT rows rather than off a request field.
+
+    An AdaLN-pruned checkpoint carries the timestep table rows and none of the dynamic
+    modulation weights; a FULL one carries the modulation weights and no tables. Anything
+    else is not a lane this producer emitted, and the restamp refuses rather than guessing.
+    """
+    present = {(tensor.component, tensor.key) for tensor in source.tensors}
+    verdicts: set[str] = set()
+    for task, section in SOURCE_SECTION.items():
+        component = TARGET_COMPONENT[task]
+        topology = H3Topology.from_config(sections[section])
+        keys = {key for owner, key in present if owner == component}
+        if not keys:
+            raise UnsupportedInput(
+                f"restamp source has no {component}", code="h3_component_absent"
+            )
+        dynamic = set(removed_keys(topology)) & keys
+        tables = set(table_shapes(topology, _production_plan(task))) & keys
+        if tables and not dynamic:
+            verdicts.add("adaln-pruned")
+        elif dynamic and not tables:
+            verdicts.add("full")
+        else:
+            raise UnsupportedInput(
+                f"{component} carries neither a clean FULL nor a clean AdaLN-pruned row set "
+                f"({len(dynamic)} modulation rows, {len(tables)} table rows)",
+                code="h3_restamp_source_shape",
+            )
+    if len(verdicts) != 1:
+        raise UnsupportedInput(
+            f"the two DiTs disagree about modulation: {sorted(verdicts)}",
+            code="h3_restamp_source_shape",
+        )
+    return verdicts.pop()
+
+
+
+def _check_emitted_config(document: bytes, modulation: str) -> None:
+    """Refuse a config document this package cannot stand behind, BEFORE it is written.
+
+    The document is emitted from package assets, so its correctness depends on which
+    `minimax-h3-tools` is deployed rather than on anything the request declares. Left
+    unchecked, a stale wheel writes a checkpoint that looks fine and refuses at
+    CONSTRUCTION — `artifact config 'fl2va_dit' 'timestep_plan_digest' is ..., expected
+    ...` — discovered at serve time on a rented pod. This is the same comparison
+    `official.py:_validate_model_contract` makes later, made here for the price of one
+    decode of 5,817 bytes (se-053).
+
+    The `cozy_h3` structure is CLOSED on the serving side, and the two modulations do not
+    carry the same keys: a FULL lane has no plan to stamp, so its extension is two keys,
+    and an AdaLN-pruned one is three. A three-key FULL document is exactly the shape a
+    closed check catches late and expensively.
+    """
+    value = canonical_json.decode(document)
+    fields = {"task", "modulation"} | (
+        {"timestep_plan_digest"} if modulation == "adaln-pruned" else set()
+    )
+    for task, component in TARGET_COMPONENT.items():
+        extension = value[component]["cozy_h3"]
+        if set(extension) != fields:
+            raise UnsupportedInput(
+                f"emitted {component} cozy_h3 is {sorted(extension)}, and a {modulation} "
+                f"lane carries exactly {sorted(fields)}",
+                code="h3_restamp_config_shape",
+            )
+        if extension["modulation"] != modulation:
+            raise UnsupportedInput(
+                f"emitted {component} declares modulation {extension['modulation']!r} for a "
+                f"{modulation} source",
+                code="h3_restamp_config_shape",
+            )
+        if modulation == "adaln-pruned":
+            expected = _production_plan(task).digest
+            if extension["timestep_plan_digest"] != expected:
+                raise UnsupportedInput(
+                    f"emitted {component} stamps plan {extension['timestep_plan_digest']} "
+                    f"but this package's {task} plan is {expected}; the config asset and the "
+                    "timestep-plan asset disagree, so the wheel is half-restamped",
+                    code="h3_restamp_plan_skew",
+                )
+
+
+@app.job(
+    name="restamp",
+    weights=(
+        WeightsOutput("restamped", max_new_bytes=MAX_VIDEO_VAE_BYTES + (128 << 10)),
+    ),
+)
+def restamp(
+    ctx: Context,
+    payload: ProductionRequest,
+    lane: H3FullTransformer,
+    artifacts: WeightsSink,
+    tel: Telemetry,
+) -> RestampResult:
+    """Re-emit one published lane under the CURRENT package-owned config and destinations.
+
+    Two things drift out from under a published checkpoint without any weight changing:
+    the config document this package owns (the task/plan stamps `model-config.json`
+    carries), and the dtype the serving code destines a component to. `fill.py` refuses a
+    stored dtype or length that differs from the destination and TensorFS pins the config
+    by digest, so both are re-publishes — and neither is a reason to recompute a byte.
+
+    So this reads NOTHING but the rows it actually rewrites. Both DiTs, the conditioner and
+    the audio VAE are inherited by reference through the zero-read/zero-hash inherit gate;
+    only the video VAE's decode operands are read, cast and written, and only while the
+    source still carries them at float32. `retable` is the wrong tool for this: it stages
+    the complete BF16 checkpoint to recompute table rows that are a pure function of a plan
+    document whose sigmas did not move.
+
+    The modulation is derived from the source's own rows, never from the request: a
+    checkpoint that is neither cleanly FULL nor cleanly AdaLN-pruned is not one this
+    producer emitted.
+    """
+    del payload
+    sections = parse_production_config(_asset("model-config.json"))
+    granted = artifacts.structure(lane)
+    modulation = _source_modulation(granted, sections)
+    components = sorted({tensor.component for tensor in granted.tensors})
+    if set(components) != set(_full_targets()):
+        raise UnsupportedInput(
+            f"restamp source components are {components}", code="h3_restamp_source_shape"
+        )
+
+    targets: dict[str, WeightsTarget] = {
+        component: WeightsTarget(source="lane", source_component=component)
+        for component in components
+    }
+    selections = {
+        component: _lanes.select(
+            component,
+            treatment,
+            _lanes.carried(targets[component], granted.tensors),
+            allow_inert=True,
+        )
+        for component, treatment in _lanes.NORMALISED_COMPONENTS.items()
+    }
+    pending = {name: s for name, s in selections.items() if s.cast}
+    for component, selection in pending.items():
+        targets[component] = _lanes.apply(targets[component], selection)
+
+    document = (
+        dual_full_config(sections)
+        if modulation == "full"
+        else dual_adaln_pruned_config(
+            sections, _production_plan("fl2va"), _production_plan("ref2va")
+        )
+    )
+    _check_emitted_config(document, modulation)
+    order = current_order(_asset("whole-order.json"))
+    rows = _full_order(sections, order.rows) if modulation == "full" else order.rows
+
+    stats = _lanes.CastStats(0, 0, 0, 0, None)
+    with artifacts.open(
+        "restamped",
+        sources={"lane": lane},
+        targets=targets,
+        configs={"model": WeightsConfig(data=document, length=len(document))},
+        order=rows,
+    ) as transaction:
+        if transaction.replayed:
+            receipt = _receipt(transaction)
+        else:
+            for component, selection in pending.items():
+                with tel.stage(f"cast-{component}"):
+                    cast = write_cast(
+                        transaction,
+                        ctx,
+                        tel,
+                        selection=selection,
+                        source="lane",
+                        source_component=component,
+                        target_component=component,
+                    )
+                stats = _lanes.CastStats(
+                    stats.converted_keys + cast.converted_keys,
+                    stats.reused_keys + cast.reused_keys,
+                    stats.source_bytes_read + cast.source_bytes_read,
+                    stats.new_bytes_written + cast.new_bytes_written,
+                    max(
+                        (
+                            value
+                            for value in (
+                                stats.worst_relative_frobenius,
+                                cast.worst_relative_frobenius,
+                            )
+                            if value is not None
+                        ),
+                        default=None,
+                    ),
+                )
+            # UNCONDITIONAL, and this is the whole reason the job exists. The restamp has
+            # two independent effects — the video VAE's bytes and this document — and a
+            # lane whose VAE is already at the destination still needs the document. Gate
+            # the write on `pending` and a lane restamped before the plan assets land can
+            # never be repaired by re-running: the second run would resolve inert and do
+            # nothing. Only the READ is skipped when there is nothing left to cast.
+            transaction.add_config("model", document)
+            receipt = transaction.commit()
+    tel.metric("h3.source_bytes", float(stats.source_bytes_read), unit="bytes")
+    return RestampResult(
+        receipt.weights_transaction_id,
+        receipt.tensorfs_receipt_digest,
+        receipt.replayed,
+        modulation,
+        tuple(component for component in components if component not in pending),
+        tuple(sorted(pending)),
+        stats.converted_keys,
+        stats.reused_keys,
+        stats.worst_relative_frobenius,
+        stats.source_bytes_read,
+        stats.new_bytes_written,
+    )

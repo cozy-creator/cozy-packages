@@ -79,6 +79,8 @@ H3 = ROOT / "minimax-h3"
 sys.path.insert(0, str(H3))
 sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
 
+from h3_tables import job as producer  # noqa: E402
+from h3_tables.lanes import NORMALISED_COMPONENTS, decode_operand  # noqa: E402
 from h3_tables.model_config import (  # noqa: E402
     dual_adaln_pruned_config,
     dual_full_config,
@@ -109,6 +111,7 @@ from official import (  # noqa: E402
     ScheduleFacts,
     _aligned_soundtrack,
     _apply_transformer_dtype,
+    _apply_video_vae_dtype,
     _artifact_sections,
     _as_float32,
     _dit_specs,
@@ -1119,9 +1122,105 @@ def arm_graph_and_dtypes() -> None:
         Counter({"torch.bfloat16": 626, "torch.float32": 12}),
     )
     check(
-        "video VAE remains fp32",
+        "video VAE constructs uniformly fp32",
         Counter(str(value.dtype) for value in video_vae.state_dict().values()),
         Counter({"torch.float32": 703}),
+    )
+    with torch.device("meta"):
+        cast_vae = _apply_video_vae_dtype(AutoencoderKLMiniMaxH3())
+    cast_state = cast_vae.state_dict()
+    cast_counts = Counter(str(value.dtype) for value in cast_state.values())
+    check(
+        "video VAE stores the fp16-autocast decode operands at fp16",
+        cast_counts,
+        Counter({"torch.float32": 484, "torch.float16": 219}),
+    )
+    check(
+        "video VAE encode side stays fp32 - encode_vae_condition has no autocast",
+        sorted(
+            name
+            for name, value in cast_state.items()
+            if value.dtype is torch.float16 and name.startswith(("encoder.", "quant_conv."))
+        ),
+        [],
+    )
+    check(
+        "video VAE rotary buffer stays fp32",
+        str(cast_vae.decoder.rope.inv_freq.dtype),
+        "torch.float32",
+    )
+    # `vae_tiles.decode_chunks` keys the incoming latents' dtype off the decoder's FIRST
+    # parameter, so parameter order decides what the served path casts them to.
+    first_name, first_parameter = next(iter(cast_vae.decoder.named_parameters()))
+    check(
+        "the decoder's first parameter is a float32 one, which decode_chunks reads",
+        (first_name, str(first_parameter.dtype)),
+        ("register_tokens", "torch.float32"),
+    )
+    check(
+        "video VAE destination bytes",
+        (
+            sum(value.numel() * 4 for value in cast_state.values()),
+            sum(value.numel() * value.element_size() for value in cast_state.values()),
+        ),
+        (10_415_475_936, 5_570_955_360),
+    )
+    red("uniform fp16 video VAE cast", cast_counts, Counter({"torch.float16": 703}))
+    # The producer stores what the code destines, so the two spellings of "which rows"
+    # must be one rule. They live in different wheels, so this is where they meet.
+    served = {name for name, value in cast_state.items() if value.dtype is torch.float16}
+    produced = {
+        name
+        for name, value in video_vae.state_dict().items()
+        if decode_operand(name, tuple(value.shape))
+    }
+    check("the producer's cast scope IS the served destination", produced == served, True)
+    check("the cast scope selects the 219 decode operands", len(produced), 219)
+    check(
+        "the producer normalises the video VAE at f16 on every lane",
+        {name: (t.cast, t.cast_scope) for name, t in NORMALISED_COMPONENTS.items()},
+        {"video_vae": ("f16", "decode_operands")},
+    )
+    red(
+        "an unscoped component cast would store the served destination",
+        len(video_vae.state_dict()),
+        len(served),
+    )
+    # The restamp emits its config from package assets, so a half-restamped wheel could
+    # write a checkpoint that only refuses at CONSTRUCTION, on a rented pod. These are the
+    # emit-time refusals that turn that into a job-time one.
+    producer_sections = parse_production_config(producer._asset("model-config.json"))
+    emitted = {
+        "adaln-pruned": dual_adaln_pruned_config(
+            producer_sections,
+            producer._production_plan("fl2va"),
+            producer._production_plan("ref2va"),
+        ),
+        "full": dual_full_config(producer_sections),
+    }
+    for modulation, document in emitted.items():
+        producer._check_emitted_config(document, modulation)
+    check(
+        "both emitted configs pass the restamp's own check",
+        sorted(emitted),
+        ["adaln-pruned", "full"],
+    )
+    refusal(
+        "a pruned document emitted as a FULL lane refuses on the closed cozy_h3 shape",
+        lambda: producer._check_emitted_config(emitted["adaln-pruned"], "full"),
+        "h3_restamp_config_shape",
+    )
+    refusal(
+        "a FULL document emitted as a pruned lane refuses on the closed cozy_h3 shape",
+        lambda: producer._check_emitted_config(emitted["full"], "adaln-pruned"),
+        "h3_restamp_config_shape",
+    )
+    skewed = canonical_json.decode(emitted["adaln-pruned"])
+    skewed["fl2va_dit"]["cozy_h3"]["timestep_plan_digest"] = f"sha256:{'0' * 64}"
+    refusal(
+        "a config asset that disagrees with the timestep-plan asset refuses at emit",
+        lambda: producer._check_emitted_config(canonical_json.encode(skewed), "adaln-pruned"),
+        "h3_restamp_plan_skew",
     )
     check("audio VAE state count", len(audio_vae.state_dict()), 1087)
     check("audio VAE parameter destinations", len(dict(audio_vae.named_parameters())), 832)
