@@ -79,6 +79,8 @@ H3 = ROOT / "minimax-h3"
 sys.path.insert(0, str(H3))
 sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
 
+from h3_tables import job as producer  # noqa: E402
+from h3_tables.lanes import NORMALISED_COMPONENTS, decode_operand  # noqa: E402
 from h3_tables.model_config import (  # noqa: E402
     dual_adaln_pruned_config,
     dual_full_config,
@@ -1158,8 +1160,6 @@ def arm_graph_and_dtypes() -> None:
     red("uniform fp16 video VAE cast", cast_counts, Counter({"torch.float16": 703}))
     # The producer stores what the code destines, so the two spellings of "which rows"
     # must be one rule. They live in different wheels, so this is where they meet.
-    from h3_tables.lanes import NORMALISED_COMPONENTS, decode_operand
-
     served = {name for name, value in cast_state.items() if value.dtype is torch.float16}
     produced = {
         name
@@ -1181,14 +1181,7 @@ def arm_graph_and_dtypes() -> None:
     # The restamp emits its config from package assets, so a half-restamped wheel could
     # write a checkpoint that only refuses at CONSTRUCTION, on a rented pod. These are the
     # emit-time refusals that turn that into a job-time one.
-    from h3_tables import job as producer
-    from h3_tables.model_config import (
-        dual_adaln_pruned_config,
-        dual_full_config,
-    )
-    from h3_tables.model_config import parse_production_config as _sections
-
-    producer_sections = _sections(producer._asset("model-config.json"))
+    producer_sections = parse_production_config(producer._asset("model-config.json"))
     emitted = {
         "adaln-pruned": dual_adaln_pruned_config(
             producer_sections,
