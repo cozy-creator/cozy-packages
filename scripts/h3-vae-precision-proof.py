@@ -24,14 +24,16 @@ import torch
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "minimax-h3"))
 
+from diffusers.modular_pipelines.minimax_h3.modular_pipeline import (  # noqa: E402
+    video_latent_num_frames,
+)
+
 from official import (  # noqa: E402
     FRAMES_PER_CHUNK,
     LATENTS_PER_CHUNK,
     _apply_video_vae_dtype,
     frames_for,
-    video_latent_num_frames,
 )
-
 from vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
 
 # Full length, both cells the release has shipped or is shipping: `frames_for` snaps whole

@@ -12,7 +12,6 @@ from typing import Annotated, Any, Literal, get_args
 import msgspec
 import torch
 from cozy_runtime.author import (
-    canonical_json,
     App,
     Context,
     Telemetry,
@@ -26,6 +25,7 @@ from cozy_runtime.author import (
     WeightsTarget,
     WeightsTensor,
     WeightsTransaction,
+    canonical_json,
 )
 from cozy_runtime.derive.quantization import (
     MAX_OUTPUT_BYTES,
@@ -119,7 +119,13 @@ _check_table_budget(MAX_TABLE_BYTES)
 #: import, before a worker is ever asked to produce anything.
 #: Every lane carries the producer-wide video VAE normalisation, so every ceiling below
 #: includes that component's own bound — including `bf16-full`, which authors nothing.
-MAX_VIDEO_VAE_BYTES = COMPONENT_MAX_NEW_BYTES["video_vae"]
+#:
+#: Spelled as a literal, not as `COMPONENT_MAX_NEW_BYTES["video_vae"]`, because cr-114's
+#: static reader folds the decorator from SOURCE over a closed vocabulary and refuses a
+#: subscript: `describe` fails the whole package with `static_computed` rather than
+#: guessing. The catalogue is still the authority — the equality below is checked at
+#: import, so the two cannot drift; only the spelling is duplicated.
+MAX_VIDEO_VAE_BYTES = 12 << 30
 LANE_OUTPUTS = (
     WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES + MAX_VIDEO_VAE_BYTES),
     WeightsOutput("bf16-adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),
@@ -130,6 +136,11 @@ LaneName = Literal["bf16-full", "bf16-adaln-pruned", "fp8-adaln-pruned", "mxfp8-
 
 
 def _check_lane_outputs() -> None:
+    if COMPONENT_MAX_NEW_BYTES["video_vae"] != MAX_VIDEO_VAE_BYTES:
+        raise ValueError(
+            f"the declared video VAE bound {MAX_VIDEO_VAE_BYTES} is not the catalogue's "
+            f"{COMPONENT_MAX_NEW_BYTES['video_vae']}"
+        )
     declared = {output.name: output.max_new_bytes for output in LANE_OUTPUTS}
     if set(declared) != set(LANES) or set(get_args(LaneName)) != set(LANES):
         raise ValueError(
@@ -1076,7 +1087,10 @@ def restamp(
                     max(
                         (
                             value
-                            for value in (stats.worst_relative_frobenius, cast.worst_relative_frobenius)
+                            for value in (
+                                stats.worst_relative_frobenius,
+                                cast.worst_relative_frobenius,
+                            )
                             if value is not None
                         ),
                         default=None,
