@@ -333,6 +333,7 @@ def main() -> None:
         "select-adaln-weights",
         "assemble-full-artifact",
         "retable-adaln",
+        "restamp",
     }:
         raise RuntimeError(f"package callable compatibility changed: {sorted(jobs)}")
     job = jobs["lanes"]

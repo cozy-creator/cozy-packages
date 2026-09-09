@@ -17,7 +17,7 @@ choice. The request selects a subset of these rows; it can never author one.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -45,6 +45,10 @@ from cozy_runtime.derive.quantization import (
 from .source import TARGET_COMPONENT
 
 CastDtype = Literal["bf16", "f16"]
+#: Which of a component's float32 rows a cast covers. ``component`` is every plain one.
+#: ``decode_operands`` is the video VAE's serving destination and nothing else — see
+#: ``VIDEO_VAE_NORMALISATION``.
+CastScope = Literal["component", "decode_operands"]
 Encoding = Literal["fp8-rowwise/1", "mxfp8/1"]
 Modulation = Literal["full", "adaln-pruned"]
 
@@ -84,6 +88,19 @@ UNSERVABLE_LANE = "mxfp8-adaln-pruned"
 #: `pre_block.attn.qkv.weight [6144, 2048]`), quantizes the audio CONDITIONING path, leaves
 #: the BigVGAN decoder untouched and saves nothing. Every ecosystem publisher pins audio
 #: autoencoders to fp32 and h3a-006 already records the same conclusion.
+#:
+#: The mechanism is only half of it, and the other half is why this component is not merely
+#: unrepresentable but must not move at ANY width, fp16 and bf16 included. THIS is the real
+#: instance of "VAE decoders sometimes genuinely break in low precision" — the audio one,
+#: not the video one. `AutoencoderKLMiniMaxH3Audio` pins all six of its roots in
+#: `_keep_in_fp32_modules` and says why: the DAC/BigVGAN stack (weight-normalised
+#: convolutions, Snake activations) "degrades audibly under bfloat16, roughly 20 dB quieter
+#: decodes". And unlike the video VAE there is no autocast to hide behind:
+#: `MiniMaxH3AudioDecodeStep` calls `audio_vae.decode` in plain float32, so a narrower
+#: store is a real change to the arithmetic rather than a store of a rounding the forward
+#: already performs. `decode` even branches on it — `if decoder_dtype != torch.float32` —
+#: which is upstream saying out loud that float32 is the supported path. 0.56 GiB is the
+#: whole component; there is nothing here worth an audible risk.
 REFUSED_COMPONENTS: Mapping[str, str] = {
     "audio_vae": (
         "the audio VAE is not representable: 637 of its 1,087 rows are rank-3, including the "
@@ -125,10 +142,13 @@ class Treatment:
     cast: CastDtype | None = None
     encode: Encoding | None = None
     keep: tuple[str, ...] = ()
+    cast_scope: CastScope = "component"
 
     def __post_init__(self) -> None:
         if self.cast is None and self.encode is None:
             raise ValueError("a treatment casts, encodes, or both; absence means inherit")
+        if self.cast_scope != "component" and self.cast is None:
+            raise ValueError("a cast scope without a cast names nothing")
         if self.keep and self.encode is None:
             raise ValueError("a keep list only excludes keys from an encoding")
         if len(set(self.keep)) != len(self.keep):
@@ -138,6 +158,8 @@ class Treatment:
         spelled = []
         if self.cast is not None:
             spelled.append(f"cast={self.cast}")
+            if self.cast_scope != "component":
+                spelled.append(f"scope={self.cast_scope}")
         if self.encode is not None:
             spelled.append(f"encode={self.encode}")
             if self.keep:
@@ -186,6 +208,54 @@ TEXT_ENCODER_KEEP: tuple[str, ...] = (
     ),
 )
 
+#: The video VAE's stored form is NOT a lane choice, so it is not authored per row.
+#:
+#: `MiniMaxH3VideoDecodeStep` decodes inside `torch.autocast(float16)`, so the decoder's
+#: conv/linear operands are rounded f32->f16 by autocast on every forward whatever they are
+#: stored as. `official.py:_apply_video_vae_dtype` therefore BUILDS them at float16, which
+#: is bit-exact and halves the component (10,415,475,936 -> 5,570,955,360 B). `fill.py`
+#: refuses a stored dtype that differs from the destination, so every lane must store what
+#: the serving code destines — including `bf16-full`, which authors no treatments of its
+#: own. That is what makes this a producer-wide normalisation rather than a lane row.
+#:
+#: The scope is the whole of the argument. The encode side has NO autocast
+#: (`encode_vae_condition`), norms, biases and register tokens are exactly what autocast
+#: keeps in float32, and `decoder.rope.inv_freq` is a config-derived buffer float16 could
+#: not restore. Casting them too still decodes at 78 dB, but it is no longer an identity,
+#: and it buys 2.4 MiB of a 4.51 GiB saving.
+#:
+#: `h3-conform.py`'s `graph` arm proves this predicate selects exactly the keys
+#: `_apply_video_vae_dtype` casts, so the two spellings cannot drift apart.
+DECODE_OPERAND_KEYS = frozenset({"post_quant_conv.weight"})
+DECODE_OPERAND_PREFIX = "decoder."
+
+
+def decode_operand(key: str, shape: Sequence[int]) -> bool:
+    """Is this row an operand the release decode's float16 autocast already rounds?"""
+    return (
+        len(shape) >= 2
+        and key.rsplit(".", 1)[-1] == "weight"
+        and (key.startswith(DECODE_OPERAND_PREFIX) or key in DECODE_OPERAND_KEYS)
+    )
+
+
+CAST_SCOPES: Mapping[str, Callable[[str, Sequence[int]], bool]] = {
+    "component": lambda key, shape: True,
+    "decode_operands": decode_operand,
+}
+
+#: Applied to EVERY lane, ahead of whatever that lane authors. A component named here may
+#: not also be authored by a lane row: one component, one treatment.
+NORMALISED_COMPONENTS: Mapping[str, Treatment] = {
+    "video_vae": Treatment(cast="f16", cast_scope="decode_operands"),
+}
+
+
+def lane_treatments(lane: Lane) -> Mapping[str, Treatment]:
+    """Everything this lane does to each component: the normalisations, then its own."""
+    return {**NORMALISED_COMPONENTS, **lane.components}
+
+
 #: The reviewed catalogue. Adding a lane is ONE row here: `job.py` derives its
 #: `WeightsOutput`, its byte ceiling, its targets and its writers from this mapping, so
 #: there is no second list of names to keep in step.
@@ -219,8 +289,14 @@ def validate_catalogue(lanes: Mapping[str, Lane] = LANES) -> None:
         raise ValueError("the H3 lane catalogue is empty")
     for name, lane in lanes.items():
         if lane.modulation == "full" and lane.components:
-            raise ValueError(f"lane {name!r} is a FULL lane and must inherit every component")
-        for component, treatment in lane.components.items():
+            raise ValueError(f"lane {name!r} is a FULL lane and AUTHORS no treatment")
+        double = sorted(set(lane.components) & set(NORMALISED_COMPONENTS))
+        if double:
+            raise ValueError(
+                f"lane {name!r} authors {double}, which the producer already normalises; "
+                "one component carries one treatment"
+            )
+        for component, treatment in lane_treatments(lane).items():
             if component in REFUSED_COMPONENTS:
                 raise ValueError(
                     f"lane {name!r} treats {component}: {REFUSED_COMPONENTS[component]}"
@@ -250,7 +326,7 @@ validate_catalogue()
 def lane_max_new_bytes(lane: Lane, *, full_bytes: int, pruned_bytes: int) -> int:
     """The declared new-byte ceiling of one lane's output slot."""
     base = full_bytes if lane.modulation == "full" else pruned_bytes
-    return base + sum(COMPONENT_MAX_NEW_BYTES[component] for component in lane.components)
+    return base + sum(COMPONENT_MAX_NEW_BYTES[component] for component in lane_treatments(lane))
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,8 +390,13 @@ def select(
     tensors: Sequence[WeightsSourceTensor],
     *,
     dit_plan: ArtifactQuantizationPlan | None = None,
+    allow_inert: bool = False,
 ) -> Selection:
     """Resolve one treatment against the granted source structure.
+
+    ``allow_inert`` is for the NORMALISATIONS only: a lane row that changes nothing is a
+    catalogue mistake and refuses, but a restamp of a checkpoint whose video VAE is already
+    at the serving destination has simply nothing left to do, and that is a success.
 
     The two DiTs encode through the reviewed plan, never through shape. Every other
     component selects structurally with the Runtime's own ``prepare_source_quantization``
@@ -379,13 +460,15 @@ def select(
             # component it barely changes.
             if tensor.key in encoded or tensor.logical_dtype != "f32":
                 continue
+            if not CAST_SCOPES[treatment.cast_scope](tensor.key, tensor.shape):
+                continue
             if not _plain_value(tensor):
                 raise UnsupportedInput(
                     f"{component}.{tensor.key} is not one plain value role and cannot be cast",
                     code="h3_cast_encoded_source",
                 )
             cast.append((tensor.key, tuple(tensor.shape)))
-    if not cast and plan is None:
+    if not cast and plan is None and not allow_inert:
         raise UnsupportedInput(
             f"{component} treatment {treatment.describe()!r} changes nothing on this source",
             code="h3_treatment_inert",
