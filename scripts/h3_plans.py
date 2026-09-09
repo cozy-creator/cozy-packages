@@ -11,12 +11,17 @@ the producer, and restamps the producer's model config with the new plan identit
 
 from __future__ import annotations
 
+import re
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 H3 = ROOT / "minimax-h3"
 TOOLS = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
+PLANS_MODULE = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "plans.py"
+MODEL_CONFIG_MODULE = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "model_config.py"
+CONFORM_SCRIPT = ROOT / "scripts" / "h3-conform.py"
 sys.path.insert(0, str(H3))
 
 from cozy_runtime.author import canonical_json  # noqa: E402
@@ -39,6 +44,53 @@ def official_schedule(steps: int) -> Schedule:
     if schedule.transformer_evaluations != steps:
         raise SystemExit(f"{steps} steps collide on the float32 grid; pick another count")
     return schedule
+
+
+def _rewrite(path: Path, edits: Sequence[tuple[str, str]]) -> None:
+    """Apply each (pattern, replacement) exactly once, or refuse.
+
+    A digest this script leaves behind is a conformance failure nobody sees until a job
+    refuses at load, so every site it invalidates is rewritten HERE rather than printed for
+    a human to paste. A pattern that stops matching means the constant moved and this list
+    is stale, which must be loud.
+    """
+    text = original = path.read_text()
+    for pattern, replacement in edits:
+        text, count = re.subn(pattern, replacement, text, count=1)
+        if count != 1:
+            raise SystemExit(f"{path}: {pattern!r} matched {count} sites, expected 1")
+    if text != original:
+        path.write_text(text)
+        print(f"restamped {path.relative_to(ROOT)}")
+
+
+def _restamp_constants(digests: dict[str, str], config_digest: str, length: int) -> None:
+    """Every pinned constant the regenerated plans invalidate, in one pass.
+
+    Three files pin these in three spellings: `LAUNCH_PLAN_DIGESTS` carries the `sha256:`
+    prefix, `PLAN_DIGESTS` carries bare hex, and `_CURRENT_MODEL_CONFIG` digests the
+    document the first two determine. Hand-pasting any of them is how se-053 spent a
+    conformance failure on `model config is not the exact current dual-task H3 config`.
+    """
+    bare = {task: digest.removeprefix("sha256:") for task, digest in digests.items()}
+    _rewrite(
+        PLANS_MODULE,
+        [(f'("{task}": )"sha256:[0-9a-f]{{64}}"', f'\\g<1>"{digests[task]}"') for task in TASKS],
+    )
+    _rewrite(
+        MODEL_CONFIG_MODULE,
+        [
+            (
+                r'(_CURRENT_MODEL_CONFIG = \(\s*)"sha256:[0-9a-f]{64}"',
+                f'\\g<1>"{config_digest}"',
+            ),
+            ("(_CURRENT_MODEL_CONFIG_LENGTH = )[0-9]+", f"\\g<1>{length}"),
+        ],
+    )
+    _rewrite(
+        CONFORM_SCRIPT,
+        [(f'("{task}": )"[0-9a-f]{{64}}"', f'\\g<1>"{bare[task]}"') for task in TASKS],
+    )
 
 
 def main(arguments: list[str]) -> None:
@@ -65,7 +117,9 @@ def main(arguments: list[str]) -> None:
         config[component]["cozy_h3"]["timestep_plan_digest"] = digests[task]
     raw = canonical_json.encode(config)
     config_path.write_bytes(raw)
-    print(f"model-config.json: {canonical_json.digest(config)} length={len(raw)}")
+    config_digest = canonical_json.digest(config)
+    print(f"model-config.json: {config_digest} length={len(raw)}")
+    _restamp_constants(digests, config_digest, len(raw))
 
 
 if __name__ == "__main__":

@@ -38,7 +38,15 @@ from . import adaln_operations as _adaln_operations
 from . import lanes as _lanes
 from .kernel import H3Topology, removed_keys, source_shapes, table_bytes, table_shapes
 from .kernel import precompute_tables as compute_tables
-from .lanes import LANES, Lane, Selection, lane_max_new_bytes, write_cast
+from .lanes import (
+    COMPONENT_MAX_NEW_BYTES,
+    LANES,
+    Lane,
+    Selection,
+    lane_max_new_bytes,
+    lane_treatments,
+    write_cast,
+)
 from .model_config import (
     dual_adaln_pruned_config,
     dual_full_config,
@@ -108,11 +116,14 @@ _check_table_budget(MAX_TABLE_BYTES)
 #: ceiling equal to what the lane's own treatments imply. Adding a lane is one catalogue
 #: row, one line here and one `LaneName` member; getting any of the three wrong refuses at
 #: import, before a worker is ever asked to produce anything.
+#: Every lane carries the producer-wide video VAE normalisation, so every ceiling below
+#: includes that component's own bound — including `bf16-full`, which authors nothing.
+MAX_VIDEO_VAE_BYTES = COMPONENT_MAX_NEW_BYTES["video_vae"]
 LANE_OUTPUTS = (
-    WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES),
-    WeightsOutput("bf16-adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES),
-    WeightsOutput("fp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES),
-    WeightsOutput("mxfp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES),
+    WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES + MAX_VIDEO_VAE_BYTES),
+    WeightsOutput("bf16-adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),
+    WeightsOutput("fp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
+    WeightsOutput("mxfp8-adaln-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
 )
 LaneName = Literal["bf16-full", "bf16-adaln-pruned", "fp8-adaln-pruned", "mxfp8-adaln-pruned"]
 
@@ -424,8 +435,13 @@ def _requested(payload: LaneRequest) -> tuple[str, ...]:
 
 
 def _computes(lane: Lane) -> bool:
-    """Whether the lane needs a table pass or a treatment pass before it can commit."""
-    return lane.modulation == "adaln-pruned" or bool(lane.components)
+    """Whether the lane needs a table pass or a treatment pass before it can commit.
+
+    Never `lane.components` alone: the producer-wide normalisations are treatments the
+    lane did not author, and a FULL lane that authors nothing still has to cast the video
+    VAE before it can commit.
+    """
+    return lane.modulation == "adaln-pruned" or bool(lane_treatments(lane))
 
 
 def _bands(count: int, start: float, stop: float) -> list[tuple[float, float]]:
@@ -537,7 +553,7 @@ def lanes(
                 ),
                 dit_plan=dit_plan,
             )
-            for component, treatment in LANES[name].components.items()
+            for component, treatment in lane_treatments(LANES[name]).items()
         }
         for name in requested
     }
@@ -659,7 +675,7 @@ def lanes(
             LaneReceipt(
                 lane=name,
                 modulation=LANES[name].modulation,
-                treated_components=sorted(LANES[name].components),
+                treated_components=sorted(lane_treatments(LANES[name])),
                 tensorfs_receipt_digest=receipts[name].tensorfs_receipt_digest,
                 weights_transaction_id=receipts[name].weights_transaction_id,
                 replayed=receipts[name].replayed,
@@ -858,3 +874,179 @@ app.job(
 app.job(assemble_full_artifact, name="assemble-full-artifact", weights=(WeightsOutput("model", 0),))
 
 app.job(_adaln_operations.retable_adaln, name="retable-adaln", weights=(WeightsOutput("model", 0),))
+
+
+class RestampResult(msgspec.Struct):
+    """What one restamp re-emitted, and what it inherited untouched."""
+
+    weights_transaction_id: str
+    tensorfs_receipt_digest: str
+    replayed: bool
+    modulation: str
+    inherited_components: tuple[str, ...]
+    normalised_components: tuple[str, ...]
+    cast_keys: int
+    reused_keys: int
+    cast_worst_relative_frobenius: float | None
+    source_bytes_read: int
+    new_bytes_written: int
+
+
+def _source_modulation(source: WeightsSource, sections: Mapping[str, dict[str, Any]]) -> str:
+    """Read the source's own modulation off its DiT rows rather than off a request field.
+
+    An AdaLN-pruned checkpoint carries the timestep table rows and none of the dynamic
+    modulation weights; a FULL one carries the modulation weights and no tables. Anything
+    else is not a lane this producer emitted, and the restamp refuses rather than guessing.
+    """
+    present = {(tensor.component, tensor.key) for tensor in source.tensors}
+    verdicts: set[str] = set()
+    for task, section in SOURCE_SECTION.items():
+        component = TARGET_COMPONENT[task]
+        topology = H3Topology.from_config(sections[section])
+        keys = {key for owner, key in present if owner == component}
+        if not keys:
+            raise UnsupportedInput(
+                f"restamp source has no {component}", code="h3_component_absent"
+            )
+        dynamic = set(removed_keys(topology)) & keys
+        tables = set(table_shapes(topology, _production_plan(task))) & keys
+        if tables and not dynamic:
+            verdicts.add("adaln-pruned")
+        elif dynamic and not tables:
+            verdicts.add("full")
+        else:
+            raise UnsupportedInput(
+                f"{component} carries neither a clean FULL nor a clean AdaLN-pruned row set "
+                f"({len(dynamic)} modulation rows, {len(tables)} table rows)",
+                code="h3_restamp_source_shape",
+            )
+    if len(verdicts) != 1:
+        raise UnsupportedInput(
+            f"the two DiTs disagree about modulation: {sorted(verdicts)}",
+            code="h3_restamp_source_shape",
+        )
+    return verdicts.pop()
+
+
+@app.job(
+    name="restamp",
+    weights=(
+        WeightsOutput("restamped", max_new_bytes=MAX_VIDEO_VAE_BYTES + (128 << 10)),
+    ),
+)
+def restamp(
+    ctx: Context,
+    payload: ProductionRequest,
+    lane: H3FullTransformer,
+    artifacts: WeightsSink,
+    tel: Telemetry,
+) -> RestampResult:
+    """Re-emit one published lane under the CURRENT package-owned config and destinations.
+
+    Two things drift out from under a published checkpoint without any weight changing:
+    the config document this package owns (the task/plan stamps `model-config.json`
+    carries), and the dtype the serving code destines a component to. `fill.py` refuses a
+    stored dtype or length that differs from the destination and TensorFS pins the config
+    by digest, so both are re-publishes — and neither is a reason to recompute a byte.
+
+    So this reads NOTHING but the rows it actually rewrites. Both DiTs, the conditioner and
+    the audio VAE are inherited by reference through the zero-read/zero-hash inherit gate;
+    only the video VAE's decode operands are read, cast and written, and only while the
+    source still carries them at float32. `retable` is the wrong tool for this: it stages
+    the complete BF16 checkpoint to recompute table rows that are a pure function of a plan
+    document whose sigmas did not move.
+
+    The modulation is derived from the source's own rows, never from the request: a
+    checkpoint that is neither cleanly FULL nor cleanly AdaLN-pruned is not one this
+    producer emitted.
+    """
+    del payload
+    sections = parse_production_config(_asset("model-config.json"))
+    granted = artifacts.structure(lane)
+    modulation = _source_modulation(granted, sections)
+    components = sorted({tensor.component for tensor in granted.tensors})
+    if set(components) != set(_full_targets()):
+        raise UnsupportedInput(
+            f"restamp source components are {components}", code="h3_restamp_source_shape"
+        )
+
+    targets: dict[str, WeightsTarget] = {
+        component: WeightsTarget(source="lane", source_component=component)
+        for component in components
+    }
+    selections = {
+        component: _lanes.select(
+            component,
+            treatment,
+            _lanes.carried(targets[component], granted.tensors),
+            allow_inert=True,
+        )
+        for component, treatment in _lanes.NORMALISED_COMPONENTS.items()
+    }
+    pending = {name: s for name, s in selections.items() if s.cast}
+    for component, selection in pending.items():
+        targets[component] = _lanes.apply(targets[component], selection)
+
+    document = (
+        dual_full_config(sections)
+        if modulation == "full"
+        else dual_adaln_pruned_config(
+            sections, _production_plan("fl2va"), _production_plan("ref2va")
+        )
+    )
+    order = current_order(_asset("whole-order.json"))
+    rows = _full_order(sections, order.rows) if modulation == "full" else order.rows
+
+    stats = _lanes.CastStats(0, 0, 0, 0, None)
+    with artifacts.open(
+        "restamped",
+        sources={"lane": lane},
+        targets=targets,
+        configs={"model": WeightsConfig(data=document, length=len(document))},
+        order=rows,
+    ) as transaction:
+        if transaction.replayed:
+            receipt = _receipt(transaction)
+        else:
+            for component, selection in pending.items():
+                with tel.stage(f"cast-{component}"):
+                    cast = write_cast(
+                        transaction,
+                        ctx,
+                        tel,
+                        selection=selection,
+                        source="lane",
+                        source_component=component,
+                        target_component=component,
+                    )
+                stats = _lanes.CastStats(
+                    stats.converted_keys + cast.converted_keys,
+                    stats.reused_keys + cast.reused_keys,
+                    stats.source_bytes_read + cast.source_bytes_read,
+                    stats.new_bytes_written + cast.new_bytes_written,
+                    max(
+                        (
+                            value
+                            for value in (stats.worst_relative_frobenius, cast.worst_relative_frobenius)
+                            if value is not None
+                        ),
+                        default=None,
+                    ),
+                )
+            transaction.add_config("model", document)
+            receipt = transaction.commit()
+    tel.metric("h3.source_bytes", float(stats.source_bytes_read), unit="bytes")
+    return RestampResult(
+        receipt.weights_transaction_id,
+        receipt.tensorfs_receipt_digest,
+        receipt.replayed,
+        modulation,
+        tuple(component for component in components if component not in pending),
+        tuple(sorted(pending)),
+        stats.converted_keys,
+        stats.reused_keys,
+        stats.worst_relative_frobenius,
+        stats.source_bytes_read,
+        stats.new_bytes_written,
+    )

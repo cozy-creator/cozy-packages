@@ -1156,6 +1156,28 @@ def arm_graph_and_dtypes() -> None:
         (10_415_475_936, 5_570_955_360),
     )
     red("uniform fp16 video VAE cast", cast_counts, Counter({"torch.float16": 703}))
+    # The producer stores what the code destines, so the two spellings of "which rows"
+    # must be one rule. They live in different wheels, so this is where they meet.
+    from h3_tables.lanes import NORMALISED_COMPONENTS, decode_operand  # noqa: PLC0415
+
+    served = {name for name, value in cast_state.items() if value.dtype is torch.float16}
+    produced = {
+        name
+        for name, value in video_vae.state_dict().items()
+        if decode_operand(name, tuple(value.shape))
+    }
+    check("the producer's cast scope IS the served destination", produced == served, True)
+    check("the cast scope selects the 219 decode operands", len(produced), 219)
+    check(
+        "the producer normalises the video VAE at f16 on every lane",
+        {name: (t.cast, t.cast_scope) for name, t in NORMALISED_COMPONENTS.items()},
+        {"video_vae": ("f16", "decode_operands")},
+    )
+    red(
+        "an unscoped component cast would store the served destination",
+        len(video_vae.state_dict()),
+        len(served),
+    )
     check("audio VAE state count", len(audio_vae.state_dict()), 1087)
     check("audio VAE parameter destinations", len(dict(audio_vae.named_parameters())), 832)
     red("uniform bf16 transformer cast", transformer_counts, Counter({"torch.bfloat16": 638}))
