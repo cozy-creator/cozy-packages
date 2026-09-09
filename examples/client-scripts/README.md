@@ -42,8 +42,8 @@ plain Python lines are not replayed or skipped by a workflow engine.
 24 fresh 1024² renders (eight prompts × candidate/reference/repeat), activation
 capture, memoized weight/media/capture/quality measurements, a fresh Eval fold,
 and explicit checkpoint/report/release effects. The local `sdxl-assessment` helper
-is an ordinary unpublished Python library, with no App or package.toml; no new
-deployable is introduced. This consumer requires the coordinated public
+is an unpublished Python library with no package.toml or deployment. Its local App
+registers only the example calibration controls. This consumer requires the coordinated public
 Runtime 0.14.0, TensorFS 0.3.34 and Eval 0.7.0 read-only weight cohort.
 
 The committed policy is a **proposal, not ratification**. Read
@@ -70,6 +70,15 @@ checks the Hub verdict, then performs revision-guarded release publication. No
 publication follows FAIL, INDETERMINATE or an unratified policy. The adapter does
 not open a dummy weights transaction; Eval's weight leaf receives actual granted
 manifest-only Models through Runtime's read-only WeightsReader service.
+
+`sdxl_calibration.py` runs one explicitly selected calibration or held-out control
+cell. Its separate prompt banks cover null, quantized and genuine native UNet ×2
+weight arms, wrong-object/color generations and blur/flat pixel controls. See
+[control evidence and review procedure](sdxl-assessment/sdxl_assessment_client/controls/README.md).
+All expected labels remain authored and unreviewed; its private control jobs have a
+local App under examples and are never added to the deployed SDXL App. The driver
+returns actual review files/facts, never publishes, and refuses an unfrozen held-out
+policy. Calibration, held-out and final-admission prompt/seed sets are disjoint.
 
 No SDXL render, model-quality verdict or release is claimed by these source changes.
 The producer and full real-model qualification remain separate tracker evidence.

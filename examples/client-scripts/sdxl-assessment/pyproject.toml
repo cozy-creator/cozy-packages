@@ -4,6 +4,9 @@ version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = ["cozy-runtime==0.14.0", "cozy-eval[jobs,weights,judge]==0.7.0"]
 
+[project.entry-points."cozy.application"]
+default = "sdxl_assessment_client.control_jobs:app"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
