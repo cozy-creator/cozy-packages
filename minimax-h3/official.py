@@ -66,6 +66,7 @@ from transformers import (
 
 from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
 from conditioner import build_text_conditioner
+from h3_table_layout import TableLayout
 from turbo import ATTENTION_KWARG, TURBO_BANK, TurboOverlay, TurboSchedule
 from vae_tiles import TileBatchedVideoVAE
 
@@ -936,8 +937,8 @@ class OfficialH3Pipeline:
         pipes = {name: MiniMaxH3ModularPipeline(blocks=block) for name, block in blocks.items()}
         dit_specs = _dit_specs(mapping)
         dits = {
-            trunk: _build_dit(upstream, structure, plan)
-            for trunk, (upstream, structure, plan) in dit_specs.items()
+            trunk: _build_dit(upstream, structure, layout)
+            for trunk, (upstream, structure, layout) in dit_specs.items()
         }
         _validate_dual_topology(dits, _DIT_COMPONENT)
         text_encoder = build_text_conditioner(_section(mapping, "text_encoder"))
@@ -1235,10 +1236,12 @@ class OfficialH3Pipeline:
         # The receipt names the schedule the official blocks actually built, proven
         # against the plan by exact float32 equality of both modality vectors.
         plan = self._plans[task]
-        facts = ScheduleFacts.of(
-            plan,
-            plan.executed(_float_tuple(state.timesteps), _float_tuple(state.audio_timesteps)),
-        )
+        schedule = plan.executed(_float_tuple(state.timesteps), _float_tuple(state.audio_timesteps))
+        if _BANK[task] is None:
+            layout = self._dit_specs[_TRUNK[task]][2]
+            if layout is not None:
+                layout.require(schedule.video_timesteps, schedule.audio_timesteps)
+        facts = ScheduleFacts.of(plan, schedule)
         loop = blocks["denoise.denoise"]
         block_state = loop.get_block_state(state)
         for index, timestep in enumerate(block_state.timesteps):
@@ -1372,7 +1375,7 @@ def _artifact_sections(mapping: Mapping[str, object]) -> Mapping[str, object]:
 
 def _dit_spec(
     mapping: Mapping[str, object], task: Trunk
-) -> tuple[dict[str, Any], str, TimestepPlan]:
+) -> tuple[dict[str, Any], str, TableLayout | None]:
     component = _DIT_COMPONENT[task]
     upstream = _section(mapping, component)
     extension = upstream.pop("cozy_h3", None)
@@ -1389,10 +1392,18 @@ def _dit_spec(
             code="artifact_config",
             fields=[component, "cozy_h3", "modulation"],
         )
-    # FULL computes modulation from live weights; only pruned tables bind a plan.
+    # FULL computes modulation from live weights. Pruned row identities belong to
+    # the checkpoint, so adding or reordering table rows needs no package release.
     fields = {"task", "modulation"}
     if structure == "adaln-pruned":
-        fields.add("timestep_plan_digest")
+        if "table_keys" not in extension:
+            raise ConformanceError(
+                f"model component {component!r} is missing its modulation table row labels; "
+                "update the checkpoint metadata with minimax-h3-tools/restamp",
+                code="artifact_config",
+                fields=[component, "cozy_h3", "table_keys"],
+            )
+        fields.add("table_keys")
     if structure == "adaln-pruned" and "generating_projection_digest" in extension:
         digest = extension["generating_projection_digest"]
         if (
@@ -1413,10 +1424,7 @@ def _dit_spec(
             code="artifact_config",
             fields=[component, "cozy_h3"],
         )
-    plan = canonical_timestep_plan(task)
     expected: dict[str, str] = {"task": task}
-    if structure == "adaln-pruned":
-        expected["timestep_plan_digest"] = f"sha256:{plan.digest}"
     for name, want in expected.items():
         if extension[name] != want:
             raise ConformanceError(
@@ -1424,12 +1432,13 @@ def _dit_spec(
                 code="artifact_config",
                 fields=[component, "cozy_h3", name],
             )
-    return upstream, str(structure), plan
+    layout = TableLayout.parse(extension["table_keys"]) if structure == "adaln-pruned" else None
+    return upstream, str(structure), layout
 
 
 def _dit_specs(
     mapping: Mapping[str, object],
-) -> dict[Trunk, tuple[dict[str, Any], str, TimestepPlan]]:
+) -> dict[Trunk, tuple[dict[str, Any], str, TableLayout | None]]:
     specs = {trunk: _dit_spec(mapping, trunk) for trunk in _TRUNKS}
     if len({spec[1] for spec in specs.values()}) != 1:
         raise ConformanceError(
@@ -1446,26 +1455,29 @@ def _dit_specs(
     return specs
 
 
-def _build_dit(config: Mapping[str, Any], structure: str, plan: TimestepPlan) -> Any:
+def _build_dit(config: Mapping[str, Any], structure: str, layout: TableLayout | None) -> Any:
     if structure == "full":
         transformer = MiniMaxH3Transformer3DModel.from_config(dict(config))
     else:
-        timesteps, block_keys = plan.table_layout()
+        if layout is None:
+            raise ConformanceError(
+                "pruned model is missing its table row labels", code="artifact_config"
+            )
         transformer = AdaLNPrunedMiniMaxH3Transformer.from_official_config(
             config,
-            table_timesteps=timesteps,
-            table_block_keys=block_keys,
+            table_timesteps=layout.timesteps,
+            table_block_keys=layout.block_keys,
         )
     return _apply_transformer_dtype(transformer)
 
 
 @dataclass(frozen=True, slots=True)
 class OverlaySpec:
-    """One turbo overlay section, closed: the trunk it patches, the turbo plan its tables
-    are keyed to, and the PDD constants its factors and heads were built with."""
+    """One turbo overlay's row labels and the PDD constants of its factors and heads."""
 
     task: Trunk
     plan: TimestepPlan
+    layout: TableLayout
     lora_rank: int
     lora_alpha: float
     pdd_num_steps: int
@@ -1476,7 +1488,7 @@ _OVERLAY_FIELDS = {
     "task",
     "modulation",
     "distillation",
-    "timestep_plan_digest",
+    "table_keys",
     "lora_rank",
     "lora_alpha",
     "pdd_num_steps",
@@ -1501,7 +1513,6 @@ def _overlay_spec(mapping: Mapping[str, object], trunk: Trunk) -> OverlaySpec:
         "task": trunk,
         "modulation": "adaln-pruned",
         "distillation": _DISTILLATION,
-        "timestep_plan_digest": f"sha256:{plan.digest}",
     }
     for name, want in expected.items():
         if extension[name] != want:
@@ -1528,6 +1539,7 @@ def _overlay_spec(mapping: Mapping[str, object], trunk: Trunk) -> OverlaySpec:
     return OverlaySpec(
         trunk,
         plan,
+        TableLayout.parse(extension["table_keys"]),
         int(counts["lora_rank"]),
         float(alpha),
         int(counts["pdd_num_steps"]),
@@ -1572,14 +1584,14 @@ class OfficialH3TurboLoRA:
 
 def _build_overlay(config: Mapping[str, Any], spec: OverlaySpec) -> TurboOverlay:
     (schedule,) = spec.plan.schedules
-    timesteps, block_keys = spec.plan.table_layout()
+    spec.layout.require(schedule.video_timesteps, schedule.audio_timesteps)
     overlay = TurboOverlay.from_official_config(
         config,
         rank=spec.lora_rank,
         alpha=spec.lora_alpha,
         schedule=TurboSchedule(schedule.video_timesteps, schedule.audio_timesteps),
-        table_timesteps=timesteps,
-        table_block_keys=block_keys,
+        table_timesteps=spec.layout.timesteps,
+        table_block_keys=spec.layout.block_keys,
         block_table_dtype=torch.bfloat16,
         final_table_dtype=torch.bfloat16,
     )
@@ -1600,7 +1612,20 @@ def _validate_dual_topology(members: Mapping[Trunk, Any], names: Mapping[Trunk, 
 
     def topology(module: Any) -> tuple[tuple[str, tuple[int, ...], str], ...]:
         return tuple(
-            (name, tuple(int(value) for value in tensor.shape), str(tensor.dtype))
+            # Row count follows each checkpoint's labels, independently per trunk.
+            # The remaining axes still prove the same modulation architecture.
+            (
+                name,
+                tuple(
+                    int(value)
+                    for value in (
+                        tensor.shape[1:]
+                        if name == "norm_out.table" or name.endswith(".adaln_proj.table")
+                        else tensor.shape
+                    )
+                ),
+                str(tensor.dtype),
+            )
             for name, tensor in module.state_dict().items()
         )
 

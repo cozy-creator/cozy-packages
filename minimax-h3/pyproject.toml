@@ -1,6 +1,6 @@
 [project]
 name = "minimax-h3"
-version = "1.10.2"
+version = "1.11.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cozy-runtime[media]>=0.13.0,<1",
@@ -34,6 +34,7 @@ only-include = [
     "conditioner.py",
     "gates.py",
     "h3.py",
+    "h3_table_layout.py",
     "h3_diagnostics.py",
     "h3_activation_trace.py",
     "h3_resident_samples.py",
