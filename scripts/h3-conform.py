@@ -921,6 +921,42 @@ def arm_clip_length() -> None:
         partial(prepare, frames_for(16)),
     )
 
+    # `ref2va` gates on the same seconds ceiling in a DIFFERENT block — its before-encode
+    # setup step, not the denoise layout step — so the scope above proves nothing about it.
+    # The wire offers the ceiling on both entrypoints, so both are shown here.
+    references = [MiniMaxH3ImageReference(image=np.zeros((64, 64, 3), dtype=np.uint8))]
+
+    def start_ref2va(frames: int, *, ceiling_override: bool = True) -> Any:
+        if not ceiling_override:
+            restore = official_module._CEILING_S
+            official_module._CEILING_S = MAX_DURATION
+            try:
+                return start_ref2va(frames)
+            finally:
+                official_module._CEILING_S = restore
+        return pipe.start_ref2va(
+            prompt="A person in a garden.",
+            references=references,
+            generator=torch.Generator().manual_seed(7),
+            steps=DEFAULT_STEPS,
+            frames=frames,
+            reference_image_short_edges=[768],
+        )
+
+    refusal(
+        "ref2va at the top served length refuses upstream without the scoped ceiling",
+        partial(start_ref2va, ceiling, ceiling_override=False),
+    )
+    check(
+        "ref2va prepares the top served length under the scoped frame ceiling",
+        int(start_ref2va(ceiling).num_frames),
+        362,
+    )
+    refusal(
+        "ref2va above the served ceiling still refuses",
+        partial(start_ref2va, frames_for(16)),
+    )
+
     field = get_type_hints(package.FirstLastFrameToVideoInput, include_extras=True)["duration_s"]
     check(
         "every served second decodes typed",
