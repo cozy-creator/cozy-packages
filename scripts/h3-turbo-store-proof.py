@@ -1,90 +1,117 @@
 #!/usr/bin/env python3
-"""Both table sets through the real Runtime WeightsSink and a real TensorFS store, on CPU.
-
-    minimax-h3-tools/.venv/bin/python scripts/h3-turbo-store-proof.py
-
-A tiny H3-shaped `full`, an AdaLN-pruned `pruned` and two PDD-shaped adapters are minted in
-a temporary store; `job._retable` — the exact orchestration the `retable` job runs — derives
-the four outputs from them. The committed headers then prove what the tables are and what
-moved: the turbo rows equal the fused kernel run directly over the same values, the launch rows
-equal the unfused kernel, the adapter slice rides the turbo bank as the adapter's own stored
-objects, and every non-table row of both checkpoints is `pruned`'s own object.
-"""
+"""Native PDD overlay construction, cancellation, resume, and source-object identity."""
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
 import sys
 import tempfile
+import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import msgspec
 import tensorfs
 import torch
-from cozy_runtime.author import WeightsSink
+from cozy_runtime.author import (
+    App,
+    Context,
+    Invocation,
+    ModelArtifact,
+    ObjectRef,
+    Telemetry,
+    WeightsOutput,
+    WeightsSink,
+    attempt,
+    describe,
+    invocable,
+)
 from cozy_runtime.author._model import _derive_model
-from cozy_runtime.author.fakes import fake_attempt, fake_context, fake_telemetry
 from cozy_runtime.internal.weights_sink import WeightsTransactionHost
+from h3_tables.adaln_operations import PLAIN
+from h3_tables.kernel import H3Topology, adapter_shapes, source_shapes
+from h3_tables.plans import Task
+from h3_tables.source import H3FullTransformer
+from h3_tables.turbo import RANK, TASKS, _produce, overlay_shapes, turbo_plan
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
-from h3_tables import job  # noqa: E402
-from h3_tables.kernel import (  # noqa: E402
-    H3Topology,
-    LowRankAdapter,
-    adapter_shapes,
-    precompute_tables,
-    source_shapes,
-    table_bytes,
-    table_shapes,
-)
-from h3_tables.plans import Task  # noqa: E402
-from h3_tables.source import (  # noqa: E402
-    ADAPTER_ALPHA,
-    ADAPTER_RANK,
-    H3FullTransformer,
-    H3TurboAdapter,
-)
+if len(sys.argv) > 1:
+    from diffusers import MiniMaxH3Transformer3DModel
 
-TINY = H3Topology(8, 3, 8, 12, 4)
-TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
-SLOT_BYTES = 1 << 24
-SHARED = ("text_encoder", "video_vae", "audio_vae")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
+    from official import canonical_timestep_plan
+    from turbo import TurboOverlay, TurboSchedule
 
 
-def fail(what: str) -> None:
-    raise SystemExit(f"h3-turbo-store-proof: {what}")
+CONFIG = {
+    "hidden_size": 8,
+    "num_attention_heads": 2,
+    "attention_head_dim": 4,
+    "ffn_dim": 12,
+    "num_layers": 2,
+    "num_refiner_layers": 1,
+    "in_channels": 3,
+    "patch_size": [1, 1, 1],
+    "audio_in_channels": 2,
+    "text_dim": 8,
+    "freq_dim": 8,
+    "time_embed_hidden_dim": 12,
+    "time_embed_dim": 4,
+    "rope_freq_dim": 1,
+}
+TOPOLOGY = H3Topology(8, 2, 8, 12, 4)
+CONFIGS = {f"{task}_dit": CONFIG for task in TASKS}
+ORDER = tuple((f"{task}_dit", "base.weight") for task in TASKS)
 
 
-def plain_spec() -> str:
-    return next(digest for alias, digest in tensorfs.seed_digests() if alias == "plain/1")
+@invocable(memoize=True)
+async def mini_turbo(
+    ctx: Context,
+    *,
+    source: H3FullTransformer,
+    full: H3FullTransformer,
+    fl2va_adapter: H3FullTransformer,
+    ref2va_adapter: H3FullTransformer,
+    weights: WeightsSink,
+    tel: Telemetry,
+) -> ModelArtifact:
+    return _produce(
+        ctx,
+        tel,
+        weights,
+        source=source,
+        full=full,
+        adapters={"fl2va": fl2va_adapter, "ref2va": ref2va_adapter},
+        configs=CONFIGS,
+        topologies=dict.fromkeys(TASKS, TOPOLOGY),
+        order=ORDER,
+    )
 
 
-def mint(store: Any, suffix: str, values: dict[str, dict[str, torch.Tensor]]) -> tuple[str, int]:
-    plain = plain_spec()
+def mint(store: Any, name: str, values: dict[str, dict[str, torch.Tensor]]) -> ModelArtifact:
     targets = {}
     for component, rows in values.items():
-        add = {}
+        additions = {}
         for key, value in rows.items():
-            dtype = "f32" if value.dtype == torch.float32 else "bf16"
-            add[key] = {
+            dtype = "bf16" if value.dtype == torch.bfloat16 else "f32"
+            additions[key] = {
                 "logical_dtype": dtype,
                 "shape": list(value.shape),
-                "encoding": plain,
+                "encoding": PLAIN,
                 "parts": {"value": {"dtype": dtype, "shape": list(value.shape)}},
             }
-        targets[component] = {"drop": [], "add": add}
-    order = [(component, key) for component, rows in values.items() for key in rows]
+        targets[component] = {"drop": [], "add": additions}
     writer = store.begin_derived(
-        "sha256:" + suffix * 32,
+        "sha256:" + __import__("hashlib").sha256(name.encode()).hexdigest(),
         1,
         {},
         targets,
         {},
-        order,
-        SLOT_BYTES,
-        work_fingerprint="sha256:" + "50" * 32,
+        [(component, key) for component, rows in values.items() for key in rows],
+        1 << 24,
+        work_fingerprint="sha256:" + "22" * 32,
     )
     for component, rows in values.items():
         for key, value in rows.items():
@@ -94,249 +121,212 @@ def mint(store: Any, suffix: str, values: dict[str, dict[str, torch.Tensor]]) ->
                 "value",
                 io.BytesIO(value.contiguous().view(torch.uint8).numpy().tobytes()),
             )
-    manifest = writer.commit()["manifest"]
-    return "sha256:" + manifest["sha256"], manifest["length"]
-
-
-def header(store: Any, manifest: str) -> Any:
-    return tensorfs.parse_header(bytes(store.manifest(manifest)["header"]))
-
-
-def bodies(store: Any, manifest: str) -> dict[tuple[str, str], str]:
-    return {
-        (component, key): json.dumps(
-            tensor["parts"]["value"].get("segments", tensor["parts"]["value"].get("inline")),
-            sort_keys=True,
-            default=str,
-        )
-        for component, tensors in header(store, manifest)["components"].items()
-        for key, tensor in tensors.items()
-    }
-
-
-def role_bytes(store: Any, head: Any, component: str, key: str) -> bytes:
-    part = head["components"][component][key]["parts"]["value"]
-    if "inline" in part:
-        return bytes(part["inline"])
-    return b"".join(
-        bytes(store.document("sha256:" + segment["sha256"], segment["length"]))
-        for segment in part["segments"]
+    receipt = writer.commit()
+    manifest = receipt["manifest"]
+    return ModelArtifact(
+        name,
+        "model",
+        ObjectRef("sha256:" + manifest["sha256"], manifest["length"]),
+        "sha256:" + "33" * 32,
     )
 
 
-def fixtures() -> tuple[dict[str, Any], dict[str, Any], dict[str, dict[str, Any]]]:
-    torch.manual_seed(2026)
-    shared = {component: {f"{component}.w": torch.randn(3)} for component in SHARED}
-    launch = job._plans(job.LAUNCH_SET)
-    full: dict[str, Any] = dict(shared)
-    pruned: dict[str, Any] = dict(shared)
-    adapters: dict[str, dict[str, Any]] = {}
-    for task in TASKS:
-        component = f"{task}_dit"
-        full[component] = {"proj_in.weight": torch.randn(2, 2).bfloat16()}
-        full[component].update(
-            {
-                key: (torch.randn(shape) * 0.05).to(dtype)
-                for key, (dtype, shape) in source_shapes(TINY).items()
-            }
-        )
-        pruned[component] = {"proj_in.weight": full[component]["proj_in.weight"]}
-        pruned[component].update(
-            {
-                key: torch.zeros(shape, dtype=torch.bfloat16)
-                for key, shape in table_shapes(TINY, launch[task]).items()
-            }
-        )
-        rows = {"proj_out.weight": torch.randn(2, 8, 8).bfloat16()}
-        rows.update(
-            {
-                key: (torch.randn(shape) * 0.2).to(dtype)
-                for key, (dtype, shape) in adapter_shapes(TINY, ADAPTER_RANK).items()
-            }
-        )
-        rows["transformer_blocks.0.attn.to_q.lora_down"] = torch.randn(ADAPTER_RANK, 8).bfloat16()
-        adapters[task] = {"model": rows}
-    return full, pruned, adapters
+def header(store: Any, model: ModelArtifact) -> Any:
+    return tensorfs.parse_header(bytes(store.manifest(model.manifest.digest)["header"]))
 
 
-def direct_tables(
-    full: dict[str, Any], adapter: dict[str, Any] | None, task: Task, plan: Any
-) -> dict[str, torch.Tensor]:
-    component = f"{task}_dit"
-    out: dict[str, torch.Tensor] = {}
-    precompute_tables(
-        plan=plan,
-        topology=TINY,
-        read=lambda key, _d, _s: full[component][key],
-        write=lambda key, value: out.__setitem__(key, value.clone()),
-        progress=lambda _done, _total: None,
-        device=torch.device("cpu"),
-        adapter=(
-            LowRankAdapter(
-                ADAPTER_RANK,
-                ADAPTER_ALPHA / ADAPTER_RANK,
-                lambda key, _d, _s: adapter["model"][key],
+def reference_check(
+    reference_path: str,
+    store: Any,
+    actual: Any,
+    full: dict[str, dict[str, torch.Tensor]],
+    adapters: Mapping[Task, dict[str, dict[str, torch.Tensor]]],
+) -> None:
+    """Compare emitted bytes with the pinned upstream implementation over Diffusers."""
+    spec = importlib.util.spec_from_file_location("upstream_pdd", reference_path)
+    assert spec is not None and spec.loader is not None
+    upstream = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(upstream)
+
+    def read(component: str, key: str) -> torch.Tensor:
+        row = actual["components"][component][key]
+        part = row["parts"]["value"]
+        raw = (
+            bytes(part["inline"])
+            if "inline" in part
+            else b"".join(
+                bytes(store.document("sha256:" + seg["sha256"], seg["length"]))
+                for seg in part["segments"]
             )
-            if adapter is not None
-            else None
-        ),
-    )
-    return out
+        )
+        dtype = torch.bfloat16 if row["logical"]["logical_dtype"] == "bf16" else torch.float32
+        return torch.frombuffer(bytearray(raw), dtype=dtype).reshape(row["logical"]["shape"])
+
+    for task in TASKS:
+        model = MiniMaxH3Transformer3DModel(**CONFIG).to(torch.bfloat16)
+        model.time_embedder.float()
+        model.proj_out.float()
+        model.audio_proj_out.float()
+        model.load_state_dict(full[f"{task}_dit"], strict=False)
+        upstream.add_lora(
+            model, upstream.DEFAULT_PDD_CONFIG["lora_targets"].split(","), RANK, float(RANK)
+        )
+        upstream.attach_parallel_decoder(model, 32)
+        incompatible = model.load_state_dict(adapters[task]["adapter"], strict=False)
+        assert not incompatible.unexpected_keys
+        plan = turbo_plan(task)
+        serving_plan = canonical_timestep_plan("fl2va_turbo" if task == "fl2va" else "ref2va_turbo")
+        (schedule,) = serving_plan.schedules
+        overlay = TurboOverlay.from_official_config(
+            CONFIG,
+            rank=RANK,
+            alpha=float(RANK),
+            schedule=TurboSchedule(schedule.video_timesteps, schedule.audio_timesteps),
+            table_timesteps=plan.timesteps,
+            table_block_keys=plan.block_rows,
+            block_table_dtype=torch.bfloat16,
+            final_table_dtype=torch.bfloat16,
+        )
+        overlay.load_state_dict(
+            {key: read(f"{task}_turbo", key) for key in actual["components"][f"{task}_turbo"]},
+            strict=True,
+        )
+        with torch.inference_mode():
+            temb = model.time_embedder(model.time_proj(torch.tensor(plan.timesteps)))
+            rows = torch.tensor([index * 3 + tag for index, tag in plan.block_rows])
+            for index, block in enumerate(model.transformer_blocks):
+                expected = torch.stack(block.adaln_proj(temb), dim=1).index_select(0, rows)
+                observed = read(f"{task}_turbo", f"transformer_blocks.{index}.adaln_proj.table")
+                assert torch.equal(expected, observed), (task, index, "modulation")
+            expected = model.norm_out.linear(torch.nn.functional.silu(temb).bfloat16()).reshape(
+                len(plan.timesteps), 2, -1
+            )
+            assert torch.equal(expected, read(f"{task}_turbo", "norm_out.table"))
+            for name, shift in (("proj_out", 12.0), ("audio_proj_out", 3.0)):
+                head = getattr(model, name)
+                inputs = torch.randn(3, head.in_features)
+                for index in range(8):
+                    head.set_plan(
+                        upstream.pdd_sampling_plan(
+                            upstream.pdd_time_grid(shift, 32).diff(), index * 4, 4
+                        ).float()
+                    )
+                    observed = torch.nn.functional.linear(
+                        inputs,
+                        read(f"{task}_turbo", f"{name}.weight")[index],
+                        read(f"{task}_turbo", f"{name}.bias")[index],
+                    )
+                    torch.testing.assert_close(head(inputs), observed, rtol=1e-6, atol=1e-7)
+    print("Stored tables and all eight heads match pinned upstream PDD over Diffusers")
 
 
 def main() -> None:
-    full_values, pruned_values, adapter_values = fixtures()
-    plans = {table_set.name: job._plans(table_set) for table_set in job.TABLE_SETS}
-    with tempfile.TemporaryDirectory(prefix="h3-turbo-store-proof-") as root:
-        store = tensorfs.Store.init(root)
-        full_id, full_len = mint(store, "61", full_values)
-        pruned_id, pruned_len = mint(store, "62", pruned_values)
-        adapter_ids = {
-            task: mint(store, suffix, adapter_values[task])
-            for task, suffix in zip(TASKS, ("63", "64"), strict=True)
+    torch.manual_seed(41)
+    full_values = {
+        f"{task}_dit": {
+            key: (torch.randn(shape) * 0.02).to(dtype)
+            for key, (dtype, shape) in source_shapes(TOPOLOGY).items()
         }
-        full_model = _derive_model(H3FullTransformer, full_id)
-        pruned_model = _derive_model(H3FullTransformer, pruned_id)
-        adapter_models: dict[Task, H3TurboAdapter] = {
-            task: _derive_model(H3TurboAdapter, adapter_ids[task][0]) for task in TASKS
+        for task in TASKS
+    }
+    body_values = {f"{task}_dit": {"base.weight": torch.randn(8, 8).bfloat16()} for task in TASKS}
+    adapters = {}
+    for task in TASKS:
+        shapes = {
+            key: ((32, *shape[1:]) if dtype == "f32" else shape)
+            for key, (dtype, shape) in overlay_shapes(CONFIG, turbo_plan(task)).items()
+            if not key.endswith(".table")
         }
-        models = {
-            "full": full_model,
-            "pruned": pruned_model,
-            "fl2va_adapter": adapter_models["fl2va"],
-            "ref2va_adapter": adapter_models["ref2va"],
+        shapes.update({key: shape for key, (_, shape) in adapter_shapes(TOPOLOGY, RANK).items()})
+        adapters[task] = {
+            "adapter": {
+                key: (torch.randn(shape) * 0.03).bfloat16() for key, shape in shapes.items()
+            }
         }
-        slots = {output.name: SLOT_BYTES for output in job.RETABLE_OUTPUTS}
-        allowed = {full_id: full_len, pruned_id: pruned_len}
-        allowed.update({identity: length for identity, length in adapter_ids.values()})
-        attempt = fake_attempt("h3-turbo-store-proof", spool=Path(root) / "spool")
-        ctx = fake_context()
-        tel = fake_telemetry(attempt, ctx)
-        pruned_order = tuple(
-            (component, key) for component, rows in pruned_values.items() for key in rows
-        )
-        work = job.RetableWork(
-            topologies={task: TINY for task in TASKS},
-            plans=plans,
-            configs={name: json.dumps({"table_set": name}).encode() for name in plans},
-            order=pruned_order,
-            device=torch.device("cpu"),
-        )
-        receipts: list[Any] = []
+    app = App()
+    app.job(mini_turbo, weights=(WeightsOutput("model", 1 << 24),))
+    describe(app)
+    with tempfile.TemporaryDirectory(prefix="h3-turbo-native-") as area:
+        root = Path(area)
+        store = tensorfs.Store.init(root / "store")
+        sources = {
+            "source": mint(store, "source", body_values),
+            "full": mint(store, "full", full_values),
+            **{f"{task}_adapter": mint(store, task, adapters[task]) for task in TASKS},
+        }
 
-        def run(session: int) -> Any:
+        def run(name: str, epoch: int, cancel: bool = False) -> Any:
+            checkpoints: list[Any] = []
             host = WeightsTransactionHost(
                 store=store,
-                owner_scope="h3-turbo-store-proof",
-                request_id="turbo-store-proof",
-                invocation_spec_digest="sha256:" + "11" * 32,
-                work_fingerprint="sha256:" + "22" * 32,
-                writer_session_id=session,
-                allowed_sources=allowed,
-                output_bounds=slots,
-                record_receipt=receipts.append,
+                owner_scope="turbo-proof",
+                request_id=name,
+                invocation_spec_digest="sha256:" + "44" * 32,
+                work_fingerprint="sha256:" + "55" * 32,
+                writer_session_id=epoch,
+                allowed_sources={
+                    value.manifest.digest: value.manifest.length for value in sources.values()
+                },
+                output_bounds={"model": 1 << 24},
+                record_checkpoint=checkpoints.append,
             )
-            sink = WeightsSink(attempt, models, slots, host.open, host.structure)
-            return job._retable(
-                ctx,
-                tel,
-                sink,
-                work,
-                full=full_model,
-                pruned=pruned_model,
-                adapters=adapter_models,
+            return attempt(
+                app.get("mini_turbo"),
+                {name: msgspec.to_builtins(value) for name, value in sources.items()},
+                Invocation(
+                    name,
+                    root / f"{name}-{epoch}",
+                    time.monotonic() + 60,
+                    models={
+                        name: _derive_model(H3FullTransformer, value.manifest.digest)
+                        for name, value in sources.items()
+                    },
+                    weights=host.open,
+                    weights_source_structure=host.structure,
+                    weights_source_config=host.config,
+                    cancel=lambda: cancel and bool(checkpoints),
+                ),
             )
 
-        result = run(1)
-        by_name = {row.table_set: row for row in result.table_sets}
-        per_task = {name: table_bytes(TINY, plans[name]["fl2va"]) for name in plans}
-        modulation = sum(
-            value.numel() * value.element_size()
-            for key, value in full_values["fl2va_dit"].items()
-            if key != "proj_in.weight"
-        )
-        slice_bytes = sum(
-            value.numel() * value.element_size()
-            for key, value in adapter_values["fl2va"]["model"].items()
-            if key in adapter_shapes(TINY, ADAPTER_RANK)
-        )
-        if (
-            any(row.replayed for row in result.table_sets)
-            or by_name["launch"].table_bytes_this_run != 2 * per_task["launch"]
-            or by_name["turbo"].table_bytes_this_run != 2 * per_task["turbo"]
-            or result.source_bytes_read_this_run != 4 * modulation + 2 * slice_bytes
-        ):
-            fail(f"first attempt result is {result}")
-        print(
-            f"  computed: launch {by_name['launch'].table_bytes_this_run} B, turbo "
-            f"{by_name['turbo'].table_bytes_this_run} B of tables; read "
-            f"{result.source_bytes_read_this_run} B"
-        )
-
-        manifests = {
-            receipt.output_slot: "sha256:"
-            + json.loads(receipt.tensorfs_receipt)["manifest"]["sha256"]
-            for receipt in receipts
+        stopped, outcome, _ = run("resume", 1, True)
+        assert stopped is None and outcome.terminal == "canceled", outcome
+        result, outcome, _ = run("resume", 2)
+        assert outcome.terminal == "succeeded" and result is not None, outcome
+        clean, outcome, _ = run("clean", 1)
+        assert outcome.terminal == "succeeded" and clean is not None, outcome
+        assert result.result.manifest == clean.result.manifest
+        replay, outcome, _ = run("resume", 3)
+        assert outcome.terminal == "succeeded" and replay.result == result.result, outcome
+        actual = header(store, result.result)
+        if len(sys.argv) > 1:
+            reference_check(sys.argv[1], store, actual, full_values, adapters)
+        base = header(store, sources["source"])
+        assert set(actual["components"]) == {
+            "fl2va_dit",
+            "ref2va_dit",
+            "fl2va_turbo",
+            "ref2va_turbo",
         }
-        if set(manifests) != set(slots):
-            fail(f"committed {sorted(manifests)}")
-        pruned_bodies = bodies(store, pruned_id)
-        adapter_bodies = {task: bodies(store, adapter_ids[task][0]) for task in TASKS}
-        for table_set in job.TABLE_SETS:
-            head = header(store, manifests[table_set.checkpoint])
-            checkpoint_bodies = bodies(store, manifests[table_set.checkpoint])
-            if set(head["components"]) != {*SHARED, "fl2va_dit", "ref2va_dit"}:
-                fail(f"{table_set.checkpoint} components are {sorted(head['components'])}")
-            for identity, body in pruned_bodies.items():
-                if identity[1].endswith(".table"):
-                    continue
-                if checkpoint_bodies.get(identity) != body:
-                    fail(f"{table_set.checkpoint} rewrote the inherited row {identity}")
-            bank_head = header(store, manifests[table_set.bank])
-            wanted = {"fl2va_dit", "ref2va_dit"}
-            if table_set.adapted:
-                wanted |= {"fl2va_adapter", "ref2va_adapter"}
-            if set(bank_head["components"]) != wanted:
-                fail(f"{table_set.bank} components are {sorted(bank_head['components'])}")
-            for task in TASKS:
-                plan = plans[table_set.name][task]
-                expected = direct_tables(
-                    full_values, adapter_values[task] if table_set.adapted else None, task, plan
-                )
-                component = f"{task}_dit"
-                if set(bank_head["components"][component]) != set(expected):
-                    fail(f"{table_set.bank} {component} does not hold exactly the table rows")
-                for key, value in expected.items():
-                    for manifest_head in (head, bank_head):
-                        raw = bytearray(role_bytes(store, manifest_head, component, key))
-                        stored = torch.frombuffer(raw, dtype=torch.bfloat16).reshape(value.shape)
-                        if not torch.equal(stored, value):
-                            fail(f"{table_set.name} {component}/{key} bytes differ from the kernel")
-                if table_set.adapted:
-                    alias = f"{task}_adapter"
-                    slice_keys = set(adapter_shapes(TINY, ADAPTER_RANK))
-                    carried = sorted(bank_head["components"][alias])
-                    if set(carried) != slice_keys:
-                        fail(f"{table_set.bank} {alias} carries {carried}")
-                    bank_bodies = bodies(store, manifests[table_set.bank])
-                    for key in slice_keys:
-                        if bank_bodies[(alias, key)] != adapter_bodies[task][("model", key)]:
-                            fail(f"{alias}/{key} is not the adapter's own stored object")
-            print(
-                f"  {table_set.name}: checkpoint inherits every non-table row of pruned by object; "
-                f"bank holds {sorted(bank_head['components'])}; tables equal the direct kernel"
-                + (" with the adapter fused" if table_set.adapted else "")
+        for task in TASKS:
+            assert actual["components"][f"{task}_dit"] == base["components"][f"{task}_dit"]
+            original = header(store, sources[f"{task}_adapter"])["components"]["adapter"]
+            overlay = actual["components"][f"{task}_turbo"]
+            assert set(overlay) == set(overlay_shapes(CONFIG, turbo_plan(task)))
+            for key, tensor in overlay.items():
+                if key.endswith((".lora_down", ".lora_up")):
+                    assert tensor == original[key]
+                assert "adaln_proj.linear" not in key
+        print(
+            json.dumps(
+                {
+                    "base_components_unchanged": True,
+                    "factor_objects_inherited": True,
+                    "resume_equals_clean": True,
+                    "replay_identical": True,
+                    "no_adapter_modulation_copies": True,
+                }
             )
-
-        replay = run(2)
-        if not all(row.replayed for row in replay.table_sets) or replay.source_bytes_read_this_run:
-            fail(f"replay result is {replay}")
-        if {row.table_set: row.tensorfs_receipt_digest for row in replay.table_sets} != {
-            row.table_set: row.tensorfs_receipt_digest for row in result.table_sets
-        }:
-            fail("replay returned different receipts")
-        print("  replay: all four outputs replayed, zero bytes read")
-    print("H3 TURBO STORE PROOF PASS sets=2 outputs=4 fused=reference-exact inherited=by-object")
+        )
 
 
 if __name__ == "__main__":

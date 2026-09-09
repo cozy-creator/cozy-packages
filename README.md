@@ -143,13 +143,14 @@ GPU numerical qualification.
 The H3 package exposes both official actions from one model generation. Its normal
 `model: H3Model` slot contains only the two DiTs, text encoder and VAEs.
 
-The additional `fl2va_turbo` and `ref2va_turbo` functions require an independent
-`lora: H3TurboLoRA` model slot. A turbo checkpoint contains only `fl2va_turbo` and
-`ref2va_turbo` overlay components; each component's config includes its upstream
-`transformer` architecture and closed `cozy_h3` PDD settings. Do not add these roots to a
-base checkpoint. The LoRA and base scopes overlap during denoising, and the overlay is
-removed on success or failure. No LoRA default is declared until a corresponding checkpoint
-is published and qualified; turbo remains untested on GPUs and has no multi-GPU declaration.
+The `fl2va_turbo` and `ref2va_turbo` functions instead take one `model: H3TurboModel`.
+Its checkpoint contains the five base roots plus `fl2va_turbo` and `ref2va_turbo`,
+produced by `minimax-h3-tools/prepare-turbo`. Each sampling scope holds its DiT and
+overlay together. LoRA hooks are installed during construction, before Runtime
+chooses fusion or Ulysses execution. Existing ordinary checkpoints retain their
+five-root contract; a turbo checkpoint is required explicitly, with no default
+until one is published and qualified. Both classes declare degrees 2 and 4;
+CPU parity checks do not establish real multi-GPU clip speed or quality.
 
 The ordinary action syntax is:
 

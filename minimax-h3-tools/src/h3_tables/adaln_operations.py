@@ -23,8 +23,8 @@ from cozy_runtime.author import (
     canonical_json,
     invocable,
 )
-from h3_table_layout import TableLayout
 
+from ._table_layout import TableLayout
 from .kernel import H3Topology, precompute_tables, removed_keys, source_shapes, table_shapes
 from .model_config import dual_adaln_pruned_config, dual_full_config, parse_production_config
 from .order import current_order, full_order

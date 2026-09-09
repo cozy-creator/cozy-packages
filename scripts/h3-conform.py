@@ -17,7 +17,7 @@ import sys
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import nullcontext, redirect_stderr
+from contextlib import redirect_stderr
 from dataclasses import replace
 from fractions import Fraction
 from functools import partial
@@ -69,6 +69,7 @@ from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference
 from diffusers.modular_pipelines.minimax_h3.before_denoise import MiniMaxH3SetTimestepsStep
 from diffusers.modular_pipelines.minimax_h3.denoise import MiniMaxH3LoopSchedulerStep
 from PIL import Image as PILImage
+from torch.nn import functional as F
 from torch.utils._python_dispatch import TorchDispatchMode
 from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
@@ -83,14 +84,16 @@ sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
 
 from h3_tables import job as producer  # noqa: E402
 from h3_tables.lanes import NORMALISED_COMPONENTS, decode_operand  # noqa: E402
+from h3_tables.legacy_config import upgrade_legacy_table_config  # noqa: E402
 from h3_tables.model_config import (  # noqa: E402
     dual_adaln_pruned_config,
     dual_full_config,
     parse_production_config,
 )
 from h3_tables.order import current_order, full_order  # noqa: E402
-from h3_tables.plans import parse_plan  # noqa: E402
-from h3_tables.source import official_full_specs  # noqa: E402
+from h3_tables.plans import TASKS, parse_plan  # noqa: E402
+from h3_tables.source import TARGET_COMPONENT, official_full_specs  # noqa: E402
+from h3_tables.turbo import collapse_head_bank, pdd_head_plan, pdd_time_grid  # noqa: E402
 
 import h3 as package  # noqa: E402
 import official  # noqa: E402
@@ -148,9 +151,6 @@ from turbo import (  # noqa: E402
     TurboOverlay,
     TurboSchedule,
     _LoRAHook,
-    collapse_head_bank,
-    pdd_head_plan,
-    pdd_time_grid,
 )
 from vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
 
@@ -290,7 +290,7 @@ def arm_checkpoint_table_layout() -> None:
     wrong = run_rows(shuffled, block_values, final_values)
     red("moving labels without table rows changes output", torch.equal(original[0], wrong[0]), True)
 
-    config = {"fl2va_dit": dit_config("fl2va", "adaln-pruned")}
+    config: dict[str, Any] = {"fl2va_dit": dit_config("fl2va", "adaln-pruned")}
     config["fl2va_dit"]["cozy_h3"]["table_keys"] = reordered
     check(
         "serving constructor accepts arbitrary checkpoint row order",
@@ -308,12 +308,14 @@ def arm_checkpoint_table_layout() -> None:
         }
     )
     config["fl2va_dit"]["cozy_h3"]["table_keys"] = extra
+    extended = official._dit_spec(config, "fl2va")[2]
+    assert extended is not None
     check(
         "checkpoint can add rows without a package change",
-        len(official._dit_spec(config, "fl2va")[2].block_keys),
+        len(extended.block_keys),
         len(layout.block_keys) + 1,
     )
-    trunks = {task: torch.nn.Module() for task in ("fl2va", "ref2va")}
+    trunks = {task: torch.nn.Module() for task in TASKS}
     for index, model in enumerate(trunks.values()):
         model.norm_out = _AdaLNPrunedOutputTable(
             torch.nn.Identity(), hidden_size=2, timestep_count=len(layout.timesteps) + index
@@ -329,7 +331,7 @@ def arm_checkpoint_table_layout() -> None:
         "artifact_config",
     )
 
-    corruptions = (
+    corruptions: tuple[tuple[str, Callable[[Any], None]], ...] = (
         ("missing layout", lambda value: value.clear()),
         ("noncontiguous index", lambda value: value["block_modulation"][0].update(index=1)),
         ("boolean index", lambda value: value["block_modulation"][0].update(index=False)),
@@ -1362,41 +1364,26 @@ def arm_graph_and_dtypes() -> None:
         len(video_vae.state_dict()),
         len(served),
     )
-    # The restamp emits its config from package assets, so a half-restamped wheel could
-    # write a checkpoint that only refuses at CONSTRUCTION, on a rented pod. These are the
-    # emit-time refusals that turn that into a job-time one.
-    producer_sections = parse_production_config(producer._asset("model-config.json"))
-    emitted = {
-        "adaln-pruned": dual_adaln_pruned_config(
-            producer_sections,
-            producer._production_plan("fl2va"),
-            producer._production_plan("ref2va"),
-        ),
-        "full": dual_full_config(producer_sections),
-    }
-    for modulation, document in emitted.items():
-        producer._check_emitted_config(document, modulation)
+    document = canonical_json.decode(producer._asset("model-config.json"))
+    old = copy.deepcopy(document)
+    for task, component in TARGET_COMPONENT.items():
+        old[component]["cozy_h3"].pop("table_keys")
+        old[component]["cozy_h3"]["timestep_plan_digest"] = canonical_json.digest(
+            {
+                **canonical_json.decode(producer._production_plan(task).canonical_bytes),
+                "frames": 345,
+            }
+        )
+    plans = {task: producer._production_plan(task) for task in TASKS}
+    migrated = upgrade_legacy_table_config(canonical_json.encode(old), plans)
     check(
-        "both emitted configs pass the restamp's own check",
-        sorted(emitted),
-        ["adaln-pruned", "full"],
+        "restamp preserves exact historical row meanings", migrated, canonical_json.encode(document)
     )
+    old["fl2va_dit"]["cozy_h3"]["timestep_plan_digest"] = "sha256:" + "0" * 64
     refusal(
-        "a pruned document emitted as a FULL lane refuses on the closed cozy_h3 shape",
-        lambda: producer._check_emitted_config(emitted["adaln-pruned"], "full"),
-        "h3_restamp_config_shape",
-    )
-    refusal(
-        "a FULL document emitted as a pruned lane refuses on the closed cozy_h3 shape",
-        lambda: producer._check_emitted_config(emitted["full"], "adaln-pruned"),
-        "h3_restamp_config_shape",
-    )
-    skewed = canonical_json.decode(emitted["adaln-pruned"])
-    skewed["fl2va_dit"]["cozy_h3"]["table_keys"] = {}
-    refusal(
-        "a config asset that disagrees with the timestep-plan asset refuses at emit",
-        lambda: producer._check_emitted_config(canonical_json.encode(skewed), "adaln-pruned"),
-        "h3_restamp_plan_skew",
+        "restamp refuses unknown historical row meanings",
+        lambda: upgrade_legacy_table_config(canonical_json.encode(old), plans),
+        "h3_restamp_table_layout",
     )
     check("audio VAE state count", len(audio_vae.state_dict()), 1087)
     check("audio VAE parameter destinations", len(dict(audio_vae.named_parameters())), 832)
@@ -3183,30 +3170,29 @@ def arm_interface() -> None:
             (duration["type"], duration["constraints"], duration["wire"]),
             ("int", {"ge": min(DURATIONS), "le": max(DURATIONS)}, "optional"),
         )
-        check(f"{name} shared model", entry["models"][0]["class"], "H3Model")
-        check(f"{name} carries no retired stamps member", "stamps" in entry["models"][0], False)
-        check(f"{name} slot admits encoded leaves", entry["models"][0]["encoded_leaves"], "accept")
-        component_use = entry["models"][0]["component_use"]
+        turbo = name.endswith("_turbo")
+        model_slot = entry["models"][0]
+        check(f"{name} one complete model", len(entry["models"]), 1)
+        check(f"{name} model class", model_slot["class"], "H3TurboModel" if turbo else "H3Model")
+        check(f"{name} encoded leaves", model_slot["encoded_leaves"], "accept")
+        component_use = model_slot["component_use"]
         trunk = name.removesuffix("_turbo")
-        check(f"{name} base sampling lease", component_use[f"sample_{name}"], [f"{trunk}_dit"])
-        check(f"{name} base warm lease", component_use[f"warm_{trunk}"], [f"{trunk}_dit"])
+        lease = [f"{trunk}_dit", f"{trunk}_turbo"] if turbo else [f"{trunk}_dit"]
+        check(f"{name} complete sampling lease", component_use[f"sample_{trunk}"], lease)
+        check(f"{name} complete warm lease", component_use[f"warm_{trunk}"], lease)
+        roots = {"fl2va_dit", "ref2va_dit", "text_encoder", "video_vae", "audio_vae"}
+        if turbo:
+            roots.update(("fl2va_turbo", "ref2va_turbo"))
+            check(
+                f"{name} requires an explicit combined checkpoint",
+                "default_ladder" in model_slot,
+                False,
+            )
         check(
-            f"{name} base requires no LoRA components",
+            f"{name} declared roots",
             {value for values in component_use.values() for value in values},
-            {"fl2va_dit", "ref2va_dit", "text_encoder", "video_vae", "audio_vae"},
+            roots,
         )
-        if name.endswith("_turbo"):
-            lora_slot = entry["models"][1]
-            check(f"{name} separate LoRA slot", lora_slot["path"], f"{name}.models.lora")
-            check(f"{name} typed LoRA", lora_slot["class"], "H3TurboLoRA")
-            check(
-                f"{name} unbound LoRA has no invented default", "default_ladder" in lora_slot, False
-            )
-            check(
-                f"{name} LoRA sampling lease", lora_slot["component_use"][f"sample_{trunk}"], [name]
-            )
-        else:
-            check(f"{name} no LoRA slot", len(entry["models"]), 1)
         check(f"{name} media capability", "media_decode" in surfaces[name].capabilities, True)
         check(
             f"{name} exact customer result fields",
@@ -3835,20 +3821,20 @@ def arm_turbo_lora() -> None:
         factors.lora_up.copy_(torch.randn(out_features, rank) * 0.1)
     x = torch.randn(1, rows, width).bfloat16()
     base = torch.randn(1, rows, out_features).bfloat16()
-    down, up = factors.lora_down.float(), factors.lora_up.float()
-    expected = base.float() + x.float().reshape(rows, width) @ down.t() @ up.t()
+    down, up = factors.lora_down, factors.lora_up
+    expected = base + F.linear(F.linear(x, down), up)
     out = base.clone()
     with _Allocations(x, out, factors.lora_down, factors.lora_up) as allocations:
         factors.accumulate(x, out)
     check(
-        "bf16 operand: the update landed (to bf16 rounding of the sum)",
-        torch.allclose(out.float(), expected, rtol=1e-2, atol=1e-1),
+        "bf16 operand: the update preserves the reference rounding",
+        torch.equal(out, expected),
         True,
     )
     check(
-        "bf16 operand: the largest allocation is the [rows, rank] projection",
-        max(allocations.sizes),
-        rows * rank,
+        "bf16 operand: every transient is bounded to 256 rows",
+        max(allocations.sizes) <= 256 * max(width, out_features),
+        True,
     )
     red(
         "a materialised [rows, out] update would be larger",
@@ -3856,27 +3842,11 @@ def arm_turbo_lora() -> None:
         True,
     )
 
-    scale = (x.reshape(rows, width).float().abs().amax(dim=-1, keepdim=True) / 448.0).clamp(
-        min=1e-12
+    refusal(
+        "a prequantized operand cannot silently change the LoRA computation",
+        lambda: factors.accumulate(SimpleNamespace(payload=x, scale=1.0), base.clone()),
+        "ValueError",
     )
-    payload = (x.reshape(rows, width).float() / scale).clamp(-448.0, 448.0).to(torch.float8_e4m3fn)
-    operand = SimpleNamespace(payload=payload, scale=scale, shape=tuple(x.shape))
-    dequantized = payload.float() * scale
-    expected = base.float() + dequantized.bfloat16().float() @ down.t() @ up.t()
-    out = base.clone()
-    with _Allocations(x, out, payload, scale, factors.lora_down, factors.lora_up) as allocations:
-        factors.accumulate(operand, out)
-    check(
-        "fp8 row-quantized operand: the update is computed from the dequantized rows",
-        torch.allclose(out.float(), expected, rtol=1e-2, atol=1e-1),
-        True,
-    )
-    check(
-        "fp8 operand: no allocation reaches [rows, out]",
-        max(allocations.sizes) < rows * out_features,
-        True,
-    )
-    observe("fp8 operand: largest transient", f"{max(allocations.sizes)} values (chunked dequant)")
     refusal(
         "an output that is not a plain row-major buffer refuses rather than copying",
         lambda: factors.accumulate(x, base.transpose(1, 2).contiguous().transpose(1, 2)),
@@ -4014,13 +3984,13 @@ def arm_turbo_forward() -> None:
     )
     check("one LoRA hook stood on a site during each turbo forward", hooked, [[1]] * 8)
     check(
-        "no LoRA hook outlives its forward",
+        "one permanent hook per site remains installed",
         sum(
             isinstance(hook, _LoRAHook)
             for module in pruned.modules()
             for hook in module._forward_hooks.values()
         ),
-        0,
+        len(paths),
     )
     check(
         "after eight turbo forwards a base forward is bit-identical to before",
@@ -4115,183 +4085,122 @@ def turbo_h3_config() -> dict[str, Any]:
     return cast(dict[str, Any], document)
 
 
-def turbo_lora_config(document: dict[str, Any]) -> dict[str, Any]:
-    """An independent checkpoint needs its own topology, not its base's tensor roots."""
-    return {
-        f"{trunk}_turbo": {
-            **copy.deepcopy(document[f"{trunk}_turbo"]),
-            "transformer": official._dit_spec(document, trunk)[0],
-        }
-        for trunk in ("fl2va", "ref2va")
-    }
-
-
 def arm_turbo_artifact() -> None:
-    print("\n== PDD-8: the LoRA is an independent checkpoint and required model slot ==")
+    """Separate exact base/turbo constructors, one model scope for each turbo forward."""
     document = turbo_h3_config()
     base_only = {name: value for name, value in document.items() if not name.endswith("_turbo")}
-    overlay_config = turbo_lora_config(document)
-    check(
-        "base config retains its five components",
-        set(official._artifact_sections(base_only)),
-        set(base_only),
-    )
     refusal(
-        "base config rejects embedded overlays",
-        lambda: official._artifact_sections(document),
+        "ordinary construction rejects turbo roots",
+        lambda: OfficialH3Pipeline(Config(document)),
         "artifact_config",
     )
     refusal(
-        "LoRA config rejects base component roots",
-        lambda: official.OfficialH3TurboLoRA(Config(document)),
-        "artifact_config",
-    )
-    refusal(
-        "LoRA config requires both trunks",
-        lambda: official.OfficialH3TurboLoRA(
-            Config({"fl2va_turbo": overlay_config["fl2va_turbo"]})
-        ),
+        "turbo construction requires both overlays",
+        lambda: official.OfficialH3TurboPipeline(Config(base_only)),
         "artifact_config",
     )
     for field, value in (
-        ("table_keys", {}),
+        ("lora_rank", 32),
+        ("lora_alpha", 32.0),
+        ("pdd_num_steps", 16),
+        ("pdd_block_size", 2),
         ("task", "ref2va"),
-        ("modulation", "full"),
-        ("distillation", "dmd"),
-        ("pdd_num_steps", 33),
-        ("lora_rank", 0),
     ):
-        changed = copy.deepcopy(overlay_config)
+        changed = copy.deepcopy(document)
         changed["fl2va_turbo"]["cozy_h3"][field] = value
         refusal(
-            f"overlay {field}={value!r} refuses",
+            f"unsupported PDD {field} refuses",
             partial(official._overlay_spec, changed, "fl2va"),
             "artifact_config",
         )
     with torch.device("meta"):
-        pipe = OfficialH3Pipeline(Config(base_only))
-        lora = official.OfficialH3TurboLoRA(Config(overlay_config))
-    check("base construction has exactly five weighted roots", set(pipe.components), set(base_only))
-    check(
-        "LoRA construction has only overlay roots",
-        set(lora.components),
-        {"fl2va_turbo", "ref2va_turbo"},
-    )
-    derived = derive(package.H3TurboLoRA(), Artifact("turbo-lora", {}, Config(overlay_config)))
-    check(
-        "Runtime derives only the independently bound LoRA destinations",
-        {row.component for row in derived.destination_sets},
-        {"fl2va_turbo", "ref2va_turbo"},
-    )
-    overlay = lora.components["fl2va_turbo"]
-    state = overlay.state_dict()
-    check("overlay destinations at release widths", len(state), 50 * 12 + 2 * 12 + 50 + 1 + 4)
-    dit = pipe.components["fl2va_dit"]
-    for family, (down, up) in PDD_FACTOR_SHAPES.items():
-        prefix = f"transformer_blocks.7.{'attn.' if family.startswith('to_') else ''}{family}"
+        base = OfficialH3Pipeline(Config(base_only))
+        turbo = official.OfficialH3TurboPipeline(Config(document))
+    check("ordinary model has exactly five real roots", set(base.components), set(base_only))
+    check("turbo model has exactly seven real roots", set(turbo.components), set(document))
+    for cls, config in ((package.H3Model, base_only), (package.H3TurboModel, document)):
+        derived = derive(cls(), Artifact("constructor-audit", {}, Config(config)))
         check(
-            f"{family} factor geometry and dtype",
-            (
-                tuple(state[f"{prefix}.lora_down"].shape),
-                tuple(state[f"{prefix}.lora_up"].shape),
-                str(state[f"{prefix}.lora_up"].dtype),
-            ),
-            (down, up, "torch.bfloat16"),
+            f"{cls.__name__} Runtime census matches its exact checkpoint",
+            {row.component for row in derived.destination_sets},
+            set(config),
         )
-    check(
-        "overlay tables match base dtype and geometry",
-        (
-            tuple(state["transformer_blocks.0.adaln_proj.table"].shape),
-            tuple(state["norm_out.table"].shape),
-            state["transformer_blocks.0.adaln_proj.table"].dtype
-            == dit.transformer_blocks[0].adaln_proj.table.dtype,
-            state["norm_out.table"].dtype == dit.norm_out.table.dtype,
-        ),
-        ((TURBO_BLOCK_ROWS, 6, 5376), (TURBO_FINAL_ROWS, 2, 5376), True, True),
-    )
-    check(
-        "overlay MiB per trunk",
-        sum(v.numel() * v.element_size() for v in state.values()) // 2**20,
-        761,
-    )
-    original = tuple(dit.state_dict())
-    with pipe.turbo_overlay("fl2va", lora):
+    for trunk in ("fl2va", "ref2va"):
+        dit, overlay = turbo.components[f"{trunk}_dit"], turbo.components[f"{trunk}_turbo"]
         check(
-            "scope selects the independently loaded overlay",
+            f"{trunk} overlay attached during construction",
             dit._overlays[TURBO_BANK] is overlay,
             True,
         )
-        check("LoRA never becomes a base destination", tuple(dit.state_dict()) == original, True)
-    check("normal execution retains no LoRA reference", dit._overlays, {})
-    try:
-        with pipe.turbo_overlay("fl2va", lora):
-            raise RuntimeError("cancelled sample")
-    except RuntimeError:
-        pass
-    check(
-        "failed sample releases overlay reference and arming",
-        (dit._overlays, dit._arming),
-        ({}, None),
-    )
-    changed = copy.deepcopy(overlay_config)
-    for section in changed.values():
-        section["transformer"]["hidden_size"] += 1
-    lora.architectures["fl2va"] = changed["fl2va_turbo"]["transformer"]
-    refusal(
-        "mismatched LoRA architecture refuses",
-        lambda: pipe.turbo_overlay("fl2va", lora).__enter__(),
-        "artifact_config",
-    )
-    lora.architectures["fl2va"] = overlay_config["fl2va_turbo"]["transformer"]
-    pipe._dit_specs["fl2va"] = (pipe._dit_specs["fl2va"][0], "full", pipe._dit_specs["fl2va"][2])
-    refusal(
-        "LoRA over FULL refuses before sample",
-        lambda: pipe.turbo_overlay("fl2va", lora).__enter__(),
-        "artifact_config",
-    )
-    pipe._dit_specs["fl2va"] = (
-        pipe._dit_specs["fl2va"][0],
-        "adaln-pruned",
-        pipe._dit_specs["fl2va"][2],
-    )
-
-    model = package.H3Model.for_test(pipe=pipe)
-    adapter = package.H3TurboLoRA.for_test(pipe=lora)
-    scopes: list[Any] = []
-
-    def denoise(task: str, state: Any, **kwargs: Any) -> Any:
-        scopes.append(
-            (task, model._cozy_active, adapter._cozy_active, dit._overlays[TURBO_BANK] is overlay)
+        check(
+            f"{trunk} no overlay aliases in DiT census",
+            any("lora" in name for name in dit.state_dict()),
+            False,
         )
-        return "sampled"
+        check(
+            f"{trunk} permanent leaf hook",
+            len(dit.transformer_blocks[0].attn.to_q._forward_hooks),
+            1,
+        )
+        check(f"{trunk} head geometry", tuple(overlay.proj_out.weight.shape), (8, 96, 5376))
+        check(f"{trunk} final table dtype", overlay.norm_out.table.dtype, dit.norm_out.table.dtype)
+        check(
+            f"{trunk} block table dtype",
+            overlay.transformer_blocks[0].adaln_proj.table.dtype,
+            dit.transformer_blocks[0].adaln_proj.table.dtype,
+        )
+    # Real small DiTs exercise the permanent hooks and complete warm scopes without a
+    # second Model, borrowed state, or any nullable component.
+    base_full = tiny_dit()
+    with torch.no_grad():
+        for parameter in base_full.parameters():
+            parameter.normal_(0, 0.02)
+    tiny = {}
+    banks: dict[str, list[Any]] = {trunk: [] for trunk in ("fl2va", "ref2va")}
+    for trunk in ("fl2va", "ref2va"):
+        config = dict(base_full.config)
+        plan = canonical_timestep_plan(trunk)
+        timesteps, block_keys = plan.table_layout()
+        dit = AdaLNPrunedMiniMaxH3Transformer.from_official_config(
+            config, table_timesteps=timesteps, table_block_keys=block_keys
+        )
+        turbo_plan = canonical_timestep_plan(f"{trunk}_turbo")
+        bank = official._build_overlay(
+            dit,
+            config,
+            turbo_plan,
+            TableLayout.parse(canonical_json.decode(turbo_plan.canonical_bytes())["table_keys"]),
+        )
+        # Shape and schedule proof; zero finite coefficients keep this independent of
+        # the separate full PDD numerical equivalence arm.
+        with torch.no_grad():
+            for parameter in dit.parameters():
+                parameter.zero_()
+            for parameter in bank.parameters():
+                parameter.zero_()
+        dit.attach_overlay(TURBO_BANK, bank)
 
-    cast(Any, pipe).denoise = denoise
-    checks: Any = SimpleNamespace(
-        component=lambda *args: None, forwards=lambda *args: nullcontext()
-    )
+        def record(module: Any, args: Any, kwargs: Any, trunk: str = trunk) -> None:
+            banks[trunk].append((kwargs.get("attention_kwargs") or {}).get(ATTENTION_KWARG))
+
+        dit.register_forward_pre_hook(record, with_kwargs=True)
+        turbo.components[f"{trunk}_dit"] = dit
+        turbo.components[f"{trunk}_turbo"] = bank
+        tiny[trunk] = dit
+    model = package.H3TurboModel.for_test(pipe=turbo)
+    warm_with_fakes(model)
     check(
-        "LoRA sampling dispatches through both public scopes",
-        adapter.sample_fl2va(
-            model, None, on_step=lambda _: None, cancel=lambda: None, checks=checks
-        ),
-        "sampled",
-    )
-    check(
-        "both model leases remain active inside denoising",
-        scopes,
+        "turbo warm uses one full scope per trunk",
+        [(c.method, c.components) for c in model.harness.calls],
         [
-            (
-                "fl2va_turbo",
-                ("sample_fl2va_turbo", ("fl2va_dit",)),
-                ("sample_fl2va", ("fl2va_turbo",)),
-                True,
-            )
+            ("warm_fl2va", ("fl2va_dit", "fl2va_turbo")),
+            ("warm_ref2va", ("ref2va_dit", "ref2va_turbo")),
         ],
     )
     check(
-        "sample releases both model scopes and LoRA reference",
-        (model._cozy_active, adapter._cozy_active, dit._overlays),
-        (None, None, {}),
+        "both real warm forwards select turbo",
+        banks,
+        {"fl2va": [TURBO_BANK], "ref2va": [TURBO_BANK]},
     )
 
 
