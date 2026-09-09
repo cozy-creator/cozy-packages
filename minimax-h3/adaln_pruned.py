@@ -1,10 +1,10 @@
 """Exact-timestep AdaLN tables for the official Diffusers MiniMax-H3 DiT.
 
 The extension deliberately inherits Diffusers' forward unchanged. It replaces only the
-time/AdaLN modules whose checkpoint-specific outputs were precomputed at one canonical
-TimestepPlan before those dynamic modules were pruned. The remaining transformer graph,
-including attention, feed-forward, RoPE,
-input/output projections, and packed-row indexing, stays upstream code.
+time/AdaLN modules whose checkpoint-specific outputs were precomputed at the timestep rows
+labelled by the checkpoint before those dynamic modules were pruned. The remaining
+transformer graph, including attention, feed-forward, RoPE, input/output projections,
+and packed-row indexing, stays upstream code.
 
 A turbo overlay (`turbo.py`) attaches beside the DiT and is served per forward: the forward
 that names its bank in `attention_kwargs` reads the overlay's tables, heads and low-rank
@@ -39,7 +39,7 @@ class _Armed:
 
 
 class _AdaLNPrunedTimestepLookup(nn.Module):  # type: ignore[misc]
-    """Map exact float32 timestep values to the AdaLN-pruned plan's global rows."""
+    """Map exact float32 timestep values to the checkpoint's labelled rows."""
 
     def __init__(self, timesteps: Sequence[float]) -> None:
         super().__init__()
@@ -60,7 +60,8 @@ class _AdaLNPrunedTimestepLookup(nn.Module):  # type: ignore[misc]
         if not bool(torch.all(counts == 1)):
             unknown = timestep.detach().float().cpu().tolist()
             raise ConformanceError(
-                f"timestep rows are not covered exactly by the AdaLN-pruned plan: {unknown}",
+                f"model modulation tables do not cover the requested timesteps: {unknown}; "
+                "select a covered step count or regenerate the tables for this schedule",
                 code="artifact_config",
             )
         return matches.to(dtype=torch.int64).argmax(dim=1)
@@ -261,7 +262,8 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
             present = table_index[row_timesteps, token_tags] >= 0
             if not bool(torch.all(present)):
                 raise ConformanceError(
-                    "packed rows request a timestep/modality pair absent from the plan's tables",
+                    "model modulation tables do not cover a requested reference timestep/modality; "
+                    "regenerate the tables with coverage for this reference type",
                     code="artifact_config",
                 )
         except Exception:
