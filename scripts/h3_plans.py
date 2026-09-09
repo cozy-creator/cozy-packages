@@ -7,7 +7,7 @@
 Each argument is a denoise step count (transformer evaluations); its sigma grid is
 `MiniMaxH3Scheduler.set_timesteps(steps + 1)` per modality, exactly as the official
 pipeline spaces `num_inference_steps`. Writes both task plans for the serving package and
-the producer, and restamps the producer's model config with the new plan identities.
+the producer, and copies the producer's ordered table keys into its model config.
 `--turbo` writes the serving package's `<task>_turbo.json` plans only: one fixed schedule,
 stamped with the trunk task, which the turbo overlay's tables are keyed to.
 """
@@ -23,7 +23,6 @@ ROOT = Path(__file__).resolve().parent.parent
 H3 = ROOT / "minimax-h3"
 TOOLS = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
 PLANS_MODULE = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "plans.py"
-MODEL_CONFIG_MODULE = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "model_config.py"
 CONFORM_SCRIPT = ROOT / "scripts" / "h3-conform.py"
 sys.path.insert(0, str(H3))
 
@@ -67,28 +66,12 @@ def _rewrite(path: Path, edits: Sequence[tuple[str, str]]) -> None:
         print(f"restamped {path.relative_to(ROOT)}")
 
 
-def _restamp_constants(digests: dict[str, str], config_digest: str, length: int) -> None:
-    """Every pinned constant the regenerated plans invalidate, in one pass.
-
-    Three files pin these in three spellings: `LAUNCH_PLAN_DIGESTS` carries the `sha256:`
-    prefix, `PLAN_DIGESTS` carries bare hex, and `_CURRENT_MODEL_CONFIG` digests the
-    document the first two determine. Hand-pasting any of them is how se-053 spent a
-    conformance failure on `model config is not the exact current dual-task H3 config`.
-    """
+def _restamp_constants(digests: dict[str, str]) -> None:
+    """Update generation provenance and scheduler-oracle fixtures together."""
     bare = {task: digest.removeprefix("sha256:") for task, digest in digests.items()}
     _rewrite(
         PLANS_MODULE,
         [(f'("{task}": )"sha256:[0-9a-f]{{64}}"', f'\\g<1>"{digests[task]}"') for task in TASKS],
-    )
-    _rewrite(
-        MODEL_CONFIG_MODULE,
-        [
-            (
-                r'(_CURRENT_MODEL_CONFIG = \(\s*)"sha256:[0-9a-f]{64}"',
-                f'\\g<1>"{config_digest}"',
-            ),
-            ("(_CURRENT_MODEL_CONFIG_LENGTH = )[0-9]+", f"\\g<1>{length}"),
-        ],
     )
     _rewrite(
         CONFORM_SCRIPT,
@@ -124,12 +107,18 @@ def main(arguments: list[str]) -> None:
     config_path = TOOLS / "model-config.json"
     config = canonical_json.decode(config_path.read_bytes())
     for component, task in (("fl2va_dit", "fl2va"), ("ref2va_dit", "ref2va")):
-        config[component]["cozy_h3"]["timestep_plan_digest"] = digests[task]
+        config[component]["cozy_h3"] = {
+            "task": task,
+            "modulation": "adaln-pruned",
+            "table_keys": canonical_json.decode(
+                (TOOLS / f"timestep-plan.{task}.json").read_bytes()
+            )["table_keys"],
+        }
     raw = canonical_json.encode(config)
     config_path.write_bytes(raw)
     config_digest = canonical_json.digest(config)
     print(f"model-config.json: {config_digest} length={len(raw)}")
-    _restamp_constants(digests, config_digest, len(raw))
+    _restamp_constants(digests)
 
 
 if __name__ == "__main__":

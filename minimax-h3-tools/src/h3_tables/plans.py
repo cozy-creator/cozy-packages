@@ -9,36 +9,19 @@ from __future__ import annotations
 
 import math
 import struct
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Any, Literal, cast
 
-import torch
 from cozy_runtime.author import canonical_json
 
 Task = Literal["fl2va", "ref2va"]
 TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
 
-#: The served 30/40/50-evaluation union plans, stamped into the committed model config.
 LAUNCH_PLAN_DIGESTS: dict[Task, str] = {
     "fl2va": "sha256:9a48803d17d7bb5499ca8c018f60c86c9890eb91496249ac7cb199bc9e45201e",
     "ref2va": "sha256:565a164cbf0cefa58d4976cb4c84887cf9807cc7c4be62263d5e0e0c5d9bc50e",
 }
-#: PDD-8 (`alibaba-pai/MiniMax-H3-Acc-LoRAs`): `Schedule(9)` at the released shifts, which is
-#: the 33-point training grid at its block-4 boundaries — eight transformer evaluations. The
-#: pipeline is called with `num_inference_steps = 9` because the scheduler counts the terminal
-#: sigma; the plan counts evaluations.
-TURBO_PLAN_DIGESTS: dict[Task, str] = {
-    "fl2va": "sha256:d2eb1605c1c1e01a4c5fdaaf1912ab43f33d9ce4772febf1c75b9bbfc8f7ba9d",
-    "ref2va": "sha256:896a10881805e3047f6df514dd4e70fcea078837469eeb22ce67f0bd3f679cb7",
-}
-
-VIDEO_SHIFT = 12.0
-AUDIO_SHIFT = 3.0
-LAUNCH_GRID_POINTS = (31, 41, 51)
-TURBO_GRID_POINTS = (9,)
-FPS = 24
 
 _TOP_LEVEL = {
     "adaln_row_index",
@@ -65,6 +48,10 @@ class TimestepPlan:
     timesteps: tuple[float, ...]
     block_rows: tuple[tuple[int, int], ...]
     steps: tuple[int, ...]
+
+    @property
+    def table_keys(self) -> dict[str, Any]:
+        return cast(dict[str, Any], canonical_json.decode(self.canonical_bytes)["table_keys"])
 
 
 def _f32(value: float) -> float:
@@ -175,16 +162,14 @@ def _parse_schedule(value: object, field: str, class_rows: list[dict[str, Any]])
     return forwards
 
 
-def parse_plan(
-    raw: bytes, *, task: str, digests: Mapping[Task, str] = LAUNCH_PLAN_DIGESTS
-) -> TimestepPlan:
+def parse_plan(raw: bytes, *, task: str, launch: bool = True) -> TimestepPlan:
     """Validate one complete plan and return its exact table selectors.
 
-    `digests` pins the approved oracle bytes per task. The structural validator itself
-    admits any exact schedule set, so admitting another plan is one more pinned digest, never
-    a second numerical implementation.
+    `launch=True` pins the currently approved oracle bytes. The structural validator itself
+    admits any exact schedule set, so widening the approved digest does not require a second
+    numerical implementation.
     """
-    if task not in TASKS:
+    if task not in LAUNCH_PLAN_DIGESTS:
         raise ValueError(f"unknown MiniMax-H3 task {task!r}")
     try:
         decoded = canonical_json.decode(raw)
@@ -202,13 +187,11 @@ def parse_plan(
         "adaln_row_index": "timestep_index*3+modality_tag",
         "final_norm_row_index": "timestep_index",
         "table_order": "first-distinct-evaluation-class-occurrence",
-        "fps": FPS,
+        "fps": 24,
     }
     for name, expected in fixed.items():
         if document[name] != expected:
-            raise ValueError(
-                f"timestep plan {name} is {document[name]!r}, expected {expected!r}"
-            )
+            raise ValueError(f"timestep plan {name} is {document[name]!r}, expected {expected!r}")
     _hex_f32(document["video_shift"], "video_shift")
     _hex_f32(document["audio_shift"], "audio_shift")
 
@@ -247,17 +230,11 @@ def parse_plan(
         if pair[0] not in seen_final:
             seen_final.add(pair[0])
             final_expected.append({"index": len(final_expected), "timestep": pair[0]})
-    if (
-        keys["block_modulation"] != block_expected
-        or keys["final_normalization"] != final_expected
-    ):
-        raise ValueError(
-            "table keys are not the first-distinct exact evaluation coverage"
-        )
+    if keys["block_modulation"] != block_expected or keys["final_normalization"] != final_expected:
+        raise ValueError("table keys are not the first-distinct exact evaluation coverage")
 
     timesteps = tuple(
-        _hex_f32(row["timestep"], "final_normalization.timestep")
-        for row in final_expected
+        _hex_f32(row["timestep"], "final_normalization.timestep") for row in final_expected
     )
     timestep_index = {value: index for index, value in enumerate(timesteps)}
     block_rows = tuple(
@@ -268,140 +245,20 @@ def parse_plan(
         for row in block_expected
     )
     digest = canonical_json.digest(document)
-    if digest != digests[typed_task]:
+    if launch and digest != LAUNCH_PLAN_DIGESTS[typed_task]:
         raise ValueError(
-            f"{task} plan {digest} is structurally valid but is not the pinned oracle "
-            f"{digests[typed_task]}"
+            f"{task} plan {digest} is structurally valid but is not the launch oracle "
+            f"{LAUNCH_PLAN_DIGESTS[typed_task]}"
         )
     return TimestepPlan(typed_task, digest, canonical, timesteps, block_rows, steps)
 
 
-def parse_declared_plan(
-    raw: bytes, *, digests: Mapping[Task, str] = LAUNCH_PLAN_DIGESTS
-) -> TimestepPlan:
+def parse_declared_plan(raw: bytes) -> TimestepPlan:
     """Parse one plan whose own closed task field selects the strict task validator."""
     try:
         value = canonical_json.decode(raw)
     except ValueError as exc:
         raise ValueError("timestep plan is not JSON") from exc
-    if not isinstance(value, dict) or value.get("task") not in TASKS:
+    if not isinstance(value, dict) or value.get("task") not in LAUNCH_PLAN_DIGESTS:
         raise ValueError("timestep plan does not declare fl2va or ref2va")
-    return parse_plan(raw, task=str(value["task"]), digests=digests)
-
-
-def sigma_grid(shift: float, points: int) -> tuple[float, ...]:
-    """`MiniMaxH3Scheduler.set_timesteps(points)`: the float32 linspace through the
-    exponential shift, float32 collisions collapsed, terminal zero included."""
-    base = torch.linspace(1.0, 0.0, points, dtype=torch.float32)
-    sigmas = shift * base / (1 + (shift - 1) * base)
-    return tuple(float(value) for value in torch.unique_consecutive(sigmas))
-
-
-def _modulation_class(
-    name: str, timestep: float, modality: str, tag: int, presence: str
-) -> dict[str, Any]:
-    return {
-        "name": name,
-        "modality": modality,
-        "modality_tag": tag,
-        "presence": presence,
-        "timestep": _f32(timestep).hex(),
-    }
-
-
-def compose_plan(
-    task: Task,
-    *,
-    video_shift: float = VIDEO_SHIFT,
-    audio_shift: float = AUDIO_SHIFT,
-    grid_points: Sequence[int],
-) -> bytes:
-    """The canonical plan bytes for these sigma grids, ascending by evaluation count.
-
-    This is the producer's own derivation of `minimax-h3`'s `TimestepPlan.canonical_bytes()`
-    without Diffusers: the committed assets must reproduce from it byte for byte.
-    """
-    clean_video = _f32(0.999)
-    schedules: list[dict[str, Any]] = []
-    block_keys: list[dict[str, Any]] = []
-    final_keys: list[dict[str, Any]] = []
-    seen_blocks: set[tuple[str, int]] = set()
-    seen_final: set[str] = set()
-    for points in grid_points:
-        video = sigma_grid(video_shift, points)
-        audio = sigma_grid(audio_shift, points)
-        if len(video) != len(audio) or len(video) < 2:
-            raise ValueError(f"{points} grid points collide differently per modality")
-        evaluations: list[dict[str, Any]] = []
-        for index, (video_sigma, audio_sigma) in enumerate(
-            zip(video[:-1], audio[:-1], strict=True)
-        ):
-            video_t = _f32(1.0 - video_sigma)
-            audio_t = _f32(1.0 - audio_sigma)
-            classes = [
-                _modulation_class("target_video", video_t, "video", 0, "always"),
-                _modulation_class("text", video_t, "text", 1, "always"),
-                _modulation_class("target_audio", audio_t, "audio", 2, "always"),
-                _modulation_class(
-                    "condition_video",
-                    max(video_t, clean_video),
-                    "video",
-                    0,
-                    "if_condition_video_rows",
-                ),
-                _modulation_class(
-                    "condition_audio", 1.0, "audio", 2, "if_condition_audio_rows"
-                ),
-            ]
-            evaluations.append(
-                {
-                    "index": index,
-                    "video_sigma": _f32(video_sigma).hex(),
-                    "audio_sigma": _f32(audio_sigma).hex(),
-                    "modulation_classes": classes,
-                }
-            )
-            for item in classes:
-                timestep = str(item["timestep"])
-                tag = int(item["modality_tag"])
-                if (timestep, tag) not in seen_blocks:
-                    seen_blocks.add((timestep, tag))
-                    block_keys.append(
-                        {
-                            "index": len(block_keys),
-                            "timestep": timestep,
-                            "modality": item["modality"],
-                            "modality_tag": tag,
-                        }
-                    )
-                if timestep not in seen_final:
-                    seen_final.add(timestep)
-                    final_keys.append({"index": len(final_keys), "timestep": timestep})
-        schedules.append(
-            {
-                "transformer_evaluations": len(video) - 1,
-                "sigma_grid_points": points,
-                "evaluations": evaluations,
-                "terminal": {
-                    "video_sigma": _f32(video[-1]).hex(),
-                    "audio_sigma": _f32(audio[-1]).hex(),
-                    "transformer_evaluation": False,
-                },
-            }
-        )
-    return canonical_json.encode(
-        {
-            "task": task,
-            "scalar_encoding": "ieee754-binary32-hex",
-            "scheduler_semantics": "minimax-h3-data-ward-rf-euler/1",
-            "row_timestep_reduction": "unique-sorted-return-inverse",
-            "adaln_row_index": "timestep_index*3+modality_tag",
-            "final_norm_row_index": "timestep_index",
-            "table_order": "first-distinct-evaluation-class-occurrence",
-            "fps": FPS,
-            "video_shift": _f32(video_shift).hex(),
-            "audio_shift": _f32(audio_shift).hex(),
-            "schedules": schedules,
-            "table_keys": {"block_modulation": block_keys, "final_normalization": final_keys},
-        }
-    )
+    return parse_plan(raw, task=str(value["task"]))

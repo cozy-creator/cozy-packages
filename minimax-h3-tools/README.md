@@ -22,6 +22,18 @@ modulation and quantized replacement tensors remain mandatory, and TensorFS stil
 checks the complete destination order. This does not accept a pruned or quantized
 checkpoint as a substitute for the full BF16 source.
 
+Pruned checkpoint configs describe the ordered AdaLN rows as `cozy_h3.table_keys`:
+each final-normalization row names an exact float32 timestep, and each block-modulation
+row names a timestep and modality. Sampling-plan hashes remain generation provenance;
+they do not decide serving compatibility. Producer and inference use byte-identical
+copies of the same small row-label parser, checked by CI.
+
+`restamp` preserves explicit valid row labels and validates them against the stored table
+dimensions. For the original checkpoint stamps it first proves the old 345-frame plan
+has identical ordered rows, then replaces its legacy digest with those labels. Unknown
+or changed historical plans require regenerating the tables. This metadata upgrade
+inherits every tensor object and does not normalize video-VAE precision.
+
 ## Lanes
 
 A lane is a NAME plus, per component, what this producer does to it. The whole catalogue
@@ -79,34 +91,16 @@ served step count. FP8 and MXFP8 are independent children of those pruned BF16 t
 components and never derive from each other.
 
 The ordinary `retable` job recomputes only those tables for an existing AdaLN-pruned
-checkpoint of any encoding, once per admitted table set (`job.TABLE_SETS`): `pruned` (the
-checkpoint to inherit, BF16, FP8 or MXFP8), `full` (the complete BF16 checkpoint whose
-modulation weights the rows are computed from) and the two PDD acceleration LoRAs
-`fl2va_adapter` / `ref2va_adapter` (`alibaba-pai/MiniMax-H3-Acc-LoRAs`, rank 64, alpha 64).
+checkpoint of any encoding: `pruned` (the checkpoint to inherit, BF16, FP8 or MXFP8) and
+`full` (the complete BF16 checkpoint whose modulation weights the rows are computed from).
 Every non-table tensor is inherited by reference and nothing is requantized, so widening the
-plan's schedule set costs table bytes only. Each set emits a retabled checkpoint and a
-two-DiT table bank derived from `full` with every other row dropped — a transaction reads
-only through source components its targets derive from, so the bank transaction is where
-the modulation weights are read; the retabled checkpoint commits first:
-
-- `launch` → `adaln-pruned` / `tables`: the 30/40/50 union plans, unchanged.
-- `turbo` → `turbo-adaln-pruned` / `turbo-tables`: PDD-8, eight evaluations on
-  `Schedule(9)` at the released shifts 12/3 (the 33-point training grid at its block-4
-  boundaries; the pipeline is called with `num_inference_steps = 9` because the scheduler
-  counts the terminal sigma), 26 block rows and 17 final-normalization rows per task,
-  84,231,168 table bytes. An AdaLN-pruned lane has no `adaln_proj.linear` for an adapter to
-  attach to, so each adapter's `adaln_proj.linear` LoRA slice is fused into the block rows in
-  the adapter's own inference order (`bf16(W·x + b) + bf16(up(down·x))` at scale alpha/rank);
-  the adapter's other six target families and its head bank apply at inference and are not
-  read. The turbo bank also carries each adapter's slice by reference (`fl2va_adapter` /
-  `ref2va_adapter`): the rows its tables were fused from, and the smallest derivation
-  TensorFS admits from a granted source. The turbo checkpoint's config stamps the turbo plan
-  digests (`plans.TURBO_PLAN_DIGESTS`).
-
-It refuses before any read unless `pruned` carries table rows and no dynamic modulation
-weights for both DiTs, `full` carries the exact modulation weights, and each adapter is one
-component carrying the complete bf16 rank-64 slice. `MAX_TABLE_BYTES` is a per-output,
-per-task ceiling; the turbo set uses 7.8 % of it beside the launch set's 95.0 %.
+plan's schedule set costs table bytes only. It emits two outputs from one table pass:
+`adaln-pruned` (the retabled checkpoint, every component inherited from `pruned`) and
+`tables` (a two-DiT table bank derived from `full` with every other row dropped) — a
+transaction may read only the source components its targets derive from, so the bank
+transaction is where the modulation weights are read. The retabled checkpoint commits
+first. It refuses before any read unless `pruned` carries table rows and no dynamic
+modulation weights for both DiTs and `full` carries the exact modulation weights.
 
 The package declares no GPU, SM, VRAM, or host-RAM guess. Creator derives accelerator-class work
 from the typed model inputs; exact artifact residency and measured request/scratch envelopes drive
@@ -139,11 +133,6 @@ a real TensorFS store, derives three lanes through the real Runtime `WeightsSink
 reads the committed headers back to prove that an untreated component keeps the source's
 exact stored objects in every lane — the property that decides whether a per-component lane
 is affordable at all.
-`scripts/turbo-proof.py` re-derives every committed plan from the package's own composer
-(no Diffusers), proves the turbo grid equals PDD's float64 block boundaries at float32, and
-checks the fused kernel against the reference `LoRALinear.forward` at every plan row on a
-tiny topology; `../../scripts/h3-turbo-store-proof.py` runs the exact `retable` orchestration over a
-tiny `full`/`pruned`/adapter set in a real TensorFS store and reads all four outputs back.
 
 The result preserves the Runtime quantizer's existing weight measurements in
 `weight_fidelity_this_run`, a list of rows naming output slot, component, the treatment that
@@ -155,3 +144,57 @@ completed component also logs those same values before later stages run. Replaye
 are absent from this run's measurements; absence never means zero error. BF16 inheritance
 and AdaLN table production do not claim quantizer measurements. Activation fidelity,
 matched output distance and output quality require separate inference/evaluation evidence.
+
+
+`h3_tables.turbo.prepare_turbo` adds the PDD-8 overlays to one existing AdaLN-pruned
+model. It is a memoized Python operation and the `prepare-turbo` job. Pass `source`
+(the BF16, FP8 or MXFP8 body being served), `full` (its original full-precision H3
+model), and `fl2va_adapter` / `ref2va_adapter` (the two native single-component PDD
+artifacts). The released PDD inputs are `MiniMax-H3-FL2VA-Acc-8Step.safetensors` and
+`MiniMax-H3-Ref2VA-Acc-8Step.safetensors` from `alibaba-pai/MiniMax-H3-Acc-LoRAs`,
+revision `335001fb9e5455d68a0caa18ec2e319072150328`.
+
+```python
+from h3_tables.turbo import prepare_turbo
+
+model = await prepare_turbo(
+    source=body, full=full, fl2va_adapter=fl2va_pdd, ref2va_adapter=ref2va_pdd,
+)
+```
+
+The single output retains every base tensor and its construction config, and adds
+`fl2va_turbo` and `ref2va_turbo` components. Their six inference LoRA families inherit
+source objects. Only adapted AdaLN tables and eight collapsed output heads are
+written. The consumed AdaLN factors are absent from the output. One native transaction
+checkpoints each completed tensor, so cancellation resumes unfinished work and a
+completed replay returns the same artifact. Ordinary `retable` keeps its two inputs
+and two outputs; turbo preparation does not change the base schedule.
+
+The output binds to `minimax-h3`'s single `H3TurboModel` slot. Ordinary `H3Model`
+continues to consume a checkpoint with only the original five components.
+
+Old `1.0.0-rc.2` AdaLN checkpoints may still carry the retired `frames:345` plan
+identity. Before turbo preparation or current ordinary serving, run the `restamp`
+job through Creator with `model.lane=paul/minimax-h3@1.0.0-rc.2/fp8-adaln-pruned`.
+It resolves only the exact historical frame-only plan or the current known plan,
+verifies table geometry, and replaces their opaque stamps with explicit ordered
+table-row labels. Already explicit valid layouts are preserved. All tensor objects,
+including the video VAE's precision, are inherited unchanged. Other old plans
+require real retabling from their generating model; `restamp` refuses them.
+
+The small row-label parser is maintained in `minimax-h3/h3_table_layout.py` and
+copied byte-for-byte into the producer. `scripts/sync-h3-table-layout.py` verifies
+the copy in CI, avoiding a private package-index dependency for pure validation.
+
+`scripts/h3-turbo-store-proof.py` verifies native inheritance, cancellation, replay,
+and component contents. With the pinned upstream `minimax_h3_pdd.py` supplied as an
+argument under the H3 environment, it also loads the emitted tensors into the serving
+overlay constructor and compares stored modulation tables and all eight output heads
+against the actual upstream adapter over Diffusers. These are CPU construction and
+numerical checks. They do not measure GPU speed, audio, or video quality.
+
+
+The tensor-only serving hooks require Runtime's preservation of hooks during encoded
+leaf installation and its refusal to prequantize a hooked consumer's operand. Publish
+the serving package only with that Runtime fix; the producer itself uses released
+Runtime 0.12 APIs.
