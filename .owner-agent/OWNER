@@ -1,5 +1,4 @@
-owner: codex /root/package_runtime_tf03
-purpose: relock all seven package sources and interfaces on cozy-runtime 0.2.13
-branch: codex/runtime0213
-base: da3b1c756fff10a6b7fa1be3bb044273492f58fd
-started: 2026-09-03
+owner: codex /root/h3_turbo_slots
+purpose: separate turbo LoRA checkpoint slot from ordinary H3
+branch: fix/h3-turbo-separate-slot
+base: fff83f8a08c070ea0a6764a621c84adc1dd09cd7

@@ -66,7 +66,7 @@ from transformers import (
 
 from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
 from conditioner import build_text_conditioner
-from turbo import ATTENTION_KWARG, TURBO_BANK, AbsentOverlay, TurboOverlay, TurboSchedule
+from turbo import ATTENTION_KWARG, TURBO_BANK, TurboOverlay, TurboSchedule
 from vae_tiles import TileBatchedVideoVAE
 
 #: A trunk is one DiT and its conditioning workflow; a task is one served function — the
@@ -129,8 +129,7 @@ _WEIGHTED_CONFIG_SECTIONS = {
     "text_encoder",
     "video_vae",
 }
-#: The turbo overlay components: present as a pair on a lane that serves the turbo
-#: functions, absent as a pair on one that does not. Never one without the other.
+#: The independent turbo LoRA checkpoint always carries both overlay components.
 _OVERLAY_CONFIG_SECTIONS = {"fl2va_turbo", "ref2va_turbo"}
 _DIT_COMPONENT: dict[Trunk, str] = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
 _OVERLAY_COMPONENT: dict[Trunk, str] = {"fl2va": "fl2va_turbo", "ref2va": "ref2va_turbo"}
@@ -941,15 +940,6 @@ class OfficialH3Pipeline:
             for trunk, (upstream, structure, plan) in dit_specs.items()
         }
         _validate_dual_topology(dits, _DIT_COMPONENT)
-        overlay_specs = _overlay_specs(mapping, dit_specs)
-        overlays = {
-            trunk: _build_overlay(dits[trunk], dit_specs[trunk][0], spec)
-            for trunk, spec in overlay_specs.items()
-        }
-        _validate_dual_topology(overlays, _OVERLAY_COMPONENT)
-        for trunk, overlay in overlays.items():
-            if overlay.present:
-                dits[trunk].attach_overlay(TURBO_BANK, overlay)
         text_encoder = build_text_conditioner(_section(mapping, "text_encoder"))
         video_vae = _apply_video_vae_dtype(
             TileBatchedVideoVAE.from_config(_section(mapping, "video_vae"))
@@ -974,13 +964,10 @@ class OfficialH3Pipeline:
         # Runtime reads this mapping and nothing under ``pipe`` when deriving/filling
         # checkpoint destinations. Config-only processors and schedulers are deliberately
         # absent; ``video_vae`` is the artifact name while official Diffusers calls it
-        # ``vae``. A turbo overlay is a component beside the DiT it patches, carrying
-        # nothing on a lane that serves no turbo function.
+        # ``vae``. LoRA roots belong to their own separately bound construction.
         self.components: dict[str, Any] = {
             "fl2va_dit": dits["fl2va"],
             "ref2va_dit": dits["ref2va"],
-            "fl2va_turbo": overlays["fl2va"],
-            "ref2va_turbo": overlays["ref2va"],
             "text_encoder": text_encoder,
             "video_vae": video_vae,
             "audio_vae": audio_vae,
@@ -993,27 +980,23 @@ class OfficialH3Pipeline:
         self._blocks = blocks
         self._pipes = pipes
         self._plans: dict[Task, TimestepPlan] = {
-            task: dit_specs[_TRUNK[task]][2] if spec is None else spec.plan
-            for task in _TASKS
-            for spec in (overlay_specs[_TRUNK[task]] if _BANK[task] else None,)
+            task: canonical_timestep_plan(task) for task in _TASKS
         }
-        self._served = {
-            task for task in _TASKS if not _BANK[task] or overlays[_TRUNK[task]].present
-        }
+        self._dit_specs = dit_specs
 
-    def serves(self, task: Task) -> bool:
-        """Whether the bound artifact carries what `task` runs on: every base task, and a
-        turbo task only when its trunk's overlay component is present."""
-        return task in self._served
-
-    def _require_served(self, task: Task) -> None:
-        if task not in self._served:
-            component = _OVERLAY_COMPONENT[_TRUNK[task]]
+    @contextmanager
+    def turbo_overlay(self, trunk: Trunk, lora: OfficialH3TurboLoRA) -> Iterator[None]:
+        """Join two admitted components for this sample only; always detach on failure."""
+        config, structure, _ = self._dit_specs[trunk]
+        if structure != "adaln-pruned" or config != lora.architectures[trunk]:
             raise ConformanceError(
-                f"this artifact carries no {component} component, so it cannot serve {task}",
+                "the turbo LoRA requires an AdaLN-pruned base with its exact architecture",
                 code="artifact_config",
-                fields=[component],
+                fields=["model", "lora"],
             )
+        dit = self.components[_DIT_COMPONENT[trunk]]
+        with dit.use_overlay(TURBO_BANK, lora.components[_OVERLAY_COMPONENT[trunk]]):
+            yield
 
     def generator(self, source: object) -> Any:
         """Adapt Runtime's public request generator to Diffusers' torch generator."""
@@ -1101,7 +1084,6 @@ class OfficialH3Pipeline:
         image_short_edges: Sequence[int] = (),
         **values: Any,
     ) -> Any:
-        self._require_served(task)
         # The plan, not the request, spells the official grid: `steps` transformer
         # evaluations are the schedule's grid points less the terminal zero.
         schedule = self._plans[task].schedule(steps)
@@ -1180,7 +1162,6 @@ class OfficialH3Pipeline:
         from. Inputs are zeros off the DiT's own rotary buffer, so nothing names a device
         and no generator moves; outputs are dropped.
         """
-        self._require_served(task)
         dit = self.components[_DIT_COMPONENT[_TRUNK[task]]]
         schedule = self._plans[task].schedules[0]
         bank = _BANK[task]
@@ -1292,9 +1273,7 @@ class OfficialH3Pipeline:
         self._run(task, "decode.video", state, component="video_vae")
         return state.videos
 
-    def decode_video_chunks(
-        self, task: Task, state: Any, on_chunk: Callable[[Any], None]
-    ) -> int:
+    def decode_video_chunks(self, task: Task, state: Any, on_chunk: Callable[[Any], None]) -> int:
         """`decode.video` with the VAE's temporal chunks handed out as they finish (h3a-017).
 
         Upstream's `MiniMaxH3VideoDecodeStep` denormalizes the latents, decodes under
@@ -1378,8 +1357,7 @@ def _section(mapping: Mapping[str, object], name: str) -> dict[str, Any]:
 
 def _artifact_sections(mapping: Mapping[str, object]) -> Mapping[str, object]:
     present = set(mapping)
-    overlays = present & _OVERLAY_CONFIG_SECTIONS
-    expected = _WEIGHTED_CONFIG_SECTIONS | (_OVERLAY_CONFIG_SECTIONS if overlays else set())
+    expected = _WEIGHTED_CONFIG_SECTIONS
     if present != expected:
         missing = sorted(expected - present)
         unexpected = sorted(present - expected)
@@ -1509,6 +1487,7 @@ _OVERLAY_FIELDS = {
 def _overlay_spec(mapping: Mapping[str, object], trunk: Trunk) -> OverlaySpec:
     component = _OVERLAY_COMPONENT[trunk]
     section = _section(mapping, component)
+    section.pop("transformer", None)
     extension = section.pop("cozy_h3", None)
     if section or not isinstance(extension, Mapping) or set(extension) != _OVERLAY_FIELDS:
         raise ConformanceError(
@@ -1556,24 +1535,42 @@ def _overlay_spec(mapping: Mapping[str, object], trunk: Trunk) -> OverlaySpec:
     )
 
 
-def _overlay_specs(
-    mapping: Mapping[str, object],
-    dit_specs: Mapping[Trunk, tuple[dict[str, Any], str, TimestepPlan]],
-) -> dict[Trunk, OverlaySpec | None]:
-    if not set(mapping) & _OVERLAY_CONFIG_SECTIONS:
-        return dict.fromkeys(_TRUNKS)
-    if {spec[1] for spec in dit_specs.values()} != {"adaln-pruned"}:
-        raise ConformanceError(
-            "a turbo overlay patches AdaLN-pruned DiTs only: its adaln_proj slice is tabled",
-            code="artifact_config",
-            fields=sorted(_OVERLAY_CONFIG_SECTIONS),
-        )
-    return {trunk: _overlay_spec(mapping, trunk) for trunk in _TRUNKS}
+class OfficialH3TurboLoRA:
+    """Two overlay roots, independent of the base checkpoint and its component census.
+
+    Each overlay config carries its upstream ``transformer`` architecture and closed
+    ``cozy_h3`` PDD metadata. It contains no base tensors, tokenizer or VAE configuration.
+    """
+
+    def __init__(self, config: Config) -> None:
+        mapping = config.mapping()
+        if set(mapping) != _OVERLAY_CONFIG_SECTIONS:
+            raise ConformanceError(
+                "a turbo LoRA checkpoint contains exactly fl2va_turbo and ref2va_turbo",
+                code="artifact_config",
+                fields=sorted(_OVERLAY_CONFIG_SECTIONS),
+            )
+        self.architectures: dict[Trunk, dict[str, Any]] = {
+            trunk: _section(_section(mapping, _OVERLAY_COMPONENT[trunk]), "transformer")
+            for trunk in _TRUNKS
+        }
+        if self.architectures["fl2va"] != self.architectures["ref2va"]:
+            raise ConformanceError(
+                "turbo LoRA trunks must describe the same upstream architecture",
+                code="artifact_config",
+                fields=sorted(_OVERLAY_CONFIG_SECTIONS),
+            )
+        overlays = {
+            trunk: _build_overlay(self.architectures[trunk], _overlay_spec(mapping, trunk))
+            for trunk in _TRUNKS
+        }
+        _validate_dual_topology(overlays, _OVERLAY_COMPONENT)
+        self.components = {
+            _OVERLAY_COMPONENT[trunk]: overlay for trunk, overlay in overlays.items()
+        }
 
 
-def _build_overlay(dit: Any, config: Mapping[str, Any], spec: OverlaySpec | None) -> Any:
-    if spec is None:
-        return AbsentOverlay()
+def _build_overlay(config: Mapping[str, Any], spec: OverlaySpec) -> TurboOverlay:
     (schedule,) = spec.plan.schedules
     timesteps, block_keys = spec.plan.table_layout()
     overlay = TurboOverlay.from_official_config(
@@ -1583,10 +1580,11 @@ def _build_overlay(dit: Any, config: Mapping[str, Any], spec: OverlaySpec | None
         schedule=TurboSchedule(schedule.video_timesteps, schedule.audio_timesteps),
         table_timesteps=timesteps,
         table_block_keys=block_keys,
-        block_table_dtype=dit.transformer_blocks[0].adaln_proj.table.dtype,
-        final_table_dtype=dit.norm_out.table.dtype,
+        block_table_dtype=torch.bfloat16,
+        final_table_dtype=torch.bfloat16,
     )
-    return overlay.eval()
+    overlay.eval()
+    return overlay
 
 
 def _validate_dual_topology(members: Mapping[Trunk, Any], names: Mapping[Trunk, str]) -> None:
@@ -1608,8 +1606,7 @@ def _validate_dual_topology(members: Mapping[Trunk, Any], names: Mapping[Trunk, 
 
     if type(fl2va) is not type(ref2va) or topology(fl2va) != topology(ref2va):
         raise ConformanceError(
-            "FL2VA and Ref2VA components do not have one identical class and destination "
-            "topology",
+            "FL2VA and Ref2VA components do not have one identical class and destination topology",
             code="artifact_config",
             fields=fields,
         )
