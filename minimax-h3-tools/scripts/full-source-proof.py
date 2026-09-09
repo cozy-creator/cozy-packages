@@ -18,7 +18,7 @@ from cozy_runtime.author import (
     WeightsSourceTensor,
 )
 from cozy_runtime.derive.quantization import h3_quantization_plan, prepare_quantization
-from h3_tables import job, operations
+from h3_tables import job, lanes, operations
 from h3_tables.kernel import H3Topology, removed_keys
 
 
@@ -79,10 +79,30 @@ def main() -> None:
 
     tables = job._table_additions(sections)
     quantization = prepare_quantization(h3_quantization_plan())
-    for encoding in (None, "fp8-rowwise/1", "mxfp8/1"):
-        old = job._pruned_targets(sections, tables, original, quantization, encoding)
-        raw = job._pruned_targets(sections, tables, selected, quantization, encoding)
-        cleaned = job._pruned_targets(sections, tables, targets, quantization, encoding)
+    def pruned(lane_name: str, full_targets: dict[str, Any]) -> dict[str, Any]:
+        lane = lanes.LANES[lane_name]
+        selections = {
+            component: lanes.select(component, treatment, dit_rows, dit_plan=quantization)
+            for component, treatment in lane.components.items()
+        }
+        return job._lane_targets(lane, sections, tables, full_targets, selections)
+
+    dit_rows = tuple(
+        WeightsSourceTensor(
+            component,
+            tensor.key,
+            tensor.logical_dtype,
+            tensor.shape,
+            (WeightsSourcePart("value", tensor.logical_dtype, tensor.shape),),
+        )
+        for component in job.TARGET_COMPONENT.values()
+        for tensor in quantization.tensors
+    )
+    for lane_name in ("bf16-adaln-pruned", "fp8-adaln-pruned", "mxfp8-adaln-pruned"):
+        encoding = lanes.LANES[lane_name].components.get("fl2va_dit")
+        old = pruned(lane_name, original)
+        raw = pruned(lane_name, selected)
+        cleaned = pruned(lane_name, targets)
         assert raw == old
         for task, section in (("fl2va", "transformer"), ("ref2va", "transformer_ref")):
             component = job.TARGET_COMPONENT[task]

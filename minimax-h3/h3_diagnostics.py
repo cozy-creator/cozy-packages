@@ -228,7 +228,6 @@ def save_trace(
         "prompt": payload.prompt,
         "seed": payload.seed,
         "references": references,
-        "mute": payload.mute,
     }
     raw = json.dumps(document, allow_nan=False, separators=(",", ":")).encode()
     if len(raw) > 1 << 20:

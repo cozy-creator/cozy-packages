@@ -15,8 +15,8 @@ async def main(ctx):
     mxfp8 = await quantize(source=pruned, encoding="mxfp8/1")
 ```
 
-This client-script path requires Runtime 0.11 or newer for its source-preserving
-caller overlay.
+This client-script path requires Runtime 0.12 or newer for its source-preserving
+caller overlay and native attachments that add no tensor bytes.
 
 The current captured plan is the approved union of 30, 40 and 50 denoising steps.
 `timesteps` selects a supported step count; the retained BF16 bank supports all

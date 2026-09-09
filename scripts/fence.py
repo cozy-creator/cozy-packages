@@ -162,6 +162,15 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    ("scripts/h3-longform-proof.py", "cozy_runtime.author._calls"): (
+        "the long-form driver builds the real child broker so the chain is proven through "
+        "Runtime's own call exchange rather than a fake. Retire when a public child-call "
+        "harness can construct a broker."
+    ),
+    ("scripts/h3-longform-proof.py", "cozy_runtime.author._assets"): (
+        "the same driver grants the previous shot's bytes to the next child the way the "
+        "worker does. Retire with the same public child-call harness."
+    ),
     ("scripts/sdxl-normalization-proof.py", "cozy_runtime.author._model"): (
         "the normalization driver constructs the exact-checkpoint source Runtime admits; "
         "for_test permits test:// identities only. Retire with a public native job fixture."
@@ -214,6 +223,17 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
     ("scripts/h3-repair-proof.py", "cozy_runtime.internal.weights_sink"): (
         "the repair integration driver exercises the public job against the real Runtime "
         "host and TensorFS writer, including interrupted resume and exact receipt replay. "
+        "Retire when the public fake weights service can construct this native host."
+    ),
+    ("scripts/h3-lane-store-proof.py", "cozy_runtime.author._model"): (
+        "the lane driver constructs the exact-checkpoint job source record Runtime builds; "
+        "for_test intentionally permits test:// identities only, and this proof needs the "
+        "real minted manifest. Retire when a public native job fixture factory owns it."
+    ),
+    ("scripts/h3-lane-store-proof.py", "cozy_runtime.internal.weights_sink"): (
+        "the lane driver runs per-component cast/encode treatments through the real "
+        "Runtime weights host and TensorFS writer, and reads the committed headers back to "
+        "prove an untreated component keeps the SOURCE's exact ObjectRefs in every lane. "
         "Retire when the public fake weights service can construct this native host."
     ),
     ("scripts/h3-conform.py", "cozy_runtime.internal.residency"): (

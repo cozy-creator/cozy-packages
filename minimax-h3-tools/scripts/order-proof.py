@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+from typing import Any
 
 from cozy_runtime.author import (
     WeightsPart,
@@ -19,6 +20,7 @@ from cozy_runtime.derive.quantization import (
     prepare_quantization,
     quantization_additions,
 )
+from h3_tables import lanes as lane_recipes
 from h3_tables.job import (
     FP8_SPEC,
     MAX_TABLE_BYTES,
@@ -26,7 +28,7 @@ from h3_tables.job import (
     PLAIN_SPEC,
     _full_order,
     _full_targets,
-    _pruned_targets,
+    _lane_targets,
     _retable_targets,
     _table_additions,
 )
@@ -34,7 +36,7 @@ from h3_tables.kernel import H3Topology, removed_keys, source_shapes, table_shap
 from h3_tables.model_config import parse_production_config
 from h3_tables.order import current_order
 from h3_tables.plans import parse_declared_plan, parse_plan
-from h3_tables.source import source_only_keys, text_source_only_keys
+from h3_tables.source import official_full_specs, source_only_keys, text_source_only_keys
 
 PROJECT = Path(__file__).resolve().parents[1]
 ASSETS = PROJECT / "src/h3_tables/assets"
@@ -110,6 +112,47 @@ def prove_retable(sections: dict[str, dict[str, object]]) -> None:
         raise RuntimeError(f"retable accepted a source with {name}")
 
 
+def _dit_structure(sections: dict[str, Any]) -> tuple[WeightsSourceTensor, ...]:
+    """The two FULL DiT components as granted structure, from the package's own contract."""
+    rows: list[WeightsSourceTensor] = []
+    for component, section in (("fl2va_dit", "transformer"), ("ref2va_dit", "transformer_ref")):
+        specs = dict(official_full_specs(sections[section]))
+        specs["rope.inv_freq"] = ("f32", (16,))
+        for key, (dtype, shape) in specs.items():
+            rows.append(
+                WeightsSourceTensor(
+                    component=component,
+                    key=key,
+                    logical_dtype=dtype,
+                    shape=tuple(shape),
+                    parts=(WeightsSourcePart("value", dtype, tuple(shape)),),
+                    encoding=PLAIN_SPEC,
+                )
+            )
+    return tuple(rows)
+
+
+def _targets_of(
+    name: str,
+    sections: dict[str, Any],
+    tables: Any,
+    full_targets: Any,
+    dits: tuple[WeightsSourceTensor, ...],
+    quantization: Any,
+) -> dict[str, Any]:
+    lane = lane_recipes.LANES[name]
+    selections = {
+        component: lane_recipes.select(
+            component,
+            treatment,
+            lane_recipes.carried(full_targets[component], dits),
+            dit_plan=quantization,
+        )
+        for component, treatment in lane.components.items()
+    }
+    return _lane_targets(lane, sections, tables, full_targets, selections)
+
+
 def main() -> None:
     sections = parse_production_config((ASSETS / "model-config.json").read_bytes())
     whole = current_order((ASSETS / "whole-order.json").read_bytes())
@@ -138,9 +181,12 @@ def main() -> None:
         or any(tensor.component != "dit" for tensor in quantization.tensors)
     ):
         raise RuntimeError("quantization changed its closed 584/313 component plan")
-    pruned = _pruned_targets(sections, tables, full_targets)
-    fp8 = _pruned_targets(sections, tables, full_targets, quantization, "fp8-rowwise/1")
-    mxfp8 = _pruned_targets(sections, tables, full_targets, quantization, "mxfp8/1")
+    # Every lane's targets now come from its catalogue row, so this proof drives the exact
+    # declaration path the job does rather than a second spelling of it.
+    dits = _dit_structure(sections)
+    pruned = _targets_of("bf16-adaln-pruned", sections, tables, full_targets, dits, quantization)
+    fp8 = _targets_of("fp8-adaln-pruned", sections, tables, full_targets, dits, quantization)
+    mxfp8 = _targets_of("mxfp8-adaln-pruned", sections, tables, full_targets, dits, quantization)
 
     measured_bytes: dict[str, int] = {}
     for task, source, component in (
@@ -211,7 +257,7 @@ def main() -> None:
     jobs = {str(row["name"]): row for row in declared}
     if set(jobs) != {
         "assemble_full",
-        "four-lane",
+        "lanes",
         "retable",
         "quantize-artifact",
         "apply-adaln",
@@ -221,25 +267,19 @@ def main() -> None:
         "retable-adaln",
     }:
         raise RuntimeError(f"package callable compatibility changed: {sorted(jobs)}")
-    job = jobs["four-lane"]
+    job = jobs["lanes"]
     models = {row["path"]: row for row in job["models"]}
-    if set(models) != {"four-lane.models.dits", "four-lane.models.shared"}:
-        raise RuntimeError("four-lane changed its two typed source slots")
+    if set(models) != {"lanes.models.dits", "lanes.models.shared"}:
+        raise RuntimeError("lanes changed its two typed source slots")
     outputs = {output["output_id"]: output for output in job["weights_outputs"]}
-    expected_outputs = {
-        "bf16-full",
-        "bf16-adaln-pruned",
-        "fp8-adaln-pruned",
-        "mxfp8-adaln-pruned",
-    }
-    if set(outputs) != expected_outputs:
-        raise RuntimeError("four-lane changed its exact output set")
-    if any("required_contract" in output for output in outputs.values()):
-        raise RuntimeError("four-lane retained a publish-time tensor requirements contract")
-    if "resources" in job:
+    if set(outputs) != set(lane_recipes.LANES):
         raise RuntimeError(
-            "four-lane should derive and measure resources instead of authoring them"
+            f"declared outputs {sorted(outputs)} are not the catalogue {sorted(lane_recipes.LANES)}"
         )
+    if any("required_contract" in output for output in outputs.values()):
+        raise RuntimeError("lanes retained a publish-time tensor requirements contract")
+    if "resources" in job:
+        raise RuntimeError("lanes should derive and measure resources instead of authoring them")
     retable = jobs["retable"]
     if {row["path"] for row in retable["models"]} != {
         "retable.models.full",
@@ -250,7 +290,7 @@ def main() -> None:
     }:
         raise RuntimeError("retable changed its two typed sources or two outputs")
     print(
-        f"H3 FOUR-LANE CONTRACT PASS jobs={len(jobs)} graphs=0 outputs=4 full_rows=3968 "
+        f"H3 LANE CONTRACT PASS jobs={len(jobs)} graphs=0 outputs={len(outputs)} full_rows=3968 "
         "task_rows=583 shared_text_drop=156 quantized_per_task=313 tables_per_task=51 "
         f"table_bytes_per_task={measured_bytes} table_budget_per_task={MAX_TABLE_BYTES} "
         "source_drop=rope dynamic_drops_per_task=106 "

@@ -9,7 +9,14 @@ from importlib.resources import files
 from typing import Any, Protocol
 
 import msgspec
-from cozy_runtime.author import Loader, Model, WeightsSink, WeightsTarget, canonical_json
+from cozy_runtime.author import (
+    Loader,
+    Model,
+    WeightsSink,
+    WeightsSource,
+    WeightsTarget,
+    canonical_json,
+)
 
 from .kernel import H3Topology, removed_keys, table_shapes
 from .plans import TimestepPlan
@@ -209,15 +216,33 @@ def full_targets() -> dict[str, WeightsTarget]:
     }
 
 
-def select_full_targets(
+def structures(
     artifacts: WeightsSink, sources: Mapping[str, H3FullTransformer]
+) -> dict[str, WeightsSource]:
+    """One bounded structure read per DISTINCT granted checkpoint, keyed by source alias.
+
+    Both slots may bind the same complete checkpoint, and every consumer here — target
+    selection and per-component treatment selection alike — wants the same facts.
+    """
+    read: dict[str, WeightsSource] = {}
+    for source in sources.values():
+        if source.checkpoint_ref not in read:
+            read[source.checkpoint_ref] = artifacts.structure(source)
+    return {alias: read[source.checkpoint_ref] for alias, source in sources.items()}
+
+
+def select_full_targets(
+    artifacts: WeightsSink,
+    sources: Mapping[str, H3FullTransformer],
+    granted: Mapping[str, WeightsSource] | None = None,
 ) -> dict[str, WeightsTarget]:
     """Drop source-only rows that remain in these exact granted checkpoints."""
+    observed = structures(artifacts, sources) if granted is None else granted
     keys: dict[str, set[tuple[str, str]]] = {}
-    for source in sources.values():
+    for alias, source in sources.items():
         if source.checkpoint_ref not in keys:
             keys[source.checkpoint_ref] = {
-                (tensor.component, tensor.key) for tensor in artifacts.structure(source).tensors
+                (tensor.component, tensor.key) for tensor in observed[alias].tensors
             }
     targets = full_targets()
     return {

@@ -882,6 +882,18 @@ def arm_clip_length() -> None:
         ),
         (min(DURATIONS), min(DURATIONS)),
     )
+    # `mute` never skipped audio generation: `decode_audio` ran regardless and the audio rows
+    # denoised in the same packed sequence at every step, so the flag only suppressed the mux
+    # while costing the caller the same time and money (se-052). It is deleted rather than
+    # documented, and a payload that still carries it refuses as an unknown field.
+    for name, request in (
+        ("fl2va", package.FirstLastFrameToVideoInput),
+        ("ref2va", package.ReferenceMediaToVideoInput),
+    ):
+        refusal(
+            f"{name} refuses a mute field on the wire",
+            partial(msgspec.convert, {"prompt": "x", "mute": True}, type=request),
+        )
     # A plan holds one row per (timestep, modality); no row depends on the frame count, so
     # a served length never needs a re-tabled checkpoint.
     for task in ("fl2va", "ref2va"):
@@ -1916,7 +1928,6 @@ def arm_media() -> None:
             SimpleNamespace(audio=finish_audio, video=finish_video),
             schedule,
             duration_s=DEFAULT_DURATION_S,
-            mute=False,
             out=cast(Any, finish_outputs),
             tel=telemetry,
             cancel=lambda: None,
@@ -2009,7 +2020,6 @@ def arm_media() -> None:
             SimpleNamespace(audio=finish_audio, video=finish_video),
             schedule,
             duration_s=DURATIONS[1],
-            mute=False,
             out=cast(Any, FinishOutputs()),
             tel=fake_telemetry(fake_attempt("h3-finish-length")),
             cancel=lambda: None,
@@ -2363,7 +2373,7 @@ def arm_resident_fill() -> None:
 
 def arm_output_gates() -> None:
     print("\n== structural refusals and quality observations ==")
-    requested = MediaFacts(width=1, height=1, frames=2, fps=24, sample_rate=24, mute=False)
+    requested = MediaFacts(width=1, height=1, frames=2, fps=24, sample_rate=24)
     decoded = torch.zeros((1, 2, 3, 1, 1), dtype=torch.float32)
     pixels = torch.zeros((2, 1, 1, 3), dtype=torch.uint8)
     waveform = torch.zeros((1, 2), dtype=torch.float32)
@@ -2402,7 +2412,7 @@ def arm_output_gates() -> None:
     )
     # A real quality rejection must remain visible without suppressing an
     # otherwise encodable inference result. Checkpoints are qualified separately.
-    requested = MediaFacts(width=512, height=512, frames=5, fps=24, sample_rate=240, mute=True)
+    requested = MediaFacts(width=512, height=512, frames=5, fps=24, sample_rate=240)
     pixels = torch.full((5, 512, 512, 3), 100, dtype=torch.uint8)
     pixels[:, ::16] = 220
     warnings = pre_encode_gate(
@@ -2548,18 +2558,11 @@ def arm_interface() -> None:
     )
     expected = {
         "fl2va": (
-            ["prompt", "mute", "seed", "steps", "duration_s", "assets"],
+            ["prompt", "seed", "steps", "duration_s", "assets"],
             "fl2va_dit",
         ),
         "ref2va": (
-            [
-                "prompt",
-                "mute",
-                "seed",
-                "steps",
-                "duration_s",
-                "assets",
-            ],
+            ["prompt", "seed", "steps", "duration_s", "assets"],
             "ref2va_dit",
         ),
     }
@@ -2598,6 +2601,88 @@ def arm_interface() -> None:
             [field["name"] for field in entry["result"]["fields"]],
             ["video", "continuation_frame", "warnings"],
         )
+    print("\n== long-form composition ==")
+    jobs = {entry["name"]: entry for entry in interface["jobs"]}
+    check(
+        "composition and its shot are jobs, beside the untouched actions",
+        set(jobs),
+        {"long_form", "segment"},
+    )
+    # The one property decision #601 turns on: the composer holds NO device while its shots
+    # render. A model slot here would make one attempt hold eight shots.
+    check("long_form declares no model slot", "models" in jobs["long_form"], False)
+    check(
+        "segment holds the H3 model for exactly one shot",
+        jobs["segment"]["models"][0]["class"],
+        "H3Model",
+    )
+    check(
+        "segment is child-callable by its exact module and export",
+        (jobs["segment"]["invocable"]["module"], jobs["segment"]["invocable"]["export"]),
+        ("h3", "segment"),
+    )
+    check(
+        "a shot's identity is frozen in its own request",
+        [field["name"] for field in jobs["segment"]["request"]["fields"]],
+        ["payload", "model"],
+    )
+    # A child call names its whole intent: only the opening frame may be omitted, because a
+    # default would put a value into the intent digest that the caller never wrote.
+    check(
+        "a shot's prompt, seed, length and steps are all named, never defaulted",
+        sorted(jobs["segment"]["invocable"]["defaults"]),
+        ["request/model", "request/payload/first_frame"],
+    )
+    check(
+        "long_form request fields",
+        [field["name"] for field in jobs["long_form"]["request"]["fields"]],
+        [
+            "shots",
+            "subject_definitions",
+            "overall_soundscape",
+            "non_diegetic_music",
+            "steps",
+            "opening_frame",
+        ],
+    )
+    check(
+        "long_form reports the delivered prefix and the shot that stopped it",
+        [field["name"] for field in jobs["long_form"]["result"]["fields"]],
+        [
+            "segments",
+            "requested",
+            "delivered_frames",
+            "fps",
+            "failed_index",
+            "failure_code",
+            "failure_detail",
+            "warnings",
+        ],
+    )
+    check(
+        "a shot list is bounded by what the assembler accepts",
+        next(
+            field["constraints"]
+            for field in jobs["long_form"]["request"]["fields"]
+            if field["name"] == "shots"
+        ),
+        {"max_length": package.MAX_SHOTS, "min_length": 2},
+    )
+    check(
+        "a long-form shot defaults to the longest served cell, not the cheapest",
+        package.Shot(prompt="x", seed=1).duration_s,
+        package.MAX_DURATION_S,
+    )
+    check(
+        "and that cell is longer than the single-clip default",
+        package.MAX_DURATION_S > package.DEFAULT_DURATION_S,
+        True,
+    )
+    check(
+        "one replayed frame leaves the chain at every seam",
+        package.segment_clock([14, 14, 14, 14, 14, 14, 14, 14]),
+        ([0, 345, 689, 1033, 1377, 1721, 2065, 2409], 2753),
+    )
     check("H3 permits Runtime encoded linear leaves", package.H3Model.__encoded_leaves__, "accept")
     check(
         "reference files bind to the explicit Assets parameter",

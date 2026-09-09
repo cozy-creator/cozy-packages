@@ -16,14 +16,14 @@ jobs:
           version: "0.12.7"
       - run: uv python install 3.12
 
-      # H3 defaults and ordinary caller helpers require Runtime 0.11.0 in static checks too.
+      # H3 zero-byte native grafts and caller helpers require Runtime 0.12.0 in static checks too.
       # The light checks need no model libraries. Locked environments below also
       # qualify installed-wheel imports and execution against each exact dependency set.
       - name: Environment
         run: |
           uv venv --python 3.12
           uv pip install \
-            "cozy-runtime>=0.11.0,<1" \
+            "cozy-runtime>=0.12.0,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences

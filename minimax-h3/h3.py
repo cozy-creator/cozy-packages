@@ -21,6 +21,7 @@ from cozy_runtime.author import (
     AssetBound,
     AssetLimits,
     Assets,
+    ChildCallError,
     Context,
     DecodedAudio,
     DecodedVideo,
@@ -30,6 +31,7 @@ from cozy_runtime.author import (
     ImagePreparation,
     InvalidRequest,
     Loader,
+    MediaDecoder,
     Mixed,
     Model,
     OutputError,
@@ -39,6 +41,7 @@ from cozy_runtime.author import (
     UnsupportedInput,
     VideoAsset,
     data_values,
+    invocable,
     sequence_parallel,
     uses_components,
 )
@@ -131,7 +134,6 @@ DurationSeconds = Annotated[
 
 class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Prompt
-    mute: bool = False
     seed: int | None = None
     steps: Steps = DEFAULT_STEPS
     duration_s: DurationSeconds = DEFAULT_DURATION_S
@@ -139,7 +141,6 @@ class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
 
 class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Prompt
-    mute: bool = False
     seed: int | None = None
     steps: Steps = DEFAULT_STEPS
     duration_s: DurationSeconds = DEFAULT_DURATION_S
@@ -522,7 +523,6 @@ def _finish(
     schedule: ScheduleFacts,
     *,
     duration_s: int,
-    mute: bool,
     out: Outputs,
     tel: Telemetry,
     cancel: Any,
@@ -561,7 +561,6 @@ def _finish(
         frames=frames,
         fps=FPS,
         sample_rate=sample_rate,
-        mute=mute,
     )
     if frames != frames_for(duration_s) or channels != 3:
         raise OutputError(
@@ -589,7 +588,7 @@ def _finish(
         video = out.save_video(
             pixels,
             fps=FPS,
-            audio=None if mute else waveform,
+            audio=waveform,
             sample_rate=sample_rate,
         )
         continuation = out.save_image(ImageFrame(width, height, frame_bytes), format="png")
@@ -714,7 +713,6 @@ def fl2va(
         state,
         schedule,
         duration_s=payload.duration_s,
-        mute=payload.mute,
         out=out,
         tel=tel,
         cancel=ctx.raise_if_cancelled,
@@ -783,9 +781,335 @@ def ref2va(
         state,
         schedule,
         duration_s=payload.duration_s,
-        mute=payload.mute,
         out=out,
         tel=tel,
         cancel=ctx.raise_if_cancelled,
         checks=checks,
     )
+
+
+# --- long-form composition -------------------------------------------------------------
+# Decision #601 keeps the shots ordinary. `long_form` holds NO device and NO second ledger:
+# it emits one ordinary `segment` request per shot and Creator mints, records, recovers and
+# bills each one. The hand-off is the previous shot's continuation frame carried BY DIGEST,
+# so a replayed call names byte-identical inputs and Creator recognises the completed child
+# instead of re-buying it. Nothing here holds a decoded segment: only asset handles cross
+# the loop, which is the cliff three community implementations rewrote around (h3a-024 §6.3).
+
+# A hand-off frame is exactly the generation canvas, which the conditioner already bounds
+# at 16.7 M pixels; three bytes a pixel is its decoded ceiling.
+_KEYFRAME_MAX_BYTES = 64 * _MIB
+_KEYFRAME_MAX_DECODED_BYTES = 3 * 16_777_216
+
+MAX_SHOTS = 8  # se-014's own bound: it trims the replayed frame from shots 2-8.
+
+
+class Shot(msgspec.Struct, forbid_unknown_fields=True):
+    """One segment's authored identity.
+
+    `seed` is explicit and required: cl-021 forbids a hidden same-seed or seed+i policy, so
+    the caller freezes every seed in the request or the chain is not reproducible.
+
+    A shot defaults to the LONGEST served cell, not the package default, and it follows
+    `MAX_DURATION_S` rather than naming a number — whatever the envelope serves is what a
+    long-form shot takes. The two defaults answer different questions: se-047 makes a single
+    clip default to the cheapest length so a caller who says nothing is not billed for the
+    longest one, while a long-form piece has already committed to the spend and pays per
+    SEAM. The longest cell halves the seam count against 5 s for ~1.8x the money, and
+    conditioning rows are a fixed per-segment cost, so they amortise ~2.8x better across it.
+    """
+
+    prompt: Prompt
+    seed: int
+    duration_s: DurationSeconds = MAX_DURATION_S
+
+
+class SegmentInput(msgspec.Struct, forbid_unknown_fields=True):
+    """One shot, as an ordinary request.
+
+    `first_frame` is the previous shot's `continuation_frame`. It rides as an asset
+    reference, so the wire carries its digest and the child is content-addressed.
+
+    Nothing here is optional but the opening frame: a child call names its whole intent,
+    because the intent digest is what lets a replay recognise a completed shot instead of
+    re-buying it, and an omitted field would make that digest depend on a default.
+    """
+
+    prompt: Prompt
+    seed: int
+    duration_s: DurationSeconds
+    steps: Steps
+    first_frame: Annotated[
+        ImageAsset | None,
+        AssetBound(
+            media_types=("image/png",),
+            max_bytes=_KEYFRAME_MAX_BYTES,
+            max_decoded_bytes=_KEYFRAME_MAX_DECODED_BYTES,
+        ),
+    ] = None
+
+
+class SegmentOutput(msgspec.Struct):
+    """`H3VideoOutput` without a default factory, which an invocable result may not carry."""
+
+    video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",))]
+    continuation_frame: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
+    warnings: list[str]
+
+
+class SegmentReceipt(msgspec.Struct):
+    """What a delivered shot contributes to the assembly and to a resume."""
+
+    seed: int
+    duration_s: int
+    frames: int
+    start_frame: int
+    video_digest: str
+    video_bytes: int
+    continuation_frame_digest: str
+    first_frame_digest: str
+
+
+class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
+    """A shot list. The identity and audio anchors are repeated verbatim in every segment."""
+
+    shots: Annotated[list[Shot], msgspec.Meta(min_length=2, max_length=MAX_SHOTS)]
+    subject_definitions: str = ""
+    overall_soundscape: str = ""
+    non_diegetic_music: str = ""
+    steps: Steps = DEFAULT_STEPS
+    opening_frame: Annotated[
+        ImageAsset | None,
+        AssetBound(
+            media_types=("image/png",),
+            max_bytes=_KEYFRAME_MAX_BYTES,
+            max_decoded_bytes=_KEYFRAME_MAX_DECODED_BYTES,
+        ),
+    ] = None
+
+
+class LongFormOutput(msgspec.Struct):
+    """The delivered prefix, always, as a MANIFEST.
+
+    Shot outputs are named by digest, never re-emitted as this attempt's own handles: a
+    child's asset belongs to the child's attempt and the runtime refuses a foreign handle
+    outright. Each shot is its own recorded request, so its video is already durable and
+    addressable — this result says which ones, in what order, and on what clock. A failed
+    shot names itself and leaves the shots before it intact and assemblable: a chain that
+    only pays out when every shot lands turns one bad segment into a total loss.
+
+    Nothing here restates anything else. `segments` carries how many landed and in what
+    order, `failed_index` is -1 exactly when every shot did, and the delivered length is
+    the exact rational `delivered_frames / fps` — the clock a master audio track must
+    match to within one AAC frame or be refused.
+    """
+
+    segments: list[SegmentReceipt]
+    requested: int
+    delivered_frames: int
+    fps: int
+    failed_index: int
+    failure_code: str
+    failure_detail: str
+    warnings: list[str]
+
+
+_ANCHOR_BLOCKS = ("subject_definitions", "overall_soundscape", "non_diegetic_music")
+
+
+def compose_shot_prompt(shot: Shot, payload: LongFormInput, *, index: int) -> str:
+    """Upstream's own prompt schema, repeated verbatim in every segment.
+
+    `subject_definitions` is the free textual identity anchor: it does not drift and it does
+    not consume the reference budget. `overall_soundscape` / `non_diegetic_music` are the
+    only cross-segment audio anchors that carry at all (h3a-024 §3.4, §4).
+    """
+    parts = [f"[Shot {index + 1}]", shot.prompt]
+    for name in _ANCHOR_BLOCKS:
+        value = getattr(payload, name).strip()
+        if value:
+            parts.append(f"{name}: {value}")
+    composed = "\n\n".join(parts)
+    if len(composed) > 4096:
+        raise InvalidRequest(
+            f"shot {index + 1}'s prompt and the repeated anchor blocks are {len(composed)} "
+            "characters; H3 admits 4096. Shorten the anchors, which every shot repeats.",
+            fields=["shots"],
+        )
+    return composed
+
+
+def segment_clock(durations: Sequence[int]) -> tuple[list[int], int]:
+    """Start frame of each shot and the delivered total, in exact integer frames.
+
+    Exactly one replayed frame leaves the chain at every seam. This is integer arithmetic
+    over frame counts and the caller turns it into seconds as `Fraction(frames, FPS)` —
+    never a per-seam `round(sample_rate / fps)`, whose residue accumulated +8.33 ms per clip.
+    """
+    starts: list[int] = []
+    total = 0
+    for index, seconds in enumerate(durations):
+        starts.append(total)
+        total += frames_for(seconds) - (1 if index else 0)
+    return starts, total
+
+
+def _decoded_keyframe(decoder: MediaDecoder, asset: ImageAsset | None) -> Image | None:
+    """Runtime decodes; the decoder's projection spells one union for every asset kind."""
+    if asset is None:
+        return None
+    image = decoder.value(asset)
+    if not isinstance(image, Image):
+        raise InvalidRequest("first_frame is not an image", fields=["first_frame"])
+    _validate_ratio(image.width, image.height, "first_frame")
+    return image
+
+
+@invocable(defaults={"model": _DEFAULT_MODEL_LADDER})
+async def segment(
+    ctx: Context,
+    *,
+    payload: SegmentInput,
+    model: H3Model,
+    decoder: MediaDecoder,
+    out: Outputs,
+    tel: Telemetry,
+) -> SegmentOutput:
+    """One shot of a chain, as an ordinary request.
+
+    This is `fl2va` with the keyframe carried as an asset reference rather than a decoded
+    upload, so a parent can bind it to the previous shot's `continuation_frame` by digest.
+    It is registered as a job because only an invocable job is child-callable; it holds the
+    device for exactly one shot, which is what decision #601 requires.
+    """
+    ctx.raise_if_cancelled()
+    view = model.for_request(ctx, seed=payload.seed)
+    checks = NumericalChecks(tel, model.pipe.resident)
+    with tel.stage("prepare", overall_range=(0.00, 0.03)):
+        first = _decoded_keyframe(decoder, payload.first_frame)
+        state = model.pipe.start_fl2va(
+            prompt=payload.prompt,
+            first_frame=first,
+            last_frame=None,
+            generator=model.pipe.generator(view.generator),
+            steps=payload.steps,
+            frames=frames_for(payload.duration_s),
+        )
+    with tel.stage("condition_text", overall_range=(0.03, 0.08)):
+        model.condition_text("fl2va", state, checks=checks)
+    if first is not None:
+        with tel.stage("condition_media", overall_range=(0.08, 0.15)):
+            model.condition_fl2va_media(state, checks=checks)
+    with tel.stage("denoise", overall_range=(0.15, 0.85)):
+        schedule = model.sample_fl2va(
+            state,
+            on_step=tel.step_callback(payload.steps, stage="denoise", overall_range=(0.15, 0.85)),
+            cancel=ctx.raise_if_cancelled,
+            checks=checks,
+        )
+    shot = _finish(
+        model,
+        "fl2va",
+        state,
+        schedule,
+        duration_s=payload.duration_s,
+        out=out,
+        tel=tel,
+        cancel=ctx.raise_if_cancelled,
+        checks=checks,
+    )
+    return SegmentOutput(shot.video, shot.continuation_frame, list(shot.warnings))
+
+
+app.job(segment, emits_media=True)
+
+
+async def long_form(
+    ctx: Context,
+    payload: LongFormInput,
+    tel: Telemetry,
+) -> LongFormOutput:
+    """Compose a shot list into one chain of ordinary shot requests.
+
+    Registered as a job, because only a job attempt is handed its package's own invocable
+    exports, and because Creator gates a composition parent as CPU-only — the same property
+    this function needs. It declares no model on purpose: this attempt holds no device while
+    eight shots render, which is decision #601's stated falsifier. Every shot is an ordinary
+    `segment` request that Creator mints, bills, cancels and — on a replay — recognises
+    rather than re-buys.
+
+    A failed shot ends the chain and is REPORTED, not raised: the shots before it are
+    already durable, content-addressed outputs and remain assemblable on their own.
+    """
+    ctx.raise_if_cancelled()
+    prompts = [
+        compose_shot_prompt(shot, payload, index=index)
+        for index, shot in enumerate(payload.shots)
+    ]
+    starts, _ = segment_clock([shot.duration_s for shot in payload.shots])
+    receipts: list[SegmentReceipt] = []
+    warnings: list[str] = []
+    frame = payload.opening_frame
+    failed_index, failure_code, failure_detail = -1, "", ""
+    for index, shot in enumerate(payload.shots):
+        ctx.raise_if_cancelled()
+        try:
+            # The runtime injects a shot's model, decoder, outputs and telemetry; a caller
+            # names only the operation arguments, which the proxy's type cannot express.
+            shot_result = await segment(  # type: ignore[call-arg]
+                payload=SegmentInput(
+                    prompt=prompts[index],
+                    seed=shot.seed,
+                    duration_s=shot.duration_s,
+                    steps=payload.steps,
+                    first_frame=frame,
+                )
+            )
+        except ChildCallError as failure:
+            failed_index = index
+            failure_code = failure.code
+            failure_detail = str(failure)[:512]
+            break
+        receipts.append(
+            SegmentReceipt(
+                seed=shot.seed,
+                duration_s=shot.duration_s,
+                frames=frames_for(shot.duration_s),
+                start_frame=starts[index],
+                video_digest=shot_result.video.digest,
+                video_bytes=shot_result.video.size_bytes,
+                continuation_frame_digest=shot_result.continuation_frame.digest,
+                first_frame_digest="" if frame is None else frame.digest,
+            )
+        )
+        warnings.extend(shot_result.warnings)
+        frame = shot_result.continuation_frame
+    if not receipts:
+        raise OutputError(
+            f"shot 1 of {len(payload.shots)} failed ({failure_code}): {failure_detail}"
+        )
+    _, delivered_frames = segment_clock([receipt.duration_s for receipt in receipts])
+    if len(receipts) < 2:
+        warnings.append(
+            "one shot delivered: its video stands alone and there is no seam to assemble"
+        )
+    tel.log(
+        "h3 long-form chain",
+        requested=len(payload.shots),
+        delivered=len(receipts),
+        delivered_frames=delivered_frames,
+        failed_index=failed_index,
+    )
+    return LongFormOutput(
+        segments=receipts,
+        requested=len(payload.shots),
+        delivered_frames=delivered_frames,
+        fps=FPS,
+        failed_index=failed_index,
+        failure_code=failure_code,
+        failure_detail=failure_detail,
+        warnings=warnings,
+    )
+
+
+app.job(long_form)
