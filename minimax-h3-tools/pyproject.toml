@@ -1,9 +1,10 @@
 [project]
 name = "minimax-h3-tools"
-version = "2.8.0"
+version = "2.9.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cozy-runtime>=0.12.0,<1",
+    "minimax-h3>=1.11.0,<2",
     "msgspec>=0.19",
     "numpy>=1.26",
     "torch>=2.13,<3",

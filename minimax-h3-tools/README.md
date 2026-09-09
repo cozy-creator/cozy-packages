@@ -22,6 +22,18 @@ modulation and quantized replacement tensors remain mandatory, and TensorFS stil
 checks the complete destination order. This does not accept a pruned or quantized
 checkpoint as a substitute for the full BF16 source.
 
+Pruned checkpoint configs describe the ordered AdaLN rows as `cozy_h3.table_keys`:
+each final-normalization row names an exact float32 timestep, and each block-modulation
+row names a timestep and modality. Sampling-plan hashes remain generation provenance;
+they do not decide serving compatibility. The shared parser comes from the ordinary
+`minimax-h3` dependency, so producer and inference validate the same metadata.
+
+`restamp` preserves explicit valid row labels and validates them against the stored table
+dimensions. For the original checkpoint stamps it first proves the old 345-frame plan
+has identical ordered rows, then replaces its legacy digest with those labels. Unknown
+or changed historical plans require regenerating the tables. This metadata upgrade uses
+the same transaction as video-VAE normalization, inheriting all other tensor objects.
+
 ## Lanes
 
 A lane is a NAME plus, per component, what this producer does to it. The whole catalogue

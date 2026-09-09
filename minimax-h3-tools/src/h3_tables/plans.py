@@ -66,6 +66,11 @@ class TimestepPlan:
     block_rows: tuple[tuple[int, int], ...]
     steps: tuple[int, ...]
 
+    @property
+    def table_keys(self) -> dict[str, Any]:
+        """The exact ordered row meanings already validated in the producer handoff."""
+        return cast(dict[str, Any], canonical_json.decode(self.canonical_bytes)["table_keys"])
+
 
 def _f32(value: float) -> float:
     return float(struct.unpack("<f", struct.pack("<f", value))[0])

@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Any, cast
 
 from cozy_runtime.author import canonical_json
+from h3_table_layout import TableLayout
 
 from .kernel import H3Topology
-from .plans import LAUNCH_PLAN_DIGESTS, Task, TimestepPlan
+from .plans import Task, TimestepPlan
 
 _SOURCE_SECTIONS = {
     "transformer",
@@ -22,19 +23,6 @@ _TEXT_CONDITIONER_CONFIG = {
     "conditioning_hidden_state": 50,
     "output": "pre_norm",
     "language_model_head": False,
-}
-_CURRENT_MODEL_CONFIG = (
-    "sha256:c6170ba27c2730a8aad46b1faf07a436140427bd5c1c9457c0d1c31720f8a1db"
-)
-_CURRENT_MODEL_CONFIG_LENGTH = 5817
-#: The committed config under the turbo plan stamps: identical constructor facts, the PDD-8
-#: plan digests in `cozy_h3.timestep_plan_digest`.
-_TURBO_MODEL_CONFIG = (
-    "sha256:003c0e4253751b1ff712dd6bdca27534aeea6df7f7f2e6ca9dfb64449090c67c"
-)
-_ADMITTED_MODEL_CONFIGS: dict[str, int] = {
-    _CURRENT_MODEL_CONFIG: _CURRENT_MODEL_CONFIG_LENGTH,
-    _TURBO_MODEL_CONFIG: _CURRENT_MODEL_CONFIG_LENGTH,
 }
 
 
@@ -78,24 +66,17 @@ def parse_full_config(raw: bytes) -> dict[str, dict[str, Any]]:
 
 
 def parse_production_config(raw: bytes) -> dict[str, dict[str, Any]]:
-    """Recover the official source sections from the one exact production config.
-
-    The package asset is the final dual-task config, so it also pins both task/plan stamps.
-    Removing those package-owned stamps recovers the official Diffusers constructor facts;
-    no second model-config document is needed.
-    """
+    """Recover official constructor facts from the producer's packaged dual-task config."""
     try:
         value = canonical_json.decode(raw)
     except ValueError as exc:
         raise ValueError("production H3 model config is not JSON") from exc
     if (
         not isinstance(value, dict)
-        or canonical_json.digest(value) != _CURRENT_MODEL_CONFIG
-        or len(raw) != _CURRENT_MODEL_CONFIG_LENGTH
         or set(value)
         != {"fl2va_dit", "ref2va_dit", "text_encoder", "video_vae", "audio_vae"}
     ):
-        raise ValueError("model config is not the exact current dual-task H3 config")
+        raise ValueError("model config is not a dual-task H3 config")
     sections: dict[str, dict[str, Any]] = {}
     stamps: tuple[tuple[str, str, Task], ...] = (
         ("fl2va_dit", "transformer", "fl2va"),
@@ -107,12 +88,15 @@ def parse_production_config(raw: bytes) -> dict[str, dict[str, Any]]:
             raise TypeError(f"model config {target!r} is not a mapping")
         config = dict(row)
         stamp = config.pop("cozy_h3", None)
-        if stamp != {
-            "task": expected_task,
-            "modulation": "adaln-pruned",
-            "timestep_plan_digest": LAUNCH_PLAN_DIGESTS[expected_task],
-        }:
-            raise ValueError(f"model config {target!r} changed its task/plan stamp")
+        if (
+            not isinstance(stamp, dict)
+            or set(stamp) != {"task", "modulation", "table_keys"}
+            or stamp["task"] != expected_task
+            or stamp["modulation"] != "adaln-pruned"
+            or not isinstance(stamp["table_keys"], dict)
+        ):
+            raise ValueError(f"model config {target!r} changed its task/table metadata")
+        TableLayout.parse(stamp["table_keys"])
         sections[source] = config
     for component in ("text_encoder", "video_vae", "audio_vae"):
         row = value[component]
@@ -148,7 +132,7 @@ def task_config(
     config["cozy_h3"] = {
         "task": plan.task,
         "modulation": "adaln-pruned",
-        "timestep_plan_digest": plan.digest,
+        "table_keys": plan.table_keys,
     }
     return {component: config}
 
@@ -156,6 +140,8 @@ def task_config(
 def dual_adaln_pruned_config(
     sections: dict[str, dict[str, Any]], fl2va: TimestepPlan, ref2va: TimestepPlan
 ) -> bytes:
+    if fl2va.task != "fl2va" or ref2va.task != "ref2va":
+        raise ValueError("dual AdaLN-pruned config requires each task's own table layout")
     document = {
         "audio_vae": sections["audio_vae"],
         "fl2va_dit": task_config(sections, fl2va)["fl2va_dit"],
@@ -163,7 +149,4 @@ def dual_adaln_pruned_config(
         "text_encoder": sections["text_encoder"],
         "video_vae": sections["video_vae"],
     }
-    raw = canonical_json.encode(document)
-    if _ADMITTED_MODEL_CONFIGS.get(canonical_json.digest(document)) != len(raw):
-        raise ValueError("dual AdaLN-pruned config is not one of the exact admitted H3 configs")
-    return raw
+    return canonical_json.encode(document)

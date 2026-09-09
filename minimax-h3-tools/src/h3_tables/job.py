@@ -35,6 +35,7 @@ from cozy_runtime.derive.quantization import (
     prepare_quantization,
     quantize_component_into,
 )
+from h3_table_layout import TableLayout
 
 from . import adaln_operations as _adaln_operations
 from . import lanes as _lanes
@@ -56,6 +57,7 @@ from .lanes import (
     lane_treatments,
     write_cast,
 )
+from .legacy_config import upgrade_legacy_table_config
 from .model_config import (
     dual_adaln_pruned_config,
     dual_full_config,
@@ -1220,49 +1222,48 @@ def _source_modulation(source: WeightsSource, sections: Mapping[str, dict[str, A
 
 
 
-def _check_emitted_config(document: bytes, modulation: str) -> None:
-    """Refuse a config document this package cannot stand behind, BEFORE it is written.
-
-    The document is emitted from package assets, so its correctness depends on which
-    `minimax-h3-tools` is deployed rather than on anything the request declares. Left
-    unchecked, a stale wheel writes a checkpoint that looks fine and refuses at
-    CONSTRUCTION — `artifact config 'fl2va_dit' 'timestep_plan_digest' is ..., expected
-    ...` — discovered at serve time on a rented pod. This is the same comparison
-    `official.py:_validate_model_contract` makes later, made here for the price of one
-    decode of 5,817 bytes (se-053).
-
-    The `cozy_h3` structure is CLOSED on the serving side, and the two modulations do not
-    carry the same keys: a FULL lane has no plan to stamp, so its extension is two keys,
-    and an AdaLN-pruned one is three. A three-key FULL document is exactly the shape a
-    closed check catches late and expensively.
-    """
+def _check_emitted_config(
+    document: bytes, modulation: str, source: WeightsSource
+) -> None:
+    """Validate row meanings and stored table dimensions before inheriting table bytes."""
     value = canonical_json.decode(document)
     fields = {"task", "modulation"} | (
-        {"timestep_plan_digest"} if modulation == "adaln-pruned" else set()
+        {"table_keys"} if modulation == "adaln-pruned" else set()
     )
+    tensors = {(tensor.component, tensor.key): tensor for tensor in source.tensors}
     for task, component in TARGET_COMPONENT.items():
         extension = value[component]["cozy_h3"]
-        if set(extension) != fields:
+        if set(extension) not in (fields, fields | {"generating_projection_digest"}):
             raise UnsupportedInput(
-                f"emitted {component} cozy_h3 is {sorted(extension)}, and a {modulation} "
-                f"lane carries exactly {sorted(fields)}",
+                f"emitted {component} cozy_h3 has unexpected metadata fields",
                 code="h3_restamp_config_shape",
             )
-        if extension["modulation"] != modulation:
+        if extension["modulation"] != modulation or extension["task"] != task:
             raise UnsupportedInput(
-                f"emitted {component} declares modulation {extension['modulation']!r} for a "
-                f"{modulation} source",
+                f"emitted {component} task/modulation differs from the source tensors",
                 code="h3_restamp_config_shape",
             )
         if modulation == "adaln-pruned":
-            expected = _production_plan(task).digest
-            if extension["timestep_plan_digest"] != expected:
-                raise UnsupportedInput(
-                    f"emitted {component} stamps plan {extension['timestep_plan_digest']} "
-                    f"but this package's {task} plan is {expected}; the config asset and the "
-                    "timestep-plan asset disagree, so the wheel is half-restamped",
-                    code="h3_restamp_plan_skew",
-                )
+            layout = TableLayout.parse(extension["table_keys"])
+            plan = replace(
+                _production_plan(task), timesteps=layout.timesteps, block_rows=layout.block_keys
+            )
+            topology = H3Topology.from_config(value[component])
+            for key, shape in table_shapes(topology, plan).items():
+                tensor = tensors.get((component, key))
+                if (
+                    tensor is None
+                    or tensor.logical_dtype != "bf16"
+                    or tensor.encoding != PLAIN_SPEC
+                    or tensor.shape != shape
+                    or len(tensor.parts) != 1
+                    or (tensor.parts[0].name, tensor.parts[0].dtype, tensor.parts[0].shape)
+                    != ("value", "bf16", shape)
+                ):
+                    raise UnsupportedInput(
+                        f"{component}.{key} stored dimensions/encoding differ from its table keys",
+                        code="h3_restamp_table_layout",
+                    )
 
 
 @app.job(
@@ -1278,24 +1279,11 @@ def restamp(
     artifacts: WeightsSink,
     tel: Telemetry,
 ) -> RestampResult:
-    """Re-emit one published lane under the CURRENT package-owned config and destinations.
+    """Upgrade a lane's legacy table metadata and normalize video-VAE decode operands.
 
-    Two things drift out from under a published checkpoint without any weight changing:
-    the config document this package owns (the task/plan stamps `model-config.json`
-    carries), and the dtype the serving code destines a component to. `fill.py` refuses a
-    stored dtype or length that differs from the destination and TensorFS pins the config
-    by digest, so both are re-publishes — and neither is a reason to recompute a byte.
-
-    So this reads NOTHING but the rows it actually rewrites. Both DiTs, the conditioner and
-    the audio VAE are inherited by reference through the zero-read/zero-hash inherit gate;
-    only the video VAE's decode operands are read, cast and written, and only while the
-    source still carries them at float32. `retable` is the wrong tool for this: it stages
-    the complete BF16 checkpoint to recompute table rows that are a pure function of a plan
-    document whose sigmas did not move.
-
-    The modulation is derived from the source's own rows, never from the request: a
-    checkpoint that is neither cleanly FULL nor cleanly AdaLN-pruned is not one this
-    producer emitted.
+    Existing explicit row labels are preserved. Legacy plan stamps are migrated only after
+    proving their historical table order and stored dimensions. DiTs, conditioner and audio
+    VAE bytes are inherited; only video-VAE operands that require casting are read/written.
     """
     del payload
     sections = parse_production_config(_asset("model-config.json"))
@@ -1324,14 +1312,11 @@ def restamp(
     for component, selection in pending.items():
         targets[component] = _lanes.apply(targets[component], selection)
 
-    document = (
-        dual_full_config(sections)
-        if modulation == "full"
-        else dual_adaln_pruned_config(
-            sections, _production_plan("fl2va"), _production_plan("ref2va")
-        )
+    document = upgrade_legacy_table_config(
+        artifacts.config(lane, "model"),
+        {task: _production_plan(task) for task in TASKS},
     )
-    _check_emitted_config(document, modulation)
+    _check_emitted_config(document, modulation, granted)
     order = current_order(_asset("whole-order.json"))
     rows = _full_order(sections, order.rows) if modulation == "full" else order.rows
 
@@ -1374,12 +1359,7 @@ def restamp(
                         default=None,
                     ),
                 )
-            # UNCONDITIONAL, and this is the whole reason the job exists. The restamp has
-            # two independent effects — the video VAE's bytes and this document — and a
-            # lane whose VAE is already at the destination still needs the document. Gate
-            # the write on `pending` and a lane restamped before the plan assets land can
-            # never be repaired by re-running: the second run would resolve inert and do
-            # nothing. Only the READ is skipped when there is nothing left to cast.
+            # Metadata migration still runs when every VAE operand is already normalized.
             transaction.add_config("model", document)
             receipt = transaction.commit()
     tel.metric("h3.source_bytes", float(stats.source_bytes_read), unit="bytes")
