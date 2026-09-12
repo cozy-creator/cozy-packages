@@ -37,7 +37,7 @@ The existing facade and `quantize_component_into` remain the numerical execution
 
 Shared memo identity must include source manifest, exact canonical plan bytes, encoding/options, Runtime operation implementation/native dependency identities and actual relevant numeric environment. Caller script edits and family code edits that leave plan bytes unchanged must hit. Plan changes must miss. Runtime/code or relevant numerical dependency changes must miss. Validate this on actual retained request/memo rows, not only a descriptor.
 
-The shared output bound must support existing H3 `MAX_QUANTIZED_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_PRUNED_BYTES`, 70,867,091,456 B (66 GiB +128 KiB), not silently inherit the 32 GiB single-DiT bound or the 16 GiB SDXL slot. Output admission remains bounded; derive the declared shared ceiling from the existing supported contract, with ordinary model grants and transaction custody unchanged.
+The shared output declaration uses the existing platform `MAX_WEIGHTS_NEW_BYTES = 2**53 - 1` ceiling, per root's reviewed Runtime9bc69e9f design. It does not embed H3's family-sized ceiling. Creator does not reserve that declared maximum; native admission accounts the actual additions. Ordinary source grants and transaction custody remain unchanged. Legacy family multi-lane declarations retain their existing bounds.
 
 ## Required verification
 
