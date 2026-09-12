@@ -170,13 +170,14 @@ once available. With both checkpoint references available, a turbo invocation
 selects their exact releases and lanes independently:
 
 ```sh
-cozy run paul/minimax-h3/fl2va_turbo \
+cozy run local/minimax-h3/fl2va_turbo \
   'prompt=<your H3 prompt>' duration_s=5 seed=24680 \
   'model.base_model=<org/base-model>@<release>/<lane>' \
   'model.turbo_lora=<org/turbo-lora>@<release>/<lane>' \
   --rental=<existing-rental-name> --await
 ```
 
+For the published installation, use `paul/minimax-h3/fl2va_turbo` instead.
 Repeat with explicitly selected two-H100 and four-H100 rentals for the GPU proof.
 The rental's device group selects the parallel degree; there is no request field
 for it. Record the installed package release, both checkpoint digests, worker
