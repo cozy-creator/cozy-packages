@@ -808,11 +808,11 @@ wheels = [
 
 [[package]]
 name = "tensorfs"
-version = "0.3.38"
+version = "0.3.36"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0c/76/c11039d9c33999b8e0cf85f7a639c6b89b4ce6537085960febcac147b6af/tensorfs-0.3.38.tar.gz", hash = "sha256:510067f09756a90f2bb650c392c7b0c0f69ff38d767bfaaec67cb104f483f2b4", size = 734160, upload-time = "2026-09-09T05:14:07.716Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d1/49/a336c16518e0a3725eb4a43b9649f13a838752c4b459fe453ba496f1a8f4/tensorfs-0.3.36.tar.gz", hash = "sha256:b0065e20ffd55065888965c6c5398162f1efbcdc3bee0b744ea2fd9d909b9b5e", size = 732795, upload-time = "2026-09-09T04:38:27.295Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4a/13/4e99f666c069849a3dd28346b50d17ab22dc5c7414bc59682cea7cb1ea47/tensorfs-0.3.38-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:131e208fec099ae79aab5452fdc084373bf44e09c435372f845f796a51680385", size = 7648674, upload-time = "2026-09-09T05:14:05.488Z" },
+    { url = "https://files.pythonhosted.org/packages/06/42/f90f95a2b3ac6dfc0fcaff96fc97167940a89e6aa8937db4a206a649d7da/tensorfs-0.3.36-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d3b4f037c22c0fef76d3dcc45b6d9dea329bb43f2646b4a2ba714e6b0e79b10f", size = 7652013, upload-time = "2026-09-09T04:38:25.693Z" },
 ]
 
 [[package]]
