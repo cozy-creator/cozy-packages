@@ -39,6 +39,7 @@ from cozy_runtime.author.publication import (
 )
 
 from .configuration import Policy, require_publishable, validate_policy
+from .image_files import project_image
 
 
 class Assessment:
@@ -93,8 +94,7 @@ class Assessment:
         if result.guidance != workload.payloads[index]["guidance"] or result.hidiffusion_applied:
             raise DataError("the actual render guidance or HiDiffusion differs from the workload")
         self.requests.add(pending.request_id)
-        media = self.out.temporary_file(".png")
-        media.write_bytes(result.image.read_bytes())
+        media = project_image(result.image, self.out)
         self.images[str(media)] = result.image
         tree = observation.capture.tree
         self.captures[str(tree.path)] = tree

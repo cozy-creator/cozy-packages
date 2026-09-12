@@ -17,6 +17,7 @@ from cozy_runtime.author import ChildCallError, FileAsset, ImageAsset, ModelArti
 from .composition import Assessment, retain_report
 from .control_inputs import ControlInputs, policy_bytes
 from .control_jobs import BLUR_RADIUS, FLAT_RGB, corrupt_media
+from .image_files import retain_image
 
 
 async def run_control(
@@ -76,9 +77,7 @@ async def run_control(
         # Keep review images as ordinary FileAssets, without altering capture/report joins.
         evidence["review_images"] = []
         for rendered_image in assessment.images.values():
-            retained = await out.commit(
-                out.save_bytes(rendered_image.read_bytes(), media_type="image/png")
-            )
+            retained = await retain_image(rendered_image, out)
             outputs.append(retained)
             evidence["review_images"].append(
                 {"image": rendered_image.digest, "file": retained.digest}
@@ -141,10 +140,8 @@ async def run_control(
                 checklist_id=workload.checklist_ids[index], checklists=checklists,
                 metrics=("element_recall",), judge=judge,
             )
-            review = await out.commit(out.save_bytes(image.read_bytes(), media_type="image/png"))
-            baseline_review = await out.commit(
-                out.save_bytes(original.read_bytes(), media_type="image/png")
-            )
+            review = await retain_image(image, out)
+            baseline_review = await retain_image(original, out)
             outputs.extend((review, baseline_review, single.facts, pair.facts, quality.facts))
             evidence["observations"].append({
                 "index": index,
