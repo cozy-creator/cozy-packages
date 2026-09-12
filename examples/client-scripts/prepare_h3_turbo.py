@@ -13,52 +13,37 @@
 # fl2va_adapter = "paul/minimax-h3@1.0.0-h3-audit.1/fl2va-adapter"
 # ref2va_adapter = "paul/minimax-h3@1.0.0-h3-audit.1/ref2va-adapter"
 # [tool.cozy.weights]
-# full_input = 1
-# fl2va_input = 1
-# ref2va_input = 1
+# model = 536870912
 # ///
-"""Produce and publish H3 turbo with an ordinary private Python transaction.
+"""Produce and publish the standalone H3 turbo adapter through an ordinary Python main.
 
-Run with `cozy run ./examples/client-scripts/prepare_h3_turbo.py --rental=NAME --await`.
-The three input holds inherit native objects without rewriting tensor data.
-The reusable producer owns PDD arithmetic; this script owns composition and publication.
+Run with `cozy run ./examples/client-scripts/prepare_h3_turbo.py --await`.
+Add `--rental=NAME` to use an existing rental.
 """
 
-from collections.abc import Awaitable, Callable
-from typing import cast
-
-from cozy_runtime.author import Model, ModelArtifact, WeightsConfig, WeightsSink, WeightsTarget
+from cozy_runtime.author import Context, Telemetry, WeightsSink
 from cozy_runtime.author.publication import publish_release, upload_checkpoint
-from h3_tables.turbo import prepare_turbo
+from h3_tables.source import H3FullTransformer
+from h3_tables.turbo import build_turbo_adapter
 
 
 async def main(
+    ctx: Context,
     *,
-    full: Model[object],
-    fl2va_adapter: Model[object],
-    ref2va_adapter: Model[object],
+    full: H3FullTransformer,
+    fl2va_adapter: H3FullTransformer,
+    ref2va_adapter: H3FullTransformer,
     weights: WeightsSink,
+    tel: Telemetry,
 ) -> dict[str, str]:
-    inputs = {}
-    for slot, output, model in (
-        ("full", "full_input", full),
-        ("fl2va_adapter", "fl2va_input", fl2va_adapter),
-        ("ref2va_adapter", "ref2va_input", ref2va_adapter),
-    ):
-        structure = weights.structure(model)
-        inputs[slot] = weights.derive(
-            output,
-            sources={"input": model},
-            targets={
-                row.component: WeightsTarget("input", row.component) for row in structure.tensors
-            },
-            configs={name: WeightsConfig("input", name) for name in structure.configs},
-            order=tuple((row.component, row.key) for row in structure.tensors),
-        ).artifact
-
-    # Managed calls accept artifact references and inject the implementation services.
-    produce = cast(Callable[..., Awaitable[ModelArtifact]], prepare_turbo)
-    turbo = await produce(**inputs)
+    turbo = build_turbo_adapter(
+        ctx,
+        full=full,
+        fl2va_adapter=fl2va_adapter,
+        ref2va_adapter=ref2va_adapter,
+        weights=weights,
+        tel=tel,
+    )
     checkpoint = await upload_checkpoint(turbo, destination="paul/minimax-h3-turbo-lora")
     release = await publish_release(
         destination="paul/minimax-h3-turbo-lora",

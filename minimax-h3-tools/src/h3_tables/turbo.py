@@ -301,8 +301,7 @@ def _produce(
         return transaction.commit().artifact
 
 
-@invocable(memoize=True)
-async def prepare_turbo(
+def build_turbo_adapter(
     ctx: Context,
     *,
     full: H3FullTransformer,
@@ -333,4 +332,24 @@ async def prepare_turbo(
         adapters={"fl2va": fl2va_adapter, "ref2va": ref2va_adapter},
         configs=configs,
         topologies=topologies,
+    )
+
+
+@invocable(memoize=True)
+async def prepare_turbo(
+    ctx: Context,
+    *,
+    full: H3FullTransformer,
+    fl2va_adapter: H3FullTransformer,
+    ref2va_adapter: H3FullTransformer,
+    weights: WeightsSink,
+    tel: Telemetry,
+) -> ModelArtifact:
+    return build_turbo_adapter(
+        ctx,
+        full=full,
+        fl2va_adapter=fl2va_adapter,
+        ref2va_adapter=ref2va_adapter,
+        weights=weights,
+        tel=tel,
     )
