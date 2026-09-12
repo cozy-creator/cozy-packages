@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import msgspec
 import numpy as np
@@ -28,6 +29,9 @@ from cozy_runtime.derive.quantization import QuantizationSource
 
 MAX_NEW_BYTES = 1 << 30
 MAX_PART_BYTES = 16 << 20
+
+Component = Literal["text_encoder", "text_encoder_2", "unet", "vae"]
+_COMPONENTS: tuple[Component, ...] = ("text_encoder", "text_encoder_2", "unet", "vae")
 
 
 class SourceTensor(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -145,7 +149,11 @@ def _normalize(
             return receipt.artifact
         # The stock CLIP position IDs are reconstructed by the constructor. A checkpoint
         # that changed their values is outside this mapping even if its shapes still match.
-        position = plan.source.get("text_encoder", {}).get("text_model.embeddings.position_ids")
+        position = (
+            plan.source.get("text_encoder", {}).get("text_model.embeddings.position_ids")
+            if any(route.component == "text_encoder" for route in plan.targets)
+            else None
+        )
         if position is not None:
             count = math.prod(position.shape)
             if position.dtype != "i64" or not 0 < count <= 77:
@@ -178,9 +186,106 @@ def _normalize(
         return transaction.commit().artifact
 
 
-@invocable(memoize=True)
-async def normalize(
-    ctx: Context, *, source: QuantizationSource, weights: WeightsSink, tel: Telemetry
+def _component_plan(plan: NormalizationPlan, component: Component) -> NormalizationPlan:
+    if component not in _COMPONENTS or component not in plan.source:
+        raise UnsupportedInput("unknown SDXL normalization component")
+    return NormalizationPlan(
+        plain=plan.plain,
+        source=plan.source,
+        targets=tuple(route for route in plan.targets if route.component == component),
+        configs={
+            name: value
+            for name, value in plan.configs.items()
+            if name == component or (component == "unet" and name not in _COMPONENTS)
+        },
+    )
+
+
+def _assemble_normalized(
+    sources: Mapping[str, QuantizationSource],
+    weights: WeightsSink,
+    ctx: Context,
+    plan: NormalizationPlan,
 ) -> ModelArtifact:
-    """Normalize one reviewed unquantized SDXL source using bounded native custody."""
-    return _normalize(source, weights, ctx, tel, PLAN)
+    if set(sources) != set(_COMPONENTS):
+        raise UnsupportedInput("normalized SDXL assembly requires all four components")
+    configs: dict[str, WeightsConfig] = {}
+    for component in _COMPONENTS:
+        ctx.raise_if_cancelled()
+        source = sources[component]
+        selected = _component_plan(plan, component)
+        observed = weights.structure(source)
+        expected_order = tuple((row.component, row.key) for row in selected.targets)
+        if (
+            tuple((row.component, row.key) for row in observed.tensors) != expected_order
+            or set(observed.configs) != set(selected.configs)
+        ):
+            raise UnsupportedInput(f"normalized {component} key, order or config set differs")
+        for actual, expected in zip(observed.tensors, selected.targets, strict=True):
+            if (
+                actual.logical_dtype != "f16"
+                or actual.shape != expected.shape
+                or actual.encoding != plan.plain
+                or len(actual.parts) != 1
+                or actual.parts[0].name != "value"
+                or actual.parts[0].dtype != "f16"
+                or actual.parts[0].shape != expected.shape
+            ):
+                raise UnsupportedInput(f"normalized {component}.{expected.key} geometry differs")
+        for name, value in selected.configs.items():
+            if weights.config(source, name) != canonical_json.encode(value):
+                raise UnsupportedInput(f"normalized {component} config {name} differs")
+            configs[name] = WeightsConfig(source=component, source_config=name)
+    with weights.open(
+        "model",
+        sources=sources,
+        targets={
+            name: WeightsTarget(source=name, source_component=name) for name in _COMPONENTS
+        },
+        configs=configs,
+        order=tuple((row.component, row.key) for row in plan.targets),
+    ) as transaction:
+        return transaction.commit().artifact
+
+
+@invocable(memoize=True)
+async def normalize_component(
+    ctx: Context,
+    *,
+    source: QuantizationSource,
+    component: Component,
+    weights: WeightsSink,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """Normalize one SDXL component with the original bounded byte transformations."""
+    return _normalize(source, weights, ctx, tel, _component_plan(PLAN, component))
+
+
+@invocable(memoize=True)
+async def assemble_normalized(
+    ctx: Context,
+    *,
+    text_encoder: QuantizationSource,
+    text_encoder_2: QuantizationSource,
+    unet: QuantizationSource,
+    vae: QuantizationSource,
+    weights: WeightsSink,
+) -> ModelArtifact:
+    """Validate and graft normalized components into the exact SDXL construction order."""
+    return _assemble_normalized(
+        {"text_encoder": text_encoder, "text_encoder_2": text_encoder_2, "unet": unet, "vae": vae},
+        weights,
+        ctx,
+        PLAN,
+    )
+
+
+async def normalize(*, source: ModelArtifact) -> ModelArtifact:
+    """Compose reusable normalized components in the caller without nested jobs."""
+    component_call = cast(Callable[..., Awaitable[ModelArtifact]], normalize_component)
+    assembly_call = cast(Callable[..., Awaitable[ModelArtifact]], assemble_normalized)
+    components = {
+        component: await component_call(source=source, component=component)
+        for component in _COMPONENTS
+    }
+    return await assembly_call(**components)
