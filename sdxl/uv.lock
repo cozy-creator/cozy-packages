@@ -763,7 +763,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.14.1,<1" },
+    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.14.2,<1" },
     { name = "diffusers", specifier = "==0.40.0" },
     { name = "hf-xet", specifier = "==1.6.0" },
     { name = "hidiffusion", specifier = "==0.1.10" },
