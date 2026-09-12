@@ -259,7 +259,6 @@ def main() -> None:
         "assemble_full",
         "lanes",
         "retable",
-        "quantize-artifact",
         "apply-adaln",
         "compute-adaln-tables",
         "select-adaln-weights",

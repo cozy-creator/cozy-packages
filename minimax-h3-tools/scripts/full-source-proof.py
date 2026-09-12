@@ -12,10 +12,10 @@ from dataclasses import replace
 from typing import Any
 
 from cozy_runtime.author import (
-    UnsupportedInput,
     WeightsSource,
     WeightsSourcePart,
     WeightsSourceTensor,
+    canonical_json,
 )
 from cozy_runtime.derive.quantization import h3_quantization_plan, prepare_quantization
 from h3_tables import job, lanes, operations
@@ -121,43 +121,50 @@ def main() -> None:
     changed_targets = module._select_full_targets(changed, {"dits": source, "shared": source})
     assert changed_targets == targets
     assert all("unexpected" not in target.drop for target in changed_targets.values())
+    # Family policy is ordinary data. The Runtime shared operation enforces these
+    # fingerprints against native granted metadata before reading/writing values.
+    policy = operations.quantization_plan()
+    assert policy.components == tuple(job.TARGET_COMPONENT.values())
+    assert policy.output_precision == "preserve"
     for expected_order in (whole.rows, full_order):
-        rows = Structures({source.checkpoint_ref: tuple(reversed(expected_order))})
-        assert operations._quantization_order(rows.structure(source)) == expected_order
-    for invalid_order in (full_order[1:], (*whole.rows, ("text_encoder", "extra.weight"))):
-        rows = Structures({source.checkpoint_ref: invalid_order})
-        try:
-            operations._quantization_order(rows.structure(source))
-        except UnsupportedInput as error:
-            assert error.code == "quantization_source"
-        else:
-            raise AssertionError("incomplete or foreign H3 construction roster accepted")
+        digest = canonical_json.digest([[component, key] for component, key in expected_order])
+        assert digest in policy.source_order_digests
+    for invalid_order in (
+        tuple(reversed(full_order)),
+        full_order[1:],
+        (*whole.rows, ("text_encoder", "extra.weight")),
+    ):
+        digest = canonical_json.digest([[component, key] for component, key in invalid_order])
+        assert digest not in policy.source_order_digests
 
-    # The memoized export must select the exact current 313 weights in each task.
-    # These are real geometry values; this arm makes no byte custody/GPU claim.
+    assert policy.keys == tuple(tensor.key for tensor in quantization.tensors)
+    assert len(policy.keys) == 313
+    assert all("adaln_proj" not in key and "time_embedder" not in key
+               and not key.startswith("norm_out.") for key in policy.keys)
     selected = tuple(
         WeightsSourceTensor(component, tensor.key, tensor.logical_dtype, tensor.shape,
                             (WeightsSourcePart("value", tensor.logical_dtype, tensor.shape),))
         for component in job.TARGET_COMPONENT.values()
         for tensor in quantization.tensors
     )
-    selection = operations._quantization_plan(WeightsSource((), selected))
-    assert len(selection.tensors) == 313
-    assert all("adaln_proj" not in tensor.key and "time_embedder" not in tensor.key
-               and not tensor.key.startswith("norm_out.") for tensor in selection.tensors)
+
+    def identity(tensors: tuple[WeightsSourceTensor, ...]) -> str:
+        return canonical_json.digest([
+            [tensor.component, tensor.key, tensor.logical_dtype, list(tensor.shape),
+             [[part.name, part.dtype, list(part.shape)] for part in tensor.parts]]
+            for tensor in tensors
+        ])
+
+    assert identity(selected) == policy.selected_schema_digest
     for bad in (
         selected[1:],
+        (*selected, replace(selected[0], key="unexpected.weight")),
         (replace(selected[0], shape=(1, 32)), *selected[1:]),
         (replace(selected[0], logical_dtype="f32"), *selected[1:]),
         (replace(selected[0], parts=(WeightsSourcePart("data", "f8_e4m3fn", selected[0].shape),)),
          *selected[1:]),
     ):
-        try:
-            operations._quantization_plan(WeightsSource((), bad))
-        except UnsupportedInput as error:
-            assert error.code == "quantization_source"
-        else:
-            raise AssertionError("an incompatible quantization source was accepted")
+        assert identity(bad) != policy.selected_schema_digest
     print(
         "H3 full-source targets PASS native declarations unchanged; one read per exact source; "
         "158 already-removed optional rows omitted; required pruning/replacement drops unchanged"

@@ -30,6 +30,7 @@ from cozy_runtime.author.sources import (
     download_huggingface,
     source_files,
 )
+from cozy_runtime.derive.operations import quantize
 from sdxl_assessment_client import load_policy, require_approved_policy
 from sdxl_assessment_client.composition import Assessment, publish, retain_report
 from sdxl_assessment_client.control_inputs import policy_bytes
@@ -38,7 +39,7 @@ from sdxl_assessment_client.report_bundle import report_bundle
 
 from sdxl import generate
 from sdxl.normalization import normalize
-from sdxl.operations import quantize
+from sdxl.operations import quantization_plan
 
 SOURCE_VERSION = 128078
 SOURCE_FILE = "civitai/files/92696"
@@ -82,7 +83,7 @@ async def main(ctx: ScriptContext, *, out: Outputs) -> Tree:
     normalize_call = cast(Callable[..., Awaitable[ModelArtifact]], normalize)
     quantize_call = cast(Callable[..., Awaitable[ModelArtifact]], quantize)
     reference = await normalize_call(source=converted)
-    candidate = await quantize_call(source=reference, encoding=ENCODING)
+    candidate = await quantize_call(source=reference, plan=quantization_plan(), encoding=ENCODING)
     assessment = Assessment(
         generate=generate,
         out=out,

@@ -880,13 +880,6 @@ def retable(
 from . import operations  # noqa: E402
 
 app.job(
-    operations.quantize,
-    name="quantize-artifact",
-    weights=(WeightsOutput("model", max_new_bytes=MAX_QUANTIZED_BYTES),),
-)
-
-
-app.job(
     _adaln_operations.select_adaln_weights,
     name="select-adaln-weights",
     weights=(WeightsOutput("model", 0),),

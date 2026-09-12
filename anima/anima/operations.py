@@ -1,29 +1,31 @@
-"""Managed ANIMA transformations for ordinary client scripts."""
+"""ANIMA policy for the shared Runtime quantization operation."""
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Awaitable, Callable
+from typing import Literal, cast
 
-import cozy_runtime.derive as derive
-from cozy_runtime.author import Context, ModelArtifact, Telemetry, WeightsSink, invocable
-from cozy_runtime.derive.quantization import QuantizationSource
+from cozy_runtime.author import ModelArtifact
+from cozy_runtime.derive.operations import QuantizationPlan
+from cozy_runtime.derive.operations import quantize as runtime_quantize
 
 
-@invocable(memoize=True)
+def quantization_plan() -> QuantizationPlan:
+    """Select transformer GEMM weights with the family's existing F32 normalization."""
+    return QuantizationPlan(components=("transformer",))
+
+
 async def quantize(
-    ctx: Context,
     *,
-    source: QuantizationSource,
+    source: ModelArtifact,
     encoding: Literal["fp8-rowwise/1", "mxfp8/1"],
     max_relative_frobenius: float | None = None,
-    weights: WeightsSink,
-    tel: Telemetry,
 ) -> ModelArtifact:
-    """Derive one lane from the canonical source; reuse complete tensor groups."""
-    return derive.quantize_artifact(
-        source,
-        derive.plan(("transformer",), encoding, max_relative_frobenius=max_relative_frobenius),
-        sink=weights,
-        ctx=ctx,
-        tel=tel,
+    """Compose family policy with the single Runtime-owned memoized operation."""
+    call = cast(Callable[..., Awaitable[ModelArtifact]], runtime_quantize)
+    return await call(
+        source=source,
+        plan=quantization_plan(),
+        encoding=encoding,
+        max_relative_frobenius=max_relative_frobenius,
     )
