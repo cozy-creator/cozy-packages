@@ -131,9 +131,18 @@ def _targets(plan: NormalizationPlan) -> dict[str, WeightsTarget]:
             plan.plain,
             {"value": WeightsPart("f16", route.shape, source=graft)},
         )
-    # Explicit destination rows include every graft source; no inherited base or
-    # drop-all roster is needed. Keep receipts below their base64-wrapped limit.
-    return {name: WeightsTarget(add=rows) for name, rows in targets.items()}
+    # Grafts already authorize their source component. Keep a base only when a
+    # component has no graft, so its read/transpose routes retain that authority.
+    return {
+        name: WeightsTarget(add=rows)
+        if any(
+            part.source is not None for tensor in rows.values() for part in tensor.parts.values()
+        )
+        else WeightsTarget(
+            source="source", source_component=name, drop=tuple(plan.source[name]), add=rows
+        )
+        for name, rows in targets.items()
+    }
 
 
 def _normalize(
