@@ -23,7 +23,7 @@ from typing import cast
 from cozy_eval.errors import ConfigError
 from cozy_eval.jobs.instrument_config import plan
 from cozy_eval.jobs.normalize_instruments import prepare_instrument
-from cozy_runtime.author import FileAsset, ModelArtifact, Outputs, ScriptContext
+from cozy_runtime.author import ModelArtifact, Outputs, ScriptContext, Tree
 from cozy_runtime.author.sources import (
     convert_cozytensors,
     download_civitai,
@@ -32,6 +32,9 @@ from cozy_runtime.author.sources import (
 )
 from sdxl_assessment_client import load_policy, require_approved_policy
 from sdxl_assessment_client.composition import Assessment, publish, retain_report
+from sdxl_assessment_client.control_inputs import policy_bytes
+from sdxl_assessment_client.image_files import image_suffix, retain_image
+from sdxl_assessment_client.report_bundle import report_bundle
 
 from sdxl import generate
 from sdxl.normalization import normalize
@@ -55,7 +58,7 @@ LANE = "fp8"
 EXPECTED_REVISION = 0
 
 
-async def main(ctx: ScriptContext, *, out: Outputs) -> list[FileAsset]:
+async def main(ctx: ScriptContext, *, out: Outputs) -> Tree:
     with as_file(files("sdxl_assessment_client") / "policy") as directory:
         policy = load_policy(directory, conditions_file=CONDITIONS_FILE)
     if PUBLISH:
@@ -90,7 +93,9 @@ async def main(ctx: ScriptContext, *, out: Outputs) -> list[FileAsset]:
     )
     report = await assessment.run()
     report_file, workloads_file = await retain_report(report, policy, out)
-    ctx.log("Provisional measurement result (not ratification):\n" + report.summary())
+    ctx.log(
+        f"Provisional assessment verdict: {report.verdict}; full report is in the result bundle"
+    )
     if PUBLISH:
         receipt = await publish(
             report,
@@ -105,4 +110,11 @@ async def main(ctx: ScriptContext, *, out: Outputs) -> list[FileAsset]:
             expected_revision=EXPECTED_REVISION,
         )
         ctx.log(f"Release {receipt.release} revision {receipt.revision}: {receipt.observation}")
-    return [report_file, workloads_file]
+    retained = {"report.json": report_file, "workloads.json": workloads_file}
+    retained["conditions.json"] = await out.commit(
+        out.save_bytes(policy_bytes(policy.conditions), media_type="application/json")
+    )
+    for index, image in enumerate(assessment.images.values()):
+        name = f"review-{index:03}{image_suffix(image.media_type)}"
+        retained[name] = await retain_image(image, out)
+    return report_bundle(retained, out)

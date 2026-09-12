@@ -62,8 +62,10 @@ Both scripts and the editable helper carry locks over public Runtime 0.14.1, Ten
 0.3.36 and Eval 0.7.0; only adjacent authored source remains editable. Keep
 `PUBLISH=False` for calibration. Run via
 `cozy run examples/client-scripts/sdxl_fp8.py --rental-only --await`; do not invoke
-model functions with an external Python harness. The script returns completed
-native report/workload files even for a provisional/failed assessment.
+model functions with an external Python harness. The script returns one native Tree
+bundle containing the report, workloads, conditions and review images, plus a manifest
+of each file's digest and actual media type. Provisional/failed assessments retain the
+same review bundle. WebP and PNG bytes keep their original encoding and suffix.
 
 Publication additionally requires an explicitly ratified conditions digest,
 destination, release, lane and revision expectation. The client checks this policy
@@ -80,7 +82,7 @@ weight arms, wrong-object/color generations and blur/flat pixel controls. See
 [control evidence and review procedure](sdxl-assessment/sdxl_assessment_client/controls/README.md).
 All expected labels remain authored and unreviewed; its private control jobs have a
 local App under examples and are never added to the deployed SDXL App. The driver
-returns actual review files/facts, never publishes, and refuses an unfrozen held-out
+returns one native Tree of actual review files/facts, never publishes, and refuses an unfrozen held-out
 policy. Calibration, held-out and final-admission prompt/seed sets are disjoint.
 
 No SDXL render, model-quality verdict or release is claimed by these source changes.

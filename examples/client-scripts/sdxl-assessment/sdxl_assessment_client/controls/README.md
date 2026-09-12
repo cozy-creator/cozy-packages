@@ -39,8 +39,9 @@ The control records its input digest, transformation and output digest. Native m
 measurements and explicitly bound Qwen checklist facts are retained. These transformations
 are not substitutes for the actual ×2-weight damage arm.
 
-Each cell returns a native evidence manifest, the exact control policy document, review
-image files and measured facts or complete assessment report/workload. The evidence
+Each cell returns one native Tree bundle with its evidence manifest, exact control policy,
+review image files and measured facts or complete assessment report/workload. A separate
+bundle manifest records filenames, exact digests and media types. The evidence
 contains exact source/candidate/judge receipts, actual request/environment identities,
 the base proposed policy digest and the split-specific policy digest. Missing learned
 metrics and unknown saturation remain unmeasured. There are no release effects or
