@@ -47,6 +47,7 @@ async def produce(
         order=order,
     ) as output:
         if output.replayed:
+            assert output.receipt is not None
             return output.receipt.artifact
         for part_component, key in order:
             ctx.raise_if_cancelled()
