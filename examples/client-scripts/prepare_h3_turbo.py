@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
 # dependencies = [
-#   "cozy-runtime>=0.16.2,<1",
+#   "cozy-runtime>=0.16.10.dev0,<1",
 #   "minimax-h3-tools>=2.12.1,<3",
 # ]
 # [tool.uv]
@@ -19,6 +19,12 @@
 
 Run with `cozy run ./examples/client-scripts/prepare_h3_turbo.py --await`.
 Add `--rental=NAME` to use an existing rental.
+
+For local development, build Runtime with its `scripts/build-dev-wheel.py`, using
+a verified native donor. Add the reported wheel path to [tool.uv.sources] above:
+# cozy-runtime = {path = "/absolute/path/to/the-built-runtime.whl"}
+The wheel must satisfy the declared Runtime floor, which includes typed Context
+injection. No PyPI publication or global installation is needed.
 """
 
 from cozy_runtime.author import Context, Telemetry, WeightsSink
