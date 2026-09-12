@@ -169,6 +169,55 @@ def child(root: Path, mode: str) -> None:
     )
 
 
+def component_equivalence(
+    root: Path, store: Any, plan: norm.NormalizationPlan,
+    manifest: str, length: int, reference: str,
+) -> None:
+    def sink(
+        name: str, sources: dict[str, tuple[str, int]], maximum: int,
+    ) -> tuple[WeightsSink, dict[str, QuantizationSource], Any]:
+        host = WeightsTransactionHost(
+            store=store, owner_scope="normalization-components", request_id=name,
+            invocation_spec_digest=tensorfs.object_id(b"component normalization proof"),
+            work_fingerprint=tensorfs.object_id(name.encode()), writer_session_id=1,
+            allowed_sources={digest: size for digest, size in sources.values()},
+            output_bounds={"model": maximum},
+        )
+        models = {
+            key: _derive_model(QuantizationSource, value[0]) for key, value in sources.items()
+        }
+        attempt = fake_attempt(name, spool=root / ("spool-" + name))
+        weights = WeightsSink(
+            attempt, models, {"model": maximum}, host.open, host.structure,
+            source_config=host.config,
+        )
+        return weights, models, attempt
+
+    parts: dict[str, tuple[str, int]] = {}
+    for component in norm._COMPONENTS:
+        weights, models, attempt = sink(
+            "component-" + component, {"source": (manifest, length)}, norm.MAX_NEW_BYTES,
+        )
+        result = norm._normalize(
+            models["source"], weights, fake_context(), fake_telemetry(attempt),
+            norm._component_plan(plan, component),
+        )
+        parts[component] = (result.manifest.digest, result.manifest.length)
+    weights, models, _ = sink("component-assembly", parts, 0)
+    result = norm._assemble_normalized(models, weights, fake_context(), plan)
+    assert result.manifest.digest == reference
+
+    # A valid component artifact cannot be accepted under another component slot.
+    wrong = {**parts, "vae": parts["unet"]}
+    weights, models, _ = sink("component-wrong-slot", wrong, 0)
+    try:
+        norm._assemble_normalized(models, weights, fake_context(), plan)
+    except UnsupportedInput:
+        pass
+    else:
+        raise AssertionError("assembly accepted a component in the wrong slot")
+
+
 def main() -> None:
     assert routes_for(norm.PLAN) == norm.PLAN.targets
     assert len(norm.PLAN.targets) == 2641
@@ -187,6 +236,7 @@ def main() -> None:
         resumed = json.loads((root / "resume.json").read_text())
         replayed = json.loads((root / "replay.json").read_text())
         assert resumed["manifest"] == replayed["manifest"]
+        component_equivalence(root, store, plan, manifest, length, resumed["manifest"])
         assert len(resumed["transformed_roles"]) == 4
         assert "vae/attention" not in resumed["transformed_roles"]
         assert replayed["replayed"] and replayed["transformed_roles"] == []
@@ -291,6 +341,8 @@ def main() -> None:
                 "completed_role_not_repeated": True,
                 "replayed_role_reads": 0,
                 "graft_identity_preserved": True,
+                    "component_assembly_equals_monolithic": True,
+                    "wrong_component_slot_refused": True,
                 "split_transpose_reshape_bits_exact": True,
                 "unreviewed_sources_refused": True,
                 "changed_position_ids_refused": True,
