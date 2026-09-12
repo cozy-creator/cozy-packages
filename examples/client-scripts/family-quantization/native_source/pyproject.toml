@@ -2,7 +2,7 @@
 name = "family-native-source"
 version = "0.0.1"
 requires-python = ">=3.12,<3.13"
-dependencies = ["cozy-runtime==0.14.2", "tensorfs==0.3.36", "numpy>=2"]
+dependencies = ["cozy-runtime==0.16.8", "tensorfs==0.3.38", "numpy>=2"]
 [project.entry-points."cozy.application"]
 default = "family_native_source:app"
 [build-system]

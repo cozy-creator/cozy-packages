@@ -674,14 +674,8 @@ def quantize(
     return QuantizedLanes(fp8=results.get("fp8"), mxfp8=results.get("mxfp8"))
 
 
-# The managed export has its own derive-only input; legacy job schemas stay unchanged.
-from . import normalization, operations  # noqa: E402
-
-app.job(
-    operations.quantize, name="quantize-artifact",
-    weights=(WeightsOutput("model", max_new_bytes=_LANE_BYTES),),
-)
-
+# Normalization is a managed source operation; quantization policy is plain composition.
+from . import normalization  # noqa: E402
 
 app.job(
     normalization.normalize_component, name="normalize-component",

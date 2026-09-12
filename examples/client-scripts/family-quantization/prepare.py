@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
 # dependencies = [
-#   "cozy-runtime==0.14.2", "tensorfs==0.3.36",
+#   "cozy-runtime==0.16.8", "tensorfs==0.3.38",
 #   "family-native-source==0.0.1", "sdxl", "anima",
 # ]
 # [tool.uv.sources]
