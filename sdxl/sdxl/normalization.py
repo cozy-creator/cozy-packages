@@ -119,14 +119,7 @@ def _validate_position_ids(raw: bytes, dtype: np.dtype[Any], count: int) -> None
         raise UnsupportedInput("SDXL source changed the constructor's position IDs")
 
 
-def _normalize(
-    source: QuantizationSource,
-    weights: WeightsSink,
-    ctx: Context,
-    tel: Telemetry,
-    plan: NormalizationPlan,
-) -> ModelArtifact:
-    _validate(weights.structure(source), plan)
+def _targets(plan: NormalizationPlan) -> dict[str, WeightsTarget]:
     targets: dict[str, dict[str, WeightsTensor]] = {}
     for route in plan.targets:
         graft = None
@@ -138,16 +131,33 @@ def _normalize(
             plan.plain,
             {"value": WeightsPart("f16", route.shape, source=graft)},
         )
+    # Grafts already authorize their source component. Keep a base only when a
+    # component has no graft, so its read/transpose routes retain that authority.
+    return {
+        name: WeightsTarget(add=rows)
+        if any(
+            part.source is not None for tensor in rows.values() for part in tensor.parts.values()
+        )
+        else WeightsTarget(
+            source="source", source_component=name, drop=tuple(plan.source[name]), add=rows
+        )
+        for name, rows in targets.items()
+    }
+
+
+def _normalize(
+    source: QuantizationSource,
+    weights: WeightsSink,
+    ctx: Context,
+    tel: Telemetry,
+    plan: NormalizationPlan,
+) -> ModelArtifact:
+    _validate(weights.structure(source), plan)
     configs = {name: canonical_json.encode(value) for name, value in plan.configs.items()}
     with weights.open(
         "model",
         sources={"source": source},
-        targets={
-            name: WeightsTarget(
-                source="source", source_component=name, drop=tuple(plan.source[name]), add=rows
-            )
-            for name, rows in targets.items()
-        },
+        targets=_targets(plan),
         configs={name: WeightsConfig(data=data) for name, data in configs.items()},
         order=tuple((row.component, row.key) for row in plan.targets),
     ) as transaction:
