@@ -157,7 +157,15 @@ dependency markers. Its lock selects public Runtime 0.16.8. The worker must sati
 that dependency before invocation. CPU parity checks do not establish real
 multi-GPU clip speed or quality.
 
-After publishing both checkpoints and installing the package, a turbo invocation
+For source qualification, install the local package from this repository:
+
+```sh
+cozy package install ./minimax-h3 --editable --no-model-download
+```
+
+This needs no package publication. A published release can instead be installed
+with `cozy package install paul/minimax-h3 --version=1.14.2 --no-model-download`
+once available. With both checkpoint references available, a turbo invocation
 selects their exact releases and lanes independently:
 
 ```sh
