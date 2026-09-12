@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
 # dependencies = [
-#   "cozy-runtime==0.14.1", "tensorfs==0.3.36", "numpy==2.5.1",
+#   "cozy-runtime==0.14.2", "tensorfs==0.3.36", "numpy==2.5.1",
 #   "torch==2.13.0", "torchvision==0.28.0",
 #   "sdxl", "sdxl-assessment-client",
 # ]
@@ -17,7 +17,7 @@ from typing import cast
 
 from cozy_eval.jobs.instrument_config import plan
 from cozy_eval.jobs.normalize_instruments import prepare_instrument
-from cozy_runtime.author import FileAsset, ModelArtifact, Outputs, ScriptContext
+from cozy_runtime.author import ModelArtifact, Outputs, ScriptContext, Tree
 from cozy_runtime.author.sources import (
     convert_cozytensors,
     download_civitai,
@@ -41,7 +41,7 @@ JUDGE_REVISION = "89644892e4d85e24eaac8bacfd4f463576704203"
 JUDGE_PROFILE = "hf/qwen/qwen3-vl-2b-instruct/bf16/1"
 
 
-async def main(ctx: ScriptContext, *, out: Outputs) -> list[FileAsset]:
+async def main(ctx: ScriptContext, *, out: Outputs) -> Tree:
     with as_file(files("sdxl_assessment_client")) as directory:
         inputs = load_controls(directory, SPLIT, CONDITIONS_FILE)
     digest = validate_selection(inputs, CASE, FROZEN_HELD_OUT_POLICY)

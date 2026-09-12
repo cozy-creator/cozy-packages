@@ -15,7 +15,7 @@ cozy run examples/client-scripts/sdxl_calibration.py --rental-only --await
 The editable helper is captured automatically; no package publication or manual
 installation is part of this workflow. It has one local App to register private control
 jobs and no package.toml or deployment. Creator's pyproject-only library capture fix
-must be present, together with public Runtime 0.14.1 / TensorFS 0.3.36 / Eval 0.7.
+must be present, together with public Runtime 0.14.2 / TensorFS 0.3.36 / Eval 0.7.
 
 `null`, `quantized`, and `scale_x2` each perform eight prompts × three fresh arms on
 the same worker. Null supplies the reference artifact to all three arms. Quantized uses
@@ -39,8 +39,9 @@ The control records its input digest, transformation and output digest. Native m
 measurements and explicitly bound Qwen checklist facts are retained. These transformations
 are not substitutes for the actual ×2-weight damage arm.
 
-Each cell returns a native evidence manifest, the exact control policy document, review
-image files and measured facts or complete assessment report/workload. The evidence
+Each cell returns one native Tree bundle with its evidence manifest, exact control policy,
+review image files and measured facts or complete assessment report/workload. A separate
+bundle manifest records filenames, exact digests and media types. The evidence
 contains exact source/candidate/judge receipts, actual request/environment identities,
 the base proposed policy digest and the split-specific policy digest. Missing learned
 metrics and unknown saturation remain unmeasured. There are no release effects or

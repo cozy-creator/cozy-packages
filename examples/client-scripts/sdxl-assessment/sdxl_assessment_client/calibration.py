@@ -12,12 +12,13 @@ from cozy_eval.jobs import compare_media, measure_media, measure_quality
 from cozy_eval.jobs.measurements import ImageSource
 from cozy_eval.measurement_facts import read_media, read_pair
 from cozy_eval.quality_facts import read_quality
-from cozy_runtime.author import ChildCallError, FileAsset, ImageAsset, ModelArtifact, Outputs
+from cozy_runtime.author import ChildCallError, FileAsset, ImageAsset, ModelArtifact, Outputs, Tree
 
 from .composition import Assessment, retain_report
 from .control_inputs import ControlInputs, policy_bytes
 from .control_jobs import BLUR_RADIUS, FLAT_RGB, corrupt_media
 from .image_files import retain_image
+from .report_bundle import file_suffix, report_bundle
 
 
 async def run_control(
@@ -31,7 +32,7 @@ async def run_control(
     candidate: ModelArtifact,
     judge: ModelArtifact,
     policy_digest: str,
-) -> list[FileAsset]:
+) -> Tree:
     """No release effect or adoption: even a provisional PASS is just an observation."""
     outputs: list[FileAsset] = []
     evidence: dict[str, Any] = {
@@ -65,7 +66,7 @@ async def run_control(
                 "reason": str(error),
                 "request_id": error.child_request_id if isinstance(error, ChildCallError) else None,
             }
-            ctx.log(f"Control {inputs.split}/{case} incomplete: {error}")
+            ctx.log(f"Control {inputs.split}/{case} incomplete; failure details are in the bundle")
         else:
             report_file, workload_file = await retain_report(report, inputs.policy, out)
             outputs.extend((report_file, workload_file))
@@ -170,4 +171,7 @@ async def run_control(
     manifest = await out.commit(
         out.save_bytes(contract.canonical(evidence), media_type="application/json")
     )
-    return [manifest, frozen, *outputs]
+    files = {"evidence.json": manifest, "conditions.json": frozen}
+    files.update({f"artifact-{index:03}{file_suffix(file.media_type)}": file
+                  for index, file in enumerate(outputs)})
+    return report_bundle(files, out)
