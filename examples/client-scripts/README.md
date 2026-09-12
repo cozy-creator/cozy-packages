@@ -44,7 +44,7 @@ capture, memoized weight/media/capture/quality measurements, a fresh Eval fold,
 and explicit checkpoint/report/release effects. The local `sdxl-assessment` helper
 is an unpublished Python library with no package.toml or deployment. Its local App
 registers only the example calibration controls. This consumer requires the coordinated public
-Runtime 0.14.1, TensorFS 0.3.36 and Eval 0.7.0 read-only weight cohort.
+Runtime 0.14.2, TensorFS 0.3.36 and Eval 0.7.0 read-only weight cohort.
 
 The committed policy is a **proposal, not ratification**. Read
 [the v2 rationale and calibration requirements](sdxl-assessment/sdxl_assessment_client/policy/ABSOLUTE-PROPOSAL-v2.md)
@@ -58,7 +58,7 @@ memoized source, conversion and normalization calls. It passes the genuine retai
 ModelArtifact to quality measurements. Confirm disk capacity for its first source
 download (approximately 4.25 GB) and converted model, and confirm the image's numerical
 closure (NumPy 2.5.1, Torch 2.13.0 and torchvision 0.28.0 for the selected CUDA 13.0 image).
-Both scripts and the editable helper carry locks over public Runtime 0.14.1, TensorFS
+Both scripts and the editable helper carry locks over public Runtime 0.14.2, TensorFS
 0.3.36 and Eval 0.7.0; only adjacent authored source remains editable. Keep
 `PUBLISH=False` for calibration. Run via
 `cozy run examples/client-scripts/sdxl_fp8.py --rental-only --await`; do not invoke
