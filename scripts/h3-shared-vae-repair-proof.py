@@ -316,15 +316,14 @@ def main() -> None:
             for name, manifest in attach_stage.SOURCES.items()
         }
         models["updated_bf16"] = _derive_model(H3FullTransformer, updated.manifest.digest)
-        saved_methods = {
-            name: getattr(WeightsTransaction, name) for name in ("add_part", "source_read_into")
-        }
+        transaction_type: Any = WeightsTransaction
+        saved_add, saved_read = transaction_type.add_part, transaction_type.source_read_into
 
         def no_tensor_io(*_: Any, **__: Any) -> Any:
             raise AssertionError("stage two must not read or add tensor payload")
 
-        for name in saved_methods:
-            setattr(WeightsTransaction, name, no_tensor_io)
+        transaction_type.add_part = no_tensor_io
+        transaction_type.source_read_into = no_tensor_io
         try:
             result, outcome, _ = invoke_stage(
                 "h3_attach_shared_vae",
@@ -335,8 +334,7 @@ def main() -> None:
             )
             assert outcome.terminal == "succeeded" and result is not None, outcome
         finally:
-            for name, method in saved_methods.items():
-                setattr(WeightsTransaction, name, method)
+            transaction_type.add_part, transaction_type.source_read_into = saved_add, saved_read
             lanes._read_f32 = original_read
         artifacts = {
             "bf16-full": updated,
