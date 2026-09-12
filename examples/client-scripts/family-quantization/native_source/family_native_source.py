@@ -66,7 +66,7 @@ class Facts(msgspec.Struct):
     summary: str
 
 
-@app.job
+@invocable(memoize=False)
 async def inspect(
     ctx: Context,
     *,
@@ -103,3 +103,5 @@ async def inspect(
 
 
 app.job(produce, weights=(WeightsOutput("model", max_new_bytes=65536),))
+
+app.job(inspect)
