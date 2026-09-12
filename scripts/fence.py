@@ -162,6 +162,14 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    ("scripts/h3-shared-vae-repair-proof.py", "cozy_runtime.author._model"): (
+        "Bind exact native fixture manifests; retire when a public native source factory "
+        "can bind production-shaped manifests instead of test:// identities."
+    ),
+    ("scripts/h3-shared-vae-repair-proof.py", "cozy_runtime.internal.weights_sink"): (
+        "Verify native four-output deduplication, interrupted resume and retained replay; "
+        "retire when the public fake weights service can construct this native host."
+    ),
     (
         "scripts/h3-restamp-native-proof.py",
         "cozy_runtime.author._model",

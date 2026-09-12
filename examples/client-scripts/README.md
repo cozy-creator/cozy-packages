@@ -12,6 +12,15 @@ parameters; the dependency is captured with the script.
   Its `[tool.cozy.weights]` metadata declares the finite output budget; `main`
   receives the existing Model and WeightsSink capabilities and returns a real
   ModelArtifact. The script performs no automatic upload or release mutation.
+- `h3_shared_vae_repair.py` repairs the four pinned rc2 revision 6 roots. It casts
+  each selected video VAE decoder operand once and sends identical bytes to four
+  native writers. TensorFS shares those objects; each lane inherits its existing
+  DiT bytes and order, including FP8/MXFP8 parts and AdaLN tables. Only the legacy
+  MXFP8 table metadata changes; existing explicit layouts remain byte-identical.
+  The script returns four artifacts in underscore output slots, ready for explicit
+  publication under the short lane names. It neither quantizes DiTs nor recomputes
+  tables. Retained completed parts resume without source reads, and completed output
+  transactions replay; a lost worker cannot supply its unretained local work.
 - `h3_vae_roundtrip.py` generates a fixed reference image, uses the existing H3
   VAE encode/decode methods, stages DiT between them, and records resident tensor
   hashes and Cozy Eval grid observations. It returns a video plus source and
