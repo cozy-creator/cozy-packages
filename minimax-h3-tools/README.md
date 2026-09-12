@@ -119,8 +119,13 @@ publishing a release.
 
 The production inputs are package-owned and immutable: exact model config, full DiT shape
 contract, construction order, and task plans live as importlib resources in the tools wheel;
-the shared `cozy-jobs` wheel owns the exact H3 quantization plan used here and by the standalone
-quantization callables. They are not Creator-supplied assets. Run
+the Runtime wheel carries the reviewed quantization tensor specifications. The ordinary
+`h3_tables.operations.quantization_plan()` helper binds their exact two-DiT geometry and
+this package's full/pruned construction-order digests for the single Runtime-owned
+`cozy_runtime.derive.operations.quantize` operation. Its compact plan contains no
+model bytes or executable policy. Noncanonical source order refuses; ordinary
+`assemble_full` and AdaLN producers already emit the accepted orders. These are not
+Creator-supplied assets. Run
 `scripts/order-proof.py` to recheck their closed census and
 `../../proofs/producer-callable.py` to validate the generated graph-free descriptor.
 
