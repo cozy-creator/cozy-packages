@@ -116,7 +116,7 @@ if (
     != SUPPORTED_STEPS
 ):
     raise ValueError("H3 task plans declare different supported step counts")
-DEFAULT_STEPS = min(SUPPORTED_STEPS)
+DEFAULT_STEPS = 30  # Static and imported descriptors must expose the same default.
 #: PDD-8: what the turbo functions run, fixed by their plans and absent from their wire.
 TURBO_STEPS = turbo_steps()
 Steps = Annotated[
