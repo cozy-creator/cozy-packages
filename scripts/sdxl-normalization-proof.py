@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "sdxl"))
 
 from cozy_runtime.author import (  # noqa: E402
     UnsupportedInput,
+    WeightsReceipt,
     WeightsSink,
     WeightsTransaction,
     canonical_json,
@@ -29,7 +30,10 @@ from cozy_runtime.author import (  # noqa: E402
 from cozy_runtime.author._model import _derive_model  # noqa: E402
 from cozy_runtime.author.fakes import fake_attempt, fake_context, fake_telemetry  # noqa: E402
 from cozy_runtime.derive.quantization import QuantizationSource  # noqa: E402
-from cozy_runtime.internal.weights_sink import WeightsTransactionHost  # noqa: E402
+from cozy_runtime.internal.weights_sink import (  # noqa: E402
+    WeightsTransactionHost,
+    protocol_receipt,
+)
 
 from sdxl import normalization as norm  # noqa: E402
 from sdxl_normalization_plan import routes_for  # noqa: E402
@@ -218,7 +222,56 @@ def component_equivalence(
         raise AssertionError("assembly accepted a component in the wrong slot")
 
 
+def full_metadata_receipt_limits() -> None:
+    """The real structural plan must fit both native intent and protocol receipt.
+
+    Commit identities below are bounded metadata placeholders. Real native commit
+    and exact output equality are exercised separately by the small byte fixture.
+    """
+    ref = {"sha256": "0" * 64, "length": 164}
+    with tempfile.TemporaryDirectory(prefix="sdxl-receipt-metadata-") as temporary:
+        store = tensorfs.Store.init(Path(temporary) / "store")
+        for component in norm._COMPONENTS:
+            plan = norm._component_plan(norm.PLAN, component)
+            targets = norm._targets(plan)
+            declaration = store.derived_declaration(
+                {"source": ("sha256:" + "0" * 64, 164)},
+                {name: WeightsTransactionHost._target(target) for name, target in targets.items()},
+                {name: {"kind": "add"} for name in plan.configs},
+                [(route.component, route.key) for route in plan.targets],
+                norm.MAX_NEW_BYTES, work_fingerprint="sha256:" + "1" * 64,
+            )
+            assert len(declaration) <= 1 << 20
+            # Each bounded non-graft role can add at most one16MiB object; treating
+            # inline roles as objects overestimates the receipt rather than hiding it.
+            added = [
+                {"sha256": f"{index:064x}", "length": math.prod(route.shape) * 2}
+                for index, route in enumerate(plan.targets)
+                if route.kind != "graft"
+            ]
+            native = canonical_json.encode({
+                "added_objects": added, "declaration": canonical_json.decode(declaration),
+                "header": ref, "manifest": ref,
+                "inherit_observation": {
+                    "bytes": 6937666560, "hashes": 0, "objects": 2641, "reads": 0,
+                },
+                "sources": [{"alias": "source", "components": [component],
+                             "header": ref, "manifest": ref}],
+                "transaction_id": "sha256:" + "2" * 64,
+            })
+            _, wrapped, _ = protocol_receipt(
+                WeightsReceipt(
+                    "model", "sha256:" + "2" * 64,
+                    canonical_json.digest(canonical_json.decode(native)), native,
+                ),
+                owner_scope="cozy-local-client", request_id="job-" + "3" * 24,
+                invocation_spec_digest="sha256:" + "4" * 64,
+            )
+            assert len(wrapped) <= 1 << 20, (component, len(declaration), len(wrapped))
+
+
 def main() -> None:
+    full_metadata_receipt_limits()
     assert routes_for(norm.PLAN) == norm.PLAN.targets
     assert len(norm.PLAN.targets) == 2641
     assert norm.PLAN.plain == next(d for alias, d in tensorfs.seed_digests() if alias == "plain/1")
