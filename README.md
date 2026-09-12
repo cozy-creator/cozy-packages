@@ -144,9 +144,10 @@ The H3 package exposes both official actions from one model generation. Its norm
 `model: H3Model` slot contains only the two DiTs, text encoder and VAEs.
 
 The `fl2va_turbo` and `ref2va_turbo` functions take two independent model slots:
-`base_model: H3TurboBase` holds the ordinary five-root checkpoint, and
+`base_model: H3TurboBase` holds an AdaLN-pruned five-root checkpoint, and
 `turbo_lora: H3TurboLoRA` holds only `fl2va_turbo` and `ref2va_turbo`. Both
-checkpoints are selected explicitly; the turbo functions have no model defaults.
+checkpoints are selected explicitly and must have matching DiT configurations;
+the turbo functions have no model defaults.
 Each sampling scope holds its base DiT and separate overlay together. LoRA hooks
 are installed during construction, before Runtime chooses fusion or Ulysses
 execution. All three model classes declare degrees 2 and 4.
