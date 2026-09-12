@@ -45,7 +45,7 @@ def tiny_plan() -> norm.NormalizationPlan:
             "vae": {"raw.attention": tensor("f16", (2, 2, 1, 1))},
             "text_encoder": {
                 "embedding": tensor("f16", (2, 2)),
-                "text_model.embeddings.position_ids": tensor("i64", (1, 4)),
+                "text_model.embeddings.position_ids": tensor("f16", (1, 4)),
             },
             "text_encoder_2": {
                 "qkv": tensor("f16", (6, 2)),
@@ -76,8 +76,8 @@ def source(
         additions = {}
         for key, spec in rows.items():
             size = math.prod(spec.shape)
-            if spec.dtype == "i64":
-                positions = np.arange(size, dtype="<i8")
+            if key == "text_model.embeddings.position_ids":
+                positions = np.arange(size, dtype="<f2" if spec.dtype == "f16" else "<i8")
                 value = (positions[::-1] if bad_positions else positions).tobytes()
             else:
                 # Include signed zero and a NaN payload: normalization must preserve bits.
@@ -169,10 +169,78 @@ def child(root: Path, mode: str) -> None:
     )
 
 
+def component_equivalence(
+    root: Path, store: Any, plan: norm.NormalizationPlan,
+    manifest: str, length: int, reference: str,
+) -> None:
+    def sink(
+        name: str, sources: dict[str, tuple[str, int]], maximum: int,
+    ) -> tuple[WeightsSink, dict[str, QuantizationSource], Any]:
+        host = WeightsTransactionHost(
+            store=store, owner_scope="normalization-components", request_id=name,
+            invocation_spec_digest=tensorfs.object_id(b"component normalization proof"),
+            work_fingerprint=tensorfs.object_id(name.encode()), writer_session_id=1,
+            allowed_sources={digest: size for digest, size in sources.values()},
+            output_bounds={"model": maximum},
+        )
+        models = {
+            key: _derive_model(QuantizationSource, value[0]) for key, value in sources.items()
+        }
+        attempt = fake_attempt(name, spool=root / ("spool-" + name))
+        weights = WeightsSink(
+            attempt, models, {"model": maximum}, host.open, host.structure,
+            source_config=host.config,
+        )
+        return weights, models, attempt
+
+    parts: dict[str, tuple[str, int]] = {}
+    for component in norm._COMPONENTS:
+        weights, models, attempt = sink(
+            "component-" + component, {"source": (manifest, length)}, norm.MAX_NEW_BYTES,
+        )
+        result = norm._normalize(
+            models["source"], weights, fake_context(), fake_telemetry(attempt),
+            norm._component_plan(plan, component),
+        )
+        parts[component] = (result.manifest.digest, result.manifest.length)
+    weights, models, _ = sink("component-assembly", parts, 0)
+    result = norm._assemble_normalized(models, weights, fake_context(), plan)
+    assert result.manifest.digest == reference
+
+    # A valid component artifact cannot be accepted under another component slot.
+    wrong = {**parts, "vae": parts["unet"]}
+    weights, models, _ = sink("component-wrong-slot", wrong, 0)
+    try:
+        norm._assemble_normalized(models, weights, fake_context(), plan)
+    except UnsupportedInput:
+        pass
+    else:
+        raise AssertionError("assembly accepted a component in the wrong slot")
+
+
 def main() -> None:
     assert routes_for(norm.PLAN) == norm.PLAN.targets
     assert len(norm.PLAN.targets) == 2641
     assert norm.PLAN.plain == next(d for alias, d in tensorfs.seed_digests() if alias == "plain/1")
+    for dtype in (np.dtype("<f2"), np.dtype("<i8")):
+        valid_positions = np.arange(77, dtype=dtype)
+        norm._validate_position_ids(valid_positions.tobytes(), dtype, 77)
+        for bad_positions in (valid_positions[::-1], np.full(77, -1, dtype=dtype)):
+            try:
+                norm._validate_position_ids(bad_positions.tobytes(), dtype, 77)
+            except UnsupportedInput:
+                pass
+            else:
+                raise AssertionError("changed position IDs accepted")
+    for value in (0.5, float("nan"), float("inf")):
+        bad_positions = np.arange(77, dtype="<f2")
+        bad_positions[1] = value
+        try:
+            norm._validate_position_ids(bad_positions.tobytes(), np.dtype("<f2"), 77)
+        except UnsupportedInput:
+            pass
+        else:
+            raise AssertionError("noninteger or nonfinite position ID accepted")
     with tempfile.TemporaryDirectory(prefix="sdxl-normalization-") as temporary:
         root = Path(temporary)
         store = tensorfs.Store.init(root / "store")
@@ -187,6 +255,7 @@ def main() -> None:
         resumed = json.loads((root / "resume.json").read_text())
         replayed = json.loads((root / "replay.json").read_text())
         assert resumed["manifest"] == replayed["manifest"]
+        component_equivalence(root, store, plan, manifest, length, resumed["manifest"])
         assert len(resumed["transformed_roles"]) == 4
         assert "vae/attention" not in resumed["transformed_roles"]
         assert replayed["replayed"] and replayed["transformed_roles"] == []
@@ -291,6 +360,8 @@ def main() -> None:
                 "completed_role_not_repeated": True,
                 "replayed_role_reads": 0,
                 "graft_identity_preserved": True,
+                    "component_assembly_equals_monolithic": True,
+                    "wrong_component_slot_refused": True,
                 "split_transpose_reshape_bits_exact": True,
                 "unreviewed_sources_refused": True,
                 "changed_position_ids_refused": True,

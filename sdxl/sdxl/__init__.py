@@ -684,6 +684,10 @@ app.job(
 
 
 app.job(
-    normalization.normalize, name="normalize",
+    normalization.normalize_component, name="normalize-component",
     weights=(WeightsOutput("model", max_new_bytes=normalization.MAX_NEW_BYTES),),
+)
+app.job(
+    normalization.assemble_normalized, name="assemble-normalized",
+    weights=(WeightsOutput("model", max_new_bytes=0),),
 )
