@@ -2,7 +2,7 @@
 # requires-python = ">=3.12,<3.13"
 # dependencies = [
 #   "cozy-runtime>=0.16.2,<1",
-#   "minimax-h3-tools==2.11.0",
+#   "minimax-h3-tools>=2.12.1,<3",
 # ]
 # [tool.uv]
 # default-groups = []

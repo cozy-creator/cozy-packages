@@ -1,4 +1,4 @@
-owner: codex /root/h3_turbo_slots
-purpose: separate turbo LoRA checkpoint slot from ordinary H3
-branch: fix/h3-turbo-separate-slot
-base: fff83f8a08c070ea0a6764a621c84adc1dd09cd7
+owner: codex /root
+purpose: qualify standalone turbo producer from ordinary client script
+branch: fix/h3-turbo-producer-20260912
+base: eb70757c04e042af95b463282b76ba7804f9607f
