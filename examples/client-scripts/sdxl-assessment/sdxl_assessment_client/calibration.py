@@ -66,7 +66,7 @@ async def run_control(
                 "reason": str(error),
                 "request_id": error.child_request_id if isinstance(error, ChildCallError) else None,
             }
-            ctx.log(f"Control {inputs.split}/{case} incomplete: {error}")
+            ctx.log(f"Control {inputs.split}/{case} incomplete; failure details are in the bundle")
         else:
             report_file, workload_file = await retain_report(report, inputs.policy, out)
             outputs.extend((report_file, workload_file))
