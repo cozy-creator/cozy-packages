@@ -876,9 +876,6 @@ def retable(
     )
 
 
-# Register after defining the source capability used by the managed operation.
-from . import operations  # noqa: E402
-
 app.job(
     _adaln_operations.select_adaln_weights,
     name="select-adaln-weights",
