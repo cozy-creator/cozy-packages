@@ -14,13 +14,15 @@ from typing import Any
 
 import numpy as np
 import tensorfs
-from cozy_runtime.author import Invocation, attempt, canonical_json, script_app
+from cozy_runtime.author import Invocation, WeightsTransaction, attempt, canonical_json, script_app
 from cozy_runtime.author._model import _derive_model
 from cozy_runtime.internal.weights_sink import WeightsTransactionHost
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
 sys.path.insert(0, str(ROOT / "examples" / "client-scripts"))
+import h3_attach_shared_vae as attach_stage  # noqa: E402
+import h3_cast_shared_vae as cast_stage  # noqa: E402
 import h3_shared_vae_repair as repair  # noqa: E402
 from h3_tables import lanes  # noqa: E402
 from h3_tables.plans import TASKS, parse_declared_plan  # noqa: E402
@@ -224,6 +226,146 @@ def main() -> None:
                     "shared_vae_object_refs_equal": True,
                     "only_mxfp8_table_metadata_upgraded": True,
                     "construction_order_preserved": True,
+                }
+            )
+        )
+
+    # Separate jobs hand off an uploaded checkpoint identity, never an in-memory writer.
+    # A second attempt may inherit every VAE ObjectRef without reading tensor bytes.
+    with tempfile.TemporaryDirectory(prefix="h3-two-stage-native-") as directory:
+        root = Path(directory)
+        store = tensorfs.Store.ensure(root / "store")
+        sources = {lane: fixture(store, lane) for lane in repair.SOURCES}
+        original = {lane: header(store, value[0]) for lane, value in sources.items()}
+        cast_stage.SOURCE = sources["bf16-full"][0]
+        attach_stage.SOURCES = {
+            lane.replace("-", "_"): value[0]
+            for lane, value in sources.items()
+            if lane != "bf16-full"
+        }
+        cast_reads = []
+
+        def cast_read(*args: Any, **kwargs: Any) -> Any:
+            cast_reads.append(kwargs["key"])
+            return original_read(*args, **kwargs)
+
+        lanes._read_f32 = cast_read
+
+        def invoke_stage(
+            module: str,
+            epoch: int,
+            models: Any,
+            allowed: Any,
+            bounds: Any,
+            *,
+            interrupt: bool = False,
+        ) -> Any:
+            def checkpoint(_: Any) -> None:
+                if interrupt:
+                    raise RuntimeError("interrupted after first committed cast tensor")
+
+            host = WeightsTransactionHost(
+                store=store,
+                owner_scope="two-stage-proof",
+                request_id=module,
+                invocation_spec_digest=tensorfs.object_id(module.encode()),
+                work_fingerprint=tensorfs.object_id(module.encode()),
+                writer_session_id=epoch,
+                allowed_sources=allowed,
+                output_bounds=bounds,
+                record_checkpoint=checkpoint,
+            )
+            return attempt(
+                script_app(module).get("main"),
+                {},
+                Invocation(
+                    module,
+                    root / f"{module}-{epoch}",
+                    time.monotonic() + 60,
+                    models=models,
+                    weights=host.open,
+                    weights_source_structure=host.structure,
+                    weights_source_config=host.config,
+                ),
+            )
+
+        stage1_models = {"source": _derive_model(H3FullTransformer, sources["bf16-full"][0])}
+        allowed = dict(sources.values())
+        stage1_bounds = {"bf16_full": cast_stage.MAX_NEW_BYTES}
+        result, outcome, _ = invoke_stage(
+            "h3_cast_shared_vae", 1, stage1_models, allowed, stage1_bounds, interrupt=True
+        )
+        assert result is None and outcome.terminal == "failed", outcome
+        assert len(cast_reads) == 1, cast_reads
+        cast_reads.clear()
+        result, outcome, _ = invoke_stage(
+            "h3_cast_shared_vae", 2, stage1_models, allowed, stage1_bounds
+        )
+        assert outcome.terminal == "succeeded" and result is not None, outcome
+        assert len(cast_reads) == 2, cast_reads
+        updated = result.result.value
+        cast_reads.clear()
+        replay, outcome, _ = invoke_stage(
+            "h3_cast_shared_vae", 3, stage1_models, allowed, stage1_bounds
+        )
+        assert outcome.terminal == "succeeded" and replay.result.value == updated, outcome
+        assert cast_reads == []
+        allowed[updated.manifest.digest] = updated.manifest.length
+        models = {
+            name: _derive_model(H3FullTransformer, manifest)
+            for name, manifest in attach_stage.SOURCES.items()
+        }
+        models["updated_bf16"] = _derive_model(H3FullTransformer, updated.manifest.digest)
+        transaction_type: Any = WeightsTransaction
+        saved_add, saved_read = transaction_type.add_part, transaction_type.source_read_into
+
+        def no_tensor_io(*_: Any, **__: Any) -> Any:
+            raise AssertionError("stage two must not read or add tensor payload")
+
+        transaction_type.add_part = no_tensor_io
+        transaction_type.source_read_into = no_tensor_io
+        try:
+            result, outcome, _ = invoke_stage(
+                "h3_attach_shared_vae",
+                1,
+                models,
+                allowed,
+                {name: attach_stage.MAX_NEW_BYTES for name in attach_stage.SOURCES},
+            )
+            assert outcome.terminal == "succeeded" and result is not None, outcome
+        finally:
+            transaction_type.add_part, transaction_type.source_read_into = saved_add, saved_read
+            lanes._read_f32 = original_read
+        artifacts = {
+            "bf16-full": updated,
+            **{name.replace("_", "-"): value for name, value in result.result.value.items()},
+        }
+        shared_vae = header(store, updated.manifest.digest)["components"]["video_vae"]
+        for lane, artifact in artifacts.items():
+            produced = header(store, artifact.manifest.digest)
+            before = original[lane]
+            assert produced["components"]["video_vae"] == shared_vae
+            for component in lanes.COMPONENTS:
+                if component != "video_vae":
+                    assert produced["components"][component] == before["components"][component]
+            assert produced["configs"]["untouched"] == before["configs"]["untouched"]
+            if lane != "mxfp8-pruned":
+                assert produced["configs"]["model"] == before["configs"]["model"]
+            else:
+                config = canonical_json.decode(produced["configs"]["model"])
+                assert all("table_keys" in config[f"{task}_dit"]["cozy_h3"] for task in TASKS)
+        print(
+            json.dumps(
+                {
+                    "two_stage_native_outputs": 4,
+                    "stage1_casts": 3,
+                    "stage1_resumed_casts": 2,
+                    "stage1_replay_reads": 0,
+                    "stage2_tensor_reads": 0,
+                    "stage2_tensor_additions": 0,
+                    "all_dit_and_quantized_object_refs_preserved": True,
+                    "shared_vae_object_refs_equal": True,
+                    "only_mxfp8_metadata_upgraded": True,
                 }
             )
         )
