@@ -11,6 +11,7 @@ import time
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import numpy as np
 import tensorfs
@@ -316,24 +317,24 @@ def main() -> None:
             for name, manifest in attach_stage.SOURCES.items()
         }
         models["updated_bf16"] = _derive_model(H3FullTransformer, updated.manifest.digest)
-        saved_add, saved_read = WeightsTransaction.add_part, WeightsTransaction.source_read_into
 
         def no_tensor_io(*_: Any, **__: Any) -> Any:
             raise AssertionError("stage two must not read or add tensor payload")
 
-        WeightsTransaction.add_part = no_tensor_io
-        WeightsTransaction.source_read_into = no_tensor_io
         try:
-            result, outcome, _ = invoke_stage(
-                "h3_attach_shared_vae",
-                1,
-                models,
-                allowed,
-                {name: attach_stage.MAX_NEW_BYTES for name in attach_stage.SOURCES},
-            )
+            with (
+                patch.object(WeightsTransaction, "add_part", no_tensor_io),
+                patch.object(WeightsTransaction, "source_read_into", no_tensor_io),
+            ):
+                result, outcome, _ = invoke_stage(
+                    "h3_attach_shared_vae",
+                    1,
+                    models,
+                    allowed,
+                    {name: attach_stage.MAX_NEW_BYTES for name in attach_stage.SOURCES},
+                )
             assert outcome.terminal == "succeeded" and result is not None, outcome
         finally:
-            WeightsTransaction.add_part, WeightsTransaction.source_read_into = saved_add, saved_read
             lanes._read_f32 = original_read
         artifacts = {
             "bf16-full": updated,
