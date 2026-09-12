@@ -45,7 +45,7 @@ def tiny_plan() -> norm.NormalizationPlan:
             "vae": {"raw.attention": tensor("f16", (2, 2, 1, 1))},
             "text_encoder": {
                 "embedding": tensor("f16", (2, 2)),
-                "text_model.embeddings.position_ids": tensor("i64", (1, 4)),
+                "text_model.embeddings.position_ids": tensor("f16", (1, 4)),
             },
             "text_encoder_2": {
                 "qkv": tensor("f16", (6, 2)),
@@ -76,8 +76,8 @@ def source(
         additions = {}
         for key, spec in rows.items():
             size = math.prod(spec.shape)
-            if spec.dtype == "i64":
-                positions = np.arange(size, dtype="<i8")
+            if key == "text_model.embeddings.position_ids":
+                positions = np.arange(size, dtype="<f2" if spec.dtype == "f16" else "<i8")
                 value = (positions[::-1] if bad_positions else positions).tobytes()
             else:
                 # Include signed zero and a NaN payload: normalization must preserve bits.
@@ -222,6 +222,25 @@ def main() -> None:
     assert routes_for(norm.PLAN) == norm.PLAN.targets
     assert len(norm.PLAN.targets) == 2641
     assert norm.PLAN.plain == next(d for alias, d in tensorfs.seed_digests() if alias == "plain/1")
+    for dtype in (np.dtype("<f2"), np.dtype("<i8")):
+        valid_positions = np.arange(77, dtype=dtype)
+        norm._validate_position_ids(valid_positions.tobytes(), dtype, 77)
+        for bad_positions in (valid_positions[::-1], np.full(77, -1, dtype=dtype)):
+            try:
+                norm._validate_position_ids(bad_positions.tobytes(), dtype, 77)
+            except UnsupportedInput:
+                pass
+            else:
+                raise AssertionError("changed position IDs accepted")
+    for value in (0.5, float("nan"), float("inf")):
+        bad_positions = np.arange(77, dtype="<f2")
+        bad_positions[1] = value
+        try:
+            norm._validate_position_ids(bad_positions.tobytes(), np.dtype("<f2"), 77)
+        except UnsupportedInput:
+            pass
+        else:
+            raise AssertionError("noninteger or nonfinite position ID accepted")
     with tempfile.TemporaryDirectory(prefix="sdxl-normalization-") as temporary:
         root = Path(temporary)
         store = tensorfs.Store.init(root / "store")

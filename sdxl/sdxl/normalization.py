@@ -111,6 +111,14 @@ def _bytes(transaction: WeightsTransaction, route: TensorRoute, spec: SourceTens
     return np.frombuffer(raw, dtype="<u2").reshape(spec.shape).T.copy().tobytes()
 
 
+def _validate_position_ids(raw: bytes, dtype: np.dtype[Any], count: int) -> None:
+    values = np.frombuffer(raw, dtype=dtype)
+    # Exact comparison also rejects fractions, infinities and NaNs. The reviewed
+    # single-file checkpoint stores this integer sequence losslessly as F16.
+    if not np.array_equal(values, np.arange(count, dtype="<i8")):
+        raise UnsupportedInput("SDXL source changed the constructor's position IDs")
+
+
 def _normalize(
     source: QuantizationSource,
     weights: WeightsSink,
@@ -156,9 +164,10 @@ def _normalize(
         )
         if position is not None:
             count = math.prod(position.shape)
-            if position.dtype != "i64" or not 0 < count <= 77:
+            if position.dtype not in {"f16", "i64"} or not 0 < count <= 77:
                 raise UnsupportedInput("unexpected SDXL position-ID geometry")
-            raw = bytearray(count * 8)
+            dtype = np.dtype("<f2" if position.dtype == "f16" else "<i8")
+            raw = bytearray(count * dtype.itemsize)
             transaction.source_read_into(
                 "source",
                 "text_encoder",
@@ -167,8 +176,7 @@ def _normalize(
                 0,
                 memoryview(raw),
             )
-            if not np.array_equal(np.frombuffer(raw, dtype="<i8"), np.arange(count, dtype="<i8")):
-                raise UnsupportedInput("SDXL source changed the constructor's position IDs")
+            _validate_position_ids(bytes(raw), dtype, count)
         completed = transaction.completed_parts
         for index, route in enumerate(plan.targets):
             ctx.raise_if_cancelled()
