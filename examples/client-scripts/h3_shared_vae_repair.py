@@ -5,13 +5,13 @@
 # minimax-h3-tools = { path = "../../minimax-h3-tools", editable = true }
 # [tool.cozy.models]
 # bf16_full = """\
-# paul/minimax-h3@sha256:d1b1fd76b6b67ad55c0d1692076ed32835229dfa4a34c0ad7b12645ba50ec2a5"""
+# paul/minimax-h3#sha256:d1b1fd76b6b67ad55c0d1692076ed32835229dfa4a34c0ad7b12645ba50ec2a5"""
 # bf16_pruned = """\
-# paul/minimax-h3@sha256:d4499d1e7125b9b4c62a5a926c1fcc3e8069bfb5b9a95aa1eb785b05663303e2"""
+# paul/minimax-h3#sha256:d4499d1e7125b9b4c62a5a926c1fcc3e8069bfb5b9a95aa1eb785b05663303e2"""
 # fp8_pruned = """\
-# paul/minimax-h3@sha256:d64f250c556b28889fb0c900643bf2028fa92cad619d8cc4b716d6145ca7d275"""
+# paul/minimax-h3#sha256:d64f250c556b28889fb0c900643bf2028fa92cad619d8cc4b716d6145ca7d275"""
 # mxfp8_pruned = """\
-# paul/minimax-h3@sha256:f2e16ba7bc09be3d7ad76d66c336e2c1ebab55770b777c84b43f3719a17fc991"""
+# paul/minimax-h3#sha256:f2e16ba7bc09be3d7ad76d66c336e2c1ebab55770b777c84b43f3719a17fc991"""
 # [tool.cozy.weights]
 # bf16_full = 6442450944
 # bf16_pruned = 6442450944
