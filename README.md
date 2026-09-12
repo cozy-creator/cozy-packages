@@ -143,14 +143,45 @@ GPU numerical qualification.
 The H3 package exposes both official actions from one model generation. Its normal
 `model: H3Model` slot contains only the two DiTs, text encoder and VAEs.
 
-The `fl2va_turbo` and `ref2va_turbo` functions instead take one `model: H3TurboModel`.
-Its checkpoint contains the five base roots plus `fl2va_turbo` and `ref2va_turbo`,
-produced by `minimax-h3-tools/prepare-turbo`. Each sampling scope holds its DiT and
-overlay together. LoRA hooks are installed during construction, before Runtime
-chooses fusion or Ulysses execution. Existing ordinary checkpoints retain their
-five-root contract; a turbo checkpoint is required explicitly, with no default
-until one is published and qualified. Both classes declare degrees 2 and 4;
-CPU parity checks do not establish real multi-GPU clip speed or quality.
+The `fl2va_turbo` and `ref2va_turbo` functions take two independent model slots:
+`base_model: H3TurboBase` holds an AdaLN-pruned five-root checkpoint, and
+`turbo_lora: H3TurboLoRA` holds only `fl2va_turbo` and `ref2va_turbo`. Both
+checkpoints are selected explicitly and must have matching DiT configurations;
+the turbo functions have no model defaults.
+Each sampling scope holds its base DiT and separate overlay together. LoRA hooks
+are installed during construction, before Runtime chooses fusion or Ulysses
+execution. All three model classes declare degrees 2 and 4.
+
+H3 1.14.2 requires Runtime 0.16.7 or newer for restoration and residency reporting
+across these model slots, retained derived-buffer aliases, and exact Python-patch
+dependency markers. Its lock selects public Runtime 0.16.8. The worker must satisfy
+that dependency before invocation. CPU parity checks do not establish real
+multi-GPU clip speed or quality.
+
+For source qualification, install the local package from this repository:
+
+```sh
+cozy package install ./minimax-h3 --editable --no-model-download
+```
+
+This needs no package publication. A published release can instead be installed
+with `cozy package install paul/minimax-h3 --version=1.14.2 --no-model-download`
+once available. With both checkpoint references available, a turbo invocation
+selects their exact releases and lanes independently:
+
+```sh
+cozy run local/minimax-h3/fl2va_turbo \
+  'prompt=<your H3 prompt>' duration_s=5 seed=24680 \
+  'model.base_model=<org/base-model>@<release>/<lane>' \
+  'model.turbo_lora=<org/turbo-lora>@<release>/<lane>' \
+  --rental=<existing-rental-name> --await
+```
+
+For the published installation, use `paul/minimax-h3/fl2va_turbo` instead.
+Repeat with explicitly selected two-H100 and four-H100 rentals for the GPU proof.
+The rental's device group selects the parallel degree; there is no request field
+for it. Record the installed package release, both checkpoint digests, worker
+Runtime version, actual GPU identities, completed video/audio and measured timings.
 
 The ordinary action syntax is:
 
