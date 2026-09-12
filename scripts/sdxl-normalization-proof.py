@@ -193,7 +193,7 @@ def component_equivalence(
         )
         return weights, models, attempt
 
-    parts = {}
+    parts: dict[str, tuple[str, int]] = {}
     for component in norm._COMPONENTS:
         weights, models, attempt = sink(
             "component-" + component, {"source": (manifest, length)}, norm.MAX_NEW_BYTES,
