@@ -56,11 +56,16 @@ class LoRAFactors(nn.Module):  # type: ignore[misc]
         inputs = x.reshape(-1, x.shape[-1])
         for start in range(0, int(inputs.shape[0]), _LORA_ROW_CHUNK):
             rows = inputs[start : start + _LORA_ROW_CHUNK]
+            count = rows.shape[0]
+            # Ulysses changes tail lengths. Keep both GEMM row dimensions fixed so
+            # that tail kernel selection cannot change BF16 update rounding.
+            if count < _LORA_ROW_CHUNK:
+                rows = F.pad(rows, (0, 0, 0, _LORA_ROW_CHUNK - count))
             partial = F.linear(rows, self.lora_down.to(rows.dtype))
             update = F.linear(partial, self.lora_up.to(rows.dtype)).to(flat.dtype)
             # addmm_ fuses the up projection and sum, skipping the BF16 update's
             # rounding. Chunked linear + add_ matches the released adapter.
-            flat[start : start + rows.shape[0]].add_(self.scale * update)
+            flat[start : start + count].add_(self.scale * update[:count])
 
 
 class _LoRAHook:
