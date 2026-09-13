@@ -67,7 +67,10 @@ from diffusers import (
 from diffusers.modular_pipelines import PipelineState
 from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference
 from diffusers.modular_pipelines.minimax_h3.before_denoise import MiniMaxH3SetTimestepsStep
-from diffusers.modular_pipelines.minimax_h3.denoise import MiniMaxH3LoopSchedulerStep
+from diffusers.modular_pipelines.minimax_h3.denoise import (
+    MiniMaxH3LoopDenoiser,
+    MiniMaxH3LoopSchedulerStep,
+)
 from PIL import Image as PILImage
 from torch.nn import functional as F
 from torch.utils._python_dispatch import TorchDispatchMode
@@ -4124,6 +4127,103 @@ def turbo_h3_config() -> dict[str, Any]:
     return cast(dict[str, Any], document)
 
 
+def arm_turbo_state() -> None:
+    """The public two-model sample passes its overlay through the real Diffusers state."""
+    torch.manual_seed(512)
+    dit = tiny_pruned_dit(TURBO_CONFIG)
+    overlay = tiny_overlay(TURBO_CONFIG)
+    with torch.no_grad():
+        for module in (dit, overlay):
+            for parameter in module.parameters():
+                parameter.normal_(0, 0.02)
+    dit.install_lora_consumers()
+    dit.set_attention_backend("native")
+    forward = turbo_forward(0, overlay.schedule)
+    original = {ATTENTION_KWARG: TURBO_BANK}
+    state = PipelineState()
+    state.set("attention_kwargs", original)
+    state.set("latents", forward["hidden_states"][0])
+    state.set("audio_latents", forward["audio_hidden_states"][0])
+    state.set("prompt_embeds", forward["encoder_hidden_states"])
+    state.set("row_timestep_plan", [(forward["timestep"], forward["timestep_indices"])])
+    for name in ("token_tags", "position_ids", "video_indices", "audio_indices", "text_indices"):
+        state.set(name, forward[name], kwargs_type="denoiser_input_fields")
+    loop = MiniMaxH3LoopDenoiser()
+    observed: list[Any] = []
+
+    def denoise(task: Any, state: Any, *, on_step: Any, cancel: Any, checks: Any) -> Any:
+        cancel()
+        block_state = loop.get_block_state(state)
+        observed.append(block_state.attention_kwargs.get(OVERLAY_KWARG))
+        _, block_state = loop(SimpleNamespace(transformer=dit), block_state, 0, forward["timestep"])
+        on_step(0)
+        return block_state.noise_pred, block_state.audio_noise_pred
+
+    base = package.H3TurboBase.for_test(
+        pipe=SimpleNamespace(
+            components={"fl2va_dit": dit},
+            _dit_specs={"fl2va": (TURBO_CONFIG, "adaln-pruned", None)},
+            denoise=denoise,
+        )
+    )
+    lora_pipe = object.__new__(official.OfficialH3TurboLoRA)
+    lora_pipe.components = {"fl2va_turbo": overlay}
+    layout = TableLayout.parse(
+        json.loads(canonical_timestep_plan("fl2va_turbo").canonical_bytes())["table_keys"]
+    )
+    lora_pipe.specs = {"fl2va": (TURBO_CONFIG, layout)}
+    lora = package.H3TurboLoRA.for_test(pipe=lora_pipe)
+    with torch.no_grad():
+        expected = dit(
+            **forward, attention_kwargs={ATTENTION_KWARG: TURBO_BANK, OVERLAY_KWARG: overlay}
+        )
+        actual = cast(
+            Any,
+            base.sample_fl2va_turbo(
+                state,
+                turbo_lora=lora,
+                on_step=lambda _step: None,
+                cancel=lambda: None,
+                checks=NumericalChecks(cast(Any, fake_telemetry())),
+            ),
+        )
+    for got, want in zip(actual, expected, strict=True):
+        torch.testing.assert_close(got, want, rtol=2e-5, atol=2e-6)
+    check(
+        "Diffusers denoiser received the separate overlay",
+        len(observed) == 1 and observed[0] is overlay,
+        True,
+    )
+    check(
+        "successful sample restores the original selector",
+        state.get("attention_kwargs") is original,
+        True,
+    )
+    check("sample creates no shadow state attribute", "attention_kwargs" in vars(state), False)
+
+    def cancel() -> None:
+        raise Cancelled("stop before the first forward")
+
+    try:
+        base.sample_fl2va_turbo(
+            state,
+            turbo_lora=lora,
+            on_step=lambda _step: None,
+            cancel=cancel,
+            checks=NumericalChecks(cast(Any, fake_telemetry())),
+        )
+    except Cancelled:
+        pass
+    else:
+        fail("turbo selector cancellation", "cancellation was swallowed")
+    check(
+        "canceled sample restores the original selector",
+        state.get("attention_kwargs") is original,
+        True,
+    )
+    check("DiT remains disarmed after both calls", dit._arming, None)
+
+
 def arm_turbo_artifact() -> None:
     """Separate exact base/turbo constructors and independent Runtime census scopes."""
     document = turbo_h3_config()
@@ -4183,6 +4283,7 @@ ARMS = {
     "turbo-heads": arm_turbo_heads,
     "turbo-lora": arm_turbo_lora,
     "turbo-forward": arm_turbo_forward,
+    "turbo-state": arm_turbo_state,
     "turbo-artifact": arm_turbo_artifact,
     "producer-configs": arm_producer_configs,
     "producer-construction-order": arm_producer_construction_order,
