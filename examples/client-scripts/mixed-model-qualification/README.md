@@ -28,10 +28,14 @@ the inference function's default model before that model has been published.
 ## Mixed input and reuse
 
 ```sh
-cozy run ./compare.py note=initial --rental="$RENTAL" --await --json
-cozy run ./compare.py note=repeat --rental="$RENTAL" --await --json
-cozy run ./compare.py note=cancel hold_for_cancel=true --rental="$RENTAL" --json
+cozy run ./compare.py --rental="$RENTAL" --await --json
+cozy run ./compare.py --rental="$RENTAL" --await --json
 ```
+
+Plain script `main` accepts context and injected services rather than request
+arguments. Set `NOTE` and `HOLD_FOR_CANCEL` at the top of this one-off script when
+selecting the cancellation scenario, then submit with the same command without
+`--await`. Return `HOLD_FOR_CANCEL` to `False` for the post-cancel comparison.
 
 Each comparison creates two separate inference requests with identical seed 24680
 and two steps. Both slots execute different real weights: a newly produced retained
@@ -44,7 +48,7 @@ prove reuse. A caller-only comment edit can additionally qualify edited capture.
 For the hold run, wait for the child's `awaiting-cancel` stage, then use
 `cozy run cancel <parent-run> --json`. The parent and active child should settle as
 cancelled, their active input custody should release, and the original completed
-producer must remain reusable. Run `cozy run ./compare.py note=post-cancel
+producer must remain reusable. Run `cozy run ./compare.py
 --rental="$RENTAL" --await --json` afterwards and compare its producer ID with
 the original; a pre-cancel reuse alone is not a post-cancel custody proof. Stop/restart `cozy run watch <run>` to test client
 reconnection without cancelling work. Cache-miss recovery is automatic through
