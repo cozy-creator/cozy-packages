@@ -3826,6 +3826,40 @@ def arm_turbo_heads() -> None:
         lambda: collapse_head_bank(bank[:31], bias[:31], plan),
         "ValueError",
     )
+    # Odd sequence lengths put partition boundaries inside projection tiles. Small
+    # CPU GEMMs may happen to agree without tiling, so also observe their real
+    # reduction shapes; accelerator evidence covers the differing numeric kernels.
+    x = torch.randn(1, 3079, 7)
+    with _GemmRows() as operations:
+        expected = heads(x, 7)
+        for degree in (2, 4):
+            actual = torch.cat(
+                [heads(part.clone(), 7) for part in x.tensor_split(degree, dim=1)], dim=1
+            )
+            check(
+                f"ragged degree {degree} heads preserve FP32 values",
+                torch.allclose(actual, expected, rtol=1e-6, atol=1e-6),
+                True,
+            )
+    check("head partitions use one GEMM row shape", set(operations.rows), {1024})
+    with _GemmRows() as untiled:
+        for degree in (1, 2, 4):
+            for part in x.tensor_split(degree, dim=1):
+                F.linear(part, heads.weight[7], heads.bias[7])
+    red("whole-shard projection changes GEMM row shapes", len(set(untiled.rows)), 1)
+
+
+class _GemmRows(TorchDispatchMode):  # type: ignore[misc]
+    """Observe real projection shapes without substituting any numeric operation."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[int] = []
+
+    def __torch_dispatch__(self, func: Any, types: Any, args: Any = (), kwargs: Any = None) -> Any:
+        if func == torch.ops.aten.addmm.default:
+            self.rows.append(int(args[1].shape[0]))
+        return func(*args, **(kwargs or {}))
 
 
 class _Allocations(TorchDispatchMode):  # type: ignore[misc]
