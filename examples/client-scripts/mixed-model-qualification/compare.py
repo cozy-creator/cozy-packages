@@ -11,7 +11,6 @@
 from cozy_runtime.author import ScriptContext
 from mixed_model_qualification import Comparison, candidate, combine, result_fields
 
-
 NOTE = "initial"
 HOLD_FOR_CANCEL = False
 
