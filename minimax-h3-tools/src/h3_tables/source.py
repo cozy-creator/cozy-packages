@@ -13,12 +13,9 @@ from cozy_runtime.author import (
     Context,
     Loader,
     Model,
-    WeightsSink,
-    WeightsSource,
-    WeightsTarget,
     canonical_json,
 )
-from tensorfs.derived import SourceInspection
+from tensorfs.derived import SourceInspection, Target
 
 from .kernel import H3Topology, removed_keys, table_shapes
 from .plans import TimestepPlan
@@ -33,7 +30,7 @@ class H3FullTransformer(Model[object]):
         del loader
 
 
-def inspection(ctx: Context, source: H3FullTransformer) -> SourceInspection:
+def inspection(ctx: Context, source: Model[object]) -> SourceInspection:
     """Read H3 planning facts through the exact native source capability."""
     with ctx.tensorfs_source(source) as capability:
         return capability.inspect()
@@ -202,55 +199,57 @@ def validate_adaln_pruned_component(
     return _validate_component(tensors, expected, "AdaLN-pruned")
 
 
-def full_targets() -> dict[str, WeightsTarget]:
+def full_targets() -> dict[str, Target]:
     return {
-        "fl2va_dit": WeightsTarget(
+        "fl2va_dit": Target(
             source="dits",
             source_component="fl2va_dit",
             drop=source_only_keys(),
         ),
-        "ref2va_dit": WeightsTarget(
+        "ref2va_dit": Target(
             source="dits",
             source_component="ref2va_dit",
             drop=source_only_keys(),
         ),
-        "text_encoder": WeightsTarget(
+        "text_encoder": Target(
             source="shared",
             source_component="text_encoder",
             drop=text_source_only_keys(),
         ),
-        "video_vae": WeightsTarget(source="shared", source_component="video_vae"),
-        "audio_vae": WeightsTarget(source="shared", source_component="audio_vae"),
+        "video_vae": Target(source="shared", source_component="video_vae"),
+        "audio_vae": Target(source="shared", source_component="audio_vae"),
     }
 
 
 def structures(
-    artifacts: WeightsSink, sources: Mapping[str, H3FullTransformer]
-) -> dict[str, WeightsSource]:
+    ctx: Context, sources: Mapping[str, H3FullTransformer]
+) -> dict[str, SourceInspection]:
     """One bounded structure read per DISTINCT granted checkpoint, keyed by source alias.
 
     Both slots may bind the same complete checkpoint, and every consumer here — target
     selection and per-component treatment selection alike — wants the same facts.
     """
-    read: dict[str, WeightsSource] = {}
+    read: dict[str, SourceInspection] = {}
     for source in sources.values():
         if source.checkpoint_ref not in read:
-            read[source.checkpoint_ref] = artifacts.structure(source)
+            read[source.checkpoint_ref] = inspection(ctx, source)
     return {alias: read[source.checkpoint_ref] for alias, source in sources.items()}
 
 
 def select_full_targets(
-    artifacts: WeightsSink,
+    ctx: Context,
     sources: Mapping[str, H3FullTransformer],
-    granted: Mapping[str, WeightsSource] | None = None,
-) -> dict[str, WeightsTarget]:
+    granted: Mapping[str, SourceInspection] | None = None,
+) -> dict[str, Target]:
     """Drop source-only rows that remain in these exact granted checkpoints."""
-    observed = structures(artifacts, sources) if granted is None else granted
+    observed = structures(ctx, sources) if granted is None else granted
     keys: dict[str, set[tuple[str, str]]] = {}
     for alias, source in sources.items():
         if source.checkpoint_ref not in keys:
             keys[source.checkpoint_ref] = {
-                (tensor.component, tensor.key) for tensor in observed[alias].tensors
+                (component, key)
+                for component, tensors in observed[alias].components.items()
+                for key in tensors
             }
     targets = full_targets()
     return {

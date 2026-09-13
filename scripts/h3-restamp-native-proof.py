@@ -16,12 +16,13 @@ import tensorfs
 import torch
 from cozy_runtime.author import Invocation, ModelArtifact, ObjectRef, attempt, canonical_json
 from cozy_runtime.author._model import _derive_model
-from cozy_runtime.internal.weights_sink import WeightsTransactionHost
 from h3_tables import job
 from h3_tables._table_layout import TableLayout
 from h3_tables.kernel import H3Topology, table_shapes
 from h3_tables.plans import TASKS
 from h3_tables.source import H3FullTransformer
+
+from native_execution_fixture import NativeExecution
 
 
 def mint(store: Any, config: dict[str, Any]) -> ModelArtifact:
@@ -96,29 +97,22 @@ def main() -> None:
         root = Path(directory)
         store = tensorfs.Store.init(root / "store")
         source = mint(store, config)
-        host = WeightsTransactionHost(
-            store=store,
-            owner_scope="restamp",
-            request_id="restamp",
-            invocation_spec_digest="sha256:" + "21" * 32,
-            work_fingerprint="sha256:" + "22" * 32,
-            writer_session_id=1,
-            allowed_sources={source.manifest.digest: source.manifest.length},
-            output_bounds={"restamped": 128 << 10},
-        )
-        result, outcome, _ = attempt(
-            job.app.get("restamp"),
-            {},
-            Invocation(
-                "restamp",
-                root / "attempt",
-                time.monotonic() + 60,
-                models={"lane": _derive_model(H3FullTransformer, source.manifest.digest)},
-                weights=host.open,
-                weights_source_structure=host.structure,
-                weights_source_config=host.config,
-            ),
-        )
+        with NativeExecution(
+            store, root, "restamp", {"lane": source}, {"restamped": 128 << 10}
+        ) as execution:
+            result, outcome, _ = attempt(
+                job.app.get("restamp"),
+                {},
+                Invocation(
+                    "restamp",
+                    root / "attempt",
+                    time.monotonic() + 60,
+                    models={"lane": _derive_model(H3FullTransformer, source.manifest.digest)},
+                    tensorfs_output=execution.client.open_output,
+                    tensorfs_source=execution.client.source,
+                    tensorfs_adopt=execution.client.adopt_model,
+                ),
+            )
         assert outcome.terminal == "succeeded" and result is not None, outcome
         before_raw = store.manifest(source.manifest.digest)["header"]
         after_raw = store.manifest(result.result.manifest.digest)["header"]

@@ -9,7 +9,6 @@ from typing import Any, Literal, cast
 
 import msgspec
 import numpy as np
-import tensorfs
 from cozy_runtime.author import (
     Context,
     ModelArtifact,
@@ -28,6 +27,7 @@ from tensorfs.derived import (
     SourceInspection,
     Target,
     Tensor,
+    derive,
 )
 
 MAX_NEW_BYTES = 1 << 30
@@ -166,7 +166,7 @@ def _normalize(
         configs={name: Config("add") for name in configs},
         order=tuple((row.component, row.key) for row in plan.targets),
     )
-    with tensorfs.derive(ctx.output("model"), definition) as transaction:
+    with derive(ctx.output("model"), definition) as transaction:
         if transaction.receipt is not None:
             receipt = transaction.receipt
             assert receipt is not None
@@ -270,7 +270,7 @@ def _assemble_normalized(
         configs=configs,
         order=tuple((row.component, row.key) for row in plan.targets),
     )
-    with tensorfs.derive(ctx.output("model"), definition) as transaction:
+    with derive(ctx.output("model"), definition) as transaction:
         return ctx.adopt_model(transaction.receipt or transaction.commit())
 
 

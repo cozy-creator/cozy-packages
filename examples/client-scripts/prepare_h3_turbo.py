@@ -27,7 +27,7 @@ The wheel must satisfy the declared Runtime floor, which includes typed Context
 injection. No PyPI publication or global installation is needed.
 """
 
-from cozy_runtime.author import Context, Telemetry, WeightsSink
+from cozy_runtime.author import Context, Telemetry
 from cozy_runtime.author.publication import publish_release, upload_checkpoint
 from h3_tables.source import H3FullTransformer
 from h3_tables.turbo import build_turbo_adapter
@@ -39,7 +39,6 @@ async def main(
     full: H3FullTransformer,
     fl2va_adapter: H3FullTransformer,
     ref2va_adapter: H3FullTransformer,
-    weights: WeightsSink,
     tel: Telemetry,
 ) -> dict[str, str]:
     turbo = build_turbo_adapter(
@@ -47,7 +46,6 @@ async def main(
         full=full,
         fl2va_adapter=fl2va_adapter,
         ref2va_adapter=ref2va_adapter,
-        weights=weights,
         tel=tel,
     )
     checkpoint = await upload_checkpoint(turbo, destination="paul/minimax-h3-turbo-lora")

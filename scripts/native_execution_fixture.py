@@ -6,6 +6,7 @@ import hashlib
 import socket
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -31,6 +32,7 @@ class NativeExecution:
         outputs: dict[str, int],
         *,
         epoch: int = 1,
+        after_checkpoint: Callable[[Any], None] | None = None,
     ) -> None:
         self.spool = root / f"{name}-{epoch}"
         self.spool.mkdir(parents=True, exist_ok=True)
@@ -88,7 +90,17 @@ class NativeExecution:
             stop=threading.Event(),
             owner_scope=lambda: "package-proof",
         )
+        if after_checkpoint is not None:
+
+            def checkpoint(
+                attempt: Any, transaction: str, binding: Any, facts: dict[str, Any]
+            ) -> None:
+                self.owner.record_checkpoint(attempt, transaction, binding, facts)
+                after_checkpoint(facts)
+
+            self.owner.writer_broker.record_checkpoint = checkpoint
         self.client = ExecutionStorage(self.spool, self.exchange, outputs)
+        self.replayed_outputs: set[str] = set()
 
     @property
     def checkpointed(self) -> bool:
@@ -116,12 +128,18 @@ class NativeExecution:
             answer.descriptor.close()
 
     def context(self) -> Context:
+        def open_output(slot: str, definition: Any) -> Any:
+            transaction = self.client.open_output(slot, definition)
+            if transaction.receipt is not None:
+                self.replayed_outputs.add(slot)
+            return transaction
+
         return Context(
             self.attempt.request_id,
-            time.monotonic() + 60,
+            time.monotonic() + 600,
             _tensorfs_source=lambda model: self.client.source(model.checkpoint_ref),
             _tensorfs_output=lambda slot: OutputCapability(
-                lambda definition: self.client.open_output(slot, definition)
+                lambda definition: open_output(slot, definition)
             ),
             _tensorfs_adopt=self.client.adopt_model,
         )
