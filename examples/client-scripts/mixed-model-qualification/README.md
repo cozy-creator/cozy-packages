@@ -8,6 +8,8 @@ owner's rental. Code and two tiny 2x2 checkpoint matrices are the only task inpu
 The package requires actual CUDA execution but no native custom kernel or large
 model. Its native output grant is 4KiB; each checkpoint has 32 bytes of tensor payload
 plus a native header and inline JSON config. All imports are at module scope.
+The independently captured package lives in `library/`; caller scripts stay
+outside that project so editing their scenarios does not invalidate its memo key.
 
 ## Prepare the published default
 
@@ -48,7 +50,8 @@ The repeated parent must reuse the native producer, as confirmed by ordinary
 `cozy run list --json --full` and `cozy run watch` records; equal bytes alone do not
 prove reuse. A caller-only comment edit can additionally qualify edited capture.
 
-For the hold run, wait for the child's `awaiting-cancel` stage, then use
+The hold run acquires the candidate and starts one held serving child without
+repeating the already-proven numerical comparisons. Wait for its `awaiting-cancel` stage, then use
 `cozy run cancel <parent-run> --json`. The parent and active child should settle as
 cancelled, their active input custody should release, and the original completed
 producer must remain reusable. Run `cozy run ./compare.py

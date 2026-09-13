@@ -4,7 +4,7 @@
 # [tool.uv]
 # default-groups = []
 # [tool.uv.sources]
-# cozy-mixed-model-qualification = {path = ".", editable = true}
+# cozy-mixed-model-qualification = {path = "library", editable = true}
 # ///
 """Compare actual mixed GPU calls, then optionally hold a child for CLI cancellation."""
 
@@ -13,7 +13,7 @@ import json
 from cozy_runtime.author import ScriptContext
 from mixed_model_qualification import candidate, combine
 
-NOTE = "initial"
+NOTE = "isolated-baseline"
 HOLD_FOR_CANCEL = False
 
 
@@ -39,6 +39,10 @@ def result_fields(value: object) -> dict[str, object]:
 
 async def main(ctx: ScriptContext) -> str:
     model = await candidate()
+    if HOLD_FOR_CANCEL:
+        ctx.log(f"Holding producer={model.producer_request_id} for cancellation proof")
+        await combine(model=model, seed=24680, steps=2, hold_for_cancel=True)
+        raise ValueError("held child returned without cancellation")
     first = combine(model=model, seed=24680, steps=2)
     baseline = await first
     if (
@@ -64,6 +68,4 @@ async def main(ctx: ScriptContext) -> str:
         f"Mixed GPU comparison passed; producer={model.producer_request_id}, "
         f"calls={first.request_id},{second.request_id}"
     )
-    if HOLD_FOR_CANCEL:
-        await combine(model=model, seed=24680, steps=2, hold_for_cancel=True)
     return json.dumps(report, sort_keys=True)

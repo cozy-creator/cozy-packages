@@ -4,7 +4,7 @@
 # [tool.uv]
 # default-groups = []
 # [tool.uv.sources]
-# cozy-mixed-model-qualification = {path = ".", editable = true}
+# cozy-mixed-model-qualification = {path = "library", editable = true}
 # [tool.cozy.weights]
 # checkpoint = 4096
 # ///
