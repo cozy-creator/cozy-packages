@@ -31,7 +31,6 @@ from cozy_runtime.author import (
 from cozy_runtime.derive.quantization import (
     MAX_OUTPUT_BYTES,
     ArtifactQuantizationRequest,
-    h3_quantization_plan,
     prepare_quantization,
     quantize_component_into,
 )
@@ -60,6 +59,7 @@ from .operations import assemble_full as assemble_full_artifact
 from .order import current_order
 from .order import full_order as _full_order
 from .plans import TASKS, TimestepPlan, parse_declared_plan
+from .quantization import h3_quantization_plan
 from .source import (
     TARGET_COMPONENT,
     H3FullTransformer,

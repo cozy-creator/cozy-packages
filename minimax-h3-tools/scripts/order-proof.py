@@ -16,7 +16,6 @@ from cozy_runtime.author import (
     canonical_json,
 )
 from cozy_runtime.derive.quantization import (
-    h3_quantization_plan,
     prepare_quantization,
     quantization_additions,
 )
@@ -36,6 +35,7 @@ from h3_tables.kernel import H3Topology, removed_keys, source_shapes, table_shap
 from h3_tables.model_config import parse_production_config
 from h3_tables.order import current_order
 from h3_tables.plans import parse_declared_plan, parse_plan
+from h3_tables.quantization import h3_quantization_plan
 from h3_tables.source import official_full_specs, source_only_keys, text_source_only_keys
 
 PROJECT = Path(__file__).resolve().parents[1]

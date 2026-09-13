@@ -35,11 +35,11 @@ from cozy_runtime.author import (
     WeightsTarget,
 )
 from cozy_runtime.derive.quantization import (
-    h3_quantization_plan,
     prepare_quantization,
 )
 from h3_tables import job, lanes
 from h3_tables.model_config import parse_production_config
+from h3_tables.quantization import h3_quantization_plan
 from h3_tables.source import official_full_specs
 
 PROJECT = Path(__file__).resolve().parents[1]

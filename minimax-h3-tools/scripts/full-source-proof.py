@@ -17,9 +17,12 @@ from cozy_runtime.author import (
     WeightsSourceTensor,
     canonical_json,
 )
-from cozy_runtime.derive.quantization import h3_quantization_plan, prepare_quantization
+from cozy_runtime.derive.quantization import (
+    prepare_quantization,
+)
 from h3_tables import job, lanes, operations
 from h3_tables.kernel import H3Topology, removed_keys
+from h3_tables.quantization import h3_quantization_plan
 
 
 class Structures:

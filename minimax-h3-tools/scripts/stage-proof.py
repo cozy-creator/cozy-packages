@@ -20,10 +20,10 @@ from cozy_runtime.author import (
 )
 from cozy_runtime.derive.quantization import (
     QuantizationStats,
-    h3_quantization_plan,
     prepare_quantization,
 )
 from h3_tables import job
+from h3_tables.quantization import h3_quantization_plan
 
 
 class Interrupted(RuntimeError):
