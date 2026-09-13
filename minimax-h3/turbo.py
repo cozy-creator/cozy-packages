@@ -35,6 +35,8 @@ LORA_FAMILIES = ("to_q", "to_k", "to_v", "to_out.0", "ff.net.0.proj", "ff.net.2"
 TABLED_FAMILY = "adaln_proj.linear"
 #: Bound the rounded up-projection transient while retaining the original input precision.
 _LORA_ROW_CHUNK = 256
+#: Fix the FP32 projection's GEMM shape across Ulysses sequence partitions.
+_HEAD_ROW_CHUNK = 1024
 
 
 class LoRAFactors(nn.Module):  # type: ignore[misc]
@@ -114,7 +116,19 @@ class TurboHeads(nn.Module):  # type: ignore[misc]
         self.bias = nn.Parameter(torch.empty(evaluations, out_features, dtype=torch.float32))
 
     def forward(self, hidden_states: torch.Tensor, step: int) -> torch.Tensor:
-        return F.linear(hidden_states, self.weight[step], self.bias[step])
+        inputs = hidden_states.reshape(-1, hidden_states.shape[-1])
+        weight, bias = self.weight[step], self.bias[step]
+        output = hidden_states.new_empty((*hidden_states.shape[:-1], weight.shape[0]))
+        flat = output.view(-1, weight.shape[0])
+        for start in range(0, int(inputs.shape[0]), _HEAD_ROW_CHUNK):
+            rows = inputs[start : start + _HEAD_ROW_CHUNK]
+            count = rows.shape[0]
+            # Changing M selects different FP32 reduction kernels even with TF32
+            # disabled. Full tiles and tails must execute the same projection.
+            if count < _HEAD_ROW_CHUNK:
+                rows = F.pad(rows, (0, 0, 0, _HEAD_ROW_CHUNK - count))
+            flat[start : start + count].copy_(F.linear(rows, weight, bias)[:count])
+        return output
 
 
 class TurboSchedule:
