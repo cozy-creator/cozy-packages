@@ -131,15 +131,6 @@ class Result(msgspec.Struct):
     next_noise: list[float]
 
 
-class Comparison(msgspec.Struct):
-    note: str
-    producer_request_id: str
-    candidate_checkpoint: str
-    first_request_id: str
-    second_request_id: str
-    result: Result
-
-
 @app.entrypoint(defaults={"adapter": [{"gpu": "*", "lane": BASE_REFERENCE}]})
 def combine(
     ctx: Context,
@@ -183,7 +174,3 @@ def combine(
         hashlib.sha256(bytes(torch.cuda.get_rng_state().tolist())).hexdigest(),
         noise,
     )
-
-
-def result_fields(value: Result) -> dict[str, object]:
-    return msgspec.structs.asdict(value)

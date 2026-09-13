@@ -36,6 +36,9 @@ Plain script `main` accepts context and injected services rather than request
 arguments. Set `NOTE` and `HOLD_FOR_CANCEL` at the top of this one-off script when
 selecting the cancellation scenario, then submit with the same command without
 `--await`. Return `HOLD_FOR_CANCEL` to `False` for the post-cancel comparison.
+The small comparison report is returned as JSON text under `result.value`.
+Only invocable exports are imported from the generated client library; report
+formatting stays in this one-off script.
 
 Each comparison creates two separate inference requests with identical seed 24680
 and two steps. Both slots execute different real weights: a newly produced retained

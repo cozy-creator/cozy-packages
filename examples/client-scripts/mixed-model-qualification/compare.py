@@ -8,14 +8,36 @@
 # ///
 """Compare actual mixed GPU calls, then optionally hold a child for CLI cancellation."""
 
+import json
+
 from cozy_runtime.author import ScriptContext
-from mixed_model_qualification import Comparison, candidate, combine, result_fields
+from mixed_model_qualification import candidate, combine
 
 NOTE = "initial"
 HOLD_FOR_CANCEL = False
 
 
-async def main(ctx: ScriptContext) -> Comparison:
+def result_fields(value: object) -> dict[str, object]:
+    return {
+        name: getattr(value, name)
+        for name in (
+            "seed",
+            "steps",
+            "candidate_checkpoint",
+            "base_checkpoint",
+            "input_sum",
+            "candidate_value",
+            "base_value",
+            "combined_value",
+            "device",
+            "cpu_rng",
+            "cuda_rng",
+            "next_noise",
+        )
+    }
+
+
+async def main(ctx: ScriptContext) -> str:
     model = await candidate()
     first = combine(model=model, seed=24680, steps=2)
     baseline = await first
@@ -30,18 +52,18 @@ async def main(ctx: ScriptContext) -> Comparison:
         raise ValueError("identical seeded calls produced different numerical or RNG results")
     if not first.request_id or not second.request_id or first.request_id == second.request_id:
         raise ValueError("inference calls did not receive independent request identities")
-    report = Comparison(
-        note=NOTE,
-        producer_request_id=model.producer_request_id,
-        candidate_checkpoint=model.manifest.digest,
-        first_request_id=first.request_id,
-        second_request_id=second.request_id,
-        result=baseline,
-    )
+    report = {
+        "note": NOTE,
+        "producer_request_id": model.producer_request_id,
+        "candidate_checkpoint": model.manifest.digest,
+        "first_request_id": first.request_id,
+        "second_request_id": second.request_id,
+        "result": result_fields(baseline),
+    }
     ctx.log(
         f"Mixed GPU comparison passed; producer={model.producer_request_id}, "
         f"calls={first.request_id},{second.request_id}"
     )
     if HOLD_FOR_CANCEL:
         await combine(model=model, seed=24680, steps=2, hold_for_cancel=True)
-    return report
+    return json.dumps(report, sort_keys=True)
