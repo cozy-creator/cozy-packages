@@ -100,6 +100,9 @@ jobs:
       - name: Diagnostic hooks preserve outputs and stop explicitly
         run: PYTHONPATH=minimax-h3 minimax-h3/.venv/bin/python scripts/h3-activation-proof.py
 
+      - name: Private first-step probe preserves model output and RNG
+        run: minimax-h3/.venv/bin/python scripts/h3-first-step-proof.py
+
       - name: Reference fidelity survives conditioning
         run: CUDA_VISIBLE_DEVICES='' minimax-h3/.venv/bin/python scripts/h3-reference-fidelity-proof.py
 
