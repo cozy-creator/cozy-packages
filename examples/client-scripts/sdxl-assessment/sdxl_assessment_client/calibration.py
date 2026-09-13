@@ -7,8 +7,9 @@ from typing import Any, cast
 
 import msgspec
 from cozy_eval import contract
+from cozy_eval.activations import read_activation_pair
 from cozy_eval.errors import DataError
-from cozy_eval.jobs import compare_media, measure_media, measure_quality
+from cozy_eval.jobs import compare_media, measure_activation_pair, measure_media, measure_quality
 from cozy_eval.jobs.measurements import ImageSource
 from cozy_eval.measurement_facts import read_media, read_pair
 from cozy_eval.quality_facts import read_quality
@@ -34,6 +35,8 @@ async def run_control(
     policy_digest: str,
 ) -> Tree:
     """No release effect or adoption: even a provisional PASS is just an observation."""
+    if case == "null" and reference.manifest.digest != candidate.manifest.digest:
+        raise DataError("null control requires the same reference and candidate checkpoint")
     outputs: list[FileAsset] = []
     evidence: dict[str, Any] = {
         "schema": "sdxl-control-evidence@1",
@@ -50,7 +53,7 @@ async def run_control(
         "judge": msgspec.to_builtins(judge),
         "publication_permitted": False,
     }
-    if case in ("null", "quantized", "scale_x2"):
+    if case in ("quantized", "scale_x2"):
         assessment = Assessment(
             generate=generate, out=out, policy=inputs.policy,
             reference=reference, candidate=candidate, judge=judge,
@@ -103,7 +106,31 @@ async def run_control(
             actual_prompt = prompt
             generated = None
             transformation = None
-            if case in ("wrong_object", "wrong_color"):
+            activation_pair = None
+            if case == "null":
+                # Same-checkpoint repeatability is a control, not a candidate assessment.
+                # render() makes another serving call and rejects a reused request ID.
+                repeat = await assessment.render(
+                    workload, index, arm="repeat", model=reference.manifest.digest,
+                    capture=workload.capture,
+                )
+                if baseline.environment != repeat.environment:
+                    raise DataError("null control render environments differ")
+                image = assessment.images[repeat.media]
+                generated = {
+                    "request_id": repeat.request_id,
+                    "checkpoint": repeat.checkpoint,
+                    "environment": msgspec.to_builtins(repeat.environment),
+                }
+                measured = await measure_activation_pair(
+                    reference=assessment.captures[baseline.capture],
+                    candidate=assessment.captures[repeat.capture],
+                )
+                outputs.append(measured.facts)
+                activation_pair = msgspec.to_builtins(
+                    read_activation_pair(measured.facts.read_bytes())
+                )
+            elif case in ("wrong_object", "wrong_color"):
                 actual_prompt = inputs.expectations[f"{case}_prompts"][index]
                 payload = {**workload.payloads[index], "prompt": actual_prompt}
                 call = generate(**payload, model=reference)
@@ -161,8 +188,13 @@ async def run_control(
                 "media": msgspec.to_builtins(read_media(single.facts.read_bytes())),
                 "pair": msgspec.to_builtins(read_pair(pair.facts.read_bytes())),
                 "quality": msgspec.to_builtins(read_quality(quality.facts.read_bytes())),
+                "activation_pair": activation_pair,
                 "assessment_verdict": None,
-                "reason": "a deliberate prompt/pixel control is not a paired checkpoint assessment",
+                "reason": (
+                    "repeatability of two fresh renders of the same checkpoint"
+                    if case == "null" else
+                    "a deliberate prompt/pixel control is not a paired checkpoint assessment"
+                ),
             })
             ctx.log(f"Retained unreviewed {inputs.split}/{case} control {index + 1}/8")
     frozen = await out.commit(
