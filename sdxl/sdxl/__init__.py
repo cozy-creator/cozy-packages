@@ -273,9 +273,9 @@ class SdxlPipeline:
                         ────────────────────────────
                         2641 destinations   6.461 GiB
 
-    fp16 everywhere: it is the checkpoint's stored dtype AND the destination's compute
-    contract, so a `plain` fill stays an encoding-contract copy. The fp8 rung's UNet
-    decodes to the same destinations at fill (cr-006/cr-008c) and this class cannot tell.
+    Construction declares fp16 logical destinations. Plain weights fill those
+    destinations; the runtime may replace supported UNet linear leaves with native
+    encoded implementations when the checkpoint carries FP8 weights.
     """
 
     def __init__(self, config: Any) -> None:
@@ -318,8 +318,12 @@ def build_pipeline(config: Any) -> SdxlPipeline:
     return SdxlPipeline(config)
 
 
-class SdxlModel(Model[SdxlPipeline]):
+class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
     """Admits by pure topology satisfaction: no structural twins, so no stamp keyword.
+
+    Runtime may replace supported linear leaves with encoded implementations. The
+    model invokes those leaves through their forward methods and leaves storage and
+    execution routing to Runtime. Plain checkpoints remain supported.
 
     THREE component sets rather than one coarse whole-pipeline set. The coarse form is
     legal and simpler, and on this card it is not servable: 6.461 GiB of weights declared
