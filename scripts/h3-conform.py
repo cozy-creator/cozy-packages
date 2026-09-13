@@ -4168,7 +4168,10 @@ def arm_turbo_state() -> None:
     )
     lora_pipe = object.__new__(official.OfficialH3TurboLoRA)
     lora_pipe.components = {"fl2va_turbo": overlay}
-    lora_pipe.specs = {"fl2va": (TURBO_CONFIG, {})}
+    layout = TableLayout.parse(
+        json.loads(canonical_timestep_plan("fl2va_turbo").canonical_bytes())["table_keys"]
+    )
+    lora_pipe.specs = {"fl2va": (TURBO_CONFIG, layout)}
     lora = package.H3TurboLoRA.for_test(pipe=lora_pipe)
     with torch.no_grad():
         expected = dit(
