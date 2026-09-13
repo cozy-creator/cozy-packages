@@ -415,17 +415,20 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
         root = base.pipe.components[f"{trunk}_dit"]
         checks.component(f"{trunk}_dit", root)
         checks.component(f"{trunk}_turbo", overlay)
-        original = state.attention_kwargs
-        state.attention_kwargs = {
-            **(original or {}),
-            ATTENTION_KWARG: TURBO_BANK,
-            OVERLAY_KWARG: overlay,
-        }
+        original = state.get("attention_kwargs")
+        state.set(
+            "attention_kwargs",
+            {
+                **(original or {}),
+                ATTENTION_KWARG: TURBO_BANK,
+                OVERLAY_KWARG: overlay,
+            },
+        )
         try:
             with checks.forwards(root, f"{trunk}_dit"):
                 return base.pipe.denoise(task, state, on_step=on_step, cancel=cancel, checks=checks)
         finally:
-            state.attention_kwargs = original
+            state.set("attention_kwargs", original)
 
 
 def _keyframe_roles(assets: KeyframeAssets) -> tuple[int | None, int | None]:
