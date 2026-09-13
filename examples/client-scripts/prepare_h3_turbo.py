@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
 # dependencies = [
-#   "cozy-runtime>=0.16.10.dev0,<1",
+#   "cozy-runtime>=0.16.9,<1",
 #   "minimax-h3-tools>=2.12.1,<3",
 # ]
 # [tool.uv]
