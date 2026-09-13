@@ -31,6 +31,7 @@ from cozy_runtime.author import (
     Telemetry,
     sequence_parallel,
 )
+from safetensors.torch import save
 
 from h3 import FirstLastFrameToVideoTurboInput, H3TurboBase, H3TurboLoRA, fl2va_turbo
 
@@ -57,6 +58,9 @@ def tensor_bytes(value: torch.Tensor) -> Iterator[bytes]:
 def tensor_record(value: torch.Tensor, *, prefix: bool = False) -> dict[str, Any]:
     """Hash original-dtype bytes; retain a small numeric sample for error measurement."""
     original_shape = list(value.shape)
+    original_stride = list(value.stride())
+    original_storage_offset = value.storage_offset()
+    alignment = value.data_ptr() % 256
     if prefix:
         if value.ndim != 3 or value.shape[1] < _PREFIX_ROWS:
             raise ValueError("prefix observation requires at least eight packed rows")
@@ -77,6 +81,9 @@ def tensor_record(value: torch.Tensor, *, prefix: bool = False) -> dict[str, Any
     sample = value[torch.unravel_index(indices, value.shape)] if value.ndim else value.reshape(1)
     return {
         "shape": original_shape,
+        "original_stride": original_stride,
+        "original_storage_offset": original_storage_offset,
+        "data_pointer_mod_256": alignment,
         "observed_shape": list(value.shape),
         "dtype": str(value.dtype),
         "coverage": "global packed rows 0..7 on rank zero" if prefix else "whole tensor",
@@ -90,11 +97,25 @@ def tensor_record(value: torch.Tensor, *, prefix: bool = False) -> dict[str, Any
 class FirstStepTrace:
     def __init__(self) -> None:
         self.records: list[dict[str, Any]] = []
+        self.retained: dict[str, torch.Tensor] = {}
         self.completed_steps = 0
         self.forward = -1
 
     def record(self, name: str, value: Any, *, prefix: bool = False) -> None:
         if isinstance(value, torch.Tensor):
+            if name in (
+                "token_refiner.input",
+                "token_refiner.output",
+                "token_refiner.refiner_blocks.0.attn.input",
+                "token_refiner.refiner_blocks.0.attn.output",
+                "token_refiner.refiner_blocks.0.attn.to_q.output",
+                "token_refiner.refiner_blocks.0.attn.to_k.output",
+                "token_refiner.refiner_blocks.0.attn.to_v.output",
+                "token_refiner.refiner_blocks.0.attn.to_out.0.input",
+            ):
+                if value.numel() * value.element_size() > 2 << 20:
+                    raise ValueError("refiner observation exceeds two MiB per tensor")
+                self.retained[name] = value.detach().to(device="cpu", copy=True).contiguous()
             self.records.append(
                 {
                     "name": name,
@@ -135,6 +156,17 @@ class FirstStepTrace:
             handles.append(root.register_forward_pre_hook(before, with_kwargs=True))
             handles.append(root.register_forward_hook(output_hook("dit", False)))
             for name, prefix_input, prefix_output in (
+                ("proj_in", False, False),
+                ("audio_proj_in", False, False),
+                ("context_embedder", False, False),
+                ("token_refiner", False, False),
+                ("token_refiner.refiner_blocks.0", False, False),
+                ("token_refiner.refiner_blocks.0.attn", False, False),
+                ("token_refiner.refiner_blocks.0.attn.to_q", False, False),
+                ("token_refiner.refiner_blocks.0.attn.to_k", False, False),
+                ("token_refiner.refiner_blocks.0.attn.to_v", False, False),
+                ("token_refiner.refiner_blocks.0.attn.to_out.0", False, False),
+                ("token_refiner.refiner_blocks.0.ff", False, False),
                 ("transformer_blocks.0", False, True),
                 ("norm_out", True, True),
                 ("proj_out", True, False),
@@ -197,6 +229,9 @@ class ProbeInput(msgspec.Struct, forbid_unknown_fields=True):
 
 
 class ProbeOutput(msgspec.Struct):
+    refiner_tensors: Annotated[
+        FileAsset, AssetBound(max_bytes=9 << 20, media_types=("application/octet-stream",))
+    ]
     trace: Annotated[FileAsset, AssetBound(max_bytes=1 << 20, media_types=("application/json",))]
     completed_steps: int
 
@@ -247,7 +282,28 @@ def probe(
         "duration_s": payload.duration_s,
         "versions": {
             name: importlib.metadata.version(name)
-            for name in ("minimax-h3", "torch", "diffusers", "cozy-runtime", "tensorfs")
+            for name in ("h3-first-step", "torch", "diffusers", "cozy-runtime", "tensorfs")
+        },
+        "retained_tensors": {
+            key: {"shape": list(value.shape), "dtype": str(value.dtype)}
+            for key, value in trace.retained.items()
+        },
+        "torch_settings": {
+            "float32_matmul_precision": torch.get_float32_matmul_precision(),
+            "matmul_allow_tf32": torch.backends.cuda.matmul.allow_tf32,
+            "matmul_allow_fp16_reduced_precision_reduction": (
+                torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction
+            ),
+            "matmul_allow_bf16_reduced_precision_reduction": (
+                torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction
+            ),
+            "flash_sdp_enabled": torch.backends.cuda.flash_sdp_enabled(),
+            "mem_efficient_sdp_enabled": torch.backends.cuda.mem_efficient_sdp_enabled(),
+            "math_sdp_enabled": torch.backends.cuda.math_sdp_enabled(),
+            "distributed_initialized": torch.distributed.is_initialized(),
+            "world_size": torch.distributed.get_world_size()
+            if torch.distributed.is_initialized()
+            else 1,
         },
         "coverage": (
             "Whole DiT inputs, block-zero inputs, gathered projection and DiT outputs; "
@@ -261,6 +317,7 @@ def probe(
     if len(raw) > 1 << 20:
         raise ValueError("first-step trace exceeds one MiB")
     return ProbeOutput(
+        refiner_tensors=out.save_bytes(save(trace.retained), media_type="application/octet-stream"),
         trace=out.save_bytes(raw, media_type="application/json"),
         completed_steps=1,
     )
