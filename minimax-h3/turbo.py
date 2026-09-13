@@ -57,7 +57,7 @@ class LoRAFactors(nn.Module):  # type: ignore[misc]
         flat = out.view(-1, out.shape[-1])
         inputs = x.reshape(-1, x.shape[-1])
         for start in range(0, int(inputs.shape[0]), _LORA_ROW_CHUNK):
-            rows = inputs[start : start + _LORA_ROW_CHUNK]
+            rows = inputs[start : start + _LORA_ROW_CHUNK].contiguous()
             count = rows.shape[0]
             # Ulysses changes tail lengths. Keep both GEMM row dimensions fixed so
             # that tail kernel selection cannot change BF16 update rounding.
@@ -121,7 +121,7 @@ class TurboHeads(nn.Module):  # type: ignore[misc]
         output = hidden_states.new_empty((*hidden_states.shape[:-1], weight.shape[0]))
         flat = output.view(-1, weight.shape[0])
         for start in range(0, int(inputs.shape[0]), _HEAD_ROW_CHUNK):
-            rows = inputs[start : start + _HEAD_ROW_CHUNK]
+            rows = inputs[start : start + _HEAD_ROW_CHUNK].contiguous()
             count = rows.shape[0]
             # Changing M selects different FP32 reduction kernels even with TF32
             # disabled. Full tiles and tails must execute the same projection.
