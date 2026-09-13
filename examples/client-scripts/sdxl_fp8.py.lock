@@ -4,7 +4,7 @@ requires-python = ">=3.12, <3.13"
 
 [manifest]
 requirements = [
-    { name = "cozy-runtime", specifier = "==0.16.8" },
+    { name = "cozy-runtime", specifier = "==0.16.10" },
     { name = "numpy", specifier = "==2.5.1" },
     { name = "sdxl", editable = "../../sdxl" },
     { name = "sdxl-assessment-client", editable = "sdxl-assessment" },
@@ -177,7 +177,7 @@ weights = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.16.8"
+version = "0.16.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -188,10 +188,10 @@ dependencies = [
     { name = "protobuf" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/09/82/f801a627677f94889ba0f8256ad1b78f7241ed781d453cd616dbaf8a83e6/cozy_runtime-0.16.8.tar.gz", hash = "sha256:70c485aa6e262fc1c31ac1cac36d716a83359e51fb35e6e10a679373ce59845d", size = 1680105, upload-time = "2026-09-12T21:12:05.115Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/db/24/769dfa918202e2f920de3ab0f753750f2129c0001dc07b9f623f0707efd8/cozy_runtime-0.16.10.tar.gz", hash = "sha256:a825624b3752ae5d3b70250594d6f8639f63c78fa8045841f71edcb5974c4a1a", size = 1686812, upload-time = "2026-09-13T00:38:36.097Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/5f/cbb2008b150cb75e492a8e4302d4885b16b1d7509e88403f1656678f4396/cozy_runtime-0.16.8-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:1111572909e2a7d68c8944666bf407a025b7f883a2bca2445d7e6363c3bf38d0", size = 13660700, upload-time = "2026-09-12T21:12:00.957Z" },
-    { url = "https://files.pythonhosted.org/packages/40/22/df064aa392ec7aba7c503ac76e545759392d9965e985d64b3cdafa17e7c5/cozy_runtime-0.16.8-py3-none-any.whl", hash = "sha256:ea9e9ef7529f0c4ae77f3bac5b820e54d8a1dd490307c918b50d914464b2ab24", size = 1193277, upload-time = "2026-09-12T21:12:03.458Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/6a/19a33d97c9a7988ce5c0f26912c5441d75843cc2af4526b3ae90d8cda782/cozy_runtime-0.16.10-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:3a270f2bed9bc2a4a09e769b7254690fa6247c89ccc9d350cb0855ec470a4020", size = 13661933, upload-time = "2026-09-13T00:38:32.374Z" },
+    { url = "https://files.pythonhosted.org/packages/08/24/0ec4b166147dac0ffcb5934046fcaafd625e8d08a2e31906dea2be411211/cozy_runtime-0.16.10-py3-none-any.whl", hash = "sha256:e2867ed7426fea4822ced37cd7d2af0c8535a5303e3df70175e2ea81960dcdab", size = 1194505, upload-time = "2026-09-13T00:38:34.611Z" },
 ]
 
 [package.optional-dependencies]
@@ -959,7 +959,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cozy-eval", extras = ["jobs", "weights", "judge"], specifier = "==0.7.0" },
-    { name = "cozy-runtime", specifier = "==0.16.8" },
+    { name = "cozy-runtime", specifier = "==0.16.10" },
     { name = "numpy", specifier = "==2.5.1" },
     { name = "tensorfs", specifier = "==0.3.38" },
     { name = "torch", specifier = "==2.13.0" },
