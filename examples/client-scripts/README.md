@@ -4,8 +4,35 @@ Run a Python file directly with `cozy run ./path/to/script.py --rental-only`.
 The client captures the script and its editable dependencies, then executes the
 ordinary `main()` function on the private worker. These files are not published
 packages and have no `package.toml`, App registry, or request/result classes.
-Runtime 0.7.0 or newer is required for typed model/service
-parameters; the dependency is captured with the script.
+Current private capture and preparation require Runtime 0.16.10 or newer on
+both the local client and private worker. The script captures its dependencies.
+
+
+`sdxl_prepare.py` is the small starting example:
+
+```sh
+cozy run examples/client-scripts/sdxl_prepare.py --rental-only --await
+```
+
+Its ordinary `async def main(ctx)` downloads one Civitai checkpoint, converts it
+through TensorFS, normalizes its SDXL components, and calls Runtime's shared
+`quantize()` with the SDXL package's deterministic plan. It returns a retained
+checkpoint. The constants are in the file; there is no request/result class or
+published workflow package. Use `--rental=<name>` to select an existing machine.
+
+Edit the script and run it again. Each invocation starts at `main()`, while the
+library operations look up compatible completed results and validate that their
+bytes still exist. A caller-only edit does not invalidate their keys. Changed
+operation inputs, parameters, plan or relevant implementation produce a new key.
+The native download/conversion/quantization writers can also adopt compatible
+partial work; this is explicit library support, not Python line replay. A Runtime
+upgrade can conservatively invalidate more work than a caller edit.
+
+The same Runtime/TensorFS code is used locally and on a private worker. Each Store's
+`.cozy-workspace/journal.sqlite3` records operation identities, results, progress and
+retention; TensorFS stores the artifact bytes. Reuse requires that Store and its
+retained bytes. There is no need for a previous run ID or Tensorhub publication.
+Inference runs fresh; checkpoint upload and release creation are explicit effects.
 
 - `h3_checkpoint_repair.py` is the completed, guarded repair recipe for exactly
   four historical H3 roots. A corrected checkpoint is refused before mutation.
@@ -59,7 +86,7 @@ capture, memoized weight/media/capture/quality measurements, a fresh Eval fold,
 and explicit checkpoint/report/release effects. The local `sdxl-assessment` helper
 is an unpublished Python library with no package.toml or deployment. Its local App
 registers only the example calibration controls. This consumer requires the coordinated public
-Runtime 0.16.8, TensorFS 0.3.38 and Eval 0.7.0 read-only weight cohort.
+Runtime 0.16.10, TensorFS 0.3.38 and Eval 0.7.0 read-only weight cohort.
 
 The committed policy is a **proposal, not ratification**. Read
 [the v2 rationale and calibration requirements](sdxl-assessment/sdxl_assessment_client/policy/ABSOLUTE-PROPOSAL-v2.md)
@@ -73,7 +100,7 @@ memoized source, conversion and normalization calls. It passes the genuine retai
 ModelArtifact to quality measurements. Confirm disk capacity for its first source
 download (approximately 4.25 GB) and converted model, and confirm the image's numerical
 closure (NumPy 2.5.1, Torch 2.13.0 and torchvision 0.28.0 for the selected CUDA 13.0 image).
-Both scripts and the editable helper carry locks over public Runtime 0.16.8, TensorFS
+Both scripts and the editable helper carry locks over public Runtime 0.16.10, TensorFS
 0.3.38 and Eval 0.7.0; only adjacent authored source remains editable. Keep
 `PUBLISH=False` for calibration. Run via
 `cozy run examples/client-scripts/sdxl_fp8.py --rental-only --await`; do not invoke
@@ -100,5 +127,8 @@ local App under examples and are never added to the deployed SDXL App. The drive
 returns one native Tree of actual review files/facts, never publishes, and refuses an unfrozen held-out
 policy. Calibration, held-out and final-admission prompt/seed sets are disjoint.
 
-No SDXL render, model-quality verdict or release is claimed by these source changes.
-The producer and full real-model qualification remain separate tracker evidence.
+Real SDXL source/conversion/normalization and a baseline render are qualified on
+a retained private L40S; quantization interruption and edited-caller reuse are
+also observed. Full candidate quality and release remain separate tracker gates.
+These examples do not claim laptop-disconnected whole-script execution, which is
+still being implemented.
