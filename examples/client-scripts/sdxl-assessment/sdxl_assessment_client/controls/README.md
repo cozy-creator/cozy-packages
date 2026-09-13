@@ -15,11 +15,19 @@ cozy run examples/client-scripts/sdxl_calibration.py --rental-only --await
 The editable helper is captured automatically; no package publication or manual
 installation is part of this workflow. It has one local App to register private control
 jobs and no package.toml or deployment. Creator's pyproject-only library capture fix
-must be present, together with public Runtime 0.14.2 / TensorFS 0.3.36 / Eval 0.7.
+must be present, together with the helper's pinned Runtime 0.16.10 / TensorFS 0.3.38 /
+Eval 0.7.
 
-`null`, `quantized`, and `scale_x2` each perform eight prompts × three fresh arms on
-the same worker. Null supplies the reference artifact to all three arms. Quantized uses
-the real quantizer. Scale-x2 makes an intentionally damaged native checkpoint by doubling
+`null` performs eight prompts × two fresh renders of the same reference checkpoint.
+Each pair must have distinct request IDs and the same observed execution environment.
+It retains activation-pair, media, image-pair and Qwen checklist facts plus both review
+images. These are repeatability observations for review, with no assessment verdict or
+publication permission. Eval's paired checkpoint assessment requires distinct checkpoint
+identities; manufacturing a different identity would not create a valid null control.
+
+`quantized` and `scale_x2` each perform eight prompts × three fresh arms on the same
+worker. Quantized uses the real quantizer. Scale-x2 makes an intentionally damaged
+native checkpoint by doubling
 every normalized plain F16 UNet tensor, retaining exact other components/configs/order.
 Its genuine source-backed writer checkpoints each completed part; it refuses nonfinite
 source values and F16 overflow. A zero tensor stays zero, so the weight evidence must
