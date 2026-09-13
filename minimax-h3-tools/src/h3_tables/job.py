@@ -876,10 +876,11 @@ def retable(
     )
 
 
+# Native output bounds include newly written construction and provenance configs.
 app.job(
     _adaln_operations.select_adaln_weights,
     name="select-adaln-weights",
-    weights=(WeightsOutput("model", 0),),
+    weights=(WeightsOutput("model", 1 << 20),),
 )
 app.job(
     _adaln_operations.compute_adaln_tables,
@@ -890,15 +891,23 @@ app.job(
     _adaln_operations.apply_adaln,
     name="apply-adaln",
     weights=(
-        WeightsOutput("model", 0),
-        WeightsOutput("fl2va-weights", 0),
-        WeightsOutput("ref2va-weights", 0),
+        WeightsOutput("model", 1 << 20),
+        WeightsOutput("fl2va-weights", 1 << 20),
+        WeightsOutput("ref2va-weights", 1 << 20),
     ),
 )
 
-app.job(assemble_full_artifact, name="assemble-full-artifact", weights=(WeightsOutput("model", 0),))
+app.job(
+    assemble_full_artifact,
+    name="assemble-full-artifact",
+    weights=(WeightsOutput("model", 1 << 20),),
+)
 
-app.job(_adaln_operations.retable_adaln, name="retable-adaln", weights=(WeightsOutput("model", 0),))
+app.job(
+    _adaln_operations.retable_adaln,
+    name="retable-adaln",
+    weights=(WeightsOutput("model", 1 << 20),),
+)
 
 
 def _source_modulation(source: WeightsSource, sections: Mapping[str, dict[str, Any]]) -> str:

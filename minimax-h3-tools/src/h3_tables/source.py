@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 import msgspec
 from cozy_runtime.author import (
+    Context,
     Loader,
     Model,
     WeightsSink,
@@ -17,6 +18,7 @@ from cozy_runtime.author import (
     WeightsTarget,
     canonical_json,
 )
+from tensorfs.derived import SourceInspection
 
 from .kernel import H3Topology, removed_keys, table_shapes
 from .plans import TimestepPlan
@@ -29,6 +31,12 @@ class H3FullTransformer(Model[object]):
 
     def load(self, loader: Loader) -> None:
         del loader
+
+
+def inspection(ctx: Context, source: H3FullTransformer) -> SourceInspection:
+    """Read H3 planning facts through the exact native source capability."""
+    with ctx.tensorfs_source(source) as capability:
+        return capability.inspect()
 
 
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
