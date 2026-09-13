@@ -10,7 +10,7 @@ adapter checkpoints, worker software, and attention route.
 Generate the diagnostic from the exact captured H3 wheel being investigated:
 
 ```sh
-python ./examples/client-scripts/h3-first-step/prepare.py \
+python ./examples/client-scripts/h3-first-step/prepare_h3_first_step.py \
   /absolute/path/to/minimax_h3.whl /absolute/path/to/probe/project
 uv lock --project /absolute/path/to/probe/project
 cozy package install /absolute/path/to/probe/project --editable --no-model-download
