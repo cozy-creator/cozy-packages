@@ -18,7 +18,6 @@ from cozy_runtime.author import (
 from cozy_runtime.derive.operations import QuantizationPlan
 from cozy_runtime.derive.operations import quantize as runtime_quantize
 from cozy_runtime.derive.quantization import (
-    h3_quantization_plan,
     prepare_quantization,
 )
 
@@ -32,6 +31,7 @@ from .adaln_operations import (
 )
 from .model_config import dual_full_config, parse_production_config
 from .order import current_order, full_order
+from .quantization import h3_quantization_plan
 from .source import TARGET_COMPONENT, H3FullTransformer, select_full_targets
 
 
