@@ -38,25 +38,56 @@ def check(name: str, got: object, expected: object) -> None:
     print(f"{FAIL}{name}: got {got!r}, expected {expected!r}")
 
 
-def inputs_of(module: Any, record: list[tuple[int, ...]]) -> None:
+def check_signal(name: str, value: torch.Tensor) -> None:
+    check(f"{name} is finite", bool(torch.isfinite(value).all()), True)
+    check(f"{name} is nonconstant", bool(value.amax() > value.amin()), True)
+
+
+def inputs_of(
+    module: Any, record: list[tuple[int, ...]], *, output_name: str | None = None,
+) -> None:
     """Record every forward's hidden-states shape. A hook records, never invents."""
 
     def hook(_module: Any, args: tuple[Any, ...], kwargs: dict[str, Any], _result: Any) -> None:
         record.append(tuple((args[0] if args else kwargs["hidden_states"]).shape))
+        if output_name is not None:
+            check_signal(output_name, _result[0])
 
     module.register_forward_hook(hook, with_kwargs=True)
 
 
-def decodes_of(vae: Any, record: list[tuple[int, ...]]) -> None:
+def decodes_of(
+    vae: Any, record: list[tuple[int, ...]], *, output_name: str | None = None,
+) -> None:
     """Record every `vae.decode` frame shape — the whole frame, tiled or not."""
     decode = vae.decode
 
     def spy(*args: Any, **kwargs: Any) -> Any:
         result = decode(*args, **kwargs)
-        record.append(tuple((result[0] if isinstance(result, tuple) else result.sample).shape))
+        pixels = result[0] if isinstance(result, tuple) else result.sample
+        record.append(tuple(pixels.shape))
+        if output_name is not None:
+            check_signal(output_name, pixels)
         return result
 
     vae.decode = spy
+
+
+def initialize_fixture(pipe: Any) -> None:
+    """Fill the CPU lifecycle fixture; production Runtime fills checkpoint weights."""
+    generator = torch.Generator().manual_seed(0)
+    with torch.no_grad():
+        for component in pipe.components.values():
+            # This arm proves lifecycle and shapes, not the worker's BF16 numerics.
+            component.float()
+            for name, parameter in component.named_parameters():
+                leaf = name.rsplit(".", 1)[-1]
+                if leaf == "bias":
+                    parameter.zero_()
+                elif parameter.ndim == 1 or leaf == "gamma":
+                    parameter.fill_(1)
+                else:
+                    parameter.uniform_(-0.02, 0.02, generator=generator)
 
 
 def sdxl_config() -> Config:
@@ -150,10 +181,11 @@ def arm_sdxl() -> None:
 def arm_anima() -> None:
     package = load("anima")
     pipe = package.build_pipeline(anima_config())
+    initialize_fixture(pipe)
     dit_inputs: list[tuple[int, ...]] = []
     decoded: list[tuple[int, ...]] = []
-    inputs_of(pipe.components["transformer"], dit_inputs)
-    decodes_of(pipe.components["vae"], decoded)
+    inputs_of(pipe.components["transformer"], dit_inputs, output_name="Anima DiT output")
+    decodes_of(pipe.components["vae"], decoded, output_name="Anima decoded frame")
     model = package.AnimaModel.for_test(pipe=pipe)
     ctx = warm_with_fakes(model)
     check("warm ran without an attempt", ctx.request_id, "")
@@ -162,7 +194,7 @@ def arm_anima() -> None:
           ("text_encoder", "text_conditioner", "transformer", "vae"))
     check("one DiT step at 512px", dit_inputs, [(1, 16, 1, 64, 64)])
     check("decoded one 512px frame", decoded, [(1, 3, 1, 512, 512)])
-    arm_cancelled(package.AnimaModel.for_test(pipe=package.build_pipeline(anima_config())))
+    arm_cancelled(package.AnimaModel.for_test(pipe=pipe))
 
 
 def arm_cancelled(model: Any) -> None:
