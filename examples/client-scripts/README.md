@@ -19,6 +19,9 @@ through TensorFS, normalizes its SDXL components, and calls Runtime's shared
 `quantize()` with the SDXL package's deterministic plan. It returns a retained
 checkpoint. The constants are in the file; there is no request/result class or
 published workflow package. Use `--rental=<name>` to select an existing machine.
+The small example declares compatibility bounds and leaves numerical library
+requirements to SDXL; its lock records the captured versions. The assessment
+examples below pin a specific numerical cohort for reproducible comparisons.
 
 Edit the script and run it again. Each invocation starts at `main()`, while the
 library operations look up compatible completed results and validate that their
