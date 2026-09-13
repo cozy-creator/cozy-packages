@@ -18,6 +18,11 @@ async def main(
     model = await candidate()
     first = combine(model=model, seed=24680, steps=2)
     baseline = await first
+    if (
+        baseline.candidate_checkpoint != model.manifest.digest
+        or baseline.base_checkpoint == model.manifest.digest
+    ):
+        raise ValueError("the serving slots did not retain their separate checkpoint identities")
     second = combine(model=model, seed=24680, steps=2)
     repeated = await second
     if result_fields(baseline) != result_fields(repeated):
