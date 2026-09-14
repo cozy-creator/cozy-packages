@@ -6,8 +6,13 @@ import importlib.metadata
 import time
 import uuid
 
+import diffusers
 import msgspec
+import torch
+from cozy_runtime._build_provenance import COMMIT
 from cozy_runtime.author import App, Bound, Context
+from cozy_runtime.internal import attention
+from cozy_runtime.internal.encoding import DeviceFacts
 
 app = App()
 
@@ -50,12 +55,6 @@ class Result(msgspec.Struct):
     )
 )
 def probe(ctx: Context, payload: Input) -> Result:
-    import diffusers
-    import torch
-    from cozy_runtime._build_provenance import COMMIT
-    from cozy_runtime.internal import attention
-    from cozy_runtime.internal.encoding import DeviceFacts
-
     ctx.raise_if_cancelled()
     if payload.expected_runtime_source != COMMIT:
         raise ValueError(

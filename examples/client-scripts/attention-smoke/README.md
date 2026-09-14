@@ -19,8 +19,10 @@ The input JSON contains the verified `expected_runtime_source`,
 Default H100 backends are FA3 BF16, Sage2, Kitchen INT8 and Sol. For Blackwell,
 request `sdpa`, `flash-attn4` and `flashinfer-bf16-fp8` explicitly instead.
 
-Use a normal serving entrypoint for this model-less GPU probe. A plain script's
-`main()` can be admitted as CPU orchestration. An explicit request attention
+The current worker assigns CPU to this model-free serving entrypoint even on a
+GPU rental, so this command currently refuses its CUDA requirement. This is a
+diagnostic fixture awaiting an explicit raw-GPU demand contract, not a qualified
+ordinary GPU workflow. A plain script's `main()` can also be CPU orchestration. An explicit request attention
 override also has no model attention sites here; the probe itself resolves each
 named backend and runs its numerical check.
 

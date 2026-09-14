@@ -162,6 +162,18 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    ("examples/client-scripts/attention-smoke/smoke.py", "cozy_runtime._build_provenance"): (
+        "Check this diagnostic executes the exact reviewed development wheel. Retire when "
+        "public Runtime provenance exposes its source identity."
+    ),
+    ("examples/client-scripts/attention-smoke/smoke.py", "cozy_runtime.internal"): (
+        "Run the pinned Runtime attention admission checks, without copying their kernel "
+        "validation. Retire when public diagnostic backend lookup exposes those checks."
+    ),
+    ("examples/client-scripts/attention-smoke/smoke.py", "cozy_runtime.internal.encoding"): (
+        "Supply actual assigned-device facts to the private diagnostic admission API. "
+        "Retire alongside that API when public diagnostic backend lookup exists."
+    ),
     ("scripts/h3-assembly-proof.py", "cozy_runtime.author._assets"): (
         "Bind native codec fixtures and their file-state guards to the author invocation. "
         "Retire when a public native asset fixture supports changed-input controls. "
