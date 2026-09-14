@@ -9,9 +9,11 @@
 """Compare actual mixed GPU calls, then optionally hold a child for CLI cancellation."""
 
 import json
+from collections.abc import Awaitable, Callable
+from typing import cast
 
-from cozy_runtime.author import ScriptContext
-from mixed_model_qualification import candidate, combine
+from cozy_runtime.author import ModelArtifact, PendingCall, ScriptContext
+from mixed_model_qualification import Result, candidate, combine
 
 NOTE = "isolated-baseline"
 HOLD_FOR_CANCEL = False
@@ -38,19 +40,22 @@ def result_fields(value: object) -> dict[str, object]:
 
 
 async def main(ctx: ScriptContext) -> str:
-    model = await candidate()
+    # Runtime lifts these worker signatures into client calls, as in sdxl_prepare.py.
+    candidate_call = cast(Callable[..., Awaitable[ModelArtifact]], candidate)
+    combine_call = cast(Callable[..., PendingCall[Result]], combine)
+    model = await candidate_call()
     if HOLD_FOR_CANCEL:
         ctx.log(f"Holding producer={model.producer_request_id} for cancellation proof")
-        await combine(model=model, seed=24680, steps=2, hold_for_cancel=True)
+        await combine_call(model=model, seed=24680, steps=2, hold_for_cancel=True)
         raise ValueError("held child returned without cancellation")
-    first = combine(model=model, seed=24680, steps=2)
+    first = combine_call(model=model, seed=24680, steps=2)
     baseline = await first
     if (
         baseline.candidate_checkpoint != model.manifest.digest
         or baseline.base_checkpoint == model.manifest.digest
     ):
         raise ValueError("the serving slots did not retain their separate checkpoint identities")
-    second = combine(model=model, seed=24680, steps=2)
+    second = combine_call(model=model, seed=24680, steps=2)
     repeated = await second
     if result_fields(baseline) != result_fields(repeated):
         raise ValueError("identical seeded calls produced different numerical or RNG results")
