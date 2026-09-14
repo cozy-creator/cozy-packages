@@ -166,6 +166,15 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "Bind native codec fixtures and their file-state guards to the author invocation. "
         "Retire when a public native asset fixture supports changed-input controls. "
     ),
+    (
+        "examples/client-scripts/h3-attention-oracle/attention_quantized.py",
+        "cozy_runtime.internal.attention_fp8",
+    ): (
+        "Private experiment measures the actual production FP8 quantizer, including "
+        "preprocessing, on identical captured H3 tensors. Avoid copying its implementation "
+        "or relying on a whole-model pin. Retire when public diagnostic backend lookup "
+        "exposes that exact operation."
+    ),
     ("scripts/h3-shared-vae-repair-proof.py", "cozy_runtime.author._model"): (
         "Bind exact native fixture manifests; retire when a public native source factory can "
         "bind production-shaped manifests instead of test:// identities. "
