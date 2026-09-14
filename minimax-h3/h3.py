@@ -56,6 +56,7 @@ from cozy_runtime.author import (
 )
 from msgspec.structs import replace
 
+from assembly import MAX_SHOTS, assemble_video
 from gates import MediaFacts, refuse_before_encode, report_after_encode
 from official import (
     FPS,
@@ -1207,8 +1208,6 @@ def _references_to_video(
 _KEYFRAME_MAX_BYTES = 64 * _MIB
 _KEYFRAME_MAX_DECODED_BYTES = 3 * 16_777_216
 
-MAX_SHOTS = 8  # se-014's own bound: it trims the replayed frame from shots 2-8.
-
 
 class Shot(msgspec.Struct, forbid_unknown_fields=True):
     """One segment's authored identity.
@@ -1518,3 +1517,4 @@ async def long_form(
 
 
 app.job(long_form)
+app.job(assemble_video, emits_media=True)

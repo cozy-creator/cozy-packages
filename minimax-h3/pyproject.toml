@@ -30,6 +30,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 only-include = [
     "adaln_pruned.py",
+    "assembly.py",
     "conditioner.py",
     "gates.py",
     "h3.py",

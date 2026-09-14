@@ -3256,7 +3256,7 @@ def arm_interface() -> None:
     check(
         "composition and its shot are jobs, beside the untouched actions",
         set(jobs),
-        {"long_form", "segment"},
+        {"long_form", "segment", "assemble_video"},
     )
     # The one property decision #601 turns on: the composer holds NO device while its shots
     # render. A model slot here would make one attempt hold eight shots.
