@@ -68,8 +68,8 @@ def summarize(path: Path) -> dict[str, Any]:
     for kernel in kernels:
         device = str(kernel.get("args", {}).get("device", f"pid:{kernel.get('pid')}"))
         devices[device].append((kernel["ts"], kernel["ts"] + kernel["dur"]))
-    with path.open("rb") as source:
-        digest = hashlib.file_digest(source, "sha256").hexdigest()
+    with path.open("rb") as binary_source:
+        digest = hashlib.file_digest(binary_source, "sha256").hexdigest()
     return {
         "path": str(path.resolve()),
         "sha256": digest,

@@ -26,6 +26,7 @@ from cozy_runtime.author import (
     Telemetry,
     uses_components,
 )
+from torch._dynamo.utils import compile_times, counters
 
 from h3 import FirstLastFrameToVideoInput, H3Model, H3VideoOutput, KeyframeAssets, fl2va
 
@@ -287,8 +288,6 @@ def execute(
         elapsed = time.perf_counter() - started
         _ACTIVE.reset(token)
     compiler = state.compiler
-    from torch._dynamo.utils import compile_times, counters
-
     document = {
         "format": "h3.compile-oracle/1",
         "status": status,
