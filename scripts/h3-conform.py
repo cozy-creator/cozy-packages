@@ -3826,6 +3826,44 @@ def arm_turbo_heads() -> None:
         lambda: collapse_head_bank(bank[:31], bias[:31], plan),
         "ValueError",
     )
+    # Odd sequence lengths put partition boundaries inside projection tiles. Small
+    # CPU GEMMs may happen to agree without tiling, so also observe their real
+    # reduction shapes; accelerator evidence covers the differing numeric kernels.
+    x = torch.randn(1, 7, 3079).transpose(1, 2)
+    with _GemmRows() as operations:
+        expected = heads(x, 7)
+        for degree in (2, 4):
+            actual = torch.cat(
+                [heads(part.clone(), 7) for part in x.tensor_split(degree, dim=1)], dim=1
+            )
+            check(
+                f"ragged degree {degree} heads preserve FP32 values",
+                torch.allclose(actual, expected, rtol=1e-6, atol=1e-6),
+                True,
+            )
+    check("head partitions use one GEMM row shape", set(operations.rows), {1024})
+    check("head tiles use row-major operands", set(operations.strides), {(7, 1)})
+    with _GemmRows() as untiled:
+        for degree in (1, 2, 4):
+            for part in x.tensor_split(degree, dim=1):
+                F.linear(part, heads.weight[7], heads.bias[7])
+    red("whole-shard projection changes GEMM row shapes", len(set(untiled.rows)), 1)
+
+
+class _GemmRows(TorchDispatchMode):  # type: ignore[misc]
+    """Observe real projection shapes without substituting any numeric operation."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[int] = []
+        self.strides: list[tuple[int, int]] = []
+
+    def __torch_dispatch__(self, func: Any, types: Any, args: Any = (), kwargs: Any = None) -> Any:
+        if func in (torch.ops.aten.addmm.default, torch.ops.aten.mm.default):
+            operand = args[1] if func == torch.ops.aten.addmm.default else args[0]
+            self.rows.append(int(operand.shape[0]))
+            self.strides.append((int(operand.stride(0)), int(operand.stride(1))))
+        return func(*args, **(kwargs or {}))
 
 
 class _Allocations(TorchDispatchMode):  # type: ignore[misc]
@@ -3887,6 +3925,22 @@ def arm_turbo_lora() -> None:
         "an output that is not a plain row-major buffer refuses rather than copying",
         lambda: factors.accumulate(x, base.transpose(1, 2).contiguous().transpose(1, 2)),
         "ValueError",
+    )
+    transposed = x.transpose(1, 2).contiguous().transpose(1, 2)
+    canonical = base.clone()
+    factors.accumulate(transposed.contiguous(), canonical)
+    out = base.clone()
+    with (
+        _GemmRows() as operations,
+        _Allocations(transposed, out, down, up) as allocations,
+    ):
+        factors.accumulate(transposed, out)
+    check("LoRA input layout does not change values", torch.equal(out, canonical), True)
+    check("LoRA tiles use row-major operands", set(operations.strides), {(width, 1), (rank, 1)})
+    check(
+        "canonicalizing LoRA input layout still bounds every transient to 256 rows",
+        max(allocations.sizes) <= 256 * max(width, out_features),
+        True,
     )
 
 
