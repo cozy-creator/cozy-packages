@@ -1,6 +1,6 @@
 # Long-form video
 
-The long-form entrypoint renders 2–8 shots in sequence. Each shot starts from the
+The long-form entrypoint renders 1–8 shots in sequence. Each shot starts from the
 previous shot's final frame. Shared subject and sound descriptions are repeated in
 every prompt. It returns a playable video and a prefix directory containing the
 original clips, continuation frames, and their recorded rendering inputs.
@@ -8,6 +8,11 @@ original clips, continuation frames, and their recorded rendering inputs.
 Four 15-second shots produce 1,445 frames at 24 fps (60.208 seconds); eight produce
 2,889 frames (120.375 seconds). One repeated frame is removed at each join. This
 is shot-to-shot continuation: appearance and sound can still drift between shots.
+
+You can start with one shot, inspect its video, and extend its returned prefix to
+two, four, or eight shots. Each extension renders only the added shots. The CPU
+composition job awaits one serving call at a time; Runtime owns model admission
+and warm executor reuse.
 
 Save a request such as this as `shots.json`:
 

@@ -1303,7 +1303,7 @@ class SegmentReceipt(msgspec.Struct):
 class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
     """A shot list. The identity and audio anchors are repeated verbatim in every segment."""
 
-    shots: Annotated[list[Shot], msgspec.Meta(min_length=2, max_length=MAX_SHOTS)]
+    shots: Annotated[list[Shot], msgspec.Meta(min_length=1, max_length=MAX_SHOTS)]
     subject_definitions: str = ""
     overall_soundscape: str = ""
     non_diegetic_music: str = ""
