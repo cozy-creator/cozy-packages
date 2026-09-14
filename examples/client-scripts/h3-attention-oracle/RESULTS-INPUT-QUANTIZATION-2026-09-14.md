@@ -11,8 +11,9 @@ Capture sites were step 0, blocks 0 and 49, with full `[1,109104,56,128]` Q/K/V.
 Each roundtrip uses the actual Runtime quantizer, restores selected inputs to
 BF16 and calls the same BF16 FA3 kernel. Unselected inputs remain unchanged.
 Times include all preprocessing, with five timed calls after warmup. Each
-backend passed its fixed-input `torch.equal` repeat comparison; source input
-hashes were unchanged. These are operation errors, not video quality scores.
+backend showed exact numerical equality in its floating `torch.equal` repeat
+comparison. Signed zero is not distinguished, so this is not raw output-byte
+proof. Source input hashes were unchanged. These are operation errors, not video quality scores.
 
 ## Q/K/V isolation
 
