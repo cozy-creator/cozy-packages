@@ -27,19 +27,24 @@ from attention_backends import build_backend
 from cozy_runtime.author import (
     App,
     AssetBound,
+    AssetLimits,
+    Assets,
     Context,
     FileAsset,
+    Image,
     Outputs,
     Telemetry,
     uses_components,
 )
 from cozy_runtime.author._attention_scope import _ACTIVE_LAYOUT
 from cozy_runtime.internal import attention_sol
+from cozy_runtime.models.minimax_h3 import H3Model
 from diffusers.models import attention_dispatch as dispatch
 
-from h3 import FirstLastFrameToVideoInput, H3Model, KeyframeAssets, fl2va
+from h3 import FirstLastFrameToVideoInput, fl2va
 
 app = App()
+KeyframeAssets = Annotated[Assets[Image], AssetLimits(images=2)]
 _ACTIVE: ContextVar[Capture | None] = ContextVar("h3_attention_capture", default=None)
 
 
