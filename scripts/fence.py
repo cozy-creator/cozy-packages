@@ -962,7 +962,11 @@ def fence_interface_format() -> Fence:
 def fence_publication_metadata() -> Fence:
     bad: list[str] = []
     expected_projects = {"anima", "sdxl", "minimax-h3", "minimax-h3-tools"}
-    actual_projects = {rel(path.parent) for path in ROOT.rglob("package.toml") if ours(path)}
+    actual_projects = {
+        rel(path.parent)
+        for path in ROOT.rglob("package.toml")
+        if ours(path) and not path.is_relative_to(ROOT / "examples" / "client-scripts")
+    }
     if actual_projects != expected_projects:
         bad.append(
             f"deployable projects must be {sorted(expected_projects)}; "

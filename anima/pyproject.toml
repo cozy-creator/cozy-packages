@@ -4,7 +4,7 @@ version = "0.2.4"
 description = "Anima anime text-to-image package for Cozy"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "cozy-runtime[media]>=0.16.8,<1",
+    "cozy-runtime[media]>=0.18.0,<1",
     "diffusers==0.40.0",
     "hf-xet==1.6.0",
     "msgspec>=0.19",
@@ -13,7 +13,7 @@ dependencies = [
     "regex==2026.7.19",
     "safetensors==0.8.0",
     "shellingham==1.5.4",
-    "tensorfs>=0.3.0,<1",
+    "tensorfs>=0.3.42,<0.4",
     "tokenizers==0.23.1",
     "torch>=2.13,<3",
     "torchvision>=0.28,<1",

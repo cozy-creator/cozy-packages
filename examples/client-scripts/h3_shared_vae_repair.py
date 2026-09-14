@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime==0.16.5", "minimax-h3-tools==2.12.0"]
+# dependencies = ["cozy-runtime>=0.18.0,<1", "minimax-h3-tools==2.12.0"]
 # [tool.uv.sources]
 # minimax-h3-tools = { path = "../../minimax-h3-tools", editable = true }
 # [tool.cozy.models]

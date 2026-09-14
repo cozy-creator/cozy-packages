@@ -3,9 +3,9 @@ name = "cozy-mixed-model-qualification"
 version = "0.0.1"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "cozy-runtime>=0.17.2,<1",
+  "cozy-runtime>=0.18.0,<1",
   "msgspec>=0.19",
-  "tensorfs>=0.3.39,<0.4",
+  "tensorfs>=0.3.42,<0.4",
   "torch>=2.13,<3",
 ]
 
