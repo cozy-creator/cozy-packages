@@ -22,7 +22,7 @@ from cozy_runtime.author import (
     uses_components,
 )
 
-from h3 import FirstLastFrameToVideoInput, H3Model, H3VideoOutput, KeyframeAssets, fl2va
+from h3 import FirstLastFrameToVideoInput, H3Model, KeyframeAssets, fl2va
 
 app = App()
 _ACTIVE: ContextVar[Capture | None] = ContextVar("h3_lora_profile", default=None)
@@ -35,11 +35,15 @@ class Input(msgspec.Struct, forbid_unknown_fields=True):
     profile: bool = True
 
 
-class Result(H3VideoOutput):
+class Result(msgspec.Struct):
     measurements: Annotated[
         FileAsset, AssetBound(max_bytes=4 << 20, media_types=("application/json",))
     ]
     trace: Annotated[FileAsset, AssetBound(max_bytes=64 << 20, media_types=("application/gzip",))]
+
+
+class ProfileComplete(Exception):
+    pass
 
 
 class Capture:
@@ -108,6 +112,9 @@ class ProfileModel(H3Model, encoded_leaves="accept", fusion="accept"):
         def step(index: int) -> None:
             on_step(index)
             capture.after_step(index)
+            if index == 1:
+                checks.settle()
+                raise ProfileComplete()
 
         root = self.pipe.components["fl2va_dit"]
         checks.component("fl2va_dit", root)
@@ -119,7 +126,7 @@ class ProfileModel(H3Model, encoded_leaves="accept", fusion="accept"):
 
 
 @app.entrypoint
-def generate(
+def probe(
     ctx: Context,
     payload: Input,
     assets: KeyframeAssets,
@@ -131,25 +138,34 @@ def generate(
     token = _ACTIVE.set(capture)
     started = time.perf_counter()
     try:
-        video = fl2va(
-            ctx,
-            FirstLastFrameToVideoInput(
-                prompt=payload.prompt, seed=payload.seed, duration_s=payload.duration_s, steps=30
-            ),
-            assets,
-            model,
-            out,
-            tel,
-        )
+        try:
+            fl2va(
+                ctx,
+                FirstLastFrameToVideoInput(
+                    prompt=payload.prompt,
+                    seed=payload.seed,
+                    duration_s=payload.duration_s,
+                    steps=30,
+                ),
+                assets,
+                model,
+                out,
+                tel,
+            )
+        except ProfileComplete:
+            pass
+        else:
+            raise RuntimeError("profile unexpectedly generated a full video")
     finally:
         _ACTIVE.reset(token)
         capture.stop()
     report = {
         "input": msgspec.to_builtins(payload),
         "profiled_step": 1 if payload.profile else None,
-        "generation_seconds": time.perf_counter() - started,
+        "two_step_seconds": time.perf_counter() - started,
+        "executed_steps": 2,
         "timing_scope": (
-            "full generation including one-step profiler overhead; not a speed benchmark"
+            "conditioning and two denoise steps with one-step profiler overhead; no full video"
         ),
         "torch": torch.__version__,
         "gpu": torch.cuda.get_device_name(),
@@ -159,9 +175,6 @@ def generate(
         "sources": json.loads(Path(__file__).with_name("profile_sources.json").read_text()),
     }
     return Result(
-        video.video,
-        video.continuation_frame,
-        video.warnings,
         out.save_bytes(json.dumps(report, sort_keys=True).encode(), media_type="application/json"),
         out.save_bytes(capture.trace, media_type="application/gzip"),
     )
