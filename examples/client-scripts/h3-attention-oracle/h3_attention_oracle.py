@@ -71,11 +71,16 @@ class Capture:
         self.tensors: tuple[Any, Any, Any] | None = None
         self.scale = 0.0
 
-    def sample(self, invoke: Any, on_step: Any) -> Any:
+    def sample(self, root: Any, invoke: Any, on_step: Any) -> Any:
         if torch.cuda.device_count() != 1:
             raise ValueError("the attention oracle requires one physical CUDA GPU")
         member = dispatch.AttentionBackendName._FLASH_3_HUB
         original = dispatch._AttentionBackendRegistry._backends[member]
+        processors = [
+            (module.processor, module.processor._attention_backend)
+            for module in root.modules()
+            if hasattr(module, "processor") and hasattr(module.processor, "_attention_backend")
+        ]
 
         @functools.wraps(original)
         def capture(**kwargs: Any) -> Any:
@@ -100,10 +105,16 @@ class Capture:
             self.block = 0
 
         dispatch._AttentionBackendRegistry._backends[member] = capture
+        # An explicit preparation pin can make an optional kernel available.
+        # Capture always follows the same BF16 trajectory before comparing it.
+        for processor, _ in processors:
+            processor._attention_backend = member
         try:
             return invoke(step)
         finally:
             dispatch._AttentionBackendRegistry._backends[member] = original
+            for processor, backend in processors:
+                processor._attention_backend = backend
 
 
 class OracleModel(H3Model, encoded_leaves="accept", fusion="accept"):
@@ -116,6 +127,7 @@ class OracleModel(H3Model, encoded_leaves="accept", fusion="accept"):
         checks.component("fl2va_dit", root)
         with checks.forwards(root, "fl2va_dit"):
             return capture.sample(
+                root,
                 lambda step: self.pipe.denoise(
                     "fl2va", state, on_step=step, cancel=cancel, checks=checks
                 ),
@@ -285,6 +297,7 @@ def probe(
         "pid": os.getpid(),
         "gpu": torch.cuda.get_device_name(),
         "capture_seconds": capture_seconds,
+        "capture_backend": "flash-attn3 BF16 (temporary explicit diagnostic selection)",
         "qkv": originals,
         "scale": capture.scale,
         "reference": reference_provenance,

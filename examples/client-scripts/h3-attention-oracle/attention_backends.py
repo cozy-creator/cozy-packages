@@ -161,7 +161,7 @@ def _build_cudnn_fp8(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, scale: float
 ) -> tuple[Callable[[], torch.Tensor], dict[str, Any]]:
     try:
-        import cudnn
+        cudnn = importlib.import_module("cudnn")
     except (ImportError, OSError) as exc:
         raise OptionalBackendUnavailable(f"cuDNN frontend is not importable: {exc}") from exc
     architecture = torch.cuda.get_device_capability(q.device)[0]
