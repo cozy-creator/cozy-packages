@@ -35,6 +35,7 @@ from cozy_runtime.author import (
 from cozy_runtime.author._assets import GrantedInput, file_state
 from cozy_runtime.author._calls import _Broker, _CallType
 from cozy_runtime.author._codec import encode_frame
+from cozy_runtime.author._media import SNIFF_BYTES, sniff
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
 import h3
@@ -122,10 +123,8 @@ def _drive(
             assert resume is not None and value["tree"] == resume.digest
             local = resume.path / value["path"]
             assert local.is_file() and not local.is_symlink()
-            media = {".json": "application/json", ".png": "image/png", ".mp4": "video/mp4"}[
-                local.suffix
-            ]
             raw = local.read_bytes()
+            media = sniff(raw[:SNIFF_BYTES]) or "application/octet-stream"
             assert len(raw) <= value["max_bytes"]
             assert not value["media_types"] or media in value["media_types"]
             return {
