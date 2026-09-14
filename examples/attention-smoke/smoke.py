@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import time
+import uuid
 
 import msgspec
 from cozy_runtime.author import App, Bound, Context
@@ -75,7 +76,9 @@ def probe(ctx: Context, payload: Input) -> Result:
     properties = torch.cuda.get_device_properties(index)
     gpu_uuid = str(getattr(properties, "uuid", ""))
     sm = properties.major * 10 + properties.minor
-    if gpu_uuid != payload.expected_gpu_uuid or sm != payload.expected_sm:
+    observed_uuid = uuid.UUID(gpu_uuid.removeprefix("GPU-"))
+    expected_uuid = uuid.UUID(payload.expected_gpu_uuid.removeprefix("GPU-"))
+    if observed_uuid != expected_uuid or sm != payload.expected_sm:
         raise ValueError(f"Assigned GPU identity differs: {gpu_uuid}, SM{sm}")
     if importlib.metadata.version("diffusers") != "0.40.0" or diffusers.__version__ != "0.40.0":
         raise ValueError(f"Diffusers metadata/import mismatch at {diffusers.__file__}")
