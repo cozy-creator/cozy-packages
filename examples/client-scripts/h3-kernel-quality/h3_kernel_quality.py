@@ -174,8 +174,15 @@ class QualityModel(H3Model, encoded_leaves="accept", fusion="accept"):
         selection = _ACTIVE.get()
         if selection is None:
             raise RuntimeError("quality request context is absent")
-        with selection.scope(self.pipe.components["fl2va_dit"]):
-            return super().sample_fl2va(state, on_step=on_step, cancel=cancel, checks=checks)
+        root = self.pipe.components["fl2va_dit"]
+        # This override already owns the public component-use scope. Calling the
+        # decorated parent method would reenter it; retain its exact sample body.
+        with selection.scope(root):
+            checks.component("fl2va_dit", root)
+            with checks.forwards(root, "fl2va_dit"):
+                return self.pipe.denoise(
+                    "fl2va", state, on_step=on_step, cancel=cancel, checks=checks
+                )
 
 
 @app.entrypoint
