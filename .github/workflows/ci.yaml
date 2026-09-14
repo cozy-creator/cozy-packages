@@ -111,6 +111,9 @@ jobs:
       - name: Diagnostic hooks preserve outputs and stop explicitly
         run: PYTHONPATH=minimax-h3 minimax-h3/.venv/bin/python scripts/h3-activation-proof.py
 
+      - name: Attention capture preserves module identity and restores dispatch
+        run: CUDA_VISIBLE_DEVICES='' PYTHONPATH=examples/client-scripts/h3-attention-oracle:minimax-h3 minimax-h3/.venv/bin/python scripts/h3-attention-capture-proof.py
+
       - name: Private first-step probe preserves model output and RNG
         run: minimax-h3/.venv/bin/python scripts/h3-first-step-proof.py
 

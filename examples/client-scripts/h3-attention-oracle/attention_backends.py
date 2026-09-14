@@ -20,6 +20,7 @@ from typing import Any
 import torch
 from attention_quantized import OptionalBackendUnavailable, build_quantized, candidate_kernel
 from diffusers.models import attention_dispatch as ad
+from runtime_attention_backend import build_runtime_backend
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
 
@@ -80,8 +81,6 @@ def build_backend(
     """Build one named backend; caller times construction, first call, and warm calls."""
     _validate(q, k, v, scale)
     if name in ("kitchen-int8", "sol-attn", "flashinfer-bf16-fp8", "sdpa"):
-        from runtime_attention_backend import build_runtime_backend
-
         return build_runtime_backend(
             name, q, k, v, scale=scale, layout=layout, module_path=module_path
         )
