@@ -45,7 +45,7 @@ def build_runtime_backend(
         "module_path": module_path,
         "construction_includes": "Runtime resolution and small native smoke, including its JIT",
         "timing_includes": (
-            "Runtime adapter dispatch, layouts, quantization, native kernel and contiguous NHD output"
+            "Runtime dispatch, layouts, quantization, native kernel and contiguous NHD output"
         ),
     }
     if entry.candidate.distribution:
