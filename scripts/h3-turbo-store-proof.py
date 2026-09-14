@@ -24,18 +24,18 @@ from cozy_runtime.author import (
     ObjectRef,
     Telemetry,
     WeightsOutput,
-    WeightsSink,
     attempt,
     describe,
     invocable,
 )
 from cozy_runtime.author._model import _derive_model
-from cozy_runtime.internal.weights_sink import WeightsTransactionHost
 from h3_tables.adaln_operations import PLAIN
 from h3_tables.kernel import H3Topology, adapter_shapes, source_shapes
 from h3_tables.plans import Task
 from h3_tables.source import H3FullTransformer
 from h3_tables.turbo import RANK, TASKS, _produce, overlay_shapes, turbo_plan
+
+from native_execution_fixture import NativeExecution
 
 if len(sys.argv) > 1:
     from diffusers import MiniMaxH3Transformer3DModel
@@ -72,13 +72,11 @@ async def mini_turbo(
     full: H3FullTransformer,
     fl2va_adapter: H3FullTransformer,
     ref2va_adapter: H3FullTransformer,
-    weights: WeightsSink,
     tel: Telemetry,
 ) -> ModelArtifact:
     return _produce(
         ctx,
         tel,
-        weights,
         full=full,
         adapters={"fl2va": fl2va_adapter, "ref2va": ref2va_adapter},
         configs=CONFIGS,
@@ -250,37 +248,26 @@ def main() -> None:
         }
 
         def run(name: str, epoch: int, cancel: bool = False) -> Any:
-            checkpoints: list[Any] = []
-            host = WeightsTransactionHost(
-                store=store,
-                owner_scope="turbo-proof",
-                request_id=name,
-                invocation_spec_digest="sha256:" + "44" * 32,
-                work_fingerprint="sha256:" + "55" * 32,
-                writer_session_id=epoch,
-                allowed_sources={
-                    value.manifest.digest: value.manifest.length for value in sources.values()
-                },
-                output_bounds={"model": 1 << 24},
-                record_checkpoint=checkpoints.append,
-            )
-            return attempt(
-                app.get("mini_turbo"),
-                {name: msgspec.to_builtins(value) for name, value in sources.items()},
-                Invocation(
-                    name,
-                    root / f"{name}-{epoch}",
-                    time.monotonic() + 60,
-                    models={
-                        name: _derive_model(H3FullTransformer, value.manifest.digest)
-                        for name, value in sources.items()
-                    },
-                    weights=host.open,
-                    weights_source_structure=host.structure,
-                    weights_source_config=host.config,
-                    cancel=lambda: cancel and bool(checkpoints),
-                ),
-            )
+            with NativeExecution(
+                store, root, name, sources, {"model": 1 << 24}, epoch=epoch
+            ) as execution:
+                return attempt(
+                    app.get("mini_turbo"),
+                    {name: msgspec.to_builtins(value) for name, value in sources.items()},
+                    Invocation(
+                        name,
+                        execution.spool,
+                        time.monotonic() + 60,
+                        models={
+                            name: _derive_model(H3FullTransformer, value.manifest.digest)
+                            for name, value in sources.items()
+                        },
+                        tensorfs_output=execution.client.open_output,
+                        tensorfs_source=execution.client.source,
+                        tensorfs_adopt=execution.client.adopt_model,
+                        cancel=lambda: cancel and execution.checkpointed,
+                    ),
+                )
 
         stopped, outcome, _ = run("resume", 1, True)
         assert stopped is None and outcome.terminal == "canceled", outcome

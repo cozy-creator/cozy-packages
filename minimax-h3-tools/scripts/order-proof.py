@@ -8,13 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from cozy_runtime.author import (
-    WeightsPart,
-    WeightsSource,
-    WeightsSourcePart,
-    WeightsSourceTensor,
-    canonical_json,
-)
+from cozy_runtime.author import canonical_json
 from cozy_runtime.derive.quantization import (
     prepare_quantization,
     quantization_additions,
@@ -25,8 +19,6 @@ from h3_tables.job import (
     MAX_TABLE_BYTES,
     MXFP8_SPEC,
     PLAIN_SPEC,
-    _full_order,
-    _full_targets,
     _lane_targets,
     _retable_targets,
     _table_additions,
@@ -34,9 +26,12 @@ from h3_tables.job import (
 from h3_tables.kernel import H3Topology, removed_keys, source_shapes, table_shapes
 from h3_tables.model_config import parse_production_config
 from h3_tables.order import current_order
+from h3_tables.order import full_order as _full_order
 from h3_tables.plans import parse_declared_plan, parse_plan
 from h3_tables.quantization import h3_quantization_plan
+from h3_tables.source import full_targets as _full_targets
 from h3_tables.source import official_full_specs, source_only_keys, text_source_only_keys
+from tensorfs.derived import Part, Source, SourceInspection, Tensor
 
 PROJECT = Path(__file__).resolve().parents[1]
 ASSETS = PROJECT / "src/h3_tables/assets"
@@ -50,22 +45,21 @@ def refuse(raw: bytes, task: str) -> None:
     raise RuntimeError(f"changed {task} TimestepPlan did not refuse")
 
 
-def structure(rows: list[tuple[str, str, str, tuple[int, ...]]]) -> WeightsSource:
-    return WeightsSource(
-        ("model",),
-        tuple(
-            WeightsSourceTensor(
-                component, key, dtype, shape, (WeightsSourcePart("value", dtype, shape),)
-            )
-            for component, key, dtype, shape in rows
-        ),
-    )
+def structure(rows: list[tuple[str, str, str, tuple[int, ...]]]) -> SourceInspection:
+    components: dict[str, dict[str, Tensor]] = {}
+    for component, key, dtype, shape in rows:
+        components.setdefault(component, {})[key] = Tensor(
+            dtype, shape, PLAIN_SPEC, {"value": Part(dtype, shape)}
+        )
+    return SourceInspection(Source("sha256:" + "01" * 32, 1), components, {"model": b"{}"})
 
 
 def prove_retable(sections: dict[str, dict[str, object]]) -> None:
     """The retable declarations edit only table keys and refuse the wrong sources."""
     tables = _table_additions(sections)
-    shared = [(c, f"{c}.w", "f32", (1,)) for c in ("text_encoder", "video_vae", "audio_vae")]
+    shared: list[tuple[str, str, str, tuple[int, ...]]] = [
+        (c, f"{c}.w", "f32", (1,)) for c in ("text_encoder", "video_vae", "audio_vae")
+    ]
     pruned_rows, full_rows = list(shared), list(shared)
     for task, section in (("fl2va", "transformer"), ("ref2va", "transformer_ref")):
         component = f"{task}_dit"
@@ -112,24 +106,14 @@ def prove_retable(sections: dict[str, dict[str, object]]) -> None:
         raise RuntimeError(f"retable accepted a source with {name}")
 
 
-def _dit_structure(sections: dict[str, Any]) -> tuple[WeightsSourceTensor, ...]:
-    """The two FULL DiT components as granted structure, from the package's own contract."""
-    rows: list[WeightsSourceTensor] = []
+def _dit_structure(sections: dict[str, Any]) -> SourceInspection:
+    """The two FULL DiT components from the package's own native geometry contract."""
+    rows: list[tuple[str, str, str, tuple[int, ...]]] = []
     for component, section in (("fl2va_dit", "transformer"), ("ref2va_dit", "transformer_ref")):
         specs = dict(official_full_specs(sections[section]))
         specs["rope.inv_freq"] = ("f32", (16,))
-        for key, (dtype, shape) in specs.items():
-            rows.append(
-                WeightsSourceTensor(
-                    component=component,
-                    key=key,
-                    logical_dtype=dtype,
-                    shape=tuple(shape),
-                    parts=(WeightsSourcePart("value", dtype, tuple(shape)),),
-                    encoding=PLAIN_SPEC,
-                )
-            )
-    return tuple(rows)
+        rows.extend((component, key, dtype, tuple(shape)) for key, (dtype, shape) in specs.items())
+    return structure(rows)
 
 
 def _targets_of(
@@ -137,7 +121,7 @@ def _targets_of(
     sections: dict[str, Any],
     tables: Any,
     full_targets: Any,
-    dits: tuple[WeightsSourceTensor, ...],
+    dits: SourceInspection,
     quantization: Any,
 ) -> dict[str, Any]:
     lane = lane_recipes.LANES[name]
@@ -221,7 +205,7 @@ def main() -> None:
                 declared.logical_dtype != "bf16"
                 or declared.shape != shape
                 or declared.encoding != PLAIN_SPEC
-                or dict(declared.parts) != {"value": WeightsPart("bf16", shape)}
+                or dict(declared.parts) != {"value": Part("bf16", shape)}
             ):
                 raise RuntimeError(f"{component}/{key} changed its exact BF16 table bytes")
         selected = {tensor.key for tensor in quantization.tensors}

@@ -10,8 +10,6 @@ from cozy_runtime.author import (
     Context,
     ModelArtifact,
     UnsupportedInput,
-    WeightsConfig,
-    WeightsSink,
     canonical_json,
     invocable,
 )
@@ -20,6 +18,7 @@ from cozy_runtime.derive.operations import quantize as runtime_quantize
 from cozy_runtime.derive.quantization import (
     prepare_quantization,
 )
+from tensorfs.derived import Config, Derivation
 
 from .adaln_operations import (
     Selection,
@@ -32,7 +31,7 @@ from .adaln_operations import (
 from .model_config import dual_full_config, parse_production_config
 from .order import current_order, full_order
 from .quantization import h3_quantization_plan
-from .source import TARGET_COMPONENT, H3FullTransformer, select_full_targets
+from .source import TARGET_COMPONENT, H3FullTransformer, select_full_targets, structures
 
 
 def quantization_plan() -> QuantizationPlan:
@@ -40,8 +39,13 @@ def quantization_plan() -> QuantizationPlan:
     reviewed = prepare_quantization(h3_quantization_plan())
     components = tuple(TARGET_COMPONENT.values())
     selected = [
-        [component, tensor.key, tensor.logical_dtype, list(tensor.shape),
-         [[tensor.source_role, tensor.logical_dtype, list(tensor.shape)]]]
+        [
+            component,
+            tensor.key,
+            tensor.logical_dtype,
+            list(tensor.shape),
+            [[tensor.source_role, tensor.logical_dtype, list(tensor.shape)]],
+        ]
         for component in components
         for tensor in reviewed.tensors
     ]
@@ -150,7 +154,6 @@ async def assemble_full(
     *,
     dits: H3FullTransformer,
     shared: H3FullTransformer,
-    weights: WeightsSink,
 ) -> ModelArtifact:
     """Assemble converted DiTs and shared weights using the existing native H3 order."""
     ctx.raise_if_cancelled()
@@ -158,10 +161,14 @@ async def assemble_full(
     sections = parse_production_config(assets.joinpath("model-config.json").read_bytes())
     current = current_order(assets.joinpath("whole-order.json").read_bytes()).rows
     sources = {"dits": dits, "shared": shared}
-    return weights.derive(
-        "model",
-        sources=sources,
-        targets=select_full_targets(weights, sources),
-        configs={"model": WeightsConfig(data=dual_full_config(sections))},
-        order=full_order(sections, current),
-    ).artifact
+    with ctx.output("model").open(
+        Derivation(
+            sources={name: info.source for name, info in structures(ctx, sources).items()},
+            targets=select_full_targets(ctx, sources),
+            configs={"model": Config("add")},
+            order=full_order(sections, current),
+        )
+    ) as transaction:
+        if transaction.receipt is None:
+            transaction.add_config("model", dual_full_config(sections))
+        return ctx.adopt_model(transaction.commit())

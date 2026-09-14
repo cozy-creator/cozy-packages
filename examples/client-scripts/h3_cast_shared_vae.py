@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime==0.16.5", "minimax-h3-tools==2.12.1"]
+# dependencies = ["cozy-runtime>=0.18.0,<1", "minimax-h3-tools==2.12.1"]
 # [tool.uv.sources]
 # minimax-h3-tools = { path = "../../minimax-h3-tools", editable = true }
 # [tool.cozy.models]
@@ -15,44 +15,43 @@ from cozy_runtime.author import (
     Model,
     ModelArtifact,
     Telemetry,
-    WeightsConfig,
-    WeightsSink,
-    WeightsTarget,
 )
 from h3_tables import lanes
+from h3_tables.source import inspection
+from tensorfs.derived import Config, Derivation, Target
 
 SOURCE = "sha256:d1b1fd76b6b67ad55c0d1692076ed32835229dfa4a34c0ad7b12645ba50ec2a5"
 MAX_NEW_BYTES = 6 << 30
 
 
-def main(
-    ctx: Context, *, source: Model[object], artifacts: WeightsSink, tel: Telemetry
-) -> ModelArtifact:
+def main(ctx: Context, *, source: Model[object], tel: Telemetry) -> ModelArtifact:
     if source.checkpoint_ref != SOURCE:
         raise ValueError("stage one requires the reviewed BF16-full checkpoint")
-    structure = artifacts.structure(source)
-    if {row.component for row in structure.tensors} != set(lanes.COMPONENTS):
+    structure = inspection(ctx, source)
+    if set(structure.components) != set(lanes.COMPONENTS):
         raise ValueError("source must contain all five H3 components")
-    selection = lanes.select(
-        "video_vae", lanes.NORMALISED_COMPONENTS["video_vae"], structure.tensors
-    )
+    selection = lanes.select("video_vae", lanes.NORMALISED_COMPONENTS["video_vae"], structure)
     targets = {
-        component: WeightsTarget(source="source", source_component=component)
+        component: Target(source="source", source_component=component)
         for component in lanes.COMPONENTS
     }
     targets["video_vae"] = lanes.apply(targets["video_vae"], selection)
-    with artifacts.open(
-        "bf16_full",
-        sources={"source": source},
-        targets=targets,
-        configs={
-            name: WeightsConfig(source="source", source_config=name) for name in structure.configs
-        },
-        order=tuple((row.component, row.key) for row in structure.tensors),
+    with ctx.output("bf16_full").open(
+        Derivation(
+            sources={"source": structure.source},
+            targets=targets,
+            configs={
+                name: Config("copy", source="source", source_config=name)
+                for name in structure.configs
+            },
+            order=tuple(
+                (component, key) for component, rows in structure.components.items() for key in rows
+            ),
+        )
     ) as transaction:
-        if transaction.replayed:
+        if transaction.receipt is not None:
             assert transaction.receipt is not None
-            return transaction.receipt.artifact
+            return ctx.adopt_model(transaction.receipt)
         stats = lanes.write_cast(
             transaction,
             ctx,
@@ -70,4 +69,4 @@ def main(
             new_bytes=stats.new_bytes_written,
             worst_relative_frobenius=stats.worst_relative_frobenius,
         )
-        return transaction.commit().artifact
+        return ctx.adopt_model(transaction.commit())

@@ -17,15 +17,7 @@ from cozy_runtime.author import (
     ModelArtifact,
     Telemetry,
     UnsupportedInput,
-    WeightsConfig,
     WeightsOutput,
-    WeightsPart,
-    WeightsReceipt,
-    WeightsSink,
-    WeightsSource,
-    WeightsTarget,
-    WeightsTensor,
-    WeightsTransaction,
     canonical_json,
 )
 from cozy_runtime.derive.quantization import (
@@ -33,6 +25,15 @@ from cozy_runtime.derive.quantization import (
     ArtifactQuantizationRequest,
     prepare_quantization,
     quantize_component_into,
+)
+from tensorfs.derived import (
+    Config,
+    Derivation,
+    DerivedTransaction,
+    Part,
+    SourceInspection,
+    Target,
+    Tensor,
 )
 
 from . import adaln_operations as _adaln_operations
@@ -63,6 +64,7 @@ from .quantization import h3_quantization_plan
 from .source import (
     TARGET_COMPONENT,
     H3FullTransformer,
+    inspection,
 )
 from .source import full_targets as _full_targets
 from .source import select_full_targets as _select_full_targets
@@ -174,7 +176,12 @@ class LaneRequest(msgspec.Struct, forbid_unknown_fields=True):
     own representational bound is enforced underneath it regardless.
     """
 
-    lanes: Annotated[tuple[LaneName, ...], msgspec.Meta(min_length=1)] = get_args(LaneName)
+    lanes: Annotated[tuple[LaneName, ...], msgspec.Meta(min_length=1)] = (
+        "bf16-full",
+        "bf16-pruned",
+        "fp8-pruned",
+        "mxfp8-pruned",
+    )
     max_relative_frobenius: float | None = None
 
 
@@ -238,7 +245,7 @@ class RetableResult(msgspec.Struct):
 
 
 def _read_source(
-    transaction: WeightsTransaction,
+    transaction: DerivedTransaction,
     source: str,
     component: str,
     name: str,
@@ -265,12 +272,13 @@ def _compute_table_parts(
     plan: TimestepPlan,
     topology: H3Topology,
     ctx: Context,
-    transaction: WeightsTransaction,
+    transaction: DerivedTransaction,
     source: str,
     source_component: str,
     write_part: Callable[[str, bytes], None],
     tel: Telemetry,
     overall_range: tuple[float, float] = (0.0, 1.0),
+    completed: frozenset[str] = frozenset(),
 ) -> tuple[int, int]:
     source_bytes = 0
     written = 0
@@ -311,58 +319,65 @@ def _compute_table_parts(
         write=write,
         progress=progress,
         device=torch.device("cuda"),
+        completed=completed,
     )
-    expected = table_bytes(topology, plan)
+    expected = sum(
+        math.prod(shape) * 2
+        for key, shape in table_shapes(topology, plan).items()
+        if key not in completed
+    )
     if written != expected or len(table_shapes(topology, plan)) != topology.num_layers + 1:
         raise ValueError(f"{task} emitted {written} table bytes, expected {expected}")
     return source_bytes, written
 
 
-def _assembly_result(receipt: WeightsReceipt) -> AssemblyResult:
-    return AssemblyResult(
-        receipt.weights_transaction_id,
-        receipt.tensorfs_receipt_digest,
-        receipt.replayed,
-    )
+def _assembly_result(receipt: Mapping[str, Any], replayed: bool) -> AssemblyResult:
+    return AssemblyResult(receipt["transaction_id"], canonical_json.digest(receipt), replayed)
 
 
 @app.job(
     weights=(WeightsOutput("model", max_new_bytes=64 << 10),),
 )
 def assemble_full(
+    ctx: Context,
     payload: ProductionRequest,
     dits: H3FullTransformer,
     shared: H3FullTransformer,
-    artifacts: WeightsSink,
 ) -> AssemblyResult:
     del payload
     sections = parse_production_config(_asset("model-config.json"))
     current = current_order(_asset("whole-order.json"))
     config = dual_full_config(sections)
     sources = {"dits": dits, "shared": shared}
-    receipt = artifacts.derive(
-        "model",
-        sources=sources,
-        targets=_select_full_targets(artifacts, sources),
-        configs={"model": WeightsConfig(data=config, length=len(config))},
-        order=_full_order(sections, current.rows),
-    )
-    return _assembly_result(receipt)
+    with ctx.output("model").open(
+        Derivation(
+            sources={name: info.source for name, info in _structures(ctx, sources).items()},
+            targets=_select_full_targets(ctx, sources),
+            configs={"model": Config("add")},
+            order=_full_order(sections, current.rows),
+        )
+    ) as transaction:
+        replayed = transaction.receipt is not None
+        if not replayed:
+            transaction.add_config("model", config)
+        receipt = transaction.commit()
+        ctx.adopt_model(receipt)
+    return _assembly_result(receipt, replayed)
 
 
 def _table_additions(
     sections: dict[str, dict[str, Any]],
-) -> dict[str, dict[str, WeightsTensor]]:
-    additions: dict[str, dict[str, WeightsTensor]] = {}
+) -> dict[str, dict[str, Tensor]]:
+    additions: dict[str, dict[str, Tensor]] = {}
     for task, section in SOURCE_SECTION.items():
         plan = _production_plan(task)
         topology = H3Topology.from_config(sections[section])
         additions[task] = {
-            key: WeightsTensor(
+            key: Tensor(
                 logical_dtype="bf16",
                 shape=shape,
                 encoding=PLAIN_SPEC,
-                parts={"value": WeightsPart("bf16", shape)},
+                parts={"value": Part("bf16", shape)},
             )
             for key, shape in sorted(table_shapes(topology, plan).items())
         }
@@ -372,10 +387,10 @@ def _table_additions(
 def _lane_targets(
     lane: Lane,
     sections: dict[str, dict[str, Any]],
-    tables: Mapping[str, Mapping[str, WeightsTensor]],
-    full_targets: Mapping[str, WeightsTarget],
+    tables: Mapping[str, Mapping[str, Tensor]],
+    full_targets: Mapping[str, Target],
     selections: Mapping[str, Selection],
-) -> dict[str, WeightsTarget]:
+) -> dict[str, Target]:
     """The five component targets of one lane.
 
     Every component starts as the FULL inheriting target: TensorFS copies its tensor
@@ -402,8 +417,8 @@ def _lane_targets(
 def _write_tables(
     task: str,
     ctx: Context,
-    source_transaction: WeightsTransaction,
-    transactions: Mapping[str, WeightsTransaction],
+    source_transaction: DerivedTransaction,
+    transactions: Mapping[str, DerivedTransaction],
     tel: Telemetry,
     overall_range: tuple[float, float],
     source: str = "dits",
@@ -412,10 +427,25 @@ def _write_tables(
     plan = _production_plan(task)
     topology = H3Topology.from_config(sections[SOURCE_SECTION[task]])
     component = TARGET_COMPONENT[task]
+    completed = {
+        name: {
+            key
+            for owner, key, role in transaction.completed_parts()
+            if owner == component and role == "value"
+        }
+        for name, transaction in transactions.items()
+    }
+    shared_completed = (
+        frozenset.intersection(*(frozenset(keys) for keys in completed.values()))
+        if completed
+        else frozenset()
+    )
 
     def write_part(name: str, raw: bytes) -> None:
-        for transaction in transactions.values():
-            transaction.add_part(component, name, "value", raw)
+        for output, transaction in transactions.items():
+            if name not in completed[output]:
+                transaction.add_part(component, name, "value", raw)
+                transaction.checkpoint()
 
     return _compute_table_parts(
         task,
@@ -428,13 +458,8 @@ def _write_tables(
         write_part,
         tel,
         overall_range,
+        completed=shared_completed,
     )
-
-
-def _receipt(transaction: WeightsTransaction) -> WeightsReceipt:
-    receipt = transaction.receipt if transaction.replayed else transaction.commit()
-    assert receipt is not None
-    return receipt
 
 
 def _requested(payload: LaneRequest) -> tuple[str, ...]:
@@ -467,7 +492,7 @@ def _bands(count: int, start: float, stop: float) -> list[tuple[float, float]]:
 
 
 def _treat(
-    transaction: WeightsTransaction,
+    transaction: DerivedTransaction,
     ctx: Context,
     tel: Telemetry,
     request: ArtifactQuantizationRequest,
@@ -536,7 +561,6 @@ def lanes(
     payload: LaneRequest,
     dits: H3FullTransformer,
     shared: H3FullTransformer,
-    artifacts: WeightsSink,
     tel: Telemetry,
 ) -> LanesResult:
     """Produce the requested reviewed lanes from one pinned BF16 source, in one attempt.
@@ -549,8 +573,8 @@ def lanes(
     """
     requested = _requested(payload)
     sources = {"dits": dits, "shared": shared}
-    granted = _structures(artifacts, sources)
-    full_targets = _select_full_targets(artifacts, sources, granted)
+    granted = _structures(ctx, sources)
+    full_targets = _select_full_targets(ctx, sources, granted)
     sections = parse_production_config(_asset("model-config.json"))
     current = current_order(_asset("whole-order.json"))
     tables = _table_additions(sections)
@@ -566,7 +590,7 @@ def lanes(
                 treatment,
                 _lanes.carried(
                     full_targets[component],
-                    granted[full_targets[component].source].tensors,
+                    granted[full_targets[component].source],
                 ),
                 dit_plan=dit_plan,
             )
@@ -585,7 +609,7 @@ def lanes(
         "full": _full_order(sections, current.rows),
         "adaln-pruned": current.rows,
     }
-    receipts: dict[str, WeightsReceipt] = {}
+    receipts: dict[str, dict[str, Any]] = {}
     fidelity: list[WeightFidelity] = []
     source_bytes = 0
     quant_request = ArtifactQuantizationRequest(
@@ -595,27 +619,26 @@ def lanes(
     with ExitStack() as stack:
         transactions = {
             name: stack.enter_context(
-                artifacts.open(
-                    name,
-                    sources=sources,
-                    targets=_lane_targets(
-                        LANES[name], sections, tables, full_targets, selections[name]
-                    ),
-                    configs={
-                        "model": WeightsConfig(
-                            data=configs[LANES[name].modulation],
-                            length=len(configs[LANES[name].modulation]),
-                        )
-                    },
-                    order=orders[LANES[name].modulation],
+                ctx.output(name).open(
+                    Derivation(
+                        sources={
+                            name: info.source for name, info in _structures(ctx, sources).items()
+                        },
+                        targets=_lane_targets(
+                            LANES[name], sections, tables, full_targets, selections[name]
+                        ),
+                        configs={"model": Config("add")},
+                        order=orders[LANES[name].modulation],
+                    )
                 )
             )
             for name in requested
         }
+        replayed = {name for name, tx in transactions.items() if tx.receipt is not None}
         active = {
             name: transaction
             for name, transaction in transactions.items()
-            if not transaction.replayed
+            if transaction.receipt is None
         }
         # A lane needing neither a table pass nor an encoding settles first, so its
         # retention never depends on a later lane's. Its casts run here rather than in the
@@ -698,8 +721,10 @@ def lanes(
             tel.progress(1.0, stage=f"commit-{name}", overall_fraction=overall_range[1])
         for name, transaction in transactions.items():
             if name not in receipts:
-                receipts[name] = _receipt(transaction)
+                receipts[name] = transaction.commit()
 
+    for receipt in receipts.values():
+        ctx.adopt_model(receipt)
     measured = [row.stats for row in fidelity]
     tel.metric("h3.source_bytes", float(source_bytes), unit="bytes")
     tel.metric(
@@ -713,13 +738,13 @@ def lanes(
                 lane=name,
                 modulation=LANES[name].modulation,
                 treated_components=sorted(lane_treatments(LANES[name])),
-                tensorfs_receipt_digest=receipts[name].tensorfs_receipt_digest,
-                weights_transaction_id=receipts[name].weights_transaction_id,
-                replayed=receipts[name].replayed,
+                tensorfs_receipt_digest=canonical_json.digest(receipts[name]),
+                weights_transaction_id=receipts[name]["transaction_id"],
+                replayed=name in replayed,
             )
             for name in requested
         ],
-        replayed_outputs=sum(receipt.replayed for receipt in receipts.values()),
+        replayed_outputs=len(replayed),
         source_bytes_read_this_run=source_bytes,
         quantized_keys_this_run=sum(stat.encoded_keys for stat in measured),
         cast_keys_this_run=sum(stat.cast_keys for stat in measured),
@@ -728,11 +753,11 @@ def lanes(
 
 
 def _retable_targets(
-    pruned: WeightsSource,
-    full: WeightsSource,
+    pruned: SourceInspection,
+    full: SourceInspection,
     sections: dict[str, dict[str, Any]],
-    tables: Mapping[str, Mapping[str, WeightsTensor]],
-) -> tuple[dict[str, WeightsTarget], dict[str, WeightsTarget]]:
+    tables: Mapping[str, Mapping[str, Tensor]],
+) -> tuple[dict[str, Target], dict[str, Target]]:
     """Declare the table bank derived from `full` and the retabled checkpoint from `pruned`.
 
     A transaction may read only the source components its targets derive from, so the
@@ -742,14 +767,22 @@ def _retable_targets(
     rows and no dynamic modulation weights for both DiTs and `full` carries the exact
     modulation weights those rows are computed from.
     """
-    present = {(tensor.component, tensor.key): tensor for tensor in pruned.tensors}
-    full_present = {(tensor.component, tensor.key): tensor for tensor in full.tensors}
-    components = {tensor.component for tensor in pruned.tensors}
+    present = {
+        (component, key): tensor
+        for component, rows in pruned.components.items()
+        for key, tensor in rows.items()
+    }
+    full_present = {
+        (component, key): tensor
+        for component, rows in full.components.items()
+        for key, tensor in rows.items()
+    }
+    components = set(pruned.components)
     if components != set(_full_targets()):
         raise ValueError(f"retable source components are {sorted(components)}")
-    bank: dict[str, WeightsTarget] = {}
+    bank: dict[str, Target] = {}
     retabled = {
-        component: WeightsTarget(source="pruned", source_component=component)
+        component: Target(source="pruned", source_component=component)
         for component in components - set(TARGET_COMPONENT.values())
     }
     for task, section in SOURCE_SECTION.items():
@@ -766,13 +799,13 @@ def _retable_targets(
                 or TORCH_DTYPE.get(tensor.logical_dtype) != dtype
             ):
                 raise ValueError(f"full source lacks modulation weight {component}/{key}")
-        bank[component] = WeightsTarget(
+        bank[component] = Target(
             source="full",
             source_component=component,
             drop=tuple(sorted(key for owner, key in full_present if owner == component)),
             add=tables[task],
         )
-        retabled[component] = WeightsTarget(
+        retabled[component] = Target(
             source="pruned",
             source_component=component,
             drop=tuple(sorted(tables[task])),
@@ -793,7 +826,6 @@ def retable(
     payload: ProductionRequest,
     full: H3FullTransformer,
     pruned: H3FullTransformer,
-    artifacts: WeightsSink,
     tel: Telemetry,
 ) -> RetableResult:
     """Recompute one AdaLN-pruned checkpoint's tables for the current plans.
@@ -807,40 +839,48 @@ def retable(
     sections = parse_production_config(_asset("model-config.json"))
     plans = {task: _production_plan(task) for task in SOURCE_SECTION}
     pruned_config = dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
-    config = {"model": WeightsConfig(data=pruned_config, length=len(pruned_config))}
+    config = {"model": Config("add")}
     tables = _table_additions(sections)
     bank_targets, targets = _retable_targets(
-        artifacts.structure(pruned), artifacts.structure(full), sections, tables
+        inspection(ctx, pruned), inspection(ctx, full), sections, tables
     )
     order = current_order(_asset("whole-order.json"))
     bank_order = tuple(
         row for row in order.rows if row[0] in bank_targets and row[1] in bank_targets[row[0]].add
     )
     source_bytes = written = 0
-    receipts: dict[str, WeightsReceipt] = {}
+    receipts: dict[str, dict[str, Any]] = {}
     with ExitStack() as stack:
         bank = stack.enter_context(
-            artifacts.open(
-                "tables",
-                sources={"full": full},
-                targets=bank_targets,
-                configs=config,
-                order=bank_order,
+            ctx.output("tables").open(
+                Derivation(
+                    sources={
+                        name: info.source for name, info in _structures(ctx, {"full": full}).items()
+                    },
+                    targets=bank_targets,
+                    configs=config,
+                    order=bank_order,
+                )
             )
         )
         retabled = stack.enter_context(
-            artifacts.open(
-                "adaln-pruned",
-                sources={"pruned": pruned},
-                targets=targets,
-                configs=config,
-                order=order.rows,
+            ctx.output("adaln-pruned").open(
+                Derivation(
+                    sources={
+                        name: info.source
+                        for name, info in _structures(ctx, {"pruned": pruned}).items()
+                    },
+                    targets=targets,
+                    configs=config,
+                    order=order.rows,
+                )
             )
         )
         transactions = {"adaln-pruned": retabled, "tables": bank}
-        active = {name: t for name, t in transactions.items() if not t.replayed}
+        replayed = {name for name, tx in transactions.items() if tx.receipt is not None}
+        active = {name: t for name, t in transactions.items() if t.receipt is None}
         if active:
-            if bank.replayed:
+            if bank.receipt is not None:
                 raise ValueError(
                     "the table bank was retained without its retabled checkpoint; "
                     "rerun under a new request identity"
@@ -862,24 +902,27 @@ def retable(
                 receipts[name] = transaction.commit()
         for name, transaction in transactions.items():
             if name not in receipts:
-                receipts[name] = _receipt(transaction)
+                receipts[name] = transaction.commit()
     tel.metric("h3.source_bytes", float(source_bytes), unit="bytes")
+    for receipt in receipts.values():
+        ctx.adopt_model(receipt)
     return RetableResult(
         pruned.checkpoint_ref,
         list(plans["fl2va"].steps),
-        receipts["adaln-pruned"].tensorfs_receipt_digest,
-        receipts["tables"].tensorfs_receipt_digest,
-        receipts["adaln-pruned"].replayed,
+        canonical_json.digest(receipts["adaln-pruned"]),
+        canonical_json.digest(receipts["tables"]),
+        "adaln-pruned" in replayed,
         sum(len(rows) for rows in tables.values()),
         written,
         source_bytes,
     )
 
 
+# Native output bounds include newly written construction and provenance configs.
 app.job(
     _adaln_operations.select_adaln_weights,
     name="select-adaln-weights",
-    weights=(WeightsOutput("model", 0),),
+    weights=(WeightsOutput("model", 1 << 20),),
 )
 app.job(
     _adaln_operations.compute_adaln_tables,
@@ -890,25 +933,33 @@ app.job(
     _adaln_operations.apply_adaln,
     name="apply-adaln",
     weights=(
-        WeightsOutput("model", 0),
-        WeightsOutput("fl2va-weights", 0),
-        WeightsOutput("ref2va-weights", 0),
+        WeightsOutput("model", 1 << 20),
+        WeightsOutput("fl2va-weights", 1 << 20),
+        WeightsOutput("ref2va-weights", 1 << 20),
     ),
 )
 
-app.job(assemble_full_artifact, name="assemble-full-artifact", weights=(WeightsOutput("model", 0),))
+app.job(
+    assemble_full_artifact,
+    name="assemble-full-artifact",
+    weights=(WeightsOutput("model", 1 << 20),),
+)
 
-app.job(_adaln_operations.retable_adaln, name="retable-adaln", weights=(WeightsOutput("model", 0),))
+app.job(
+    _adaln_operations.retable_adaln,
+    name="retable-adaln",
+    weights=(WeightsOutput("model", 1 << 20),),
+)
 
 
-def _source_modulation(source: WeightsSource, sections: Mapping[str, dict[str, Any]]) -> str:
+def _source_modulation(source: SourceInspection, sections: Mapping[str, dict[str, Any]]) -> str:
     """Read the source's own modulation off its DiT rows rather than off a request field.
 
     An AdaLN-pruned checkpoint carries the timestep table rows and none of the dynamic
     modulation weights; a FULL one carries the modulation weights and no tables. Anything
     else is not a lane this producer emitted, and the restamp refuses rather than guessing.
     """
-    present = {(tensor.component, tensor.key) for tensor in source.tensors}
+    present = {(component, key) for component, rows in source.components.items() for key in rows}
     verdicts: set[str] = set()
     for task, section in SOURCE_SECTION.items():
         component = TARGET_COMPONENT[task]
@@ -936,11 +987,15 @@ def _source_modulation(source: WeightsSource, sections: Mapping[str, dict[str, A
     return verdicts.pop()
 
 
-def _check_emitted_config(document: bytes, modulation: str, source: WeightsSource) -> None:
+def _check_emitted_config(document: bytes, modulation: str, source: SourceInspection) -> None:
     """Validate row meanings and stored table dimensions before inheriting table bytes."""
     value = canonical_json.decode(document)
     fields = {"task", "modulation"} | ({"table_keys"} if modulation == "adaln-pruned" else set())
-    tensors = {(tensor.component, tensor.key): tensor for tensor in source.tensors}
+    tensors = {
+        (component, key): tensor
+        for component, rows in source.components.items()
+        for key, tensor in rows.items()
+    }
     for task, component in TARGET_COMPONENT.items():
         extension = value[component]["cozy_h3"]
         if set(extension) not in (fields, fields | {"generating_projection_digest"}):
@@ -966,9 +1021,7 @@ def _check_emitted_config(document: bytes, modulation: str, source: WeightsSourc
                     or tensor.logical_dtype != "bf16"
                     or tensor.encoding != PLAIN_SPEC
                     or tensor.shape != shape
-                    or len(tensor.parts) != 1
-                    or (tensor.parts[0].name, tensor.parts[0].dtype, tensor.parts[0].shape)
-                    != ("value", "bf16", shape)
+                    or tensor.parts != {"value": Part("bf16", shape)}
                 ):
                     raise UnsupportedInput(
                         f"{component}.{key} stored dimensions/encoding differ from its table keys",
@@ -981,35 +1034,37 @@ def restamp(
     ctx: Context,
     payload: ProductionRequest,
     lane: H3FullTransformer,
-    artifacts: WeightsSink,
     tel: Telemetry,
 ) -> ModelArtifact:
     """Migrate the exact frame-stamped AdaLN plan without changing any tensor bytes."""
     del payload
     ctx.raise_if_cancelled()
-    granted = artifacts.structure(lane)
+    granted = inspection(ctx, lane)
     sections = parse_production_config(_asset("model-config.json"))
     modulation = _source_modulation(granted, sections)
     document = upgrade_legacy_table_config(
-        artifacts.config(lane, "model"), {task: _production_plan(task) for task in TASKS}
+        granted.configs["model"], {task: _production_plan(task) for task in TASKS}
     )
     _check_emitted_config(document, modulation, granted)
-    components = sorted({tensor.component for tensor in granted.tensors})
+    components = sorted(granted.components)
     if set(components) != set(_full_targets()):
         raise UnsupportedInput("restamp requires exactly the five H3 base components")
-    with artifacts.open(
-        "restamped",
-        sources={"lane": lane},
-        targets={component: WeightsTarget("lane", component) for component in components},
-        configs={"model": WeightsConfig(data=document, length=len(document))},
-        order=tuple((row.component, row.key) for row in granted.tensors),
+    with ctx.output("restamped").open(
+        Derivation(
+            sources={name: info.source for name, info in _structures(ctx, {"lane": lane}).items()},
+            targets={component: Target("lane", component) for component in components},
+            configs={"model": Config("add")},
+            order=tuple(
+                (component, key) for component, rows in granted.components.items() for key in rows
+            ),
+        )
     ) as transaction:
-        if transaction.replayed:
-            return _receipt(transaction).artifact
+        if transaction.receipt is not None:
+            return ctx.adopt_model(transaction.commit())
         transaction.add_config("model", document)
         receipt = transaction.commit()
     tel.metric("h3.source_bytes", 0, unit="bytes")
-    return receipt.artifact
+    return ctx.adopt_model(receipt)
 
 
 from .turbo import prepare_turbo  # noqa: E402

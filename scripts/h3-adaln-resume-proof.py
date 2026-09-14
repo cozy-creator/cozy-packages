@@ -20,18 +20,12 @@ from cozy_runtime.author import (
     ModelArtifact,
     ObjectRef,
     Telemetry,
-    WeightsConfig,
     WeightsOutput,
-    WeightsPart,
-    WeightsSink,
-    WeightsTarget,
-    WeightsTensor,
     attempt,
     describe,
     invocable,
 )
 from cozy_runtime.author._model import _derive_model
-from cozy_runtime.internal.weights_sink import WeightsTransactionHost
 from h3_tables.adaln_operations import PLAIN, _compute_into, _plan
 from h3_tables.kernel import (
     H3Topology,
@@ -41,6 +35,9 @@ from h3_tables.kernel import (
     table_shapes,
 )
 from h3_tables.source import H3FullTransformer
+from tensorfs.derived import Config, Derivation, Part, Target, Tensor
+
+from native_execution_fixture import NativeExecution
 
 TOPOLOGY = H3Topology(8, 3, 8, 12, 4)
 PLAN = _plan("fl2va")
@@ -48,33 +45,33 @@ COMPONENT = "fl2va_dit"
 
 
 @invocable(memoize=True)
-async def mini_tables(
-    ctx: Context, *, source: H3FullTransformer, weights: WeightsSink, tel: Telemetry
-) -> ModelArtifact:
+async def mini_tables(ctx: Context, *, source: H3FullTransformer, tel: Telemetry) -> ModelArtifact:
     tables = table_shapes(TOPOLOGY, PLAN)
-    with weights.open(
-        "model",
-        sources={"source": source},
-        targets={
-            COMPONENT: WeightsTarget(
-                "source",
-                COMPONENT,
-                drop=removed_keys(TOPOLOGY),
-                add={
-                    key: WeightsTensor("bf16", shape, PLAIN, {"value": WeightsPart("bf16", shape)})
-                    for key, shape in tables.items()
-                },
-            )
-        },
-        configs={"adaln": WeightsConfig(data=b"{}")},
-        order=tuple((COMPONENT, key) for key in tables),
+    with ctx.tensorfs_source(source) as native_source:
+        selected = native_source.inspect().source
+    with ctx.output("model").open(
+        Derivation(
+            sources={"source": selected},
+            targets={
+                COMPONENT: Target(
+                    "source",
+                    COMPONENT,
+                    drop=removed_keys(TOPOLOGY),
+                    add={
+                        key: Tensor("bf16", shape, PLAIN, {"value": Part("bf16", shape)})
+                        for key, shape in tables.items()
+                    },
+                )
+            },
+            configs={"adaln": Config("add")},
+            order=tuple((COMPONENT, key) for key in tables),
+        )
     ) as transaction:
-        if transaction.replayed:
-            assert transaction.receipt is not None
-            return transaction.receipt.artifact
+        if transaction.receipt is not None:
+            return ctx.adopt_model(transaction.receipt)
         _compute_into(ctx, tel, transaction, "fl2va", PLAN, TOPOLOGY)
         transaction.add_config("adaln", b"{}")
-        return transaction.commit().artifact
+        return ctx.adopt_model(transaction.commit())
 
 
 def main() -> None:
@@ -171,32 +168,23 @@ def main() -> None:
         )
 
         def run(name: str, epoch: int, stop: bool) -> Any:
-            checkpoints: list[Any] = []
-            host = WeightsTransactionHost(
-                store=store,
-                owner_scope="table-proof",
-                request_id=name,
-                invocation_spec_digest="sha256:" + "43" * 32,
-                work_fingerprint="sha256:" + "44" * 32,
-                writer_session_id=epoch,
-                allowed_sources={source.manifest.digest: source.manifest.length},
-                output_bounds={"model": 1 << 20},
-                record_checkpoint=checkpoints.append,
-            )
-            return attempt(
-                app.get("mini_tables"),
-                {"source": msgspec.to_builtins(source)},
-                Invocation(
-                    name,
-                    root / f"{name}-{epoch}",
-                    time.monotonic() + 60,
-                    models={"source": _derive_model(H3FullTransformer, source.manifest.digest)},
-                    weights=host.open,
-                    weights_source_structure=host.structure,
-                    weights_source_config=host.config,
-                    cancel=lambda: stop and bool(checkpoints),
-                ),
-            )
+            with NativeExecution(
+                store, root, name, {"source": source}, {"model": 1 << 20}, epoch=epoch
+            ) as execution:
+                return attempt(
+                    app.get("mini_tables"),
+                    {"source": msgspec.to_builtins(source)},
+                    Invocation(
+                        name,
+                        execution.spool,
+                        time.monotonic() + 60,
+                        models={"source": _derive_model(H3FullTransformer, source.manifest.digest)},
+                        tensorfs_output=execution.client.open_output,
+                        tensorfs_source=execution.client.source,
+                        tensorfs_adopt=execution.client.adopt_model,
+                        cancel=lambda: stop and execution.checkpointed,
+                    ),
+                )
 
         first, outcome, _ = run("interrupted", 1, True)
         assert first is None and outcome.terminal == "canceled", outcome

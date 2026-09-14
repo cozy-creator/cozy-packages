@@ -7,26 +7,20 @@ import hashlib
 import io
 import json
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
 import tensorfs
 import torch
 from cozy_runtime.author import (
+    Context,
     ModelArtifact,
     ObjectRef,
     UnsupportedInput,
-    WeightsConfig,
-    WeightsPart,
-    WeightsPartSource,
-    WeightsSink,
-    WeightsTarget,
-    WeightsTensor,
     canonical_json,
 )
 from cozy_runtime.author._model import _derive_model
-from cozy_runtime.author._services import Attempt
-from cozy_runtime.internal.weights_sink import WeightsTransactionHost
 from h3_tables.adaln_operations import (
     PLAIN,
     _bank_config,
@@ -36,7 +30,10 @@ from h3_tables.adaln_operations import (
     _require_bank_binding,
 )
 from h3_tables.kernel import H3Topology, precompute_tables, source_shapes, table_shapes
-from h3_tables.source import H3FullTransformer
+from h3_tables.source import H3FullTransformer, inspection
+from tensorfs.derived import Config, Derivation, Part, PartSource, Target, Tensor
+
+from native_execution_fixture import NativeExecution
 
 TOPOLOGY = H3Topology(8, 2, 8, 12, 4)
 COMPONENT = "fl2va_dit"
@@ -85,33 +82,20 @@ def native(
     )
 
 
-def sink(
-    store: Any, root: Path, name: str, artifacts: dict[str, ModelArtifact], outputs: dict[str, int]
-) -> tuple[WeightsSink, dict[str, H3FullTransformer]]:
-    host = WeightsTransactionHost(
-        store=store,
-        owner_scope="binding-proof",
-        request_id=name,
-        invocation_spec_digest="sha256:" + "52" * 32,
-        work_fingerprint="sha256:" + "53" * 32,
-        writer_session_id=1,
-        allowed_sources={
-            artifact.manifest.digest: artifact.manifest.length for artifact in artifacts.values()
-        },
-        output_bounds=outputs,
-    )
+def bound_context(
+    stack: ExitStack,
+    store: Any,
+    root: Path,
+    name: str,
+    artifacts: dict[str, ModelArtifact],
+    outputs: dict[str, int],
+) -> tuple[Context, dict[str, H3FullTransformer]]:
+    execution = stack.enter_context(NativeExecution(store, root, name, artifacts, outputs))
     models = {
         key: _derive_model(H3FullTransformer, artifact.manifest.digest)
         for key, artifact in artifacts.items()
     }
-    return WeightsSink(
-        Attempt(name, root / name),
-        models,
-        outputs,
-        host.open,
-        source_structure=host.structure,
-        source_config=host.config,
-    ), models
+    return execution.context(), models
 
 
 def main() -> None:
@@ -120,7 +104,7 @@ def main() -> None:
         key: (torch.randn(shape) * 0.03).to(dtype)
         for key, (dtype, shape) in source_shapes(TOPOLOGY).items()
     }
-    with tempfile.TemporaryDirectory(prefix="h3-adaln-bindings-") as area:
+    with tempfile.TemporaryDirectory(prefix="h3-adaln-bindings-") as area, ExitStack() as stack:
         root = Path(area)
         store = tensorfs.Store.init(root / "store")
         original = native(
@@ -133,8 +117,10 @@ def main() -> None:
         )
         projections = []
         for name, artifact in (("project-source", original), ("project-body-changed", changed)):
-            weights, models = sink(store, root, name, {"source": artifact}, {"model": 0})
-            projections.append(_project(weights, models["source"], "fl2va", "model", TOPOLOGY))
+            ctx, models = bound_context(
+                stack, store, root, name, {"source": artifact}, {"model": 1 << 20}
+            )
+            projections.append(_project(ctx, models["source"], "fl2va", "model", TOPOLOGY))
         assert projections[0].manifest == projections[1].manifest
         for index, key in enumerate(
             (
@@ -146,10 +132,15 @@ def main() -> None:
             edited = {name: value.clone() for name, value in values.items()}
             edited[key].flatten()[0] += 0.25
             source = native(store, f"generator-change-{index}", edited)
-            weights, models = sink(
-                store, root, f"projection-change-{index}", {"source": source}, {"model": 0}
+            ctx, models = bound_context(
+                stack,
+                store,
+                root,
+                f"projection-change-{index}",
+                {"source": source},
+                {"model": 1 << 20},
             )
-            result = _project(weights, models["source"], "fl2va", "model", TOPOLOGY)
+            result = _project(ctx, models["source"], "fl2va", "model", TOPOLOGY)
             assert result.manifest != projections[0].manifest
 
         tables: dict[str, torch.Tensor] = {}
@@ -184,27 +175,23 @@ def main() -> None:
             {"model": bindings},
         )
         outputs = {"bf16": 0, "fp8": 1024, "mxfp8": 1024}
-        weights, models = sink(
-            store, root, "attach", {"body": body, "bank": bank, "wrong": wrong}, outputs
+        ctx, models = bound_context(
+            stack, store, root, "attach", {"body": body, "bank": bank, "wrong": wrong}, outputs
         )
-        expected = _bindings(weights, models["body"])["fl2va"]
-        _require_bank_binding(weights, models["bank"], "fl2va", expected, TOPOLOGY)
+        expected = _bindings(inspection(ctx, models["body"]))["fl2va"]
+        _require_bank_binding(ctx, models["bank"], "fl2va", expected, TOPOLOGY)
         try:
-            _require_bank_binding(weights, models["wrong"], "fl2va", expected, TOPOLOGY)
+            _require_bank_binding(ctx, models["wrong"], "fl2va", expected, TOPOLOGY)
         except UnsupportedInput as error:
             assert error.code == "adaln_binding"
         else:
             raise AssertionError("same-shape/same-plan bank from another generator was accepted")
         tensors = {
-            key: WeightsTensor(
+            key: Tensor(
                 "bf16",
                 shape,
                 PLAIN,
-                {
-                    "value": WeightsPart(
-                        "bf16", shape, source=WeightsPartSource("bank", COMPONENT, key, "value")
-                    )
-                },
+                {"value": Part("bf16", shape, source=PartSource("bank", COMPONENT, key, "value"))},
             )
             for key, shape in table_shapes(TOPOLOGY, _plan("fl2va")).items()
         }
@@ -215,26 +202,38 @@ def main() -> None:
         table_parts = []
         for label, encoding in (("bf16", None), ("fp8", rowwise), ("mxfp8", mxfp8)):
             additions = dict(tensors)
+            payloads = {}
             if encoding is not None:
-                parts = {"data": WeightsPart("f8_e4m3fn", (16, 32), data=bytes(512))}
-                parts["scale"] = (
-                    WeightsPart("f32", (16,), data=torch.ones(16).numpy().tobytes())
+                payloads = {
+                    "data": bytes(512),
+                    "scale": torch.ones(16).numpy().tobytes()
                     if label == "fp8"
-                    else WeightsPart("u8", (16, 1), data=bytes([127] * 16))
+                    else bytes([127] * 16),
+                }
+                parts = {"data": Part("f8_e4m3fn", (16, 32))}
+                parts["scale"] = Part("f32", (16,)) if label == "fp8" else Part("u8", (16, 1))
+                additions["body.weight"] = Tensor("bf16", (16, 32), encoding, parts)
+            with ctx.output(label).open(
+                Derivation(
+                    sources={
+                        name: inspection(ctx, models[name]).source for name in ("body", "bank")
+                    },
+                    targets={
+                        COMPONENT: Target(
+                            "body",
+                            COMPONENT,
+                            drop=("body.weight",) if encoding else (),
+                            add=additions,
+                        )
+                    },
+                    configs={"model": Config("copy", "body", "model")},
+                    order=((COMPONENT, "body.weight"), *((COMPONENT, key) for key in tensors)),
                 )
-                additions["body.weight"] = WeightsTensor("bf16", (16, 32), encoding, parts)
-            receipt = weights.derive(
-                label,
-                sources={"body": models["body"], "bank": models["bank"]},
-                targets={
-                    COMPONENT: WeightsTarget(
-                        "body", COMPONENT, drop=("body.weight",) if encoding else (), add=additions
-                    )
-                },
-                configs={"model": WeightsConfig("body", "model")},
-                order=((COMPONENT, "body.weight"), *((COMPONENT, key) for key in tensors)),
-            )
-            header_bytes = store.manifest(receipt.artifact.manifest.digest)["header"]
+            ) as transaction:
+                for role, payload in payloads.items():
+                    transaction.add_part(COMPONENT, "body.weight", role, payload)
+                receipt = ctx.adopt_model(transaction.commit())
+            header_bytes = store.manifest(receipt.manifest.digest)["header"]
             assert header_bytes is not None, "produced model has no CozyTensors header"
             header = tensorfs.parse_header(header_bytes)
             table_parts.append({key: header["components"][COMPONENT][key] for key in tensors})

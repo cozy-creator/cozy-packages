@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime>=0.17.2,<1", "cozy-mixed-model-qualification==0.0.1"]
+# dependencies = ["cozy-runtime>=0.18.0,<1", "cozy-mixed-model-qualification==0.0.1"]
 # [tool.uv]
 # default-groups = []
 # [tool.uv.sources]
@@ -9,11 +9,11 @@
 """Compare actual mixed GPU calls, then optionally hold a child for CLI cancellation."""
 
 import json
-from collections.abc import Awaitable, Callable
-from typing import cast
+from collections.abc import Callable
+from typing import Any, cast
 
-from cozy_runtime.author import ModelArtifact, PendingCall, ScriptContext
-from mixed_model_qualification import Result, candidate, combine
+from cozy_runtime.author import PendingCall, ScriptContext
+from mixed_model_qualification import candidate, combine
 
 NOTE = "isolated-baseline"
 HOLD_FOR_CANCEL = False
@@ -40,10 +40,9 @@ def result_fields(value: object) -> dict[str, object]:
 
 
 async def main(ctx: ScriptContext) -> str:
-    # Runtime lifts these worker signatures into client calls, as in sdxl_prepare.py.
-    candidate_call = cast(Callable[..., Awaitable[ModelArtifact]], candidate)
-    combine_call = cast(Callable[..., PendingCall[Result]], combine)
-    model = await candidate_call()
+    model = await candidate()
+    # The captured client flattens the request and returns an observed pending call.
+    combine_call = cast(Callable[..., PendingCall[Any]], combine)
     if HOLD_FOR_CANCEL:
         ctx.log(f"Holding producer={model.producer_request_id} for cancellation proof")
         await combine_call(model=model, seed=24680, steps=2, hold_for_cancel=True)

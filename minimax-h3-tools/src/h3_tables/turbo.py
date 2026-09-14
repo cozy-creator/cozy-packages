@@ -12,16 +12,18 @@ from cozy_runtime.author import (
     ModelArtifact,
     Telemetry,
     UnsupportedInput,
-    WeightsConfig,
-    WeightsPart,
-    WeightsPartSource,
-    WeightsSink,
-    WeightsSource,
-    WeightsTarget,
-    WeightsTensor,
-    WeightsTransaction,
     canonical_json,
     invocable,
+)
+from tensorfs.derived import (
+    Config,
+    Derivation,
+    DerivedTransaction,
+    Part,
+    PartSource,
+    SourceInspection,
+    Target,
+    Tensor,
 )
 
 from .adaln_operations import (
@@ -32,7 +34,7 @@ from .adaln_operations import (
 )
 from .kernel import H3Topology, LowRankAdapter, adapter_shapes, precompute_tables, table_shapes
 from .plans import Task, TimestepPlan, parse_plan
-from .source import H3FullTransformer
+from .source import H3FullTransformer, inspection
 
 RANK = 64
 NUM_STEPS = 32
@@ -130,7 +132,7 @@ def overlay_shapes(
 
 
 def _adapter_component(
-    structure: WeightsSource, config: dict[str, Any], plan: TimestepPlan, topology: H3Topology
+    structure: SourceInspection, config: dict[str, Any], plan: TimestepPlan, topology: H3Topology
 ) -> str:
     expected = {
         key: ("bf16", ((NUM_STEPS, *shape[1:]) if dtype == "f32" else shape))
@@ -140,21 +142,21 @@ def _adapter_component(
     expected.update(
         {key: ("bf16", shape) for key, (_, shape) in adapter_shapes(topology, RANK).items()}
     )
-    components = {row.component for row in structure.tensors}
-    rows = {row.key: row for row in structure.tensors}
-    if len(components) != 1 or len(rows) != len(structure.tensors) or set(rows) != set(expected):
+    components = set(structure.components)
+    rows = next(iter(structure.components.values())) if len(components) == 1 else {}
+    if len(components) != 1 or set(rows) != set(expected):
         raise UnsupportedInput("PDD adapter must contain exactly its LoRA factors and 32 heads")
     for key, (dtype, shape) in expected.items():
         row = rows[key]
         if (row.logical_dtype, row.shape, row.encoding) != (dtype, shape, PLAIN) or tuple(
-            (p.name, p.dtype, p.shape) for p in row.parts
+            (role, p.dtype, p.shape) for role, p in row.parts.items()
         ) != (("value", dtype, shape),):
             raise UnsupportedInput(f"PDD adapter tensor {key} must be plain {dtype} {shape}")
     return components.pop()
 
 
 def _read(
-    transaction: WeightsTransaction,
+    transaction: DerivedTransaction,
     source: str,
     component: str,
     key: str,
@@ -170,7 +172,7 @@ def _read(
     return value
 
 
-def _write(transaction: WeightsTransaction, component: str, key: str, value: torch.Tensor) -> None:
+def _write(transaction: DerivedTransaction, component: str, key: str, value: torch.Tensor) -> None:
     transaction.add_part(
         component, key, "value", value.cpu().contiguous().view(torch.uint8).numpy().tobytes()
     )
@@ -185,7 +187,6 @@ def _progress(ctx: Context, tel: Telemetry, task: Task, done: int, total: int) -
 def _produce(
     ctx: Context,
     tel: Telemetry,
-    weights: WeightsSink,
     *,
     full: H3FullTransformer,
     adapters: dict[Task, H3FullTransformer],
@@ -195,7 +196,7 @@ def _produce(
     """One adapter transaction; LoRA factors inherit their exact source objects."""
     source_models: dict[str, H3FullTransformer] = {"full": full}
     source_models.update({str(task): model for task, model in adapters.items()})
-    structures = {name: weights.structure(model) for name, model in source_models.items()}
+    structures = {name: inspection(ctx, model) for name, model in source_models.items()}
     plans = {task: turbo_plan(task) for task in TASKS}
     components = {
         task: _adapter_component(
@@ -203,28 +204,26 @@ def _produce(
         )
         for task in TASKS
     }
-    targets: dict[str, WeightsTarget] = {}
+    targets: dict[str, Target] = {}
     output_order: list[tuple[str, str]] = []
     for task in TASKS:
         component = f"{task}_turbo"
         specs = overlay_shapes(configs[f"{task}_dit"], plans[task])
-        targets[component] = WeightsTarget(
+        targets[component] = Target(
             "full",
             f"{task}_dit",
-            drop=tuple(
-                row.key for row in structures["full"].tensors if row.component == f"{task}_dit"
-            ),
+            drop=tuple(structures["full"].components[f"{task}_dit"]),
             add={
-                key: WeightsTensor(
+                key: Tensor(
                     dtype,
                     shape,
                     PLAIN,
                     {
-                        "value": WeightsPart(
+                        "value": Part(
                             dtype,
                             shape,
                             source=(
-                                WeightsPartSource(task, components[task], key, "value")
+                                PartSource(task, components[task], key, "value")
                                 if key.endswith((".lora_down", ".lora_up"))
                                 else None
                             ),
@@ -251,16 +250,16 @@ def _produce(
             },
         }
     raw = canonical_json.encode(config)
-    with weights.open(
-        "model",
-        sources=source_models,
-        targets=targets,
-        configs={"model": WeightsConfig(data=raw)},
-        order=tuple(output_order),
+    with ctx.output("model").open(
+        Derivation(
+            sources={name: structure.source for name, structure in structures.items()},
+            targets=targets,
+            configs={"model": Config("add")},
+            order=tuple(output_order),
+        )
     ) as transaction:
-        if transaction.replayed:
-            assert transaction.receipt is not None
-            return transaction.receipt.artifact
+        if transaction.receipt is not None:
+            return ctx.adopt_model(transaction.receipt)
         if ctx.device.type == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = False
         torch.set_float32_matmul_precision("highest")
@@ -269,7 +268,7 @@ def _produce(
             component = f"{task}_turbo"
             completed = {
                 key
-                for owner, key, role in transaction.completed_parts
+                for owner, key, role in transaction.completed_parts()
                 if owner == component and role == "value"
             }
             tables = table_shapes(topologies[task], plans[task])
@@ -298,7 +297,7 @@ def _produce(
                     if f"{prefix}.{suffix}" not in completed:
                         _write(transaction, component, f"{prefix}.{suffix}", value)
         transaction.add_config("model", raw)
-        return transaction.commit().artifact
+        return ctx.adopt_model(transaction.commit())
 
 
 def build_turbo_adapter(
@@ -307,7 +306,6 @@ def build_turbo_adapter(
     full: H3FullTransformer,
     fl2va_adapter: H3FullTransformer,
     ref2va_adapter: H3FullTransformer,
-    weights: WeightsSink,
     tel: Telemetry,
 ) -> ModelArtifact:
     """Prepare a PDD-8 adapter independently of any quantized base checkpoint."""
@@ -323,11 +321,10 @@ def build_turbo_adapter(
         for task in TASKS
     }
     for task in TASKS:
-        _validate_generators(weights.structure(full), task, topologies[task])
+        _validate_generators(inspection(ctx, full), task, topologies[task])
     return _produce(
         ctx,
         tel,
-        weights,
         full=full,
         adapters={"fl2va": fl2va_adapter, "ref2va": ref2va_adapter},
         configs=configs,
@@ -342,7 +339,6 @@ async def prepare_turbo(
     full: H3FullTransformer,
     fl2va_adapter: H3FullTransformer,
     ref2va_adapter: H3FullTransformer,
-    weights: WeightsSink,
     tel: Telemetry,
 ) -> ModelArtifact:
     return build_turbo_adapter(
@@ -350,6 +346,5 @@ async def prepare_turbo(
         full=full,
         fl2va_adapter=fl2va_adapter,
         ref2va_adapter=ref2va_adapter,
-        weights=weights,
         tel=tel,
     )

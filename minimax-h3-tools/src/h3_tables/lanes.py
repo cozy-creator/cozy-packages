@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 import numpy as np
@@ -26,11 +26,6 @@ from cozy_runtime.author import (
     Context,
     Telemetry,
     UnsupportedInput,
-    WeightsPart,
-    WeightsSourceTensor,
-    WeightsTarget,
-    WeightsTensor,
-    WeightsTransaction,
 )
 from cozy_runtime.derive import safetensors_io as st
 from cozy_runtime.derive.quantization import (
@@ -41,6 +36,7 @@ from cozy_runtime.derive.quantization import (
     prepare_source_quantization,
     quantization_additions,
 )
+from tensorfs.derived import DerivedTransaction, Part, SourceInspection, Target, Tensor
 
 from .source import TARGET_COMPONENT
 
@@ -330,14 +326,6 @@ def lane_max_new_bytes(lane: Lane, *, full_bytes: int, pruned_bytes: int) -> int
 
 
 @dataclass(frozen=True, slots=True)
-class _StructureView:
-    """The Runtime `SourceStructure` protocol over one component's granted tensors."""
-
-    tensors: tuple[WeightsSourceTensor, ...]
-    configs: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class Selection:
     """One component's resolved work: which keys cast, which encode, under what plan."""
 
@@ -356,9 +344,7 @@ class Selection:
         return tuple(sorted({key for key, _ in self.cast} | set(self.encoded)))
 
 
-def carried(
-    target: WeightsTarget, tensors: Sequence[WeightsSourceTensor]
-) -> tuple[WeightsSourceTensor, ...]:
+def carried(target: Target, structure: SourceInspection) -> SourceInspection:
     """The source rows one target actually carries: its component MINUS its dropped rows.
 
     A treatment must never see a row the lane removes. The conditioner is where this bites:
@@ -368,26 +354,22 @@ def carried(
     unscoped, an encoding would resurrect the row the lane exists to delete.
     """
     dropped = set(target.drop)
-    return tuple(
-        tensor
-        for tensor in tensors
-        if tensor.component == target.source_component and tensor.key not in dropped
-    )
+    rows = {
+        key: tensor
+        for key, tensor in structure.components.get(target.source_component, {}).items()
+        if key not in dropped
+    }
+    return replace(structure, components={target.source_component: rows}, configs={})
 
 
-def _plain_value(tensor: WeightsSourceTensor) -> bool:
-    return (
-        len(tensor.parts) == 1
-        and tensor.parts[0].name == "value"
-        and tensor.parts[0].dtype == tensor.logical_dtype
-        and tuple(tensor.parts[0].shape) == tuple(tensor.shape)
-    )
+def _plain_value(tensor: Tensor) -> bool:
+    return tensor.parts == {"value": Part(tensor.logical_dtype, tensor.shape)}
 
 
 def select(
     component: str,
     treatment: Treatment,
-    tensors: Sequence[WeightsSourceTensor],
+    structure: SourceInspection,
     *,
     dit_plan: ArtifactQuantizationPlan | None = None,
     allow_inert: bool = False,
@@ -409,11 +391,9 @@ def select(
             f"{component} is refused: {REFUSED_COMPONENTS[component]}",
             code="h3_component_refused",
         )
-    present = tuple(tensor for tensor in tensors if tensor.component == component)
+    present = structure.components.get(component, {})
     if not present:
-        raise UnsupportedInput(
-            f"source has no component {component!r}", code="h3_component_absent"
-        )
+        raise UnsupportedInput(f"source has no component {component!r}", code="h3_component_absent")
 
     plan: ArtifactQuantizationPlan | None = None
     plan_component = component
@@ -426,9 +406,7 @@ def select(
                 )
             plan, plan_component = dit_plan, DIT_PLAN_COMPONENT
         else:
-            structural = prepare_source_quantization(
-                _StructureView(present), components=(component,)
-            )
+            structural = prepare_source_quantization(structure, components=(component,))
             kept = set(treatment.keep)
             missing = sorted(kept - {tensor.key for tensor in structural.tensors})
             if missing:
@@ -446,28 +424,28 @@ def select(
             plan = ArtifactQuantizationPlan(
                 components=[component],
                 configs=[],
-                order=[(component, tensor.key) for tensor in present],
+                order=[(component, key) for key in present],
                 tensors=selected,
             )
 
     encoded = {tensor.key for tensor in plan.tensors} if plan is not None else set()
     cast: list[tuple[str, tuple[int, ...]]] = []
     if treatment.cast is not None:
-        for tensor in present:
+        for key, tensor in present.items():
             # Only float32 converts. A 16-bit source already carries the target's byte
             # width and re-rounding it loses mantissa bits for nothing (#695), so it
             # inherits by reference — which is what stops a cast lane from rewriting a
             # component it barely changes.
-            if tensor.key in encoded or tensor.logical_dtype != "f32":
+            if key in encoded or tensor.logical_dtype != "f32":
                 continue
-            if not CAST_SCOPES[treatment.cast_scope](tensor.key, tensor.shape):
+            if not CAST_SCOPES[treatment.cast_scope](key, tensor.shape):
                 continue
             if not _plain_value(tensor):
                 raise UnsupportedInput(
-                    f"{component}.{tensor.key} is not one plain value role and cannot be cast",
+                    f"{component}.{key} is not one plain value role and cannot be cast",
                     code="h3_cast_encoded_source",
                 )
-            cast.append((tensor.key, tuple(tensor.shape)))
+            cast.append((key, tuple(tensor.shape)))
     if not cast and plan is None and not allow_inert:
         raise UnsupportedInput(
             f"{component} treatment {treatment.describe()!r} changes nothing on this source",
@@ -476,17 +454,17 @@ def select(
     return Selection(component, treatment, tuple(cast), plan, plan_component)
 
 
-def additions(selection: Selection) -> dict[str, WeightsTensor]:
+def additions(selection: Selection) -> dict[str, Tensor]:
     """The declared replacement tensors for one resolved treatment."""
     dtype = selection.treatment.cast
-    result: dict[str, WeightsTensor] = {}
+    result: dict[str, Tensor] = {}
     for key, shape in selection.cast:
         assert dtype is not None
-        result[key] = WeightsTensor(
+        result[key] = Tensor(
             logical_dtype=dtype,
             shape=shape,
             encoding=PLAIN_SPEC,
-            parts={"value": WeightsPart(dtype, shape)},
+            parts={"value": Part(dtype, shape)},
         )
     if selection.plan is not None and selection.treatment.encode is not None:
         result.update(
@@ -500,14 +478,14 @@ def additions(selection: Selection) -> dict[str, WeightsTensor]:
     return result
 
 
-def apply(target: WeightsTarget, selection: Selection) -> WeightsTarget:
+def apply(target: Target, selection: Selection) -> Target:
     """Fold one resolved treatment into a component's target declaration.
 
     Only the treated keys are dropped. A target's other additions — the AdaLN timestep
     tables — are pure creations with no source row to drop, and TensorFS refuses a drop of
     a key its selected source component does not carry.
     """
-    return WeightsTarget(
+    return Target(
         source=target.source,
         source_component=target.source_component,
         drop=tuple(sorted(set(target.drop) | set(selection.replaced))),
@@ -536,7 +514,7 @@ MAX_CAST_TENSOR_BYTES = 1 << 30
 
 
 def write_cast(
-    transaction: WeightsTransaction,
+    transaction: DerivedTransaction,
     ctx: Context,
     tel: Telemetry,
     *,
@@ -544,6 +522,7 @@ def write_cast(
     source: str,
     source_component: str,
     target_component: str,
+    mirrors: Sequence[DerivedTransaction] = (),
 ) -> CastStats:
     """Stream one component's float32 cut through RNE into the declared carrier.
 
@@ -558,7 +537,8 @@ def write_cast(
         return CastStats(0, 0, 0, 0, None)
     carrier = dtype.upper()
     bound = CAST_ROUND_TRIP_BOUND[dtype]
-    completed = transaction.completed_parts
+    writers = [(writer, frozenset(writer.completed_parts())) for writer in (transaction, *mirrors)]
+    completed = frozenset.intersection(*(parts for _, parts in writers))
     read = written = reused = 0
     worst = 0.0
     total = len(selection.cast)
@@ -596,8 +576,10 @@ def write_cast(
         norm = float(np.linalg.norm(values))
         relative = float(np.linalg.norm(error)) / norm if norm else 0.0
         worst = max(worst, relative)
-        transaction.add_part(target_component, key, "value", raw)
-        transaction.checkpoint()
+        for writer, accepted in writers:
+            if (target_component, key, "value") not in accepted:
+                writer.add_part(target_component, key, "value", raw)
+                writer.checkpoint()
         read += length
         written += len(raw)
         tel.log(
@@ -613,11 +595,11 @@ def write_cast(
         tel.progress(done / total, stage=stage)
         del values, raw, restored, error
     converted = total - reused
-    return CastStats(converted, reused, read, written, worst if converted else None)
+    return CastStats(converted, reused, read, written, None if reused else worst)
 
 
 def _read_f32(
-    transaction: WeightsTransaction,
+    transaction: DerivedTransaction,
     *,
     source: str,
     component: str,
