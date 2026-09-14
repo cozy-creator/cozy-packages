@@ -44,7 +44,9 @@ def build_runtime_backend(
         "layout": asdict(layout) if layout is not None else None,
         "module_path": module_path,
         "construction_includes": "Runtime resolution and small native smoke, including its JIT",
-        "timing_includes": "Runtime adapter dispatch, layouts, quantization and native kernel",
+        "timing_includes": (
+            "Runtime adapter dispatch, layouts, quantization, native kernel and contiguous NHD output"
+        ),
     }
     if entry.candidate.distribution:
         distribution = metadata.distribution(entry.candidate.distribution)
@@ -54,7 +56,7 @@ def build_runtime_backend(
 
     if name != "sol-attn":
         return (
-            lambda: dispatch_attention_fn(q, k, v, scale=scale, backend=entry.member),
+            lambda: dispatch_attention_fn(q, k, v, scale=scale, backend=entry.member).contiguous(),
             provenance,
         )
 
@@ -72,6 +74,6 @@ def build_runtime_backend(
         with attention_scope(layout), attention_sol.observing() as counts:
             result = call()
         provenance["last_effective_calls"] = dict(counts)
-        return result
+        return result.contiguous()
 
     return invoke, provenance
