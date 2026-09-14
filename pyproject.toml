@@ -44,6 +44,11 @@ warn_unused_ignores = false
 module = ["h3-activation-proof"]
 disallow_subclassing_any = false
 
+# The private qualification's two-by-two fixture also subclasses optional Torch.
+[[tool.mypy.overrides]]
+module = ["mixed_model_qualification"]
+disallow_subclassing_any = false
+
 [tool.ruff]
 line-length = 100
 src = [
