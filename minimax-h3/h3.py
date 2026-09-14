@@ -996,6 +996,10 @@ _DEFAULT_MODEL_LADDER = [
     {"gpu": "5090", "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
 ]
 
+_DEFAULT_TURBO_LORA_LADDER = [
+    {"gpu": "*", "lane": "paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
+]
+
 
 @app.entrypoint(defaults={"model": _DEFAULT_MODEL_LADDER})
 def fl2va(
@@ -1088,19 +1092,50 @@ def _keyframes_to_video(
     turbo_lora: H3TurboLoRA | None = None,
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
-    view = model.for_request(ctx, seed=payload.seed)
+    first_index, last_index = _keyframe_roles(assets)
+    return _render_keyframes(
+        ctx,
+        task,
+        model,
+        out,
+        tel,
+        prompt=payload.prompt,
+        seed=payload.seed,
+        duration_s=payload.duration_s,
+        steps=steps,
+        first=_keyframe_image(assets, first_index, field="first"),
+        last=_keyframe_image(assets, last_index, field="last"),
+        turbo_lora=turbo_lora,
+    )
+
+
+def _render_keyframes(
+    ctx: Context,
+    task: Task,
+    model: H3Model,
+    out: Outputs,
+    tel: Telemetry,
+    *,
+    prompt: str,
+    seed: int | None,
+    duration_s: int,
+    steps: int,
+    first: Image | None,
+    last: Image | None,
+    turbo_lora: H3TurboLoRA | None = None,
+) -> H3VideoOutput:
+    """Shared FL2VA rendering for direct requests and chained asset handoffs."""
+    ctx.raise_if_cancelled()
+    view = model.for_request(ctx, seed=seed)
     checks = NumericalChecks(tel, model.pipe.resident)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
-        first_index, last_index = _keyframe_roles(assets)
-        first = _keyframe_image(assets, first_index, field="first")
-        last = _keyframe_image(assets, last_index, field="last")
         state = model.pipe.start_fl2va(
-            prompt=payload.prompt,
+            prompt=prompt,
             first_frame=first,
             last_frame=last,
             generator=model.pipe.generator(view.generator),
             steps=steps,
-            frames=frames_for(payload.duration_s),
+            frames=frames_for(duration_s),
             task=task,
         )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
@@ -1125,7 +1160,7 @@ def _keyframes_to_video(
         task,
         state,
         schedule,
-        duration_s=payload.duration_s,
+        duration_s=duration_s,
         out=out,
         tel=tel,
         cancel=ctx.raise_if_cancelled,
@@ -1262,6 +1297,27 @@ class SegmentInput(msgspec.Struct, forbid_unknown_fields=True):
     ] = None
 
 
+class SegmentTurboInput(msgspec.Struct, forbid_unknown_fields=True):
+    """One shot, as an ordinary request.
+
+    `first_frame` is the previous shot's `continuation_frame`, passed as a verified asset
+    reference. An extending request also names the retained prefix's renderer provenance.
+    """
+
+    prompt: Prompt
+    seed: int
+    duration_s: DurationSeconds
+    expected_provenance: RenderProvenance | None = None
+    first_frame: Annotated[
+        ImageAsset | None,
+        AssetBound(
+            media_types=("image/png",),
+            max_bytes=_KEYFRAME_MAX_BYTES,
+            max_decoded_bytes=_KEYFRAME_MAX_DECODED_BYTES,
+        ),
+    ] = None
+
+
 class SegmentOutput(msgspec.Struct):
     """`H3VideoOutput` without a default factory, which an invocable result may not carry."""
 
@@ -1301,13 +1357,18 @@ class SegmentReceipt(msgspec.Struct):
 
 
 class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
-    """A shot list. The identity and audio anchors are repeated verbatim in every segment."""
+    """A shot list with shared identity and audio anchors; defaults to eight-step PDD turbo.
+
+    Standard sampling requires mode="standard" and defaults to 30 steps. Turbo fixes
+    its schedule and accepts no steps override. Both modes retain exact renderer provenance.
+    """
 
     shots: Annotated[list[Shot], msgspec.Meta(min_length=1, max_length=MAX_SHOTS)]
     subject_definitions: str = ""
     overall_soundscape: str = ""
     non_diegetic_music: str = ""
-    steps: Steps = DEFAULT_STEPS
+    mode: Literal["turbo", "standard"] = "turbo"
+    steps: Steps | None = None
     resume_from: Annotated[Tree | None, AssetBound(max_bytes=MAX_PREFIX_BYTES)] = None
     opening_frame: Annotated[
         ImageAsset | None,
@@ -1413,45 +1474,61 @@ async def segment(
     ctx.raise_if_cancelled()
     observed = provenance(model.checkpoint_ref)
     compatible(observed, payload.expected_provenance)
-    view = model.for_request(ctx, seed=payload.seed)
-    checks = NumericalChecks(tel, model.pipe.resident)
-    with tel.stage("prepare", overall_range=(0.00, 0.03)):
-        first = _decoded_keyframe(decoder, payload.first_frame)
-        state = model.pipe.start_fl2va(
-            prompt=payload.prompt,
-            first_frame=first,
-            last_frame=None,
-            generator=model.pipe.generator(view.generator),
-            steps=payload.steps,
-            frames=frames_for(payload.duration_s),
-        )
-    with tel.stage("condition_text", overall_range=(0.03, 0.08)):
-        model.condition_text("fl2va", state, checks=checks)
-    if first is not None:
-        with tel.stage("condition_media", overall_range=(0.08, 0.15)):
-            model.condition_fl2va_media("fl2va", state, checks=checks)
-    with tel.stage("denoise", overall_range=(0.15, 0.85)):
-        schedule = model.sample_fl2va(
-            state,
-            on_step=tel.step_callback(payload.steps, stage="denoise", overall_range=(0.15, 0.85)),
-            cancel=ctx.raise_if_cancelled,
-            checks=checks,
-        )
-    shot = _finish(
-        model,
+    shot = _render_keyframes(
+        ctx,
         "fl2va",
-        state,
-        schedule,
+        model,
+        out,
+        tel,
+        prompt=payload.prompt,
+        seed=payload.seed,
         duration_s=payload.duration_s,
-        out=out,
-        tel=tel,
-        cancel=ctx.raise_if_cancelled,
-        checks=checks,
+        steps=payload.steps,
+        first=_decoded_keyframe(decoder, payload.first_frame),
+        last=None,
+    )
+    return SegmentOutput(shot.video, shot.continuation_frame, list(shot.warnings), observed)
+
+
+@invocable(
+    defaults={
+        "base_model": _DEFAULT_MODEL_LADDER,
+        "turbo_lora": _DEFAULT_TURBO_LORA_LADDER,
+    }
+)
+async def segment_turbo(
+    ctx: Context,
+    *,
+    payload: SegmentTurboInput,
+    base_model: H3TurboBase,
+    turbo_lora: H3TurboLoRA,
+    decoder: MediaDecoder,
+    out: Outputs,
+    tel: Telemetry,
+) -> SegmentOutput:
+    """One chained PDD-8 shot using independently bound base and adapter checkpoints."""
+    ctx.raise_if_cancelled()
+    observed = provenance(base_model.checkpoint_ref, turbo_lora.checkpoint_ref)
+    compatible(observed, payload.expected_provenance)
+    shot = _render_keyframes(
+        ctx,
+        "fl2va_turbo",
+        base_model,
+        out,
+        tel,
+        prompt=payload.prompt,
+        seed=payload.seed,
+        duration_s=payload.duration_s,
+        steps=TURBO_STEPS,
+        first=_decoded_keyframe(decoder, payload.first_frame),
+        last=None,
+        turbo_lora=turbo_lora,
     )
     return SegmentOutput(shot.video, shot.continuation_frame, list(shot.warnings), observed)
 
 
 app.entrypoint(segment)
+app.entrypoint(segment_turbo)
 
 
 async def long_form(
@@ -1468,6 +1545,16 @@ async def long_form(
     completed shot records are preserved, never relabeled as new rendering.
     """
     ctx.raise_if_cancelled()
+    if payload.mode == "turbo" and payload.steps is not None:
+        raise InvalidRequest(
+            "turbo fixes eight PDD evaluations; omit steps or select mode=standard",
+            fields=["mode", "steps"],
+        )
+    steps = (
+        TURBO_STEPS
+        if payload.mode == "turbo"
+        else (DEFAULT_STEPS if payload.steps is None else payload.steps)
+    )
     prompts = [
         compose_shot_prompt(shot, payload, index=index) for index, shot in enumerate(payload.shots)
     ]
@@ -1490,7 +1577,7 @@ async def long_form(
             incoming = first_digest if index == 0 else records[index - 1].continuation_frame_digest
             check_intent(
                 record,
-                ShotIntent(prompts[index], shot.seed, shot.duration_s, payload.steps, incoming),
+                ShotIntent(prompts[index], shot.seed, shot.duration_s, steps, incoming),
                 frames_for(shot.duration_s),
             )
         expected = records[0].provenance
@@ -1504,20 +1591,31 @@ async def long_form(
             prompts[index],
             shot.seed,
             shot.duration_s,
-            payload.steps,
+            steps,
             "" if frame is None else frame.digest,
         )
         try:
-            call = segment(  # type: ignore[call-arg]
-                payload=SegmentInput(
-                    prompt=intent.prompt,
-                    seed=intent.seed,
-                    duration_s=intent.duration_s,
-                    steps=intent.steps,
-                    expected_provenance=expected,
-                    first_frame=frame,
+            if payload.mode == "turbo":
+                call = segment_turbo(  # type: ignore[call-arg]
+                    payload=SegmentTurboInput(
+                        prompt=intent.prompt,
+                        seed=intent.seed,
+                        duration_s=intent.duration_s,
+                        expected_provenance=expected,
+                        first_frame=frame,
+                    )
                 )
-            )
+            else:
+                call = segment(  # type: ignore[call-arg]
+                    payload=SegmentInput(
+                        prompt=intent.prompt,
+                        seed=intent.seed,
+                        duration_s=intent.duration_s,
+                        steps=intent.steps,
+                        expected_provenance=expected,
+                        first_frame=frame,
+                    )
+                )
             shot_result = await call
         except ChildCallError as failure:
             # A concurrent caller cancellation must not become a successful partial result.
@@ -1588,6 +1686,8 @@ async def long_form(
     ]
     tel.log(
         "h3 long-form delivery",
+        mode=payload.mode,
+        steps=steps,
         complete=complete,
         delivered=len(records),
         requested=len(payload.shots),

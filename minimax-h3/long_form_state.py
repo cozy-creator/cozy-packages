@@ -52,6 +52,7 @@ class RenderProvenance(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     model_manifest: str
     code_digest: str
     software: list[SoftwareVersion]
+    turbo_lora_manifest: str = ""
 
 
 class ShotIntent(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -121,20 +122,23 @@ def code_digest() -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def provenance(model_manifest: str) -> RenderProvenance:
+def provenance(model_manifest: str, turbo_lora_manifest: str = "") -> RenderProvenance:
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", model_manifest):
         raise InvalidRequest("H3 rendering needs its exact model manifest", code="prefix_model")
+    if turbo_lora_manifest and not re.fullmatch(r"sha256:[0-9a-f]{64}", turbo_lora_manifest):
+        raise InvalidRequest("H3 turbo needs its exact adapter manifest", code="prefix_model")
     return RenderProvenance(
         model_manifest,
         code_digest(),
         [SoftwareVersion(name, importlib.metadata.version(name)) for name in SOFTWARE],
+        turbo_lora_manifest,
     )
 
 
 def compatible(actual: RenderProvenance, expected: RenderProvenance | None) -> None:
     if expected is not None and actual != expected:
         raise InvalidRequest(
-            "retained shots use different model bytes, package code or rendering software; "
+            "retained shots use different base or adapter bytes, code or rendering software; "
             "reuse their recorded source cohort to extend this prefix",
             code="prefix_provenance",
             fields=["resume_from"],

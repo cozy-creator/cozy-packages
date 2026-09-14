@@ -15,7 +15,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import av
 import msgspec
@@ -49,6 +49,8 @@ PROVENANCE = RenderProvenance(
     "sha256:" + "22" * 32,
     [SoftwareVersion("synthetic-renderer", "1")],
 )
+
+TURBO_PROVENANCE = msgspec.structs.replace(PROVENANCE, turbo_lora_manifest="sha256:" + "44" * 32)
 
 
 @invocable
@@ -105,13 +107,17 @@ def _drive(
     resume: Tree | None = None,
     fail_at: int = -1,
     cancel_at: int = -1,
-    observed: RenderProvenance = PROVENANCE,
+    observed: RenderProvenance | None = None,
+    mode: Literal["turbo", "standard"] = "standard",
+    steps: int | None = None,
 ) -> tuple[Any, Any, list[dict[str, Any]]]:
     root.mkdir()
     spool = root / "bytes"
     spool.mkdir()
     parent = root.name
-    real = next(surface for surface in describe(h3.app) if surface.name == "segment")
+    child_name = "segment_turbo" if mode == "turbo" else "segment"
+    real = next(surface for surface in describe(h3.app) if surface.name == child_name)
+    observed = observed or (TURBO_PROVENANCE if mode == "turbo" else PROVENANCE)
     calls: list[dict[str, Any]] = []
     answers: dict[int, str] = {}
     byte_grants: dict[int, list[dict[str, Any]]] = {}
@@ -149,7 +155,13 @@ def _drive(
                     "child_request_id": f"{parent}-child-{index}",
                 }
             document = json.loads(value["payload"])
-            assert document.pop("model") is None, document
+            for slot in ("base_model", "turbo_lora") if mode == "turbo" else ("model",):
+                assert document.pop(slot) is None, document
+            if mode == "turbo":
+                assert "steps" not in document["payload"]
+                # The CPU stand-in below uses the standard schema only for codec generation.
+                document["payload"]["steps"] = 30
+                document["payload"]["expected_provenance"] = None
             assert list(document) == ["payload"], document
             # The self-call keeps the omitted model slot. Runtime resolves its frozen
             # default; this CPU stand-in has no model and consumes only the shot payload.
@@ -224,10 +236,10 @@ def _drive(
     broker = _Broker(
         parent,
         {
-            ("", "h3", "segment"): _CallType(
+            ("", "h3", child_name): _CallType(
                 SHOT_INTERFACE,
                 "h3",
-                "segment",
+                child_name,
                 cast(type[msgspec.Struct], real.payload_type),
                 h3.SegmentOutput,
             )
@@ -237,6 +249,8 @@ def _drive(
     wire = msgspec.to_builtins(
         h3.LongFormInput(
             shots=shots,
+            mode=mode,
+            steps=steps,
             subject_definitions="A small red rover.",
             overall_soundscape="Stream water and wind in trees; no vocals.",
             non_diegetic_music="N/A",
@@ -332,6 +346,38 @@ def main() -> None:
     result, outcome, _ = _drive(root / "changed-code", edited, resume=prefix, observed=changed_code)
     assert result is None and outcome.code == "prefix_provenance", outcome
 
+    result, outcome, calls = _drive(root / "turbo", shots[:2], mode="turbo")
+    assert outcome.terminal == "succeeded", outcome
+    turbo = result.result
+    assert turbo.complete and len(calls) == 2
+    assert all(item.provenance == TURBO_PROVENANCE for item in turbo.segments)
+    turbo_prefix = persist_prefix(store, turbo.prefix, root / "retained-turbo", "turbo")
+    turbo_manifest = msgspec.json.decode(
+        (turbo_prefix.path / "manifest.json").read_bytes(), type=PrefixManifest
+    )
+    assert all(item.intent.steps == 8 for item in turbo_manifest.shots)
+    result, outcome, calls = _drive(root / "turbo-resume", shots, mode="turbo", resume=turbo_prefix)
+    assert outcome.terminal == "succeeded", outcome
+    assert result.result.reused == 2 and len(calls) == 2
+    assert result.result.segments[:2] == turbo.segments
+    changed_adapter = msgspec.structs.replace(
+        TURBO_PROVENANCE, turbo_lora_manifest="sha256:" + "55" * 32
+    )
+    result, outcome, _ = _drive(
+        root / "changed-adapter", shots, mode="turbo", resume=turbo_prefix, observed=changed_adapter
+    )
+    assert result is None and outcome.code == "prefix_provenance", outcome
+    result, outcome, calls = _drive(
+        root / "mode-change", shots, mode="standard", resume=turbo_prefix
+    )
+    assert result is None and outcome.code == "prefix_intent" and not calls, outcome
+    result, outcome, calls = _drive(
+        root / "turbo-standard-prefix", shots, mode="turbo", resume=prefix
+    )
+    assert result is None and outcome.code == "prefix_intent" and not calls, outcome
+    result, outcome, calls = _drive(root / "turbo-steps", shots, mode="turbo", steps=30)
+    assert result is None and outcome.terminal != "succeeded" and not calls, outcome
+
     result, outcome, _ = _drive(root / "cancel", shots, cancel_at=1)
     assert result is None and outcome.terminal == "canceled", outcome
     result, outcome, _ = _drive(root / "first-fails", shots, fail_at=0)
@@ -354,6 +400,11 @@ def main() -> None:
         "changed_intent_refused": True,
         "changed_code_refused": True,
         "cancellation_remains_cancelled": True,
+        "turbo_prefix": turbo_prefix.digest,
+        "turbo_evaluations": 8,
+        "turbo_adapter_change_refused": True,
+        "mode_change_refused": True,
+        "turbo_step_override_refused": True,
         "actual_h3_inference": False,
     }
     (root / "evidence.json").write_text(json.dumps(facts, indent=2) + "\n")
