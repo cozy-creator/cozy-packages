@@ -112,9 +112,14 @@ class Selection:
             raise ValueError("expected 50 independently owned H3 main attention processors")
         member = dispatch.AttentionBackendName._FLASH_3_HUB
         original = dispatch._AttentionBackendRegistry._backends[member]
-        processors = [(module.processor, module.processor._attention_backend) for module in modules]
-        if any(backend != member for _, backend in processors):
-            raise ValueError("prepare this request with --attention-kernel=flash-attn3")
+        # The CLI kernel pin applies to every component, including H3's FP32/D256
+        # audio VAE. Scope BF16 to this DiT instead; its two tiny refiner sites
+        # remain BF16 while only the marked main blocks enter the candidate.
+        processors = {
+            id(module.processor): (module.processor, module.processor._attention_backend)
+            for module in root.modules()
+            if hasattr(module, "processor") and hasattr(module.processor, "_attention_backend")
+        }
         if not _LOCK.acquire(blocking=False):
             raise RuntimeError("another private attention override is already active")
         handles: list[Any] = []
@@ -136,6 +141,8 @@ class Selection:
             _SITE.set(None)
 
         try:
+            for processor, _ in processors.values():
+                processor._attention_backend = member
             for index, module in enumerate(modules):
                 handles.append(module.register_forward_pre_hook(functools.partial(before, index)))
                 handles.append(module.register_forward_hook(after, always_call=True))
@@ -155,6 +162,8 @@ class Selection:
             dispatch._AttentionBackendRegistry._backends[member] = original
             for handle in handles:
                 handle.remove()
+            for processor, backend in processors.values():
+                processor._attention_backend = backend
             _SITE.reset(token)
             _LOCK.release()
 
