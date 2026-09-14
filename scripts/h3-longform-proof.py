@@ -316,7 +316,7 @@ def main() -> None:
     assert result is None and outcome.code == "prefix_provenance", outcome
 
     result, outcome, _ = _drive(root / "cancel", shots, cancel_at=1)
-    assert result is None and outcome.terminal == "cancelled", outcome
+    assert result is None and outcome.terminal == "canceled", outcome
     result, outcome, _ = _drive(root / "first-fails", shots, fail_at=0)
     assert result is None and outcome.terminal != "succeeded", outcome
     manifest = msgspec.json.decode(
