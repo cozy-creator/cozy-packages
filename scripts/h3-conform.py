@@ -3130,9 +3130,9 @@ def arm_interface() -> None:
     entries = {entry["name"]: entry for entry in interface["entrypoints"]}
     surfaces = {surface.name: surface for surface in describe(package.app)}
     check(
-        "exact action names: two official actions and their two turbo functions",
+        "official actions, turbo functions and the model-bearing segment",
         set(entries),
-        {"fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo"},
+        {"fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo", "segment"},
     )
     check(
         "six workflows over four tasks",
@@ -3254,34 +3254,34 @@ def arm_interface() -> None:
     print("\n== long-form composition ==")
     jobs = {entry["name"]: entry for entry in interface["jobs"]}
     check(
-        "composition and its shot are jobs, beside the untouched actions",
+        "composition and assembly are CPU jobs",
         set(jobs),
-        {"long_form", "segment", "assemble_video"},
+        {"long_form", "assemble_video"},
     )
     # The one property decision #601 turns on: the composer holds NO device while its shots
     # render. A model slot here would make one attempt hold eight shots.
     check("long_form declares no model slot", "models" in jobs["long_form"], False)
     check(
         "segment holds the H3 model for exactly one shot",
-        jobs["segment"]["models"][0]["class"],
+        entries["segment"]["models"][0]["class"],
         "H3Model",
     )
     check(
         "segment is child-callable by its exact module and export",
-        (jobs["segment"]["invocable"]["module"], jobs["segment"]["invocable"]["export"]),
+        (entries["segment"]["invocable"]["module"], entries["segment"]["invocable"]["export"]),
         ("h3", "segment"),
     )
     check(
         "a shot's identity is frozen in its own request",
-        [field["name"] for field in jobs["segment"]["request"]["fields"]],
-        ["payload", "model"],
+        [field["name"] for field in entries["segment"]["request"]["fields"]],
+        ["payload"],
     )
     # A child call names its whole intent: only the opening frame may be omitted, because a
     # default would put a value into the intent digest that the caller never wrote.
     check(
         "a shot's prompt, seed, length and steps are all named, never defaulted",
-        sorted(jobs["segment"]["invocable"]["defaults"]),
-        ["request/model", "request/payload/first_frame"],
+        sorted(entries["segment"]["invocable"]["defaults"]),
+        ["request/payload/expected_provenance", "request/payload/first_frame"],
     )
     check(
         "long_form request fields",
@@ -3292,6 +3292,7 @@ def arm_interface() -> None:
             "overall_soundscape",
             "non_diegetic_music",
             "steps",
+            "resume_from",
             "opening_frame",
         ],
     )
@@ -3299,6 +3300,11 @@ def arm_interface() -> None:
         "long_form reports the delivered prefix and the shot that stopped it",
         [field["name"] for field in jobs["long_form"]["result"]["fields"]],
         [
+            "video",
+            "prefix",
+            "complete",
+            "delivered",
+            "reused",
             "segments",
             "requested",
             "delivered_frames",

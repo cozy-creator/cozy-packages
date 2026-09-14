@@ -162,6 +162,10 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    ("scripts/h3-assembly-proof.py", "cozy_runtime.author._assets"): (
+        "Bind native codec fixtures and their file-state guards to the author invocation. "
+        "Retire when a public native asset fixture supports changed-input controls. "
+    ),
     ("scripts/h3-shared-vae-repair-proof.py", "cozy_runtime.author._model"): (
         "Bind exact native fixture manifests; retire when a public native source factory can "
         "bind production-shaped manifests instead of test:// identities. "
@@ -615,9 +619,14 @@ def fence_h3_media_boundary() -> Fence:
             if (
                 isinstance(node, ast.Attribute)
                 and node.attr == "read_bytes"
-                and ast.unparse(node.value).startswith("_ASSETS /")
+                and (
+                    ast.unparse(node.value).startswith("_ASSETS /")
+                    or rel(path) == "minimax-h3/long_form_state.py"
+                )
             ):
-                continue  # Exact package assets are model code, never request media.
+                # Package assets are code; prefix state copies opaque verified bytes into
+                # a native Tree and reads its JSON manifest. Neither decodes request media.
+                continue
             if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs:
                 bad.append(
                     f"{rel(path)}:{node.lineno}: uses .{node.attr} — H3 receives only public "

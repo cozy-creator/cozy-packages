@@ -34,6 +34,7 @@ only-include = [
     "conditioner.py",
     "gates.py",
     "h3.py",
+    "long_form_state.py",
     "h3_table_layout.py",
     "h3_diagnostics.py",
     "h3_activation_trace.py",

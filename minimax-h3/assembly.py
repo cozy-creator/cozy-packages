@@ -50,7 +50,7 @@ from cozy_runtime.author import (
 # assembler takes at most that many videos. ONE number, in the module that enforces it.
 MAX_SHOTS = 8
 
-MAX_INPUT_BYTES = 512 << 20
+MAX_INPUT_BYTES = 256 << 20
 MAX_EVENT_BYTES = 32 << 20
 LEVEL_WINDOW_SECONDS = Fraction(1, 2)
 GAIN_RIDE_SECONDS = Fraction(2, 1)
