@@ -188,6 +188,10 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "the same driver grants the previous shot's bytes to the next child the way the worker "
         "does. Retire with the same public child-call harness. "
     ),
+    ("scripts/h3-longform-proof.py", "cozy_runtime.author._codec"): (
+        "The host fixture encodes the child's registered frames through Runtime's exact "
+        "post-phase codec before returning byte grants. Retire with a public child harness. "
+    ),
     ("scripts/sdxl-normalization-proof.py", "cozy_runtime.author._model"): (
         "the normalization driver constructs the exact-checkpoint source Runtime admits; "
         "for_test permits test:// identities only. Retire with a public native job fixture. "

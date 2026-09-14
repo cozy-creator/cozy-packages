@@ -107,6 +107,7 @@ from adaln_pruned import (  # noqa: E402
     _AdaLNPrunedOutputTable,
     _AdaLNPrunedTimestepLookup,
 )
+from assembly import MAX_SHOTS  # noqa: E402
 from conditioner import build_text_conditioner, text_conditioner_config  # noqa: E402
 from gates import MediaFacts, refuse_before_encode, report_after_encode  # noqa: E402
 from h3_order import construction_order, encode_order  # noqa: E402
@@ -3322,7 +3323,7 @@ def arm_interface() -> None:
             for field in jobs["long_form"]["request"]["fields"]
             if field["name"] == "shots"
         ),
-        {"max_length": package.MAX_SHOTS, "min_length": 2},
+        {"max_length": MAX_SHOTS, "min_length": 2},
     )
     check(
         "a long-form shot defaults to the longest served cell, not the cheapest",

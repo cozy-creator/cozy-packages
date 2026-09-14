@@ -34,6 +34,7 @@ from cozy_runtime.author import (
 )
 from cozy_runtime.author._assets import GrantedInput, file_state
 from cozy_runtime.author._calls import _Broker, _CallType
+from cozy_runtime.author._codec import encode_frame
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
 import h3
@@ -149,7 +150,10 @@ def _drive(
                     "child_request_id": f"{parent}-child-{index}",
                 }
             document = json.loads(value["payload"])
+            assert document.pop("model") is None, document
             assert list(document) == ["payload"], document
+            # The self-call keeps the omitted model slot. Runtime resolves its frozen
+            # default; this CPU stand-in has no model and consumes only the shot payload.
             incoming = document["payload"].get("first_frame")
             grants = {}
             if incoming:
@@ -169,7 +173,7 @@ def _drive(
                 )
             work = root / f"child-{index}"
             with ThreadPoolExecutor(max_workers=1) as pool:
-                produced, outcome, _ = pool.submit(
+                produced, outcome, record = pool.submit(
                     attempt,
                     child_app.get("segment"),
                     document,
@@ -183,14 +187,15 @@ def _drive(
             outputs: list[dict[str, Any]] = []
             for field, suffix in (("video", ".mp4"), ("continuation_frame", ".png")):
                 asset = getattr(produced.result, field)
-                raw = asset.read_bytes()
-                assert sha(raw) == asset.digest
-                local = spool / (asset.digest[7:] + suffix)
+                frame = record.frames[asset.ref]
+                raw = encode_frame(frame.codec, frame.facts, frame.raw.read_bytes())
+                digest = sha(raw)
+                local = spool / (digest[7:] + suffix)
                 local.write_bytes(raw)
                 response[field] = {
-                    "asset_ref": asset.digest,
+                    "asset_ref": digest,
                     "kind": asset.kind,
-                    "digest": asset.digest,
+                    "digest": digest,
                     "size_bytes": len(raw),
                     "media_type": asset.media_type,
                 }
@@ -198,7 +203,7 @@ def _drive(
                     {
                         "output_id": field,
                         "kind": asset.kind,
-                        "digest": asset.digest,
+                        "digest": digest,
                         "length": len(raw),
                         "media_type": asset.media_type,
                         "local": str(local),

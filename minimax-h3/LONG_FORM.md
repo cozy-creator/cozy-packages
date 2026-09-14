@@ -36,14 +36,8 @@ If a later shot fails, the result contains a playable partial video, its prefix,
 the failure details. Failure on the first shot fails the request. Cancellation
 remains cancellation.
 
-To extend or recover a delivered prefix, keep its complete directory, set
-`resume_from` to a reference such as `"retained-prefix"` in the new request, and
-bind that reference to the collected prefix directory:
-
-```sh
-cozy run paul/minimax-h3/long_form --in extended.json --rental=your-rental \
-  --input-tree retained-prefix=/path/to/collected/prefix --await --out ./extended-video
-```
+To extend or recover a delivered prefix, keep its complete directory. The new
+request's `resume_from` field takes that retained native Tree.
 
 Include the original completed shots at the start of `extended.json`. Their
 prompts, seeds, durations, shared descriptions, step count and opening frame must
@@ -55,7 +49,9 @@ The prefix records the exact model manifest, package code, and rendering softwar
 An extension refuses a different rendering cohort instead of describing old clips
 as if they were newly generated. This is explicit reuse of completed clips;
 ordinary inference is not memoized. Keep the matching package/runtime cohort when
-extending a prefix.
+extending a prefix. Currently the package hash is conservative: editing H3's own
+composer or assembler also changes that cohort. Editing an external client script
+does not change it.
 
 The final video and the prefix each have a 256 MiB encoded-byte limit. Runtime
 decodes bounded media events during assembly; it does not hold a complete decoded

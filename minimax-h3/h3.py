@@ -1265,8 +1265,22 @@ class SegmentInput(msgspec.Struct, forbid_unknown_fields=True):
 class SegmentOutput(msgspec.Struct):
     """`H3VideoOutput` without a default factory, which an invocable result may not carry."""
 
-    video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",))]
-    continuation_frame: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
+    video: Annotated[
+        VideoAsset,
+        AssetBound(
+            max_bytes=MAX_PREFIX_BYTES,
+            max_decoded_bytes=32 << 20,
+            media_types=("video/mp4",),
+        ),
+    ]
+    continuation_frame: Annotated[
+        ImageAsset,
+        AssetBound(
+            max_bytes=_KEYFRAME_MAX_BYTES,
+            max_decoded_bytes=_KEYFRAME_MAX_DECODED_BYTES,
+            media_types=("image/png",),
+        ),
+    ]
     warnings: list[str]
     provenance: RenderProvenance
 
