@@ -15,11 +15,10 @@ Runtime draft PR463 owns the adapter. Its real Creator CLI proof covers native
 writer descriptors, edited-caller memo reuse, partial checkpoint adoption and
 Context-only tensor production/inheritance. These source changes require the
 joint cr-170/cr-171/cr-174 SDK. Runtime 0.18.0 is reserved and its minimum is
-prepared in package and client metadata. TensorFS 0.3.42 is published. Package
-versions and frozen locks will be updated against the actual public Runtime release
-before activation; proof still uses exact source wheels.
-No package will be published from this incomplete migration or with an unqualified
-SDK dependency/interface bound. Frozen 0.16.10 proof artifacts are preserved.
+prepared in package and client metadata. Runtime 0.18.0, TensorFS 0.3.42 and Eval
+0.7.1 are now published and read back from their official artifacts. All four core
+package locks and the private assessment-client lock resolve that public cohort.
+Frozen 0.16.10 proof artifacts are preserved.
 
 
 All H3 job/lanes/source/AdaLN/turbo consumers, SDXL normalization/assembly, family prepare
@@ -29,7 +28,10 @@ AdaLN/turbo and SDXL process-exit/resume proofs preserve bytes, object identitie
 behavior. The family readback example consumes TensorFS Tensor.parts as a mapping.
 
 The native writer/metadata and reader components are public TensorFS 0.3.41/0.3.42.
-The coordinated Runtime 0.18.0 release and package versions/locks remain pending. These library migration proofs do not
+The coordinated Runtime 0.18.0 and Eval 0.7.1 releases are delivered. Core package
+compatibility release candidates are Anima 0.2.5, SDXL 2.3.6, MiniMax-H3 1.14.4 and
+MiniMax-H3-tools 2.12.2; exact source/lock CI and native/inference preflight gate their
+publication. These library migration proofs do not
 claim final H3 rendering or disconnected/private/default-home product qualification.
 
 Merged current package master e73bd86, preserving the new H3 first-step and mixed
@@ -50,4 +52,7 @@ measurements are; generation and quality bind the explicit model and judge slots
 
 See [native consumer release checks](native-consumer-release-checks.md) for the
 six remaining public lock updates and final SDK/CLI qualification. Evidence lives
-under `outputs/consumer-delivery-finish` in the Cozy v2 workspace.
+under `outputs/consumer-delivery-finish` in the Cozy v2 workspace. The refreshed
+catalog census includes yanked releases and confirms all four candidate versions
+are unused; no existing release is overwritten. These package API compatibility
+releases do not endorse a new model checkpoint or its image quality.

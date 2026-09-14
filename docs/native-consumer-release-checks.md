@@ -5,6 +5,30 @@ with `/root`. All consumer work uses the durable worktrees recorded in
 `cr174-tensorfs-consumers.md`. No SDK or package publication is implied by a local
 candidate build.
 
+## Current compatibility release candidates
+
+Runtime 0.18.0 and Eval 0.7.1 are now public from their official tag workflows;
+all six locks have been regenerated and pass `uv lock --check`. Eval's 75 wheel
+files and 153 tracked source-archive files match tag c6b4efd exactly. The public
+Eval base remains Runtime/Torch-free, and its jobs extra imports with official
+Runtime 0.18.0/TensorFS 0.3.42 without Torch.
+
+Fresh Tensorhub package history (including yanked releases) and the current source
+versions reserve the following next source patches. These are catalog package
+releases under `paul`, not unrelated same-named PyPI projects.
+
+| Package | Current source | Latest catalog | Reserved compatibility release |
+| --- | --- | --- | --- |
+| anima | 0.2.4 | 0.2.3 | 0.2.5 |
+| sdxl | 2.3.5 | 2.3.3 | 2.3.6 |
+| minimax-h3 | 1.14.3 | 1.14.3 | 1.14.4 |
+| minimax-h3-tools | 2.12.1 | 2.12.0 | 2.12.2 |
+
+Publish these compatibility releases after exact source/lock CI and the current
+native/inference preflight; a new SDXL checkpoint's image-quality assessment is a
+separate gate for that checkpoint. Ordinary local editable package composition
+remains the development and final pipeline path. No diagnostic package is added.
+
 ## Public dependency sequence
 
 TensorFS 0.3.42 is public and must not be republished. After Runtime 0.18.0 is
