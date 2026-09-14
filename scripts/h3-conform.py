@@ -4399,18 +4399,18 @@ def arm_attention_scope() -> None:
         video_tag=0,
     )
     _, tags, video, audio, text, condition_video, condition_audio = packed
-    fields = {"token_tags": tags, "text_indices": text}
+    fields = {"token_tags": tags, "text_indices": text, "audio_indices": audio}
     state = SimpleNamespace(
         denoiser_input_fields=fields,
         num_condition_video_rows=condition_video,
         num_condition_audio_rows=condition_audio,
     )
     layout = _attention_layout(state, 12)
-    protected = torch.cat((text, video[:condition_video], audio[:condition_audio])).sort().values
+    protected = torch.cat((text, video[:condition_video], audio)).sort().values
     check(
-        "mixed references occupy exactly the protected prefix", protected.tolist(), list(range(31))
+        "all non-target-video rows occupy the protected prefix", protected.tolist(), list(range(39))
     )
-    check("mixed reference layout facts", (layout.live_tokens, layout.protected_prefix), (51, 31))
+    check("mixed reference layout facts", (layout.live_tokens, layout.protected_prefix), (51, 39))
     state.denoiser_input_fields = {name: value.to("meta") for name, value in fields.items()}
     check(
         "layout uses shape metadata without tensor-value reads",
@@ -4468,7 +4468,7 @@ def arm_attention_scope() -> None:
     check(
         "actual text-only forward layout",
         [(x.live_tokens, x.protected_prefix) for x in seen if x],
-        [(640, 4)] * 30,
+        [(640, 418)] * 30,
     )
     check("request scope does not leak", _ACTIVE_LAYOUT.get(), None)
 
