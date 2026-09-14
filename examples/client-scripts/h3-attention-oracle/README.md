@@ -6,8 +6,10 @@ artifact through the workflow package; it does not copy a transformer or kernel.
 Published Runtime 0.18.2 lacks these APIs. Use the reviewed development wheel in
 both capture and worker; a successful static describe alone is not execution proof.
 
-The request includes `prompt`, `duration_s` (15), `capture_step`, `capture_block`,
-`backends`, `repeats` and `reference_backend`. For example, compare
+Edit the ordinary script's `REQUEST` before capture: `prompt`, `duration_s` (15),
+`capture_step`, `capture_block`, `backends`, `repeats` and `reference_backend`.
+The package-style `h3_attention_oracle:app/probe` entrypoint also accepts these as
+request fields. For example, compare
 `["fa3_bf16", "sage2_sm90", "kitchen-int8"]` on H100, or
 `["sdpa", "flashinfer-bf16-fp8"]` with `reference_backend="sdpa"` on Blackwell.
 The model binding is the ordinary `model.model=paul/minimax-h3` checkpoint option.

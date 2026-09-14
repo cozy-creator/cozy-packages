@@ -60,7 +60,7 @@ def build_runtime_backend(
 
     assert layout is not None
 
-    class Call(torch.nn.Module):
+    class Call(torch.nn.Module):  # type: ignore[misc]
         def forward(self) -> Any:
             return dispatch_attention_fn(q, k, v, scale=scale, backend=entry.member)
 
