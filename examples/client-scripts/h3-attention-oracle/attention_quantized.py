@@ -51,7 +51,13 @@ def build_quantized(
     returned call performs fresh quantization from the original BF16 Q/K/V on
     every invocation, including any preprocessing allocations.
     """
-    if name not in {"sage2_sm90", "fa3_fp8"}:
+    if name not in {
+        "sage2_sm90",
+        "fa3_fp8",
+        "fa3_qkv_roundtrip",
+        "fa3_fp8_splits2",
+        "fa3_fp8_splits4",
+    }:
         raise ValueError(f"Unknown quantized attention backend: {name}")
     if not math.isfinite(scale) or scale <= 0:
         raise ValueError("Attention scale must be finite and positive")
@@ -117,6 +123,56 @@ def build_quantized(
     kernel = dispatch._HUB_KERNELS_REGISTRY[dispatch.AttentionBackendName._FLASH_3_HUB].kernel_fn
     if not callable(kernel):
         raise OptionalBackendUnavailable("The measured production FA3 kernel is not loaded")
+    if name in {"fa3_fp8_splits2", "fa3_fp8_splits4"}:
+        splits = int(name[-1])
+        free, _ = torch.cuda.mem_get_info(q.device)
+        reusable = torch.cuda.memory_reserved(q.device) - torch.cuda.memory_allocated(q.device)
+        required = q.numel() * (4 * splits + 3 + 2) + q.shape[0] * q.shape[1] * q.shape[2] * 4 * (
+            splits + 1
+        )
+        if required + (1 << 30) > free + reusable:
+            raise OptionalBackendUnavailable(
+                "split-KV scratch exceeds available memory with a 1 GiB margin"
+            )
+
+        def split_call() -> Any:
+            (q8, qs), (k8, ks), (v8, vs) = [production_fp8.quantise(x) for x in (q, k, v)]
+            return kernel(
+                q8,
+                k8,
+                v8,
+                softmax_scale=scale,
+                causal=False,
+                num_splits=splits,
+                q_descale=qs,
+                k_descale=ks,
+                v_descale=vs,
+            )
+
+        return split_call, {
+            **common,
+            "experimental": True,
+            "num_splits": splits,
+            "estimated_extra_bytes": required,
+            "available_and_reusable_bytes": free + reusable,
+            "preprocessing": "Runtime production per-head quantization inside each call",
+        }
+    if name == "fa3_qkv_roundtrip":
+
+        def roundtrip_call() -> Any:
+            decoded = []
+            for value in (q, k, v):
+                codes, descale = production_fp8.quantise(value)
+                decoded.append((codes.float() * descale[:, None, :, None]).to(value.dtype))
+            return kernel(*decoded, softmax_scale=scale, causal=False, num_splits=1)
+
+        return roundtrip_call, {
+            **common,
+            "diagnostic_control": True,
+            "attention_compute": "BF16 after production FP8 Q/K/V quantize-dequantize",
+            "purpose": "separate QKV quantization error from FP8 attention arithmetic",
+            **_source(production_fp8.quantise, "cozy-runtime"),
+        }
     # Explicit diagnostic coupling: measure the real quantizer on the same inputs.
     production_fp8.bind(kernel)
     try:

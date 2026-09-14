@@ -49,6 +49,7 @@ class Input(msgspec.Struct, forbid_unknown_fields=True):
     backends: tuple[str, ...] = ("fa3_bf16", "cudnn_bf16")
     repeats: Annotated[int, msgspec.Meta(ge=3, le=10)] = 5
     profile: bool = True
+    sequence_limit: Annotated[int, msgspec.Meta(ge=0, le=109104)] = 0
 
 
 class Result(msgspec.Struct):
@@ -163,7 +164,7 @@ def reference_rows(q: Any, k: Any, v: Any, scale: float) -> tuple[Any, Any]:
 
 def delta(actual: Any, expected: Any) -> dict[str, Any]:
     # Row chunks avoid allocating several full-size FP32 activation copies.
-    error_square = total_square = absmax = 0.0
+    error_square = total_square = actual_square = dot = absmax = 0.0
     finite = True
     equal = True
     for start in range(0, actual.shape[1], 256):
@@ -176,11 +177,15 @@ def delta(actual: Any, expected: Any) -> dict[str, Any]:
         absmax = max(absmax, float(error.abs().max()))
         error_square += float(error.double().square().sum())
         total_square += float(b.double().square().sum())
+        actual_square += float(a.double().square().sum())
+        dot += float((a.double() * b.double()).sum())
     return {
         "finite": finite,
         "equal_values": equal,
         "max_abs": absmax,
         "relative_l2": math.sqrt(error_square / max(total_square, 1e-300)),
+        "norm_ratio": math.sqrt(actual_square / max(total_square, 1e-300)),
+        "cosine": dot / math.sqrt(max(actual_square * total_square, 1e-300)),
     }
 
 
@@ -229,6 +234,11 @@ def probe(
     q, k, v = capture.tensors
     torch.cuda.synchronize()
     capture_seconds = time.perf_counter() - started
+    model_qkv_shape = list(q.shape)
+    if payload.sequence_limit:
+        if payload.sequence_limit > q.shape[1]:
+            raise ValueError("sequence_limit exceeds the captured model sequence")
+        q, k, v = (x[:, : payload.sequence_limit] for x in (q, k, v))
     originals = [fingerprint(x) for x in (q, k, v)]
     reference_call, reference_provenance = build_backend("fa3_bf16", q, k, v, scale=capture.scale)
     reference = reference_call()
@@ -298,6 +308,10 @@ def probe(
         "pid": os.getpid(),
         "gpu": torch.cuda.get_device_name(),
         "capture_seconds": capture_seconds,
+        "model_qkv_shape": model_qkv_shape,
+        "sequence_scope": "captured prefix ablation"
+        if payload.sequence_limit
+        else "complete model sequence",
         "capture_backend": "flash-attn3 BF16 (temporary explicit diagnostic selection)",
         "qkv": originals,
         "scale": capture.scale,

@@ -135,7 +135,7 @@ def build_backend(
     if name == "cudnn_fp8":
         call, provenance = _build_cudnn_fp8(q, k, v, scale)
         return call, {**metadata, **provenance}
-    if name in ("sage2_sm90", "fa3_fp8"):
+    if name in ("sage2_sm90", "fa3_fp8", "fa3_qkv_roundtrip", "fa3_fp8_splits2", "fa3_fp8_splits4"):
         call, provenance = build_quantized(name, q, k, v, scale=scale)
         return call, {**metadata, **provenance}
     raise ValueError(f"unknown attention backend: {name}")
