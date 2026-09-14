@@ -199,6 +199,10 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "Retain the model-produced layout at the exact intercepted attention call, then "
         "replay it unchanged for the Sol experiment. Retire with public scope observations."
     ),
+    ("scripts/h3-conform.py", "cozy_runtime.author._attention_scope"): (
+        "Read the actual active context in real CPU DiT hooks to verify scope lifetime "
+        "and exception restoration. No package serving code reads this private context."
+    ),
     ("scripts/h3-assembly-proof.py", "cozy_runtime.author._assets"): (
         "Bind native codec fixtures and their file-state guards to the author invocation. "
         "Retire when a public native asset fixture supports changed-input controls. "
