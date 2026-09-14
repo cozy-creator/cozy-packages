@@ -132,7 +132,7 @@ def code_digest() -> str:
         path = PurePosixPath(str(member))
         if path.is_absolute() or ".." in path.parts:
             raise InvalidRequest("H3 builtin source inventory is not relative", code="prefix_code")
-        source = Path(runtime.locate_file(member))
+        source = Path(str(runtime.locate_file(member)))
         if not source.is_file():
             raise InvalidRequest("H3 builtin source file is unavailable", code="prefix_code")
         size = source.stat().st_size
