@@ -25,6 +25,23 @@ class OptionalBackendUnavailable(RuntimeError):
     """The requested backend is unavailable in this worker configuration."""
 
 
+def candidate_kernel(flavor: str) -> tuple[Any, dict[str, Any]]:
+    module, source, distribution = {
+        "twolevel": (
+            "h3_fa3_fp8_e4ad1ed05262",
+            "e4ad1ed052626bdee606345371cb9f4e376c786e",
+            "cozy-h3-fa3-fp8-candidate",
+        ),
+        "tile128": (
+            "h3_fa3_fp8_76aebdf70165",
+            "76aebdf701653cb41036c1523cb6c03606d22a10",
+            "cozy-h3-fa3-fp8-tile128",
+        ),
+    }[flavor]
+    function = importlib.import_module(module).flash_attn_func
+    return function, {**_source(function, distribution), "candidate_source": source}
+
+
 def _source(function: Any, distribution: str) -> dict[str, Any]:
     filename = inspect.getsourcefile(function)
     try:
@@ -58,6 +75,7 @@ def build_quantized(
         "fa3_fp8_splits2",
         "fa3_fp8_splits4",
         "fa3_twolevel_fp8",
+        "fa3_tile128_fp8",
     }:
         raise ValueError(f"Unknown quantized attention backend: {name}")
     if not math.isfinite(scale) or scale <= 0:
@@ -124,9 +142,8 @@ def build_quantized(
     kernel = dispatch._HUB_KERNELS_REGISTRY[dispatch.AttentionBackendName._FLASH_3_HUB].kernel_fn
     if not callable(kernel):
         raise OptionalBackendUnavailable("The measured production FA3 kernel is not loaded")
-    if name == "fa3_twolevel_fp8":
-        module = importlib.import_module("h3_fa3_fp8_e4ad1ed05262")
-        candidate = module.flash_attn_func
+    if name in {"fa3_twolevel_fp8", "fa3_tile128_fp8"}:
+        candidate, provenance = candidate_kernel(name.split("_")[1])
 
         def twolevel_call() -> Any:
             (q8, qs), (k8, ks), (v8, vs) = [production_fp8.quantise(x) for x in (q, k, v)]
@@ -144,9 +161,8 @@ def build_quantized(
 
         return twolevel_call, {
             **common,
-            **_source(candidate, "cozy-h3-fa3-fp8-candidate"),
+            **provenance,
             "experimental": True,
-            "candidate_source": "e4ad1ed052626bdee606345371cb9f4e376c786e",
             "pv_accumulation": "completed tensor-core tile plus separate FP32 running sum",
             "preprocessing": "Runtime production per-head quantization inside each call",
         }

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from attention_quantized import OptionalBackendUnavailable, build_quantized
+from attention_quantized import OptionalBackendUnavailable, build_quantized, candidate_kernel
 from diffusers.models import attention_dispatch as ad
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
@@ -106,14 +106,12 @@ def build_backend(
             **_function_provenance(fn),
             "flash_attn_4": version,
         }
-    if name == "fa3_rebuilt_bf16":
-        module = importlib.import_module("h3_fa3_fp8_e4ad1ed05262")
-        fn = module.flash_attn_func
+    if name in {"fa3_rebuilt_bf16", "fa3_tile128_bf16"}:
+        fn, provenance = candidate_kernel("twolevel" if name == "fa3_rebuilt_bf16" else "tile128")
         return lambda: _flash_call(fn, q, k, v, scale), {
             **metadata,
-            **_function_provenance(fn),
+            **provenance,
             "diagnostic_control": True,
-            "candidate_source": "e4ad1ed052626bdee606345371cb9f4e376c786e",
         }
     if name == "cudnn_bf16":
         params = torch.backends.cuda.SDPAParams(
@@ -151,6 +149,7 @@ def build_backend(
         "fa3_fp8_splits2",
         "fa3_fp8_splits4",
         "fa3_twolevel_fp8",
+        "fa3_tile128_fp8",
     ):
         call, provenance = build_quantized(name, q, k, v, scale=scale)
         return call, {**metadata, **provenance}
