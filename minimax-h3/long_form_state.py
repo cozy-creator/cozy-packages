@@ -29,7 +29,8 @@ VIDEO_BOUND = AssetBound(
     max_bytes=MAX_PREFIX_BYTES, max_decoded_bytes=32 << 20, media_types=("video/mp4",)
 )
 FRAME_BOUND = AssetBound(max_bytes=64 << 20, max_decoded_bytes=64 << 20, media_types=("image/png",))
-MANIFEST_BOUND = AssetBound(max_bytes=MAX_MANIFEST_BYTES, media_types=("application/json",))
+# JSON has no byte signature; the bounded FileAsset is validated by PrefixManifest decoding.
+MANIFEST_BOUND = AssetBound(max_bytes=MAX_MANIFEST_BYTES)
 SOFTWARE = (
     "cozy-runtime",
     "tensorfs",
