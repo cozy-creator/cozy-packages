@@ -25,6 +25,7 @@ module = [
     "merge_arithmetic",
     # The pinned private scratch probe requires the unmerged LoRA development cohort.
     "cozy_runtime.internal.lora",
+    "attention_backends",
 ]
 ignore_missing_imports = true
 

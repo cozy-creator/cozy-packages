@@ -99,7 +99,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.18.0"
+version = "0.18.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -110,10 +110,10 @@ dependencies = [
     { name = "protobuf" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/19/c1/f82137fa5508a04766d6cf19e70970235b383b40708aeaaf5ec8e3b0905f/cozy_runtime-0.18.0.tar.gz", hash = "sha256:c8b9b1b8be343ae8204efe035c21feb37ba5bb510765e4bc6af4b463081f65ea", size = 2163610, upload-time = "2026-09-14T03:17:38.381Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8b/15/1eb7ebee55751486498f1724d41ce0b5c60ab368c75fc911a5aa2083b506/cozy_runtime-0.18.2.tar.gz", hash = "sha256:02291238195f79211b228f1fbf696d51d6baec8611dc05aa0ed533697d29abdc", size = 2199840, upload-time = "2026-09-14T09:06:45.992Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b2/58/d6533d4e39dbb20c3e46026c950e05618212fc301486b7e7bfa0e052f909/cozy_runtime-0.18.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:91aab126b4cd914d0b6819851f3ed9ed51701111ca2bf3f4367d282913a4abdd", size = 13730496, upload-time = "2026-09-14T03:17:33.879Z" },
-    { url = "https://files.pythonhosted.org/packages/de/0e/40615dadabf1fdd76cb7ab382448571682bba17b2f8218b7287a028f09a6/cozy_runtime-0.18.0-py3-none-any.whl", hash = "sha256:70dc582019173f3a2d6ee0fd6baab5a2957a63a53af8db63bf093f8d74668686", size = 1263073, upload-time = "2026-09-14T03:17:36.787Z" },
+    { url = "https://files.pythonhosted.org/packages/ab/32/3de15f70b9d199dc1f02e6ae02e6e6c86bc1f4c5ad274c241a7e689b1729/cozy_runtime-0.18.2-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:8ead178283ae86b04aa65e3bd939103acade896249f61b3bd2a02514bac72916", size = 13754140, upload-time = "2026-09-14T09:06:42.437Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/8b/cb791411738a09c2ea1d127f3475f2b653cb471a2d49a0d6bbec2deb37cc/cozy_runtime-0.18.2-py3-none-any.whl", hash = "sha256:fae73586e089c2a1de147840636a3d34955ae62e4eca9828e7e3e3a1353e655e", size = 1286712, upload-time = "2026-09-14T09:06:44.586Z" },
 ]
 
 [package.optional-dependencies]
@@ -392,7 +392,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.14.4"
+version = "1.15.0"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-eval" },
@@ -415,7 +415,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cozy-eval", specifier = ">=0.3.2,<1" },
-    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.18.0,<1" },
+    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.18.2,<1" },
     { name = "diffusers", specifier = "==0.40.0" },
     { name = "hf-xet", specifier = "==1.6.0" },
     { name = "msgspec", specifier = ">=0.19" },
@@ -757,11 +757,11 @@ wheels = [
 
 [[package]]
 name = "tensorfs"
-version = "0.3.42"
+version = "0.3.43"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/bd/6f/231d164b0d60395dc28733ed78eeeaef5f5322057e7b1bc1072b09cf5456/tensorfs-0.3.42.tar.gz", hash = "sha256:a7591d70caa41046be9068874c700d603e0b68ab9d9e3ed0bfa7ee145af2d1f2", size = 748903, upload-time = "2026-09-14T01:47:04.582Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/db/97/3cfd5bd4f8301e48a39629c6304f2414ac92db63f4a6f2f78a33552a325e/tensorfs-0.3.43.tar.gz", hash = "sha256:de92cf3bad85f60b5b27f003f92190cad21770376de8f586a43cca1898ac70e5", size = 760530, upload-time = "2026-09-14T05:40:21.044Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/73/5e/1eb8616a5351c4809ff0001931dad11c8cbd59018cef13ebd5c9b6b6d882/tensorfs-0.3.42-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f26af4bf6f783419c54335fb3ac703d754401f601d8854c9458d71d35253e8c0", size = 7681384, upload-time = "2026-09-14T01:47:02.584Z" },
+    { url = "https://files.pythonhosted.org/packages/51/98/91a4e7980865ec2a7fc373078ea052a31f1e369851db4223fdb2b625c502/tensorfs-0.3.43-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e7d7bed24510e2995d4426db826b99cebd102fcd7b9c2eadaa76189cb38455e7", size = 7744094, upload-time = "2026-09-14T05:40:19.277Z" },
 ]
 
 [[package]]

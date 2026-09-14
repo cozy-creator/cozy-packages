@@ -162,6 +162,10 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    ("scripts/h3-assembly-proof.py", "cozy_runtime.author._assets"): (
+        "Bind native codec fixtures and their file-state guards to the author invocation. "
+        "Retire when a public native asset fixture supports changed-input controls. "
+    ),
     (
         "examples/client-scripts/h3-lora-profile/h3_lora_scratch_probe.py",
         "cozy_runtime.internal.lora",
@@ -200,6 +204,10 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
     ("scripts/h3-longform-proof.py", "cozy_runtime.author._assets"): (
         "the same driver grants the previous shot's bytes to the next child the way the worker "
         "does. Retire with the same public child-call harness. "
+    ),
+    ("scripts/h3-longform-proof.py", "cozy_runtime.author._codec"): (
+        "The host fixture encodes the child's registered frames through Runtime's exact "
+        "post-phase codec before returning byte grants. Retire with a public child harness. "
     ),
     ("scripts/sdxl-normalization-proof.py", "cozy_runtime.author._model"): (
         "the normalization driver constructs the exact-checkpoint source Runtime admits; "
@@ -632,9 +640,14 @@ def fence_h3_media_boundary() -> Fence:
             if (
                 isinstance(node, ast.Attribute)
                 and node.attr == "read_bytes"
-                and ast.unparse(node.value).startswith("_ASSETS /")
+                and (
+                    ast.unparse(node.value).startswith("_ASSETS /")
+                    or rel(path) == "minimax-h3/long_form_state.py"
+                )
             ):
-                continue  # Exact package assets are model code, never request media.
+                # Package assets are code; prefix state copies opaque verified bytes into
+                # a native Tree and reads its JSON manifest. Neither decodes request media.
+                continue
             if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs:
                 bad.append(
                     f"{rel(path)}:{node.lineno}: uses .{node.attr} — H3 receives only public "
