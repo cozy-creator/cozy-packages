@@ -5,6 +5,11 @@ single-GPU rental. It imports H3 inference from the paired Runtime built-in mode
 artifact through the workflow package; it does not copy a transformer or kernel.
 Published Runtime 0.18.2 lacks these APIs. Use the reviewed development wheel in
 both capture and worker; a successful static describe alone is not execution proof.
+The helper modules are an ordinary Python package declared in `pyproject.toml`;
+`main.py` depends on it explicitly. Creator does not implicitly capture adjacent
+Python files. For qualification, stage a copy of the script whose `tool.uv.sources`
+pins the exact Runtime development wheel and the local helper/workflow packages.
+Selecting the host tool through PATH alone does not pin capture dependencies.
 
 Edit the ordinary script's `REQUEST` before capture: `prompt`, `duration_s` (15),
 `capture_step`, `capture_block`, `backends`, `repeats` and `reference_backend`.
