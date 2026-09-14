@@ -1091,6 +1091,7 @@ def _keyframes_to_video(
     steps: int,
     turbo_lora: H3TurboLoRA | None = None,
 ) -> H3VideoOutput:
+    ctx.raise_if_cancelled()
     first_index, last_index = _keyframe_roles(assets)
     return _render_keyframes(
         ctx,
@@ -1356,7 +1357,11 @@ class SegmentReceipt(msgspec.Struct):
 
 
 class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
-    """A shot list. The identity and audio anchors are repeated verbatim in every segment."""
+    """A shot list with shared identity and audio anchors; defaults to eight-step PDD turbo.
+
+    Standard sampling requires mode="standard" and defaults to 30 steps. Turbo fixes
+    its schedule and accepts no steps override. Both modes retain exact renderer provenance.
+    """
 
     shots: Annotated[list[Shot], msgspec.Meta(min_length=1, max_length=MAX_SHOTS)]
     subject_definitions: str = ""

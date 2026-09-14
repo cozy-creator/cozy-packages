@@ -3133,7 +3133,7 @@ def arm_interface() -> None:
     check(
         "official actions, turbo functions and the model-bearing segment",
         set(entries),
-        {"fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo", "segment"},
+        {"fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo", "segment", "segment_turbo"},
     )
     check(
         "six workflows over four tasks",
@@ -3282,7 +3282,32 @@ def arm_interface() -> None:
     check(
         "a shot's prompt, seed, length and steps are all named, never defaulted",
         sorted(entries["segment"]["invocable"]["defaults"]),
-        ["request/payload/expected_provenance", "request/payload/first_frame"],
+        [
+            "request/payload/expected_provenance",
+            "request/payload/expected_provenance/union/1/turbo_lora_manifest",
+            "request/payload/first_frame",
+            "result/provenance/turbo_lora_manifest",
+        ],
+    )
+    check("long-form defaults to turbo", package.LongFormInput(shots=[]).mode, "turbo")
+    check(
+        "long-form has no contradictory standard step default",
+        package.LongFormInput(shots=[]).steps,
+        None,
+    )
+    check(
+        "turbo child has the independently bound base and adapter",
+        [slot["class"] for slot in entries["segment_turbo"]["models"]],
+        ["H3TurboBase", "H3TurboLoRA"],
+    )
+    refusal(
+        "turbo child cannot represent steps",
+        partial(
+            msgspec.convert,
+            {"prompt": "x", "seed": 1, "duration_s": 5, "steps": 8},
+            package.SegmentTurboInput,
+        ),
+        "ValidationError",
     )
     check(
         "long_form request fields",
@@ -3292,6 +3317,7 @@ def arm_interface() -> None:
             "subject_definitions",
             "overall_soundscape",
             "non_diegetic_music",
+            "mode",
             "steps",
             "resume_from",
             "opening_frame",
