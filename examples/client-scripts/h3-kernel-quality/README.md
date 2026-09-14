@@ -13,7 +13,7 @@ python3 prepare_h3_kernel_quality.py \
 
 The destination must be empty. The preparer retains every serving source/data byte from the wheel, copies the existing attention helpers without edits, and uses a relative local dependency for the exact private CUDA candidate wheel. Sage2 must already be available on the selected Hopper worker. The tile128 wheel was built for Torch2.13; do not use it in an unqualified Torch2.14 image.
 
-Install that explicit local directory with `cozy package install --no-model-download /home/fidika/cozy_v2/outputs/h3-kernel-quality-20260914/project`. Then use its installed `local/h3-kernel-quality/generate` target through the ordinary default-home CLI on an already owned single-H100 rental. The private request scopes BF16 to the FL2VA DiT; leave the global CLI attention override unset so H3's FP32/D256 audio VAE retains a compatible backend:
+Create its ordinary lock with `uv lock --project /home/fidika/cozy_v2/outputs/h3-kernel-quality-20260914/project`, then install that explicit local directory with `cozy package install --editable --no-model-download /home/fidika/cozy_v2/outputs/h3-kernel-quality-20260914/project`. Use its installed `local/h3-kernel-quality/generate` target through the ordinary default-home CLI on an already owned single-H100 rental. The private request scopes BF16 to the FL2VA DiT; leave the global CLI attention override unset so H3's FP32/D256 audio VAE retains a compatible backend:
 
 ```sh
 cozy run local/h3-kernel-quality/generate \
