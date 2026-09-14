@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal
 
 import msgspec
 import torch
-from attention_backends import build_backend, load_fa3  # type: ignore[import-not-found]
+from attention_backends import build_backend, load_fa3
 from cozy_runtime.author import (
     App,
     AssetBound,
