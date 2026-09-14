@@ -22,6 +22,7 @@ module = [
     "torch.*", "torchvision.*", "transformers.*", "tokenizers.*", "numpy.*", "PIL.*",
     "safetensors.*", "diffusers.*", "tfsbench", "tensorfs", "tensorfs.*", "cozy_eval.*",
     "av", "av.*",
+    "merge_arithmetic",
 ]
 ignore_missing_imports = true
 

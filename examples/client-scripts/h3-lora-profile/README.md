@@ -41,3 +41,31 @@ LoRA tile GEMMs have4096 input rows and low inner/output rank; distinguish these
 from encoded base GEMMs and existing activation quantization before attributing
 cost. Merge arithmetic and cache lifecycle are a separate experiment; no production
 behavior, format choice or quality promise follows from this trace alone.
+
+## Actual-layer merge probe
+
+`prepare_h3_lora_merge_probe.py WHEEL ARITHMETIC_FILE DESTINATION` stages a separate
+`local/h3-lora-merge-probe/probe` project. The preparer pins the reviewed helper's
+exact bytes; it does not install or execute anything. Lock/install it through the
+same ordinary CLI flow above, then supply the identical fight input (omit fixed
+`steps`, select optional `block=0|25|49`) and a nonzero generic `--lora` binding.
+
+The probe runs one actual denoising step, observes one Runtime-owned encoded Q
+projection and its already validated active factors, then stops before video
+decode. It takes at most the first4,096 packed input rows and compares separate
+candidate weight buffers. It never patches the live module, subtracts an update,
+writes a checkpoint or implements a cache. The temporary ownership bound is1GiB,
+checked against tensor shapes and actual device headroom; one candidate is held at
+a time and all original source/factor hashes must remain unchanged.
+
+Controls compare rank-ordered FP32 and highest-mode FP32 GEMM preparation under
+preserved, grow-only and recalibrated row scales. Original-grid overflow is a
+recorded refusal. A BF16 merged-weight control changes the activation route too;
+the report says so. Forced zero-update codec controls expose gratuitous grid
+changes, while actual zero strength remains an exact original-part bypass.
+Autocast is disabled during measurements without changing process-global math
+settings. The report includes original-scale diversity, code maxima, preparation
+and forward times, sampled FP64 weight/forward errors, and error relative to the
+LoRA update's norm. Per-row numerical diagnostics are part of prototype preparation
+time. These are one-layer measurements, not full-model quality or cached-serving
+qualification.
