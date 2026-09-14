@@ -10,6 +10,7 @@ import tarfile
 import tempfile
 import time
 import traceback
+from collections import Counter
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -88,9 +89,13 @@ class CompilerState:
                 record = {
                     "index": index,
                     "nodes": len(list(graph.graph.nodes)),
-                    "targets": [
-                        str(node.target) for node in graph.graph.nodes if node.op == "call_function"
-                    ],
+                    "targets": dict(
+                        Counter(
+                            str(node.target)
+                            for node in graph.graph.nodes
+                            if node.op == "call_function"
+                        )
+                    ),
                 }
                 self.graphs.append(record)
                 (self.root / f"fx_graph_{index:04d}.py").write_text(graph.code)
