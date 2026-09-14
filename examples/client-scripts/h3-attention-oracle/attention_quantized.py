@@ -57,6 +57,7 @@ def build_quantized(
         "fa3_qkv_roundtrip",
         "fa3_fp8_splits2",
         "fa3_fp8_splits4",
+        "fa3_twolevel_fp8",
     }:
         raise ValueError(f"Unknown quantized attention backend: {name}")
     if not math.isfinite(scale) or scale <= 0:
@@ -123,6 +124,32 @@ def build_quantized(
     kernel = dispatch._HUB_KERNELS_REGISTRY[dispatch.AttentionBackendName._FLASH_3_HUB].kernel_fn
     if not callable(kernel):
         raise OptionalBackendUnavailable("The measured production FA3 kernel is not loaded")
+    if name == "fa3_twolevel_fp8":
+        module = importlib.import_module("h3_fa3_fp8_e4ad1ed05262")
+        candidate = module.flash_attn_func
+
+        def twolevel_call() -> Any:
+            (q8, qs), (k8, ks), (v8, vs) = [production_fp8.quantise(x) for x in (q, k, v)]
+            return candidate(
+                q8,
+                k8,
+                v8,
+                softmax_scale=scale,
+                causal=False,
+                num_splits=1,
+                q_descale=qs,
+                k_descale=ks,
+                v_descale=vs,
+            )
+
+        return twolevel_call, {
+            **common,
+            **_source(candidate, "cozy-h3-fa3-fp8-candidate"),
+            "experimental": True,
+            "candidate_source": "e4ad1ed052626bdee606345371cb9f4e376c786e",
+            "pv_accumulation": "completed tensor-core tile plus separate FP32 running sum",
+            "preprocessing": "Runtime production per-head quantization inside each call",
+        }
     if name in {"fa3_fp8_splits2", "fa3_fp8_splits4"}:
         splits = int(name[-1])
         free, _ = torch.cuda.mem_get_info(q.device)
