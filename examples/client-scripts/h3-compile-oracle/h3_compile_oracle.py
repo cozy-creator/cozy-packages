@@ -74,17 +74,29 @@ class CompilerState:
         self.modules = list(root.transformer_blocks) if payload.mode == "blocks" else [root]
         self.original = [module.forward for module in self.modules]
         self.compiled: list[Any] = []
+        # Runtime owns and seals these per-content paths before CUDA starts.
+        # Observe them; changing them inside a model correctly breaks the seal.
+        self.cache_roots = {
+            name: Path(os.environ[key])
+            for name, key in (
+                ("inductor", "TORCHINDUCTOR_CACHE_DIR"),
+                ("triton", "TRITON_CACHE_DIR"),
+            )
+            if os.environ.get(key)
+        }
+        self.cache_files_before = {
+            name: [str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()]
+            for name, root in self.cache_roots.items()
+        }
         if payload.mode != "eager":
-            # A new empty directory gives a genuinely cold compiler cache without
-            # changing image-owned or another request's cache contents.
-            os.environ["TORCHINDUCTOR_CACHE_DIR"] = str(self.root / "inductor")
-            os.environ["TRITON_CACHE_DIR"] = str(self.root / "triton")
+            if "inductor" not in self.cache_roots:
+                raise RuntimeError("compiler cache must be imposed before executor startup")
+            if payload.cold and self.cache_files_before["inductor"]:
+                raise RuntimeError("cold compile requires a fresh content-scoped Inductor cache")
             torch._dynamo.reset()
             torch._dynamo.utils.counters.clear()
 
             def backend(graph: Any, inputs: list[Any]) -> Any:
-                from torch._dynamo.backends.registry import lookup_backend
-
                 index = len(self.graphs)
                 record = {
                     "index": index,
@@ -101,7 +113,7 @@ class CompilerState:
                 (self.root / f"fx_graph_{index:04d}.py").write_text(graph.code)
                 started = time.perf_counter()
                 try:
-                    return lookup_backend("inductor")(
+                    return torch._inductor.compile(
                         graph,
                         inputs,
                         options={"max_autotune": payload.autotune, "triton.cudagraphs": False},
@@ -218,12 +230,16 @@ def archive(run: RunState, report: bytes) -> bytes:
         tar.addfile(info, io.BytesIO(report))
         if run.compiler is not None:
             total = 0
-            for path in sorted(run.compiler.root.rglob("*")):
-                if path.is_file() and path.suffix in {".py", ".cpp", ".json"}:
-                    total += path.stat().st_size
-                    if total > 512 << 20:
-                        raise RuntimeError("compiler source/trace archive exceeds diagnostic bound")
-                    tar.add(path, arcname=str(path.relative_to(run.compiler.root)))
+            roots = {"diagnostic": run.compiler.root, **run.compiler.cache_roots}
+            for label, root in roots.items():
+                for path in sorted(root.rglob("*")):
+                    if path.is_file() and path.suffix in {".py", ".cpp", ".json"}:
+                        total += path.stat().st_size
+                        if total > 512 << 20:
+                            raise RuntimeError(
+                                "compiler source/trace archive exceeds diagnostic bound"
+                            )
+                        tar.add(path, arcname=str(Path(label) / path.relative_to(root)))
     result = buffer.getvalue()
     if len(result) > 128 << 20:
         raise RuntimeError("compressed compiler archive exceeds output bound")
@@ -285,7 +301,10 @@ def execute(
         "generation_seconds": elapsed,
         "denoise_seconds": state.sample_seconds,
         "compiler_key": compiler.key if compiler else None,
-        "compiler_cache": str(compiler.root) if compiler else None,
+        "compiler_cache": {key: str(value) for key, value in compiler.cache_roots.items()}
+        if compiler
+        else {},
+        "cache_files_before": compiler.cache_files_before if compiler else {},
         "profile": str(state.profile_path) if state.profile_path else None,
         "graphs_before": state.graphs_before,
         "graphs_after": len(compiler.graphs) if compiler else 0,
