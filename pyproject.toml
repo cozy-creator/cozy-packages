@@ -23,6 +23,8 @@ module = [
     "safetensors.*", "diffusers.*", "tfsbench", "tensorfs", "tensorfs.*", "cozy_eval.*",
     "av", "av.*",
     "merge_arithmetic",
+    # The pinned private scratch probe requires the unmerged LoRA development cohort.
+    "cozy_runtime.internal.lora",
 ]
 ignore_missing_imports = true
 

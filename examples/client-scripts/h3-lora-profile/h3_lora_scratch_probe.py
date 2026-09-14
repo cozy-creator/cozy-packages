@@ -119,7 +119,10 @@ class Capture(support.Capture):
                 torch.cuda.synchronize()
                 samples: dict[str, list[float]] = {"old": [], "new": []}
                 for index in range(12):
-                    order = (("old", lora.LinearAdapters._apply), ("new", candidate))
+                    order: tuple[tuple[str, Any], ...] = (
+                        ("old", lora.LinearAdapters._apply),
+                        ("new", candidate),
+                    )
                     if index % 2:
                         order = tuple(reversed(order))
                     for label, method in order:
