@@ -68,10 +68,23 @@ def _flash_call(
 
 
 def build_backend(
-    name: str, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, *, scale: float
+    name: str,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    scale: float,
+    layout: Any = None,
+    module_path: str = "",
 ) -> tuple[Callable[[], torch.Tensor], dict[str, Any]]:
     """Build one named backend; caller times construction, first call, and warm calls."""
     _validate(q, k, v, scale)
+    if name in ("kitchen-int8", "sol-attn", "flashinfer-bf16-fp8", "sdpa"):
+        from runtime_attention_backend import build_runtime_backend
+
+        return build_runtime_backend(
+            name, q, k, v, scale=scale, layout=layout, module_path=module_path
+        )
     metadata: dict[str, Any] = {
         "backend": name,
         "input_dtype": "bfloat16",

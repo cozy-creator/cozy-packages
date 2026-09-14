@@ -171,6 +171,34 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "Read the actual active context in real CPU DiT hooks to verify scope lifetime "
         "and exception restoration. No package serving code reads this private context."
     ),
+    (
+        "examples/client-scripts/h3-attention-oracle/h3_attention_oracle.py",
+        "cozy_runtime.internal",
+    ): (
+        "Reuse Runtime's scoped site hooks to identify the actual intercepted attention "
+        "module. Retire with public per-site diagnostic observations."
+    ),
+    (
+        "examples/client-scripts/h3-attention-oracle/runtime_attention_backend.py",
+        "cozy_runtime.internal",
+    ): (
+        "Private pinned-source qualification calls the production attention selector/adapters "
+        "without duplicating upstream kernels. Retire with a public diagnostic lookup API."
+    ),
+    (
+        "examples/client-scripts/h3-attention-oracle/runtime_attention_backend.py",
+        "cozy_runtime.internal.encoding",
+    ): (
+        "Record the actual selected device used by the production attention resolver. "
+        "Retire with a public diagnostic device snapshot."
+    ),
+    (
+        "examples/client-scripts/h3-attention-oracle/h3_attention_oracle.py",
+        "cozy_runtime.author._attention_scope",
+    ): (
+        "Retain the model-produced layout at the exact intercepted attention call, then "
+        "replay it unchanged for the Sol experiment. Retire with public scope observations."
+    ),
     ("scripts/h3-assembly-proof.py", "cozy_runtime.author._assets"): (
         "Bind native codec fixtures and their file-state guards to the author invocation. "
         "Retire when a public native asset fixture supports changed-input controls. "

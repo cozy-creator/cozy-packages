@@ -17,6 +17,7 @@ import tempfile
 import time
 import traceback
 from contextvars import ContextVar
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -32,6 +33,8 @@ from cozy_runtime.author import (
     Telemetry,
     uses_components,
 )
+from cozy_runtime.author._attention_scope import _ACTIVE_LAYOUT
+from cozy_runtime.internal import attention_sol
 from diffusers.models import attention_dispatch as dispatch
 
 from h3 import FirstLastFrameToVideoInput, H3Model, KeyframeAssets, fl2va
@@ -50,6 +53,7 @@ class Input(msgspec.Struct, forbid_unknown_fields=True):
     repeats: Annotated[int, msgspec.Meta(ge=3, le=10)] = 5
     profile: bool = True
     sequence_limit: Annotated[int, msgspec.Meta(ge=0, le=109104)] = 0
+    reference_backend: str = "fa3_bf16"
 
 
 class Result(msgspec.Struct):
@@ -68,28 +72,36 @@ class Capture:
     def __init__(self, payload: Input) -> None:
         self.payload = payload
         self.step = 0
-        self.block = 0
         self.tensors: tuple[Any, Any, Any] | None = None
         self.scale = 0.0
+        self.layout: Any = None
+        self.module_path = ""
 
     def sample(self, root: Any, invoke: Any, on_step: Any) -> Any:
-        if torch.cuda.device_count() != 1:
-            raise ValueError("the attention oracle requires one physical CUDA GPU")
-        member = dispatch.AttentionBackendName._FLASH_3_HUB
+        references = {
+            "fa3_bf16": "_flash_3_hub",
+            "cudnn_bf16": "_native_cudnn",
+            "sdpa": "native",
+        }
+        if self.payload.reference_backend not in references:
+            raise ValueError("capture reference must be fa3_bf16, cudnn_bf16 or sdpa")
+        member = dispatch.AttentionBackendName(references[self.payload.reference_backend])
         original = dispatch._AttentionBackendRegistry._backends[member]
         processors = [
-            (module.processor, module.processor._attention_backend)
-            for module in root.modules()
+            (path, module, module.processor, module.processor._attention_backend)
+            for path, module in root.named_modules()
             if hasattr(module, "processor") and hasattr(module.processor, "_attention_backend")
         ]
 
         @functools.wraps(original)
         def capture(**kwargs: Any) -> Any:
             q, k, v = (kwargs[key] for key in ("query", "key", "value"))
-            # The two tiny text-refiner calls are separate from the 50 DiT blocks.
-            if q.shape[1] > 1024:
-                block = self.block
-                self.block += 1
+            # Match the actual module path; prompt length cannot turn a text-refiner
+            # call into a DiT block or shift the diagnostic block counter.
+            site = attention_sol._SITE.get()
+            parts = site.path.split(".") if site is not None else []
+            if len(parts) > 1 and parts[0] == "transformer_blocks" and parts[1].isdigit():
+                block = int(parts[1])
                 if self.step == self.payload.capture_step and block == self.payload.capture_block:
                     if kwargs.get("attn_mask") is not None or kwargs.get("is_causal", False):
                         raise ValueError("expected H3's dense noncausal attention")
@@ -97,25 +109,32 @@ class Capture:
                         raise ValueError("capture requires unsharded attention")
                     self.tensors = (q.detach(), k.detach(), v.detach())
                     self.scale = kwargs.get("scale") or 1 / math.sqrt(q.shape[-1])
+                    self.layout = _ACTIVE_LAYOUT.get()
+                    self.module_path = site.path if site is not None else ""
                     raise Captured()
             return original(**kwargs)
 
         def step(index: int) -> None:
             on_step(index)
             self.step = index + 1
-            self.block = 0
 
-        dispatch._AttentionBackendRegistry._backends[member] = capture
+        temporary_sites: list[tuple[str, Any]] = []
         # An explicit preparation pin can make an optional kernel available.
         # Capture always follows the same BF16 trajectory before comparing it.
-        for processor, _ in processors:
-            processor._attention_backend = member
         try:
+            for path, module, processor, _ in processors:
+                if getattr(module, "_cozy_sol_site", None) is None:
+                    attention_sol.install_site(module, "fl2va_dit", path)
+                    temporary_sites.append((path, module))
+                processor._attention_backend = member
+            dispatch._AttentionBackendRegistry._backends[member] = capture
             return invoke(step)
         finally:
             dispatch._AttentionBackendRegistry._backends[member] = original
-            for processor, backend in processors:
+            for _, _, processor, backend in processors:
                 processor._attention_backend = backend
+            for path, module in temporary_sites:
+                attention_sol.remove_site(module, "fl2va_dit", path)
 
 
 class OracleModel(H3Model, encoded_leaves="accept", fusion="accept"):
@@ -209,6 +228,8 @@ def probe(
     out: Outputs,
     tel: Telemetry,
 ) -> Result:
+    if torch.cuda.device_count() != 1:
+        raise ValueError("the attention oracle requires one physical CUDA GPU")
     capture = Capture(payload)
     token = _ACTIVE.set(capture)
     started = time.perf_counter()
@@ -236,11 +257,15 @@ def probe(
     capture_seconds = time.perf_counter() - started
     model_qkv_shape = list(q.shape)
     if payload.sequence_limit:
+        if "sol-attn" in payload.backends:
+            raise ValueError("Sol comparison requires the full captured document layout")
         if payload.sequence_limit > q.shape[1]:
             raise ValueError("sequence_limit exceeds the captured model sequence")
         q, k, v = (x[:, : payload.sequence_limit] for x in (q, k, v))
     originals = [fingerprint(x) for x in (q, k, v)]
-    reference_call, reference_provenance = build_backend("fa3_bf16", q, k, v, scale=capture.scale)
+    reference_call, reference_provenance = build_backend(
+        payload.reference_backend, q, k, v, scale=capture.scale
+    )
     reference = reference_call()
     rows, fp32 = reference_rows(q, k, v, capture.scale)
     paths: list[Path] = []
@@ -249,7 +274,15 @@ def probe(
         record: dict[str, Any] = {"name": name}
         try:
             began = time.perf_counter()
-            call, provenance = build_backend(name, q, k, v, scale=capture.scale)
+            call, provenance = build_backend(
+                name,
+                q,
+                k,
+                v,
+                scale=capture.scale,
+                layout=capture.layout,
+                module_path=capture.module_path,
+            )
             record.update(provenance=provenance, construction_seconds=time.perf_counter() - began)
             result, first_wall, first_cuda = timed(call)
             record.update(first_call_seconds=first_wall, first_call_cuda_ms=first_cuda)
@@ -266,7 +299,7 @@ def probe(
             )
             if result.shape != q.shape or result.dtype != torch.bfloat16:
                 raise ValueError("attention did not return the expected BF16 NHD tensor")
-            record["against_fa3"] = delta(result, reference)
+            record["against_reference"] = delta(result, reference)
             record["against_fp32_sampled_rows"] = delta(result[:, rows], fp32)
             repeated = call()
             record["repeatability"] = delta(repeated, result)
@@ -301,7 +334,7 @@ def probe(
         raise RuntimeError("an attention candidate modified the captured Q/K/V inputs")
     registry = dispatch._AttentionBackendRegistry._backends
     document = {
-        "format": "h3.attention-oracle/1",
+        "format": "h3.attention-oracle/2",
         "request_id": ctx.request_id,
         "input": msgspec.to_builtins(payload),
         "checkpoint": model.checkpoint_ref,
@@ -312,7 +345,9 @@ def probe(
         "sequence_scope": "captured prefix ablation"
         if payload.sequence_limit
         else "complete model sequence",
-        "capture_backend": "flash-attn3 BF16 (temporary explicit diagnostic selection)",
+        "capture_backend": payload.reference_backend,
+        "captured_attention_layout": asdict(capture.layout) if capture.layout is not None else None,
+        "captured_module_path": capture.module_path,
         "qkv": originals,
         "scale": capture.scale,
         "reference": reference_provenance,
