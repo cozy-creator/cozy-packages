@@ -80,7 +80,7 @@ async def inspect(
         for name in ("block_a.weight", "block_b.weight"):
             row = derived.tensor(component, name)
             assert row.logical_dtype == dtype
-            assert {part.name for part in row.parts} == {"data", "scale"}
+            assert set(row.parts) == {"data", "scale"}
             assert source.identity(component, name) != derived.identity(component, name)
             data = bytearray(512)
             derived.read_part_into(component, name, "data", 0, data)
