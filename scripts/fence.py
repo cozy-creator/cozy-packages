@@ -163,6 +163,14 @@ def public_runtime_surface(module: str) -> bool:
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
     (
+        "examples/client-scripts/h3-lora-profile/h3_lora_scratch_probe.py",
+        "cozy_runtime.internal.lora",
+    ): (
+        "Private experiment compares exact pinned Runtime LoRA methods using the original "
+        "hook classes and request context, without mutating serving weights or global methods. "
+        "Retire with this one-off scratch qualification; this is not a public author API."
+    ),
+    (
         "examples/client-scripts/h3-attention-oracle/attention_quantized.py",
         "cozy_runtime.internal.attention_fp8",
     ): (

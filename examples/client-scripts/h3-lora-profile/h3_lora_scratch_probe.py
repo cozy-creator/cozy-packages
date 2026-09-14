@@ -10,11 +10,12 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
+import cozy_runtime.internal.lora as lora
 import h3_lora_merge_probe as support
 import msgspec
 import torch
 from cozy_runtime.author import App, Context, Outputs, Telemetry
-from cozy_runtime.internal import lora
+from h3_lora_merge_probe import ProbeModel as ProbeModel
 
 from h3 import FirstLastFrameToVideoInput, KeyframeAssets, fl2va
 
@@ -157,7 +158,7 @@ def probe(
     ctx: Context,
     payload: support.Input,
     assets: KeyframeAssets,
-    model: support.ProbeModel,
+    model: ProbeModel,
     out: Outputs,
     tel: Telemetry,
 ) -> support.Result:
