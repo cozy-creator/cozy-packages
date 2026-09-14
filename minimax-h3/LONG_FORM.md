@@ -37,7 +37,16 @@ the failure details. Failure on the first shot fails the request. Cancellation
 remains cancellation.
 
 To extend or recover a delivered prefix, keep its complete directory. The new
-request's `resume_from` field takes that retained native Tree.
+request's `resume_from` field takes that retained native Tree. Attach the collected
+prefix directory to that field:
+
+```sh
+cozy run paul/minimax-h3/long_form --in extended.json --rental=your-rental \
+  --asset resume_from=/path/to/collected/prefix --await --out ./extended-video
+```
+
+The CLI supplies `resume_from` from this attachment; the JSON contains the shot
+list and shared descriptions as before.
 
 Include the original completed shots at the start of `extended.json`. Their
 prompts, seeds, durations, shared descriptions, step count and opening frame must
