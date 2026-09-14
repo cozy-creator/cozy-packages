@@ -33,6 +33,7 @@ import torch
 from cozy_runtime.author import (
     Artifact,
     Assets,
+    AttentionLayout,
     AudioAsset,
     Cancelled,
     Config,
@@ -43,9 +44,11 @@ from cozy_runtime.author import (
     ImageAsset,
     Mixed,
     VideoAsset,
+    attention_scope,
     canonical_json,
     describe,
 )
+from cozy_runtime.author._attention_scope import _ACTIVE_LAYOUT
 from cozy_runtime.author.fakes import (
     fake_attempt,
     fake_input,
@@ -65,8 +68,15 @@ from diffusers import (
     MiniMaxH3Transformer3DModel,
 )
 from diffusers.modular_pipelines import PipelineState
-from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference
-from diffusers.modular_pipelines.minimax_h3.before_denoise import MiniMaxH3SetTimestepsStep
+from diffusers.modular_pipelines.minimax_h3 import (
+    MiniMaxH3AudioReference,
+    MiniMaxH3ImageReference,
+    MiniMaxH3VideoReference,
+)
+from diffusers.modular_pipelines.minimax_h3.before_denoise import (
+    MiniMaxH3Ref2VAPrepareLayoutStep,
+    MiniMaxH3SetTimestepsStep,
+)
 from diffusers.modular_pipelines.minimax_h3.denoise import (
     MiniMaxH3LoopDenoiser,
     MiniMaxH3LoopSchedulerStep,
@@ -115,6 +125,7 @@ from cozy_runtime.models.minimax_h3.official import (  # noqa: E402
     _apply_video_vae_dtype,
     _artifact_sections,
     _as_float32,
+    _attention_layout,
     _dit_specs,
     _processor,
     _ScopedPipeline,
@@ -4363,17 +4374,6 @@ def arm_turbo_artifact() -> None:
 
 def arm_attention_scope() -> None:
     """Real Diffusers layouts and CPU DiT steps supply/reset request-local attention facts."""
-    from cozy_runtime.author import AttentionLayout, attention_scope
-    from cozy_runtime.author._attention_scope import _ACTIVE_LAYOUT
-    from cozy_runtime.models.minimax_h3.official import _attention_layout
-    from diffusers.modular_pipelines.minimax_h3 import (
-        MiniMaxH3AudioReference,
-        MiniMaxH3VideoReference,
-    )
-    from diffusers.modular_pipelines.minimax_h3.before_denoise import (
-        MiniMaxH3Ref2VAPrepareLayoutStep,
-    )
-
     refs = [
         MiniMaxH3ImageReference(image=PILImage.new("RGB", (16, 16))),
         MiniMaxH3AudioReference(audio=torch.zeros(2, 8), sample_rate=32000),
