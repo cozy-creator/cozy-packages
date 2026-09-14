@@ -2,8 +2,8 @@
 """Check the producer's copy of H3 row parsing; --write updates it from the canonical source."""
 
 import argparse
-from pathlib import Path
 from importlib.resources import files
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 

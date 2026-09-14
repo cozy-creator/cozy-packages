@@ -19,12 +19,12 @@ from cozy_runtime.author.fakes import fake_context, fake_outputs
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "minimax-h3"))
+from cozy_runtime.models.minimax_h3.official import OfficialH3Pipeline  # noqa: E402
 from safetensors.torch import load, save  # noqa: E402
 
 import h3  # noqa: E402
 import h3_diagnostics  # noqa: E402
 from h3_activation_trace import ACTIVE_TRACE, ActivationTrace, FirstStepCaptured  # noqa: E402
-from cozy_runtime.models.minimax_h3.official import OfficialH3Pipeline  # noqa: E402
 
 
 class Block(torch.nn.Module):

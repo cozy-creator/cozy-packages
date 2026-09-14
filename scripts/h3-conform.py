@@ -85,33 +85,18 @@ H3 = ROOT / "minimax-h3"
 sys.path.insert(0, str(H3))
 sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
 
-from h3_tables import job as producer  # noqa: E402
-from h3_tables.lanes import NORMALISED_COMPONENTS, decode_operand  # noqa: E402
-from h3_tables.legacy_config import upgrade_legacy_table_config  # noqa: E402
-from h3_tables.model_config import (  # noqa: E402
-    dual_adaln_pruned_config,
-    dual_full_config,
-    parse_production_config,
-)
-from h3_tables.order import current_order, full_order  # noqa: E402
-from h3_tables.plans import TASKS, parse_plan  # noqa: E402
-from h3_tables.source import TARGET_COMPONENT, official_full_specs  # noqa: E402
-from h3_tables.turbo import collapse_head_bank, pdd_head_plan, pdd_time_grid  # noqa: E402
-
-import h3 as package  # noqa: E402
-from cozy_runtime.models.minimax_h3 import official  # noqa: E402
 import cozy_runtime.models.minimax_h3.official as official_module  # noqa: E402
+from cozy_runtime.models.minimax_h3 import official  # noqa: E402
 from cozy_runtime.models.minimax_h3.adaln_pruned import (  # noqa: E402
     AdaLNPrunedMiniMaxH3Transformer,
     _AdaLNPrunedBlockTable,
     _AdaLNPrunedOutputTable,
     _AdaLNPrunedTimestepLookup,
 )
-from assembly import MAX_SHOTS  # noqa: E402
-from cozy_runtime.models.minimax_h3.conditioner import build_text_conditioner, text_conditioner_config  # noqa: E402
-from gates import MediaFacts, refuse_before_encode, report_after_encode  # noqa: E402
-from h3_order import construction_order, encode_order  # noqa: E402
-from cozy_runtime.models.minimax_h3.table_layout import TableLayout  # noqa: E402
+from cozy_runtime.models.minimax_h3.conditioner import (  # noqa: E402
+    build_text_conditioner,
+    text_conditioner_config,
+)
 from cozy_runtime.models.minimax_h3.official import (  # noqa: E402
     _DIT_COMPONENT,
     FPS,
@@ -146,6 +131,7 @@ from cozy_runtime.models.minimax_h3.official import (  # noqa: E402
     timestep_plan_digest,
     validate_reference_policy,
 )
+from cozy_runtime.models.minimax_h3.table_layout import TableLayout  # noqa: E402
 from cozy_runtime.models.minimax_h3.turbo import (  # noqa: E402
     ATTENTION_KWARG,
     LORA_FAMILIES,
@@ -158,6 +144,23 @@ from cozy_runtime.models.minimax_h3.turbo import (  # noqa: E402
     _LoRAHook,
 )
 from cozy_runtime.models.minimax_h3.vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
+from h3_tables import job as producer  # noqa: E402
+from h3_tables.lanes import NORMALISED_COMPONENTS, decode_operand  # noqa: E402
+from h3_tables.legacy_config import upgrade_legacy_table_config  # noqa: E402
+from h3_tables.model_config import (  # noqa: E402
+    dual_adaln_pruned_config,
+    dual_full_config,
+    parse_production_config,
+)
+from h3_tables.order import current_order, full_order  # noqa: E402
+from h3_tables.plans import TASKS, parse_plan  # noqa: E402
+from h3_tables.source import TARGET_COMPONENT, official_full_specs  # noqa: E402
+from h3_tables.turbo import collapse_head_bank, pdd_head_plan, pdd_time_grid  # noqa: E402
+
+import h3 as package  # noqa: E402
+from assembly import MAX_SHOTS  # noqa: E402
+from gates import MediaFacts, refuse_before_encode, report_after_encode  # noqa: E402
+from h3_order import construction_order, encode_order  # noqa: E402
 
 STEPS = supported_steps()
 DEFAULT_STEPS = min(STEPS)
@@ -580,7 +583,9 @@ def arm_schedule() -> None:
         check(
             f"{task} static schema plan matches the Runtime builtin bytes",
             committed,
-            files("cozy_runtime.models.minimax_h3").joinpath("timestep-plans", f"{task}.json").read_bytes(),
+            files("cozy_runtime.models.minimax_h3")
+            .joinpath("timestep-plans", f"{task}.json")
+            .read_bytes(),
         )
         check(
             f"{task} committed semantic document",
@@ -1902,7 +1907,13 @@ def arm_adaln_pruned() -> None:
 def arm_processor() -> None:
     print("\n== five-file processor closure ==")
     for relative, expected in ASSET_DIGESTS.items():
-        check(relative, hashlib.sha256(files("cozy_runtime.models.minimax_h3").joinpath(relative).read_bytes()).hexdigest(), expected)
+        check(
+            relative,
+            hashlib.sha256(
+                files("cozy_runtime.models.minimax_h3").joinpath(relative).read_bytes()
+            ).hexdigest(),
+            expected,
+        )
     tokenizer, processor = _processor()
     check("tokenizer vocabulary size", tokenizer.vocab_size, 151643)
     check("tokenizer total size", len(tokenizer), 151676)
@@ -3733,7 +3744,9 @@ def arm_turbo_plan() -> None:
         check(
             f"{task} static schema plan matches the Runtime builtin bytes",
             committed,
-            files("cozy_runtime.models.minimax_h3").joinpath("timestep-plans", f"{task}.json").read_bytes(),
+            files("cozy_runtime.models.minimax_h3")
+            .joinpath("timestep-plans", f"{task}.json")
+            .read_bytes(),
         )
         check(f"{task} committed semantic identity", timestep_plan_digest(committed), plan.digest)
         check(f"{task} one fixed schedule", plan.steps, (8,))
@@ -4348,7 +4361,161 @@ def arm_turbo_artifact() -> None:
         check(f"{trunk} overlay head geometry", tuple(overlay.proj_out.weight.shape), (8, 96, 5376))
 
 
+def arm_attention_scope() -> None:
+    """Real Diffusers layouts and CPU DiT steps supply/reset request-local attention facts."""
+    from cozy_runtime.author import AttentionLayout, attention_scope
+    from cozy_runtime.author._attention_scope import _ACTIVE_LAYOUT
+    from cozy_runtime.models.minimax_h3.official import _attention_layout
+    from diffusers.modular_pipelines.minimax_h3 import (
+        MiniMaxH3AudioReference,
+        MiniMaxH3VideoReference,
+    )
+    from diffusers.modular_pipelines.minimax_h3.before_denoise import (
+        MiniMaxH3Ref2VAPrepareLayoutStep,
+    )
+
+    refs = [
+        MiniMaxH3ImageReference(image=PILImage.new("RGB", (16, 16))),
+        MiniMaxH3AudioReference(audio=torch.zeros(2, 8), sample_rate=32000),
+        MiniMaxH3VideoReference(
+            frames=torch.zeros(1, 3, 16, 16),
+            fps=24,
+            audio=torch.zeros(2, 8),
+            sample_rate=32000,
+        ),
+    ]
+    packed = MiniMaxH3Ref2VAPrepareLayoutStep.build_ref2va_packed_sequence(
+        text_token_tags=torch.ones(3, dtype=torch.long),
+        references=refs,
+        condition_latents=[torch.zeros(1, 24, 1, 4, 6), torch.zeros(1, 24, 2, 4, 6)],
+        audio_condition_latents=[torch.zeros(6, 32), torch.zeros(4, 32)],
+        num_latent_frames=2,
+        latent_height=4,
+        latent_width=6,
+        num_audio_latents=4,
+        patch_size=(1, 2, 2),
+        audio_channels=2,
+        audio_tag=2,
+        video_tag=0,
+    )
+    _, tags, video, audio, text, condition_video, condition_audio = packed
+    fields = {"token_tags": tags, "text_indices": text}
+    state = SimpleNamespace(
+        denoiser_input_fields=fields,
+        num_condition_video_rows=condition_video,
+        num_condition_audio_rows=condition_audio,
+    )
+    layout = _attention_layout(state, 12)
+    protected = torch.cat((text, video[:condition_video], audio[:condition_audio])).sort().values
+    check(
+        "mixed references occupy exactly the protected prefix", protected.tolist(), list(range(31))
+    )
+    check("mixed reference layout facts", (layout.live_tokens, layout.protected_prefix), (51, 31))
+    state.denoiser_input_fields = {name: value.to("meta") for name, value in fields.items()}
+    check(
+        "layout uses shape metadata without tensor-value reads",
+        _attention_layout(state, 12),
+        layout,
+    )
+
+    pipe = meta_h3_pipeline()
+    dit = MiniMaxH3Transformer3DModel.from_config(
+        dict(tiny_dit().config),
+        in_channels=24,
+        audio_in_channels=32,
+    ).eval()
+    pipe.components["fl2va_dit"] = dit
+    for workflow in ("t2va", "fl2va"):
+        pipe._pipes[workflow].update_components(transformer=dit)
+
+    def start() -> Any:
+        state = pipe.start_fl2va(
+            prompt="Two fighters.",
+            first_frame=None,
+            last_frame=None,
+            generator=torch.Generator().manual_seed(7),
+            steps=30,
+            frames=124,
+        )
+        for name, value in {
+            "height": 64,
+            "width": 96,
+            "prompt_embeds": torch.zeros(1, 4, 32),
+            "text_token_tags": torch.ones(4, dtype=torch.long),
+        }.items():
+            state.set(name, value)
+        return state
+
+    seen: list[AttentionLayout | None] = []
+    between: list[AttentionLayout | None] = []
+    handle = dit.register_forward_pre_hook(lambda _module, _args: seen.append(_ACTIVE_LAYOUT.get()))
+    outer = AttentionLayout(live_tokens=1, protected_prefix=0, step=99)
+    with torch.no_grad(), attention_scope(outer):
+        pipe.denoise(
+            "fl2va",
+            start(),
+            on_step=lambda _: between.append(_ACTIVE_LAYOUT.get()),
+            cancel=lambda: None,
+        )
+        check("each DiT step restores the surrounding scope", between, [outer] * 30)
+        check("completed request restores the surrounding scope", _ACTIVE_LAYOUT.get(), outer)
+    handle.remove()
+    check(
+        "30 actual CPU DiT forwards have ordered scope indices",
+        [x.step for x in seen if x],
+        list(range(30)),
+    )
+    check(
+        "actual text-only forward layout",
+        [(x.live_tokens, x.protected_prefix) for x in seen if x],
+        [(640, 4)] * 30,
+    )
+    check("request scope does not leak", _ACTIVE_LAYOUT.get(), None)
+
+    class StopForward(Exception):
+        pass
+
+    def stop(_module: Any, _args: Any) -> None:
+        assert _ACTIVE_LAYOUT.get() is not None
+        raise StopForward("scoped CPU forward interrupted")
+
+    handle = dit.register_forward_pre_hook(stop)
+    try:
+        with attention_scope(outer):
+            refusal(
+                "failed DiT step unwinds its scope",
+                lambda: pipe.denoise(
+                    "fl2va",
+                    start(),
+                    on_step=lambda _: None,
+                    cancel=lambda: None,
+                ),
+                "StopForward",
+            )
+            check("failed step restores outer scope", _ACTIVE_LAYOUT.get(), outer)
+    finally:
+        handle.remove()
+    check("failure scope does not leak", _ACTIVE_LAYOUT.get(), None)
+    handle = dit.register_forward_pre_hook(lambda _module, _args: seen.append(_ACTIVE_LAYOUT.get()))
+    try:
+        pipe.warm_dit("fl2va")
+    finally:
+        handle.remove()
+    check(
+        "warm is explicitly dense",
+        seen[-1],
+        AttentionLayout(
+            live_tokens=24,
+            protected_prefix=0,
+            step=0,
+            dense_until_step=10,
+            dense_paths=("token_refiner", "transformer_blocks.0", "transformer_blocks.1"),
+        ),
+    )
+
+
 ARMS = {
+    "attention-scope": arm_attention_scope,
     "checkpoint-table-layout": arm_checkpoint_table_layout,
     "turbo-plan": arm_turbo_plan,
     "turbo-heads": arm_turbo_heads,
