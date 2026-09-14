@@ -43,9 +43,9 @@ latency measurements:
 |---|---|---|
 | Eager first-step profile | `probe` | `mode=eager profile=true` |
 | Cold regional compilation | `probe` | `mode=blocks cold=true profile=false` |
-| Full eager video | `run` | `mode=eager profile=false` |
-| Full warm compiled video | `run` | `mode=blocks profile=false` |
-| Warm compiled first-step profile | `probe` | `mode=blocks profile=true` |
+| Full eager video | `run` | `mode=eager profile=false warmup_steps=2` |
+| Full warm compiled video | `run` | `mode=blocks profile=false warmup_steps=2` |
+| Warm compiled first-step profile | `probe` | `mode=blocks profile=true warmup_steps=2` |
 
 `run` produces the ordinary video and continuation frame plus measurements and
 compiler artifacts. `probe` deliberately stops after the first denoising step,
@@ -61,6 +61,17 @@ counts, and counters from the measurements. A warm run should reuse the same
 executor and configuration with no new compiler graphs. Changing mode or
 `autotune=true` creates a new compiler configuration; its first call can still
 reuse disk caches and must not be labeled a fully cold boot.
+
+An unchanged project does not guarantee that a worker retains its executor
+between requests. Use `warmup_steps=2` for warm comparisons: within one request,
+the oracle first runs two denoising steps without profiling or decoding, then
+restarts the unchanged, seeded `fl2va` call on that same model and compiler.
+Warmup is recorded separately under `warmup` and excluded from measured
+generation and step times; CLI execution still includes it. Two steps cover
+specializations first reached on the second scheduler step. Check warmup and
+measured PIDs match and `graphs_before == graphs_after` during the measured pass;
+additional captured graphs mean compilation still occurred. `warmup_steps`
+accepts 0, 1, or 2; `cold=true` applies before warmup only.
 
 Compilation uses `fullgraph=false`, `dynamic=false`, and no CUDA graphs. Graph
 breaks are reported, so `mode=dit` does not imply complete DiT graph capture.

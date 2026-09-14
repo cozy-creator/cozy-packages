@@ -11,6 +11,7 @@ import tempfile
 import time
 import traceback
 from collections import Counter
+from collections.abc import Callable
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -42,6 +43,7 @@ class Input(msgspec.Struct, forbid_unknown_fields=True):
     autotune: bool = False
     cold: bool = False
     profile: bool = False
+    warmup_steps: Annotated[int, msgspec.Meta(ge=0, le=2)] = 0
 
 
 class ProbeResult(msgspec.Struct):
@@ -63,7 +65,7 @@ class GenerationResult(H3VideoOutput):
     ]
 
 
-class FirstStepComplete(Exception):
+class DenoisingComplete(Exception):
     pass
 
 
@@ -134,15 +136,27 @@ class CompilerState:
 
 
 class RunState:
-    def __init__(self, payload: Input, probe_only: bool) -> None:
+    def __init__(self, payload: Input, stop_after_steps: int) -> None:
         self.payload = payload
-        self.probe_only = probe_only
+        self.stop_after_steps = stop_after_steps
         self.steps: list[float] = []
         self.compiler: CompilerState | None = None
         self.graphs_before = 0
         self.profile: Any = None
         self.profile_path: Path | None = None
         self.sample_seconds = 0.0
+        self.wall_seconds = 0.0
+
+    def generate(self, invoke: Callable[[], H3VideoOutput]) -> H3VideoOutput | None:
+        token = _ACTIVE.set(self)
+        started = time.perf_counter()
+        try:
+            return invoke()
+        except DenoisingComplete:
+            return None
+        finally:
+            self.wall_seconds = time.perf_counter() - started
+            _ACTIVE.reset(token)
 
     def sample(self, root: Any, invoke: Any, on_step: Any) -> Any:
         if torch.cuda.device_count() != 1:
@@ -186,8 +200,8 @@ class RunState:
                 self.profile.export_chrome_trace(str(self.profile_path))
                 self.profile = None
             on_step(index)
-            if self.probe_only:
-                raise FirstStepComplete()
+            if self.stop_after_steps and len(self.steps) >= self.stop_after_steps:
+                raise DenoisingComplete()
             last = time.perf_counter()
 
         try:
@@ -259,14 +273,11 @@ def execute(
 ) -> tuple[H3VideoOutput | None, ProbeResult]:
     if not 5 <= payload.duration_s <= 15 or payload.seed < 0:
         raise ValueError("use duration_s 5..15 and a nonnegative seed")
-    state = RunState(payload, probe_only)
-    token = _ACTIVE.set(state)
-    started = time.perf_counter()
-    result = None
-    status = "completed"
-    error = None
-    try:
-        result = fl2va(
+    if not 0 <= payload.warmup_steps <= 2:
+        raise ValueError("warmup_steps must be 0..2")
+
+    def invoke() -> H3VideoOutput:
+        return fl2va(
             ctx,
             FirstLastFrameToVideoInput(
                 prompt=payload.prompt,
@@ -279,15 +290,43 @@ def execute(
             out,
             tel,
         )
-    except FirstStepComplete:
-        status = "first_step_only"
+
+    # Warmup and measurement share this model/executor. A new seeded fl2va call
+    # restarts the actual request; cold applies only before the warmup begins.
+    state = RunState(
+        msgspec.structs.replace(payload, cold=False) if payload.warmup_steps else payload,
+        1 if probe_only else 0,
+    )
+    warmup = None
+    warmup_report = None
+    result = None
+    status = "completed"
+    error = None
+    try:
+        if payload.warmup_steps:
+            warmup = RunState(
+                msgspec.structs.replace(payload, profile=False), payload.warmup_steps
+            )
+            try:
+                if warmup.generate(invoke) is not None:
+                    raise RuntimeError("warmup reached decoding instead of stopping in denoising")
+            finally:
+                warmup_report = {
+                    "requested_steps": payload.warmup_steps,
+                    "steps": warmup.steps,
+                    "wall_seconds": warmup.wall_seconds,
+                    "denoise_seconds": warmup.sample_seconds,
+                    "graphs_before": warmup.graphs_before,
+                    "graphs_after": len(warmup.compiler.graphs) if warmup.compiler else 0,
+                    "pid": os.getpid(),
+                }
+        result = state.generate(invoke)
+        if result is None:
+            status = "first_step_only"
     except Exception:
         status = "error"
         error = traceback.format_exc()
-    finally:
-        elapsed = time.perf_counter() - started
-        _ACTIVE.reset(token)
-    compiler = state.compiler
+    compiler = state.compiler or (warmup.compiler if warmup else None)
     document = {
         "format": "h3.compile-oracle/1",
         "status": status,
@@ -296,8 +335,9 @@ def execute(
         "pid": os.getpid(),
         "checkpoint": model.checkpoint_ref,
         "input": msgspec.to_builtins(payload),
+        "warmup": warmup_report,
         "steps": state.steps,
-        "generation_seconds": elapsed,
+        "generation_seconds": state.wall_seconds,
         "denoise_seconds": state.sample_seconds,
         "compiler_key": compiler.key if compiler else None,
         "compiler_cache": {key: str(value) for key, value in compiler.cache_roots.items()}
@@ -332,13 +372,16 @@ def execute(
         "compiler oracle",
         status=status,
         mode=payload.mode,
-        generation_seconds=elapsed,
+        generation_seconds=state.wall_seconds,
         denoise_seconds=state.sample_seconds,
         graphs=document["graphs_after"],
     )
     return result, ProbeResult(
         measurements=out.save_bytes(raw, media_type="application/json"),
-        compiler_artifacts=out.save_bytes(archive(state, raw), media_type="application/gzip"),
+        compiler_artifacts=out.save_bytes(
+            archive(state if state.compiler else warmup or state, raw),
+            media_type="application/gzip",
+        ),
         status=status,
     )
 
