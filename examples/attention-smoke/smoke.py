@@ -82,7 +82,9 @@ def probe(ctx: Context, payload: Input) -> Result:
     if not payload.backends or len(payload.backends) != len(set(payload.backends)):
         raise ValueError("Request a nonempty set of distinct explicit backends")
 
-    device = DeviceFacts("cuda", properties.name, sm, "", "", index)
+    device = DeviceFacts(
+        kind="cuda", name=properties.name, sm=sm, driver="", configuration="", index=index
+    )
     kernels: list[Kernel] = []
     for name in payload.backends:
         ctx.raise_if_cancelled()

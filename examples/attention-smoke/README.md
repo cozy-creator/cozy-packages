@@ -25,6 +25,5 @@ override also has no model attention sites here; the probe itself resolves each
 named backend and runs its numerical check.
 
 `preparation_seconds` includes imports, first-call compilation and the tiny
-numerical check. It is not an H3 benchmark or a quality comparison. A successful
-smoke is permission to proceed with the separately measured full-shape and video
-qualification, not permission to promote an approximate backend automatically.
+numerical check. It is not an H3 benchmark or a quality comparison. Run separate full-shape and video qualification after this smoke; automatic
+promotion still requires those performance and quality results.
