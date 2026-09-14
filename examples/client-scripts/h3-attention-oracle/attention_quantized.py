@@ -16,6 +16,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import cozy_runtime.internal.attention_fp8 as production_fp8
+import torch
+from diffusers.models import attention_dispatch as dispatch
+
+
+class OptionalBackendUnavailable(RuntimeError):
+    """The requested backend is unavailable in this worker configuration."""
+
 
 def _source(function: Any, distribution: str) -> dict[str, Any]:
     filename = inspect.getsourcefile(function)
@@ -43,9 +51,6 @@ def build_quantized(
     returned call performs fresh quantization from the original BF16 Q/K/V on
     every invocation, including any preprocessing allocations.
     """
-    import torch
-    from attention_backends import OptionalBackendUnavailable
-
     if name not in {"sage2_sm90", "fa3_fp8"}:
         raise ValueError(f"Unknown quantized attention backend: {name}")
     if not math.isfinite(scale) or scale <= 0:
@@ -108,8 +113,12 @@ def build_quantized(
             "preprocessing": "SageAttention SM90 public wrapper, included in each call",
         }
 
-    dispatch = importlib.import_module("diffusers.models.attention_dispatch")
     backend_name = "_flash_3_hub_fp8"
+    kernel = dispatch._HUB_KERNELS_REGISTRY[dispatch.AttentionBackendName._FLASH_3_HUB].kernel_fn
+    if not callable(kernel):
+        raise OptionalBackendUnavailable("The measured production FA3 kernel is not loaded")
+    # Explicit diagnostic coupling: measure the real quantizer on the same inputs.
+    production_fp8.bind(kernel)
     try:
         backend = dispatch.AttentionBackendName(backend_name)
     except ValueError as error:
@@ -135,5 +144,6 @@ def build_quantized(
         "qkv_quantization": "Runtime production per-(batch, head) FP8 E4M3",
         "preprocessing": "Registered production wrapper, included in each call",
         "quantizer_path": "production wrapper selects fused or eager from actual input strides",
+        "registration": "diagnostic binds production quantizer to the loaded FA3 kernel",
         "input_contiguous": [x.is_contiguous() for x in (q, k, v)],
     }

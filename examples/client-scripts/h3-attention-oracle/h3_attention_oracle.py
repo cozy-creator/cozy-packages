@@ -227,6 +227,7 @@ def probe(
     if capture.tensors is None:
         raise RuntimeError("the requested real H3 attention site was not captured")
     q, k, v = capture.tensors
+    torch.cuda.synchronize()
     capture_seconds = time.perf_counter() - started
     originals = [fingerprint(x) for x in (q, k, v)]
     reference_call, reference_provenance = build_backend("fa3_bf16", q, k, v, scale=capture.scale)

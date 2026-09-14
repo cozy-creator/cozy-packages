@@ -18,10 +18,9 @@ from pathlib import Path
 from typing import Any
 
 import torch
-
-
-class OptionalBackendUnavailable(RuntimeError):
-    """The requested backend cannot run in this worker configuration."""
+from attention_quantized import OptionalBackendUnavailable, build_quantized
+from diffusers.models import attention_dispatch as ad
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 
 def _function_provenance(fn: Callable[..., Any]) -> dict[str, Any]:
@@ -37,8 +36,6 @@ def _function_provenance(fn: Callable[..., Any]) -> dict[str, Any]:
 
 def load_fa3() -> tuple[Callable[..., Any], dict[str, Any]]:
     """Reuse the exact FA3 function already loaded for Diffusers serving."""
-    from diffusers.models import attention_dispatch as ad
-
     config = ad._HUB_KERNELS_REGISTRY[ad.AttentionBackendName._FLASH_3_HUB]
     fn = config.kernel_fn
     if not callable(fn):
@@ -110,8 +107,6 @@ def build_backend(
             "flash_attn_4": version,
         }
     if name == "cudnn_bf16":
-        from torch.nn.attention import SDPBackend, sdpa_kernel
-
         params = torch.backends.cuda.SDPAParams(
             q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), None, 0.0, False, False
         )
@@ -141,8 +136,6 @@ def build_backend(
         call, provenance = _build_cudnn_fp8(q, k, v, scale)
         return call, {**metadata, **provenance}
     if name in ("sage2_sm90", "fa3_fp8"):
-        from attention_quantized import build_quantized
-
         call, provenance = build_quantized(name, q, k, v, scale=scale)
         return call, {**metadata, **provenance}
     raise ValueError(f"unknown attention backend: {name}")
