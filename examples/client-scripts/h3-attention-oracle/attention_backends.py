@@ -133,9 +133,10 @@ def build_backend(
                 )
             return out.transpose(1, 2).contiguous()
 
+        read_cudnn_version: Callable[[], int | None] = torch.backends.cudnn.version
         return call, {
             **metadata,
-            "cudnn_backend": torch.backends.cudnn.version(),
+            "cudnn_backend": read_cudnn_version(),
             "allowed_sdpa_backends": ["CUDNN_ATTENTION"],
             "cudnn_deterministic": torch.backends.cudnn.deterministic,
         }
@@ -146,6 +147,9 @@ def build_backend(
         "sage2_sm90",
         "fa3_fp8",
         "fa3_qkv_roundtrip",
+        "fa3_q_roundtrip",
+        "fa3_k_roundtrip",
+        "fa3_v_roundtrip",
         "fa3_fp8_splits2",
         "fa3_fp8_splits4",
         "fa3_twolevel_fp8",

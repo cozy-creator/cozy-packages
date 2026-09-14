@@ -59,6 +59,29 @@ def _source(function: Any, distribution: str) -> dict[str, Any]:
     }
 
 
+ROUNDTRIP_INPUTS = {
+    "fa3_q_roundtrip": (0,),
+    "fa3_k_roundtrip": (1,),
+    "fa3_v_roundtrip": (2,),
+    "fa3_qkv_roundtrip": (0, 1, 2),
+}
+
+
+def roundtrip_inputs(q: Any, k: Any, v: Any, selected: tuple[int, ...]) -> tuple[Any, Any, Any]:
+    """Change only selected Q/K/V through the actual production quantizer.
+
+    Non-selected inputs are passed through as their original tensor objects.
+    CPU validation exercises production's eager floor; CUDA chooses its actual
+    fused/eager route from the captured tensor's device and strides.
+    """
+    values = [q, k, v]
+    for index in selected:
+        value = values[index]
+        codes, descale = production_fp8.quantise(value)
+        values[index] = (codes.float() * descale[:, None, :, None]).to(value.dtype)
+    return values[0], values[1], values[2]
+
+
 def build_quantized(
     name: str, q: Any, k: Any, v: Any, *, scale: float
 ) -> tuple[Callable[[], Any], dict[str, Any]]:
@@ -72,6 +95,9 @@ def build_quantized(
         "sage2_sm90",
         "fa3_fp8",
         "fa3_qkv_roundtrip",
+        "fa3_q_roundtrip",
+        "fa3_k_roundtrip",
+        "fa3_v_roundtrip",
         "fa3_fp8_splits2",
         "fa3_fp8_splits4",
         "fa3_twolevel_fp8",
@@ -200,20 +226,20 @@ def build_quantized(
             "available_and_reusable_bytes": free + reusable,
             "preprocessing": "Runtime production per-head quantization inside each call",
         }
-    if name == "fa3_qkv_roundtrip":
+    if name in ROUNDTRIP_INPUTS:
+        selected = ROUNDTRIP_INPUTS[name]
 
         def roundtrip_call() -> Any:
-            decoded = []
-            for value in (q, k, v):
-                codes, descale = production_fp8.quantise(value)
-                decoded.append((codes.float() * descale[:, None, :, None]).to(value.dtype))
+            decoded = roundtrip_inputs(q, k, v, selected)
             return kernel(*decoded, softmax_scale=scale, causal=False, num_splits=1)
 
         return roundtrip_call, {
             **common,
             "diagnostic_control": True,
-            "attention_compute": "BF16 after production FP8 Q/K/V quantize-dequantize",
-            "purpose": "separate QKV quantization error from FP8 attention arithmetic",
+            "attention_compute": "BF16 after selected production FP8 input quantize-dequantize",
+            "quantized_inputs": ["QKV"[index] for index in selected],
+            "unchanged_inputs": ["QKV"[index] for index in range(3) if index not in selected],
+            "purpose": "isolate input quantization from FP8 attention arithmetic",
             **_source(production_fp8.quantise, "cozy-runtime"),
         }
     # Explicit diagnostic coupling: measure the real quantizer on the same inputs.
