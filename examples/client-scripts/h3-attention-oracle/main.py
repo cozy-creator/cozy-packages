@@ -2,7 +2,7 @@
 # requires-python = ">=3.12,<3.13"
 # dependencies = ["cozy-runtime[media,minimax-h3]>=0.18.2,<1", "minimax-h3", "h3-attention-oracle"]
 # [tool.uv.sources]
-# minimax-h3 = {path = "../../../minimax-h3", editable = true}
+# minimax-h3 = {path = "../../../minimax-h3"}
 # h3-attention-oracle = {path = "."}
 # ///
 """Run actual-input attention comparisons as an ordinary unpublished client script.
