@@ -101,7 +101,7 @@ class Capture(support.Capture):
 
                 old = call(lora.LinearAdapters._apply)
                 new = call(candidate)
-                equal = torch.equal(old, new)
+                equal = torch.equal(old.view(torch.uint8), new.view(torch.uint8))
                 record = {
                     "byte_equal": equal,
                     "difference": support.error(new, old),

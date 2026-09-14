@@ -82,6 +82,11 @@ The first8209 actual input rows exercise two full4096-row tiles plus17 tail rows
 Both methods receive clones of one identical encoded-base output. The comparison
 uses the real factor stack and an explicit synthetic second negative-strength term
 with the same verified factors. Three warmups precede twelve interleaved timing
-pairs. Both cases must be byte-identical; source/factor hashes and a1GiB scratch
+pairs. Both cases compare uint8 views and must be byte-identical; source/factor hashes and a1GiB scratch
 bound are checked. Timings include output cloning and do not establish full-video
 speed. The request stops after one denoising step and never updates the worker.
+
+Historical run764 used `torch.equal` on floating outputs. Its original `byte_equal`
+field therefore means exact numerical equality, which does not distinguish signed
+zero. Preserve that report and its captured source; the updated byte-view check
+applies to future probes. Full-video/media hash parity is a separate observation.
