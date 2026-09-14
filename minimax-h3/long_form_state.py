@@ -79,14 +79,14 @@ class PrefixManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 def code_digest() -> str:
-    """Hash the installed H3 package's actual payload, excluding installer bookkeeping."""
+    """Hash installed workflow and builtin inference payloads, excluding bookkeeping."""
     distribution = importlib.metadata.distribution("minimax-h3")
     digest = hashlib.sha256()
     files = distribution.files
     if files is None:
         raise InvalidRequest("H3 package has no installed source inventory", code="prefix_code")
     names = {str(member) for member in files}
-    if not {"h3.py", "official.py", "long_form_state.py"}.issubset(names):
+    if not {"h3.py", "long_form_state.py"}.issubset(names):
         raise InvalidRequest(
             "prefix provenance needs the captured H3 wheel inventory", code="prefix_code"
         )
@@ -117,6 +117,35 @@ def code_digest() -> str:
         count += 1
     if count == 0:
         raise InvalidRequest("H3 package source inventory is empty", code="prefix_code")
+    # The Runtime version can stay constant during content-addressed development.
+    # Record the builtin's actual installed code/assets as well as its version.
+    runtime = importlib.metadata.distribution("cozy-runtime")
+    builtin_prefix = "cozy_runtime/models/minimax_h3/"
+    builtin_files = [
+        member for member in runtime.files or ()
+        if str(member).startswith(builtin_prefix)
+        and "__pycache__" not in PurePosixPath(str(member)).parts
+    ]
+    if not any(str(member) == builtin_prefix + "model.py" for member in builtin_files):
+        raise InvalidRequest("H3 builtin source inventory is unavailable", code="prefix_code")
+    for member in sorted(builtin_files, key=str):
+        path = PurePosixPath(str(member))
+        if path.is_absolute() or ".." in path.parts:
+            raise InvalidRequest("H3 builtin source inventory is not relative", code="prefix_code")
+        source = Path(runtime.locate_file(member))
+        if not source.is_file():
+            raise InvalidRequest("H3 builtin source file is unavailable", code="prefix_code")
+        size = source.stat().st_size
+        total += size
+        if total > 128 << 20:
+            raise InvalidRequest("H3 source inventory exceeds its bound", code="prefix_code")
+        name = ("cozy-runtime/" + str(path)).encode()
+        digest.update(len(name).to_bytes(4, "big"))
+        digest.update(name)
+        digest.update(size.to_bytes(8, "big"))
+        with source.open("rb") as stream:
+            while block := stream.read(1 << 20):
+                digest.update(block)
     return "sha256:" + digest.hexdigest()
 
 

@@ -34,7 +34,7 @@ from h3 import (
 )
 from h3_activation_trace import ACTIVE_TRACE, ActivationTrace, FirstStepCaptured
 from h3_resident_samples import resident_hashes
-from official import (
+from cozy_runtime.models.minimax_h3.official import (
     _DIT_COMPONENT,
     _TRUNK,
     MAX_FRAMES,

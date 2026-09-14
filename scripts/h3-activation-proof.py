@@ -24,7 +24,7 @@ from safetensors.torch import load, save  # noqa: E402
 import h3  # noqa: E402
 import h3_diagnostics  # noqa: E402
 from h3_activation_trace import ACTIVE_TRACE, ActivationTrace, FirstStepCaptured  # noqa: E402
-from official import OfficialH3Pipeline  # noqa: E402
+from cozy_runtime.models.minimax_h3.official import OfficialH3Pipeline  # noqa: E402
 
 
 class Block(torch.nn.Module):

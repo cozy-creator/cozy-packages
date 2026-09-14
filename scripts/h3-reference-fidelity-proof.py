@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
 
 from h3_tables.model_config import dual_full_config, parse_production_config  # noqa: E402
 
-from official import (  # noqa: E402
+from cozy_runtime.models.minimax_h3.official import (  # noqa: E402
     REFERENCE_IMAGE_SHORT_EDGE,
     OfficialH3Pipeline,
     _ScopedPipeline,

@@ -17,7 +17,7 @@ from torch.nn import functional as F
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "minimax-h3"))
 
-from turbo import LoRAFactors  # noqa: E402
+from cozy_runtime.models.minimax_h3.turbo import LoRAFactors  # noqa: E402
 
 
 def apply(

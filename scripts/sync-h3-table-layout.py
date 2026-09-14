@@ -3,6 +3,7 @@
 
 import argparse
 from pathlib import Path
+from importlib.resources import files
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -11,7 +12,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args()
-    source = ROOT / "minimax-h3/h3_table_layout.py"
+    source = files("cozy_runtime.models.minimax_h3").joinpath("table_layout.py")
     target = ROOT / "minimax-h3-tools/src/h3_tables/_table_layout.py"
     if args.write:
         target.write_bytes(source.read_bytes())

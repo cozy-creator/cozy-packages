@@ -39,7 +39,7 @@ from cozy_runtime.author._codec import encode_frame
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
 import h3
 from long_form_state import PrefixManifest, RenderProvenance, SoftwareVersion, compatible
-from official import FPS, frames_for
+from cozy_runtime.models.minimax_h3.official import FPS, frames_for
 
 WIDTH, HEIGHT, RATE = 96, 64, 32000
 SHOT_INTERFACE = "sha256:" + "5c" * 32
