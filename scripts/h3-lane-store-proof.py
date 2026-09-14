@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""H3 per-component lane treatments through the real Runtime WeightsSink and TensorFS.
+"""H3 per-component lane treatments through real Runtime-bound TensorFS handles.
 
 `minimax-h3-tools/scripts/lane-proof.py` proves the DECLARATIONS a lane makes, over the
 exact H3 census, on the author surface alone. This driver proves the BYTES and, above all,
 OBJECT IDENTITY: it mints a tiny synthetic H3-shaped source in a real `tensorfs.Store`,
-derives three lanes from it through the same `WeightsSink` a worker hands the job, and
-reads the committed CozyTensors headers back.
+derives three lanes through the native source/output capabilities a worker hands the job,
+and reads the committed CozyTensors headers back.
 
 The property it exists to establish is the one that decides whether a per-component lane is
 affordable at all: a component no lane treats keeps the SOURCE's exact stored objects in
