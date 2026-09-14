@@ -14,9 +14,18 @@ from typing import Any
 
 import numpy as np
 import tensorfs
-from cozy_runtime.author import Invocation, WeightsTransaction, attempt, canonical_json, script_app
+from cozy_runtime.author import (
+    Invocation,
+    ModelArtifact,
+    ObjectRef,
+    attempt,
+    canonical_json,
+    script_app,
+)
 from cozy_runtime.author._model import _derive_model
-from cozy_runtime.internal.weights_sink import WeightsTransactionHost
+from tensorfs.derived import DerivedTransaction
+
+from native_execution_fixture import NativeExecution
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
@@ -148,30 +157,37 @@ def main() -> None:
                 if interrupt and len(checkpoints) == 4:
                     raise RuntimeError("injected interruption after one shared tensor")
 
-            host = WeightsTransactionHost(
-                store=store,
-                owner_scope="shared-vae-proof",
-                request_id="repair",
-                invocation_spec_digest=tensorfs.object_id(b"invocation"),
-                work_fingerprint=tensorfs.object_id(b"same repair work"),
-                writer_session_id=epoch,
-                allowed_sources=dict(sources.values()),
-                output_bounds={name: repair.MAX_NEW_BYTES for name in models},
-                record_checkpoint=checkpoint,
-            )
-            return attempt(
-                app.get("main"),
-                {},
-                Invocation(
-                    "repair",
-                    root / f"attempt-{epoch}",
-                    time.monotonic() + 60,
-                    models=models,
-                    weights=host.open,
-                    weights_source_structure=host.structure,
-                    weights_source_config=host.config,
-                ),
-            )
+            artifacts = {
+                name: ModelArtifact(
+                    "source",
+                    "model",
+                    ObjectRef(model.checkpoint_ref, dict(sources.values())[model.checkpoint_ref]),
+                    "sha256:" + "11" * 32,
+                )
+                for name, model in models.items()
+            }
+            with NativeExecution(
+                store,
+                root,
+                "repair",
+                artifacts,
+                {name: repair.MAX_NEW_BYTES for name in models},
+                epoch=epoch,
+                after_checkpoint=checkpoint,
+            ) as execution:
+                return attempt(
+                    app.get("main"),
+                    {},
+                    Invocation(
+                        "repair",
+                        root / f"attempt-{epoch}",
+                        time.monotonic() + 60,
+                        models=models,
+                        tensorfs_output=execution.client.open_output,
+                        tensorfs_source=execution.client.source,
+                        tensorfs_adopt=execution.client.adopt_model,
+                    ),
+                )
 
         result, outcome, _ = invoke(1, interrupt=True)
         assert result is None and outcome.terminal == "failed", outcome
@@ -264,30 +280,31 @@ def main() -> None:
                 if interrupt:
                     raise RuntimeError("interrupted after first committed cast tensor")
 
-            host = WeightsTransactionHost(
-                store=store,
-                owner_scope="two-stage-proof",
-                request_id=module,
-                invocation_spec_digest=tensorfs.object_id(module.encode()),
-                work_fingerprint=tensorfs.object_id(module.encode()),
-                writer_session_id=epoch,
-                allowed_sources=allowed,
-                output_bounds=bounds,
-                record_checkpoint=checkpoint,
-            )
-            return attempt(
-                script_app(module).get("main"),
-                {},
-                Invocation(
-                    module,
-                    root / f"{module}-{epoch}",
-                    time.monotonic() + 60,
-                    models=models,
-                    weights=host.open,
-                    weights_source_structure=host.structure,
-                    weights_source_config=host.config,
-                ),
-            )
+            artifacts = {
+                name: ModelArtifact(
+                    "source",
+                    "model",
+                    ObjectRef(model.checkpoint_ref, allowed[model.checkpoint_ref]),
+                    "sha256:" + "11" * 32,
+                )
+                for name, model in models.items()
+            }
+            with NativeExecution(
+                store, root, module, artifacts, bounds, epoch=epoch, after_checkpoint=checkpoint
+            ) as execution:
+                return attempt(
+                    script_app(module).get("main"),
+                    {},
+                    Invocation(
+                        module,
+                        root / f"{module}-{epoch}",
+                        time.monotonic() + 60,
+                        models=models,
+                        tensorfs_output=execution.client.open_output,
+                        tensorfs_source=execution.client.source,
+                        tensorfs_adopt=execution.client.adopt_model,
+                    ),
+                )
 
         stage1_models = {"source": _derive_model(H3FullTransformer, sources["bf16-full"][0])}
         allowed = dict(sources.values())
@@ -316,7 +333,7 @@ def main() -> None:
             for name, manifest in attach_stage.SOURCES.items()
         }
         models["updated_bf16"] = _derive_model(H3FullTransformer, updated.manifest.digest)
-        transaction_type: Any = WeightsTransaction
+        transaction_type: Any = DerivedTransaction
         saved_add, saved_read = transaction_type.add_part, transaction_type.source_read_into
 
         def no_tensor_io(*_: Any, **__: Any) -> Any:

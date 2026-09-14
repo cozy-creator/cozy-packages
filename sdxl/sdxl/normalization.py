@@ -14,18 +14,21 @@ from cozy_runtime.author import (
     ModelArtifact,
     Telemetry,
     UnsupportedInput,
-    WeightsConfig,
-    WeightsPart,
-    WeightsPartSource,
-    WeightsSink,
-    WeightsSource,
-    WeightsTarget,
-    WeightsTensor,
-    WeightsTransaction,
     canonical_json,
     invocable,
 )
 from cozy_runtime.derive.quantization import QuantizationSource
+from tensorfs.derived import (
+    Config,
+    Derivation,
+    DerivedTransaction,
+    Part,
+    PartSource,
+    SourceInspection,
+    Target,
+    Tensor,
+    derive,
+)
 
 MAX_NEW_BYTES = 1 << 30
 MAX_PART_BYTES = 16 << 20
@@ -60,8 +63,12 @@ PLAN = msgspec.json.decode(
 )
 
 
-def _validate(source: WeightsSource, plan: NormalizationPlan) -> None:
-    observed = {(tensor.component, tensor.key): tensor for tensor in source.tensors}
+def _validate(source: SourceInspection, plan: NormalizationPlan) -> None:
+    observed = {
+        (component, key): tensor
+        for component, rows in source.components.items()
+        for key, tensor in rows.items()
+    }
     expected = {
         (component, key): spec
         for component, rows in plan.source.items()
@@ -71,19 +78,20 @@ def _validate(source: WeightsSource, plan: NormalizationPlan) -> None:
         raise UnsupportedInput("normalization requires the reviewed raw SDXL component key sets")
     for key, spec in expected.items():
         tensor = observed[key]
+        value = tensor.parts.get("value")
         if (
             tensor.logical_dtype != spec.dtype
             or tensor.shape != spec.shape
             or tensor.encoding != plan.plain
             or len(tensor.parts) != 1
-            or tensor.parts[0].name != "value"
-            or tensor.parts[0].dtype != spec.dtype
-            or tensor.parts[0].shape != spec.shape
+            or value is None
+            or value.dtype != spec.dtype
+            or tuple(value.shape) != spec.shape
         ):
             raise UnsupportedInput(f"normalization source geometry or encoding differs at {key}")
 
 
-def _bytes(transaction: WeightsTransaction, route: TensorRoute, spec: SourceTensor) -> bytes:
+def _bytes(transaction: DerivedTransaction, route: TensorRoute, spec: SourceTensor) -> bytes:
     size = math.prod(route.shape) * 2
     if spec.dtype != "f16" or not 0 < size <= MAX_PART_BYTES:
         raise UnsupportedInput("SDXL normalization role exceeds the reviewed fp16 byte bound")
@@ -119,52 +127,50 @@ def _validate_position_ids(raw: bytes, dtype: np.dtype[Any], count: int) -> None
         raise UnsupportedInput("SDXL source changed the constructor's position IDs")
 
 
-def _targets(plan: NormalizationPlan) -> dict[str, WeightsTarget]:
-    targets: dict[str, dict[str, WeightsTensor]] = {}
+def _targets(plan: NormalizationPlan) -> dict[str, Target]:
+    targets: dict[str, dict[str, Tensor]] = {}
     for route in plan.targets:
         graft = None
         if route.kind == "graft":
-            graft = WeightsPartSource("source", route.component, route.source_key, "value")
-        targets.setdefault(route.component, {})[route.key] = WeightsTensor(
+            graft = PartSource("source", route.component, route.source_key, "value")
+        targets.setdefault(route.component, {})[route.key] = Tensor(
             "f16",
             route.shape,
             plan.plain,
-            {"value": WeightsPart("f16", route.shape, source=graft)},
+            {"value": Part("f16", route.shape, source=graft)},
         )
     # Grafts already authorize their source component. Keep a base only when a
     # component has no graft, so its read/transpose routes retain that authority.
     return {
-        name: WeightsTarget(add=rows)
+        name: Target(add=rows)
         if any(
             part.source is not None for tensor in rows.values() for part in tensor.parts.values()
         )
-        else WeightsTarget(
-            source="source", source_component=name, drop=tuple(plan.source[name]), add=rows
-        )
+        else Target(source="source", source_component=name, drop=tuple(plan.source[name]), add=rows)
         for name, rows in targets.items()
     }
 
 
 def _normalize(
     source: QuantizationSource,
-    weights: WeightsSink,
     ctx: Context,
     tel: Telemetry,
     plan: NormalizationPlan,
 ) -> ModelArtifact:
-    _validate(weights.structure(source), plan)
+    source_capability = ctx.tensorfs_source(source)
+    _validate(source_capability.inspect(), plan)
     configs = {name: canonical_json.encode(value) for name, value in plan.configs.items()}
-    with weights.open(
-        "model",
-        sources={"source": source},
+    definition = Derivation(
+        sources={"source": source_capability},
         targets=_targets(plan),
-        configs={name: WeightsConfig(data=data) for name, data in configs.items()},
+        configs={name: Config("add") for name in configs},
         order=tuple((row.component, row.key) for row in plan.targets),
-    ) as transaction:
-        if transaction.replayed:
+    )
+    with derive(ctx.output("model"), definition) as transaction:
+        if transaction.receipt is not None:
             receipt = transaction.receipt
             assert receipt is not None
-            return receipt.artifact
+            return ctx.adopt_model(receipt)
         # The stock CLIP position IDs are reconstructed by the constructor. A checkpoint
         # that changed their values is outside this mapping even if its shapes still match.
         position = (
@@ -187,7 +193,7 @@ def _normalize(
                 memoryview(raw),
             )
             _validate_position_ids(bytes(raw), dtype, count)
-        completed = transaction.completed_parts
+        completed = set(transaction.completed_parts())
         for index, route in enumerate(plan.targets):
             ctx.raise_if_cancelled()
             if route.kind == "graft" or (route.component, route.key, "value") in completed:
@@ -196,12 +202,12 @@ def _normalize(
             transaction.add_part(route.component, route.key, "value", value)
             transaction.checkpoint()
             tel.progress((index + 1) / len(plan.targets), stage="normalize-sdxl")
-        completed_configs = transaction.completed_configs
+        completed_configs = set(transaction.completed_configs())
         for name, data in configs.items():
             if name not in completed_configs:
                 transaction.add_config(name, data)
                 transaction.checkpoint()
-        return transaction.commit().artifact
+        return ctx.adopt_model(transaction.receipt or transaction.commit())
 
 
 def _component_plan(plan: NormalizationPlan, component: Component) -> NormalizationPlan:
@@ -221,49 +227,51 @@ def _component_plan(plan: NormalizationPlan, component: Component) -> Normalizat
 
 def _assemble_normalized(
     sources: Mapping[str, QuantizationSource],
-    weights: WeightsSink,
     ctx: Context,
     plan: NormalizationPlan,
 ) -> ModelArtifact:
     if set(sources) != set(_COMPONENTS):
         raise UnsupportedInput("normalized SDXL assembly requires all four components")
-    configs: dict[str, WeightsConfig] = {}
+    configs: dict[str, Config] = {}
+    capabilities = {name: ctx.tensorfs_source(source) for name, source in sources.items()}
     for component in _COMPONENTS:
         ctx.raise_if_cancelled()
-        source = sources[component]
         selected = _component_plan(plan, component)
-        observed = weights.structure(source)
+        observed = capabilities[component].inspect()
+        observed_tensors = [
+            (name, key, tensor)
+            for name, rows in observed.components.items()
+            for key, tensor in rows.items()
+        ]
         expected_order = tuple((row.component, row.key) for row in selected.targets)
-        if (
-            tuple((row.component, row.key) for row in observed.tensors) != expected_order
-            or set(observed.configs) != set(selected.configs)
-        ):
+        if tuple((name, key) for name, key, _ in observed_tensors) != expected_order or set(
+            observed.configs
+        ) != set(selected.configs):
             raise UnsupportedInput(f"normalized {component} key, order or config set differs")
-        for actual, expected in zip(observed.tensors, selected.targets, strict=True):
+        for (_, _, actual), expected in zip(observed_tensors, selected.targets, strict=True):
+            value = actual.parts.get("value")
             if (
                 actual.logical_dtype != "f16"
                 or actual.shape != expected.shape
                 or actual.encoding != plan.plain
                 or len(actual.parts) != 1
-                or actual.parts[0].name != "value"
-                or actual.parts[0].dtype != "f16"
-                or actual.parts[0].shape != expected.shape
+                or value is None
+                or value.dtype != "f16"
+                or tuple(value.shape) != expected.shape
             ):
                 raise UnsupportedInput(f"normalized {component}.{expected.key} geometry differs")
-        for name, value in selected.configs.items():
-            if weights.config(source, name) != canonical_json.encode(value):
+        for name, config_value in selected.configs.items():
+            if observed.configs[name] != canonical_json.encode(config_value):
                 raise UnsupportedInput(f"normalized {component} config {name} differs")
-            configs[name] = WeightsConfig(source=component, source_config=name)
-    with weights.open(
-        "model",
-        sources=sources,
-        targets={
-            name: WeightsTarget(source=name, source_component=name) for name in _COMPONENTS
-        },
+            configs[name] = Config("copy", source=component, source_config=name)
+    definition = Derivation(
+        sources=capabilities,
+        targets={name: Target(source=name, source_component=name) for name in _COMPONENTS},
         configs=configs,
         order=tuple((row.component, row.key) for row in plan.targets),
-    ) as transaction:
-        return transaction.commit().artifact
+    )
+    with derive(ctx.output("model"), definition) as transaction:
+        return ctx.adopt_model(transaction.receipt or transaction.commit())
 
 
 @invocable(memoize=True)
@@ -272,11 +280,10 @@ async def normalize_component(
     *,
     source: QuantizationSource,
     component: Component,
-    weights: WeightsSink,
     tel: Telemetry,
 ) -> ModelArtifact:
     """Normalize one SDXL component with the original bounded byte transformations."""
-    return _normalize(source, weights, ctx, tel, _component_plan(PLAN, component))
+    return _normalize(source, ctx, tel, _component_plan(PLAN, component))
 
 
 @invocable(memoize=True)
@@ -287,12 +294,10 @@ async def assemble_normalized(
     text_encoder_2: QuantizationSource,
     unet: QuantizationSource,
     vae: QuantizationSource,
-    weights: WeightsSink,
 ) -> ModelArtifact:
     """Validate and graft normalized components into the exact SDXL construction order."""
     return _assemble_normalized(
         {"text_encoder": text_encoder, "text_encoder_2": text_encoder_2, "unet": unet, "vae": vae},
-        weights,
         ctx,
         PLAN,
     )

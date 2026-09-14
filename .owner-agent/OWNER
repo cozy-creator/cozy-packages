@@ -1,4 +1,4 @@
-owner: codex /root
-purpose: qualify standalone turbo producer from ordinary client script
-branch: fix/h3-turbo-producer-20260912
-base: eb70757c04e042af95b463282b76ba7804f9607f
+owner: /root/resume_queue_dev_diagnostics
+purpose: Ordinary default-home mixed-checkpoint rental qualification on parent-owned Nu13
+branch: audit/mixed-model-rental-qualification-20260913
+base: c75fb9a

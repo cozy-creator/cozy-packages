@@ -28,7 +28,6 @@ from cozy_runtime.author import (
     Telemetry,
     UnsupportedInput,
     WeightsOutput,
-    WeightsSink,
     uses_components,
 )
 from diffusers import (
@@ -549,7 +548,6 @@ def quantize(
     ctx: Context,
     payload: QuantizeInput,
     source: AnimaModel,
-    weights: WeightsSink,
     tel: Telemetry,
 ) -> QuantizedLanes:
     """Derive the requested row-wise DiT lanes from one reviewed BF16 source."""
@@ -563,7 +561,7 @@ def quantize(
                 _LANE_ENCODINGS[lane],
                 max_relative_frobenius=payload.max_relative_frobenius,
             ),
-            sink=weights, ctx=ctx, tel=tel, output=lane,
+            ctx=ctx, tel=tel, output=lane,
         )
         for lane in payload.lanes
     }

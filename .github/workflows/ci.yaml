@@ -23,7 +23,7 @@ jobs:
         run: |
           uv venv --python 3.12
           uv pip install --refresh-package cozy-runtime \
-            "cozy-runtime>=0.16.8,<1" \
+            "cozy-runtime>=0.18.0,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences
@@ -99,6 +99,9 @@ jobs:
 
       - name: Diagnostic hooks preserve outputs and stop explicitly
         run: PYTHONPATH=minimax-h3 minimax-h3/.venv/bin/python scripts/h3-activation-proof.py
+
+      - name: Private first-step probe preserves model output and RNG
+        run: minimax-h3/.venv/bin/python scripts/h3-first-step-proof.py
 
       - name: Reference fidelity survives conditioning
         run: CUDA_VISIBLE_DEVICES='' minimax-h3/.venv/bin/python scripts/h3-reference-fidelity-proof.py

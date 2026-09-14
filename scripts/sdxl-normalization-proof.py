@@ -21,20 +21,21 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "sdxl"))
 
 from cozy_runtime.author import (  # noqa: E402
+    ModelArtifact,
+    ObjectRef,
     UnsupportedInput,
     WeightsReceipt,
-    WeightsSink,
-    WeightsTransaction,
     canonical_json,
 )
 from cozy_runtime.author._model import _derive_model  # noqa: E402
-from cozy_runtime.author.fakes import fake_attempt, fake_context, fake_telemetry  # noqa: E402
+from cozy_runtime.author.fakes import fake_attempt, fake_telemetry  # noqa: E402
 from cozy_runtime.derive.quantization import QuantizationSource  # noqa: E402
 from cozy_runtime.internal.weights_sink import (  # noqa: E402
-    WeightsTransactionHost,
     protocol_receipt,
 )
+from tensorfs.derived import Config, Derivation, DerivedTransaction, Source  # noqa: E402
 
+from native_execution_fixture import NativeExecution  # noqa: E402
 from sdxl import normalization as norm  # noqa: E402
 from sdxl_normalization_plan import routes_for  # noqa: E402
 
@@ -119,107 +120,99 @@ def child(root: Path, mode: str) -> None:
     store = tensorfs.Store.open(root / "store")
     plan = tiny_plan()
     model = _derive_model(QuantizationSource, data["manifest"])
-    receipts: list[Any] = []
     reads: list[str] = []
 
     def checkpoint(_row: Any) -> None:
         if mode == "interrupt":
             os._exit(73)  # No Python cleanup; the native checkpoint is already durable.
 
-    host = WeightsTransactionHost(
-        store=store,
-        owner_scope="normalization-proof",
-        request_id="normalize",
-        invocation_spec_digest=tensorfs.object_id(b"normalization invocation"),
-        work_fingerprint=tensorfs.object_id(b"normalization implementation"),
-        writer_session_id={"interrupt": 1, "resume": 2, "replay": 3}[mode],
-        allowed_sources={data["manifest"]: data["length"]},
-        output_bounds={"model": norm.MAX_NEW_BYTES},
-        record_checkpoint=checkpoint,
-        record_receipt=receipts.append,
-    )
-    transaction = host.transaction_id("model")
-    prior = store.derived_lookup(transaction)
-    if mode != "interrupt" and prior.get("state") == "open":
-        store.derived_fence(transaction, prior["writer_session_id"])
-    attempt = fake_attempt("normalize", spool=root / ("spool-" + mode))
-    sink = WeightsSink(
-        attempt, {"source": model}, {"model": norm.MAX_NEW_BYTES}, host.open, host.structure
-    )
     original = norm._bytes
 
     def observe(
-        transaction: WeightsTransaction, route: norm.TensorRoute, spec: norm.SourceTensor
+        transaction: DerivedTransaction, route: norm.TensorRoute, spec: norm.SourceTensor
     ) -> bytes:
         reads.append(route.component + "/" + route.key)
-        return original(transaction, route, spec)
+        value = original(transaction, route, spec)
+        assert isinstance(value, bytes)
+        return value
 
-    norm._bytes = observe
-    try:
-        result = norm._normalize(model, sink, fake_context(), fake_telemetry(attempt), plan)
-    finally:
-        norm._bytes = original
-    receipt = receipts[-1]
-    (root / (mode + ".json")).write_text(
-        json.dumps(
-            {
-                "manifest": result.manifest.digest,
-                "length": result.manifest.length,
-                "transaction": transaction,
-                "replayed": receipt.replayed,
-                "transformed_roles": reads,
-            }
-        )
+    artifact = ModelArtifact(
+        "source", "model", ObjectRef(data["manifest"], data["length"]), "sha256:" + "11" * 32
     )
+    with NativeExecution(
+        store,
+        root,
+        "normalize",
+        {"source": artifact},
+        {"model": norm.MAX_NEW_BYTES},
+        epoch={"interrupt": 1, "resume": 2, "replay": 3}[mode],
+        after_checkpoint=checkpoint,
+    ) as execution:
+        norm._bytes = observe
+        try:
+            result = norm._normalize(
+                model, execution.context(), fake_telemetry(fake_attempt("normalize")), plan
+            )
+        finally:
+            norm._bytes = original
+        transaction = next(iter(execution.client.opened))
+        (root / (mode + ".json")).write_text(
+            json.dumps(
+                {
+                    "manifest": result.manifest.digest,
+                    "length": result.manifest.length,
+                    "transaction": transaction,
+                    "replayed": "model" in execution.replayed_outputs,
+                    "transformed_roles": reads,
+                }
+            )
+        )
 
 
 def component_equivalence(
-    root: Path, store: Any, plan: norm.NormalizationPlan,
-    manifest: str, length: int, reference: str,
+    root: Path, store: Any, plan: norm.NormalizationPlan, manifest: str, length: int, reference: str
 ) -> None:
-    def sink(
-        name: str, sources: dict[str, tuple[str, int]], maximum: int,
-    ) -> tuple[WeightsSink, dict[str, QuantizationSource], Any]:
-        host = WeightsTransactionHost(
-            store=store, owner_scope="normalization-components", request_id=name,
-            invocation_spec_digest=tensorfs.object_id(b"component normalization proof"),
-            work_fingerprint=tensorfs.object_id(name.encode()), writer_session_id=1,
-            allowed_sources={digest: size for digest, size in sources.values()},
-            output_bounds={"model": maximum},
+    def execution(name: str, sources: dict[str, tuple[str, int]], maximum: int) -> NativeExecution:
+        return NativeExecution(
+            store,
+            root,
+            name,
+            {
+                key: ModelArtifact(
+                    "source", "model", ObjectRef(digest, size), "sha256:" + "11" * 32
+                )
+                for key, (digest, size) in sources.items()
+            },
+            {"model": maximum},
         )
-        models = {
-            key: _derive_model(QuantizationSource, value[0]) for key, value in sources.items()
-        }
-        attempt = fake_attempt(name, spool=root / ("spool-" + name))
-        weights = WeightsSink(
-            attempt, models, {"model": maximum}, host.open, host.structure,
-            source_config=host.config,
-        )
-        return weights, models, attempt
 
     parts: dict[str, tuple[str, int]] = {}
+    model = _derive_model(QuantizationSource, manifest)
     for component in norm._COMPONENTS:
-        weights, models, attempt = sink(
-            "component-" + component, {"source": (manifest, length)}, norm.MAX_NEW_BYTES,
-        )
-        result = norm._normalize(
-            models["source"], weights, fake_context(), fake_telemetry(attempt),
-            norm._component_plan(plan, component),
-        )
-        parts[component] = (result.manifest.digest, result.manifest.length)
-    weights, models, _ = sink("component-assembly", parts, 0)
-    result = norm._assemble_normalized(models, weights, fake_context(), plan)
-    assert result.manifest.digest == reference
+        with execution(
+            "component-" + component, {"source": (manifest, length)}, norm.MAX_NEW_BYTES
+        ) as owner:
+            result = norm._normalize(
+                model,
+                owner.context(),
+                fake_telemetry(fake_attempt(component)),
+                norm._component_plan(plan, component),
+            )
+            parts[component] = (result.manifest.digest, result.manifest.length)
+    models = {key: _derive_model(QuantizationSource, digest) for key, (digest, _) in parts.items()}
+    with execution("component-assembly", parts, 0) as owner:
+        result = norm._assemble_normalized(models, owner.context(), plan)
+        assert result.manifest.digest == reference
 
-    # A valid component artifact cannot be accepted under another component slot.
     wrong = {**parts, "vae": parts["unet"]}
-    weights, models, _ = sink("component-wrong-slot", wrong, 0)
-    try:
-        norm._assemble_normalized(models, weights, fake_context(), plan)
-    except UnsupportedInput:
-        pass
-    else:
-        raise AssertionError("assembly accepted a component in the wrong slot")
+    models = {key: _derive_model(QuantizationSource, digest) for key, (digest, _) in wrong.items()}
+    with execution("component-wrong-slot", wrong, 0) as owner:
+        try:
+            norm._assemble_normalized(models, owner.context(), plan)
+        except UnsupportedInput:
+            pass
+        else:
+            raise AssertionError("assembly accepted a component in the wrong slot")
 
 
 def full_metadata_receipt_limits() -> None:
@@ -235,11 +228,13 @@ def full_metadata_receipt_limits() -> None:
             plan = norm._component_plan(norm.PLAN, component)
             targets = norm._targets(plan)
             declaration = store.derived_declaration(
-                {"source": ("sha256:" + "0" * 64, 164)},
-                {name: WeightsTransactionHost._target(target) for name, target in targets.items()},
-                {name: {"kind": "add"} for name in plan.configs},
-                [(route.component, route.key) for route in plan.targets],
-                norm.MAX_NEW_BYTES, work_fingerprint="sha256:" + "1" * 64,
+                *Derivation(
+                    {"source": Source("sha256:" + "0" * 64, 164)},
+                    targets,
+                    {name: Config("add") for name in plan.configs},
+                    [(route.component, route.key) for route in plan.targets],
+                ).native_arguments(norm.MAX_NEW_BYTES),
+                work_fingerprint="sha256:" + "1" * 64,
             )
             assert len(declaration) <= 1 << 20
             # Each bounded non-graft role can add at most one16MiB object; treating
@@ -249,22 +244,38 @@ def full_metadata_receipt_limits() -> None:
                 for index, route in enumerate(plan.targets)
                 if route.kind != "graft"
             ]
-            native = canonical_json.encode({
-                "added_objects": added, "declaration": canonical_json.decode(declaration),
-                "header": ref, "manifest": ref,
-                "inherit_observation": {
-                    "bytes": 6937666560, "hashes": 0, "objects": 2641, "reads": 0,
-                },
-                "sources": [{"alias": "source", "components": [component],
-                             "header": ref, "manifest": ref}],
-                "transaction_id": "sha256:" + "2" * 64,
-            })
+            native = canonical_json.encode(
+                {
+                    "added_objects": added,
+                    "declaration": canonical_json.decode(declaration),
+                    "header": ref,
+                    "manifest": ref,
+                    "inherit_observation": {
+                        "bytes": 6937666560,
+                        "hashes": 0,
+                        "objects": 2641,
+                        "reads": 0,
+                    },
+                    "sources": [
+                        {
+                            "alias": "source",
+                            "components": [component],
+                            "header": ref,
+                            "manifest": ref,
+                        }
+                    ],
+                    "transaction_id": "sha256:" + "2" * 64,
+                }
+            )
             _, wrapped, _ = protocol_receipt(
                 WeightsReceipt(
-                    "model", "sha256:" + "2" * 64,
-                    canonical_json.digest(canonical_json.decode(native)), native,
+                    "model",
+                    "sha256:" + "2" * 64,
+                    canonical_json.digest(canonical_json.decode(native)),
+                    native,
                 ),
-                owner_scope="cozy-local-client", request_id="job-" + "3" * 24,
+                owner_scope="cozy-local-client",
+                request_id="job-" + "3" * 24,
                 invocation_spec_digest="sha256:" + "4" * 64,
             )
             assert len(wrapped) <= 1 << 20, (component, len(declaration), len(wrapped))
@@ -352,24 +363,34 @@ def main() -> None:
             assert actual == expected, route.key
         probe.fence()
         store.derived_abandon(probe_id)
-        host = WeightsTransactionHost(
-            store=store,
-            owner_scope="normalization-proof",
-            request_id="refusal",
-            invocation_spec_digest=tensorfs.object_id(b"refusal invocation"),
-            work_fingerprint=tensorfs.object_id(b"refusal implementation"),
-            writer_session_id=1,
-            allowed_sources={manifest: length},
-            output_bounds={"model": norm.MAX_NEW_BYTES},
-        )
-        observed = host.structure(manifest)
+        with (
+            NativeExecution(
+                store,
+                root,
+                "refusal",
+                {
+                    "source": ModelArtifact(
+                        "source", "model", ObjectRef(manifest, length), "sha256:" + "11" * 32
+                    )
+                },
+                {"model": norm.MAX_NEW_BYTES},
+            ) as owner,
+            owner.client.source(manifest) as capability,
+        ):
+            observed = capability.inspect()
+        first_component = next(iter(observed.components))
+        first_key = next(iter(observed.components[first_component]))
+        wrong_rows = dict(observed.components[first_component])
+        wrong_rows[first_key] = replace(wrong_rows[first_key], encoding="wrong")
         for bad in (
-            replace(observed, tensors=observed.tensors[:-1]),
-            replace(observed, configs=("unexpected",)),
             replace(
                 observed,
-                tensors=(replace(observed.tensors[0], encoding="wrong"), *observed.tensors[1:]),
+                components={
+                    key: rows for key, rows in observed.components.items() if key != first_component
+                },
             ),
+            replace(observed, configs={"unexpected": b"{}"}),
+            replace(observed, components={**observed.components, first_component: wrong_rows}),
         ):
             try:
                 norm._validate(bad, plan)
@@ -380,31 +401,27 @@ def main() -> None:
         bad_store = tensorfs.Store.init(root / "bad-positions")
         bad_manifest, bad_length, _ = source(bad_store, plan, bad_positions=True)
         bad_model = _derive_model(QuantizationSource, bad_manifest)
-        bad_host = WeightsTransactionHost(
-            store=bad_store,
-            owner_scope="normalization-proof",
-            request_id="bad-positions",
-            invocation_spec_digest=tensorfs.object_id(b"bad positions invocation"),
-            work_fingerprint=tensorfs.object_id(b"bad positions implementation"),
-            writer_session_id=1,
-            allowed_sources={bad_manifest: bad_length},
-            output_bounds={"model": norm.MAX_NEW_BYTES},
-        )
-        bad_attempt = fake_attempt("bad-positions", spool=root / "bad-spool")
-        bad_sink = WeightsSink(
-            bad_attempt,
-            {"source": bad_model},
+        with NativeExecution(
+            bad_store,
+            root,
+            "bad-positions",
+            {
+                "source": ModelArtifact(
+                    "source", "model", ObjectRef(bad_manifest, bad_length), "sha256:" + "11" * 32
+                )
+            },
             {"model": norm.MAX_NEW_BYTES},
-            bad_host.open,
-            bad_host.structure,
-        )
-        try:
-            norm._normalize(bad_model, bad_sink, fake_context(), fake_telemetry(bad_attempt), plan)
-        except UnsupportedInput as error:
-            assert "position IDs" in str(error)
-        else:
-            raise AssertionError("changed position-ID values were discarded")
-        assert bad_store.derived_lookup(bad_host.transaction_id("model"))["state"] != "committed"
+        ) as owner:
+            try:
+                norm._normalize(
+                    bad_model, owner.context(), fake_telemetry(fake_attempt("bad-positions")), plan
+                )
+            except UnsupportedInput as error:
+                assert "position IDs" in str(error)
+            else:
+                raise AssertionError("changed position-ID values were discarded")
+            transaction = next(iter(owner.client.opened))
+            assert bad_store.derived_lookup(transaction)["state"] != "committed"
     print(
         json.dumps(
             {
@@ -413,8 +430,8 @@ def main() -> None:
                 "completed_role_not_repeated": True,
                 "replayed_role_reads": 0,
                 "graft_identity_preserved": True,
-                    "component_assembly_equals_monolithic": True,
-                    "wrong_component_slot_refused": True,
+                "component_assembly_equals_monolithic": True,
+                "wrong_component_slot_refused": True,
                 "split_transpose_reshape_bits_exact": True,
                 "unreviewed_sources_refused": True,
                 "changed_position_ids_refused": True,

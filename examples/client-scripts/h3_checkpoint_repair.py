@@ -20,17 +20,12 @@ import math
 from collections.abc import Mapping
 
 from cozy_runtime.author import (
+    Context,
     Model,
     ModelArtifact,
     Telemetry,
-    WeightsConfig,
-    WeightsPart,
-    WeightsSink,
-    WeightsSourceTensor,
-    WeightsTarget,
-    WeightsTensor,
-    WeightsTransaction,
 )
+from tensorfs.derived import Config, Derivation, DerivedTransaction, Part, Target, Tensor
 
 # A half swap is an involution. Only these recorded bad roots may enter this
 # migration; a repaired or independently converted source must never be swapped again.
@@ -59,33 +54,33 @@ MAX_NEW_BYTES = 32 << 30
 
 
 def _declaration(
-    tensor: WeightsSourceTensor, variant: str, encodings: Mapping[str, str]
-) -> WeightsTensor:
+    tensor: Tensor, variant: str, encodings: Mapping[str, str], *, component: str, key: str
+) -> Tensor:
     if (
         tensor.logical_dtype != "bf16"
         or len(tensor.shape) != 2
         or min(tensor.shape) <= 0
         or tensor.shape[0] % 2
     ):
-        raise ValueError(f"unexpected H3 FC1 geometry: {tensor.component}/{tensor.key}")
-    parts = {part.name: WeightsPart(part.dtype, part.shape) for part in tensor.parts}
-    if parts == {"value": WeightsPart("bf16", tensor.shape)}:
+        raise ValueError(f"unexpected H3 FC1 geometry: {component}/{key}")
+    parts = dict(tensor.parts)
+    if parts == {"value": Part("bf16", tensor.shape)}:
         encoding = encodings["plain"]
     else:
         scale = (
-            WeightsPart("f32", (tensor.shape[0],))
+            Part("f32", (tensor.shape[0],))
             if variant == "fp8"
-            else WeightsPart("u8", (tensor.shape[0], tensor.shape[1] // 32))
+            else Part("u8", (tensor.shape[0], tensor.shape[1] // 32))
         )
-        expected = {"data": WeightsPart("f8_e4m3fn", tensor.shape), "scale": scale}
+        expected = {"data": Part("f8_e4m3fn", tensor.shape), "scale": scale}
         if variant == "plain" or parts != expected or (variant == "mxfp8" and tensor.shape[1] % 32):
-            raise ValueError(f"unexpected H3 FC1 roles: {tensor.component}/{tensor.key}")
+            raise ValueError(f"unexpected H3 FC1 roles: {component}/{key}")
         encoding = encodings[variant]
-    return WeightsTensor(tensor.logical_dtype, tensor.shape, encoding, parts)
+    return Tensor(tensor.logical_dtype, tensor.shape, encoding, parts)
 
 
 def _read_swapped(
-    transaction: WeightsTransaction, component: str, key: str, role: str, length: int
+    transaction: DerivedTransaction, component: str, key: str, role: str, length: int
 ) -> bytearray:
     """One bounded role buffer; no source callback re-enters a locked native writer."""
     if length <= 0 or length > MAX_ROLE_BYTES or length % 2:
@@ -108,50 +103,56 @@ def _read_swapped(
 
 
 def repair(
-    source: Model[object], artifacts: WeightsSink, tel: Telemetry, encodings: Mapping[str, str]
+    source: Model[object], ctx: Context, tel: Telemetry, encodings: Mapping[str, str]
 ) -> ModelArtifact:
     variant = SOURCES.get(source.checkpoint_ref)
     if variant is None:
         raise ValueError(
             "repair accepts only the four recorded H3 checkpoints with unswapped FC1 rows"
         )
-    structure = artifacts.structure(source)
-    targets: dict[str, WeightsTarget] = {}
-    changed: dict[tuple[str, str], WeightsTensor] = {}
-    for tensor in structure.tensors:
-        targets.setdefault(
-            tensor.component, WeightsTarget(source="source", source_component=tensor.component)
-        )
-        if tensor.component in COMPONENTS and tensor.key in FC1_KEYS:
-            changed[tensor.component, tensor.key] = _declaration(tensor, variant, encodings)
+    with ctx.tensorfs_source(source) as capability:
+        structure = capability.inspect()
+    targets: dict[str, Target] = {}
+    changed: dict[tuple[str, str], Tensor] = {}
+    for component, tensors in structure.components.items():
+        targets[component] = Target(source="source", source_component=component)
+        for key, tensor in tensors.items():
+            if component in COMPONENTS and key in FC1_KEYS:
+                changed[component, key] = _declaration(
+                    tensor, variant, encodings, component=component, key=key
+                )
     wanted = {(component, key) for component in COMPONENTS for key in FC1_KEYS}
     if set(changed) != wanted:
         raise ValueError("repair source does not contain all 104 declared H3 FC1 matrices")
     for component in COMPONENTS:
         additions = {key: row for (owner, key), row in changed.items() if owner == component}
-        targets[component] = WeightsTarget(
+        targets[component] = Target(
             source="source",
             source_component=component,
             drop=tuple(additions),
             add=additions,
         )
     configs = {
-        name: WeightsConfig(source="source", source_config=name) for name in structure.configs
+        name: Config("copy", source="source", source_config=name) for name in structure.configs
     }
-    order = tuple((tensor.component, tensor.key) for tensor in structure.tensors)
+    order = tuple(
+        (component, key) for component, rows in structure.components.items() for key in rows
+    )
     source_bytes, replayed_parts = 0, 0
-    with artifacts.open(
-        "checkpoint",
-        sources={"source": source},
-        targets=targets,
-        configs=configs,
-        order=order,
+    with ctx.output("checkpoint").open(
+        Derivation(
+            sources={"source": structure.source},
+            targets=targets,
+            configs=configs,
+            order=order,
+        )
     ) as transaction:
-        if transaction.replayed:
+        replayed = transaction.receipt is not None
+        if transaction.receipt is not None:
             receipt = transaction.receipt
             assert receipt is not None
         else:
-            completed = transaction.completed_parts
+            completed = transaction.completed_parts()
             for index, ((component, key), declaration) in enumerate(changed.items()):
                 for role, part in declaration.parts.items():
                     if (component, key, role) in completed:
@@ -165,17 +166,18 @@ def repair(
                 transaction.checkpoint()
                 tel.progress((index + 1) / len(changed), stage="repair-fc1")
             receipt = transaction.commit()
+    artifact = ctx.adopt_model(receipt)
     tel.log(
         "H3 checkpoint repaired",
         source_checkpoint=source.checkpoint_ref,
-        checkpoint=receipt.artifact.manifest.digest,
+        checkpoint=artifact.manifest.digest,
         repaired_tensors=len(changed),
         source_bytes_read_this_run=source_bytes,
         replayed_parts=replayed_parts,
-        replayed=transaction.replayed,
+        replayed=replayed,
     )
-    return receipt.artifact
+    return artifact
 
 
-def main(*, source: Model[object], artifacts: WeightsSink, tel: Telemetry) -> ModelArtifact:
-    return repair(source, artifacts, tel, ENCODINGS)
+def main(*, source: Model[object], ctx: Context, tel: Telemetry) -> ModelArtifact:
+    return repair(source, ctx, tel, ENCODINGS)

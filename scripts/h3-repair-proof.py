@@ -14,10 +14,11 @@ from pathlib import Path
 from typing import Any
 
 import tensorfs
-from cozy_runtime.author import Model, WeightsSink
+from cozy_runtime.author import Model, ModelArtifact, ObjectRef
 from cozy_runtime.author._model import _derive_model
 from cozy_runtime.author.fakes import fake_attempt, fake_telemetry
-from cozy_runtime.internal.weights_sink import WeightsTransactionHost
+
+from native_execution_fixture import NativeExecution
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "examples" / "client-scripts"))
@@ -116,7 +117,6 @@ def exercise(root: Path, variant: str) -> None:
     checkpoints: list[Any] = []
 
     def invoke(epoch: int, interrupt: bool = False) -> Any:
-        receipts: list[Any] = []
         reads: list[int] = []
         read_swapped = repair._read_swapped
 
@@ -131,39 +131,40 @@ def exercise(root: Path, variant: str) -> None:
             if interrupt:
                 raise RuntimeError("injected interruption after a native checkpoint")
 
-        host = WeightsTransactionHost(
-            store=store,
-            owner_scope="repair-proof",
-            request_id="repair-" + variant,
-            invocation_spec_digest=tensorfs.object_id(b"repair invocation"),
-            work_fingerprint=tensorfs.object_id(("repair-work-" + variant).encode()),
-            writer_session_id=epoch,
-            allowed_sources={source: length},
-            output_bounds={"checkpoint": repair.MAX_NEW_BYTES},
-            record_checkpoint=checkpoint,
-            record_receipt=receipts.append,
+        artifact = ModelArtifact(
+            "source", "model", ObjectRef(source, length), "sha256:" + "11" * 32
         )
-        structure_order = [(row.component, row.key) for row in host.structure(source).tensors]
-        assert structure_order == source_order, "source structure changed construction order"
-        attempt = fake_attempt("repair-" + variant, spool=root / f"spool-{epoch}")
-        sink = WeightsSink(
-            attempt,
-            {"source": model},
+        with NativeExecution(
+            store,
+            root,
+            "repair-" + variant,
+            {"source": artifact},
             {"checkpoint": repair.MAX_NEW_BYTES},
-            host.open,
-            host.structure,
-        )
-        repair._read_swapped = observed_read
-        try:
-            result = repair.main(source=model, artifacts=sink, tel=fake_telemetry(attempt))
-        finally:
-            repair._read_swapped = read_swapped
-        return result, receipts[-1], reads
+            epoch=epoch,
+            after_checkpoint=checkpoint,
+        ) as execution:
+            with execution.client.source(source) as capability:
+                structure = capability.inspect()
+            structure_order = [
+                (component, key) for component, rows in structure.components.items() for key in rows
+            ]
+            assert structure_order == source_order, "source structure changed construction order"
+            record = fake_attempt("repair-" + variant, spool=root / f"spool-{epoch}")
+            repair._read_swapped = observed_read
+            try:
+                result = repair.main(
+                    ctx=execution.context(), source=model, tel=fake_telemetry(record)
+                )
+            finally:
+                repair._read_swapped = read_swapped
+            transaction = next(iter(execution.client.opened))
+            receipt = store.derived_lookup(transaction)["receipt"]
+        return result, receipt, reads
 
     try:
         invoke(2, interrupt=True)
-    except Exception as error:
-        assert "injected interruption" in str(error), error
+    except tensorfs.errors.Refusal as error:
+        assert error.code == "IO_FAILED" and len(checkpoints) == 1, error
     else:
         raise AssertionError("native checkpoint interruption did not fire")
     assert len(checkpoints) == 1
@@ -171,9 +172,9 @@ def exercise(root: Path, variant: str) -> None:
     changed_roles = sum(key in repair.FC1_KEYS for _, key, _ in values)
     assert 0 < len(resumed_reads) < changed_roles, "completed parts were read again"
     replayed, replayed_receipt, replayed_reads = invoke(4)
-    assert replayed_receipt.replayed and not replayed_reads
+    assert replayed_receipt == resumed_receipt and not replayed_reads
     assert replayed == resumed
-    facts = store.derived_lookup(resumed_receipt.weights_transaction_id)["receipt"]
+    facts = store.derived_lookup(resumed_receipt["transaction_id"])["receipt"]
     manifest = "sha256:" + facts["manifest"]["sha256"]
     produced_header = store.manifest(manifest)["header"]
     assert produced_header is not None, "repaired model has no CozyTensors header"
