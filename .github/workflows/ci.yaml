@@ -23,7 +23,7 @@ jobs:
         run: |
           uv venv --python 3.12
           uv pip install --refresh-package cozy-runtime \
-            "cozy-runtime>=0.18.0,<1" \
+            "cozy-runtime>=0.18.2,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences
@@ -94,6 +94,17 @@ jobs:
 
       - name: Arms
         run: minimax-h3/.venv/bin/python scripts/h3-conform.py
+
+      - name: Native long-form assembly and prefix recovery
+        run: |
+          minimax-h3/.venv/bin/python scripts/h3-assembly-proof.py "$RUNNER_TEMP/h3-assembly"
+          minimax-h3/.venv/bin/python scripts/h3-longform-proof.py "$RUNNER_TEMP/h3-prefix"
+        env:
+          CUDA_VISIBLE_DEVICES: ""
+          OMP_NUM_THREADS: "2"
+          MKL_NUM_THREADS: "2"
+          OPENBLAS_NUM_THREADS: "2"
+
       - name: PDD Ulysses parity at degrees two and four
         run: minimax-h3/.venv/bin/python scripts/h3-turbo-cp-proof.py
 
