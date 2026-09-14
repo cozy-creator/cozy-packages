@@ -10,6 +10,9 @@ model. Its native output grant is 4KiB; each checkpoint has 32 bytes of tensor p
 plus a native header and inline JSON config. All imports are at module scope.
 The independently captured package lives in `library/`; caller scripts stay
 outside that project so editing their scenarios does not invalidate its memo key.
+Runtime0.17.2 is the minimum published version supporting the model-free bounded
+seed script. Numerical qualification used the same Python code on0.17.2 before
+this requirement-metadata floor was corrected; unrelated package floors are unchanged.
 
 ## Prepare the published default
 
