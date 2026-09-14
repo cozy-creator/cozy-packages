@@ -82,6 +82,13 @@ def roundtrip_inputs(q: Any, k: Any, v: Any, selected: tuple[int, ...]) -> tuple
     return values[0], values[1], values[2]
 
 
+def center_keys(k: Any) -> Any:
+    """Remove one FP32 sequence mean per batch/head/channel without changing the input."""
+    mean = k.mean(dim=1, keepdim=True, dtype=torch.float32)
+    centered = k.to(torch.float32, copy=True)
+    return centered.sub_(mean)
+
+
 def build_quantized(
     name: str, q: Any, k: Any, v: Any, *, scale: float
 ) -> tuple[Callable[[], Any], dict[str, Any]]:
@@ -98,6 +105,9 @@ def build_quantized(
         "fa3_q_roundtrip",
         "fa3_k_roundtrip",
         "fa3_v_roundtrip",
+        "fa3_k_center_bf16",
+        "fa3_k_center_roundtrip",
+        "fa3_k_center_tile128_fp8",
         "fa3_fp8_splits2",
         "fa3_fp8_splits4",
         "fa3_twolevel_fp8",
@@ -168,6 +178,53 @@ def build_quantized(
     kernel = dispatch._HUB_KERNELS_REGISTRY[dispatch.AttentionBackendName._FLASH_3_HUB].kernel_fn
     if not callable(kernel):
         raise OptionalBackendUnavailable("The measured production FA3 kernel is not loaded")
+    if name in {"fa3_k_center_bf16", "fa3_k_center_roundtrip", "fa3_k_center_tile128_fp8"}:
+        provenance: dict[str, Any] = {}
+        if name == "fa3_k_center_tile128_fp8":
+            centered_kernel, provenance = candidate_kernel("tile128")
+
+        def centered_call() -> Any:
+            centered = center_keys(k)
+            if name == "fa3_k_center_tile128_fp8":
+                q8, qs = production_fp8.quantise(q)
+                k8, ks = production_fp8.quantise(centered)
+                del centered
+                v8, vs = production_fp8.quantise(v)
+                return centered_kernel(
+                    q8,
+                    k8,
+                    v8,
+                    softmax_scale=scale,
+                    causal=False,
+                    num_splits=1,
+                    q_descale=qs,
+                    k_descale=ks,
+                    v_descale=vs,
+                )
+            if name == "fa3_k_center_roundtrip":
+                _, centered, _ = roundtrip_inputs(q, centered, v, (1,))
+            return kernel(
+                q, centered.to(k.dtype), v, softmax_scale=scale, causal=False, num_splits=1
+            )
+
+        return centered_call, {
+            **common,
+            **provenance,
+            "diagnostic_control": True,
+            "key_centering": "FP32 mean over sequence for each batch/head/channel; not restored",
+            "mean_shape": [q.shape[0], 1, q.shape[2], q.shape[3]],
+            "mathematical_invariant": "shared key shift adds one constant per softmax query row",
+            "attention_compute": "corrected tile128 FP8" if name.endswith("fp8") else "BF16",
+            "quantized_inputs": (
+                ["Q", "centered K", "V"]
+                if name.endswith("fp8")
+                else ["centered K"]
+                if name.endswith("roundtrip")
+                else []
+            ),
+            "quantizer": _source(production_fp8.quantise, "cozy-runtime"),
+            "timing_scope": "centering and any quantization/dequantization inside every timed call",
+        }
     if name in {"fa3_twolevel_fp8", "fa3_tile128_fp8"}:
         candidate, provenance = candidate_kernel(name.split("_")[1])
 
