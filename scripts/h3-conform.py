@@ -3323,7 +3323,7 @@ def arm_interface() -> None:
             for field in jobs["long_form"]["request"]["fields"]
             if field["name"] == "shots"
         ),
-        {"max_length": MAX_SHOTS, "min_length": 2},
+        {"max_length": MAX_SHOTS, "min_length": 1},
     )
     check(
         "a long-form shot defaults to the longest served cell, not the cheapest",

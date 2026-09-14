@@ -275,6 +275,24 @@ def main() -> None:
     root.mkdir(parents=True, exist_ok=False)
     store = tensorfs.Store.init(root / "tensorfs")
     shots = [h3.Shot(f"The rover reaches landmark {index}.", 1000 + index, 5) for index in range(4)]
+    result, outcome, calls = _drive(root / "single", shots[:1])
+    assert outcome.terminal == "succeeded", outcome
+    single = result.result
+    assert single.complete and single.delivered == single.requested == 1
+    assert single.reused == 0 and len(calls) == 1 and single.failed_index == -1
+    assert single.delivered_frames == 124
+    check_video(single.video, 124)
+    single_prefix = persist_prefix(store, single.prefix, root / "retained-single", "single")
+    result, outcome, calls = _drive(root / "second", shots[:2], resume=single_prefix)
+    assert outcome.terminal == "succeeded", outcome
+    second = result.result
+    assert second.complete and second.delivered == 2 and second.reused == 1
+    assert len(calls) == 1 and second.segments[:1] == single.segments
+    sent = json.loads(calls[0]["payload"])["payload"]
+    assert sent["first_frame"] == single.segments[0].continuation_frame_digest
+    assert sent["expected_provenance"] == msgspec.to_builtins(PROVENANCE)
+    check_video(second.video, 247)
+
     result, outcome, calls = _drive(root / "partial", shots, fail_at=2)
     assert outcome.terminal == "succeeded", outcome
     partial = result.result
@@ -326,6 +344,10 @@ def main() -> None:
         receipt.child_request_id for receipt in partial.segments
     ]
     facts = {
+        "single_frames": single.delivered_frames,
+        "single_prefix": single_prefix.digest,
+        "single_extension_reused": second.reused,
+        "single_extension_rendered": 1,
         "partial_frames": partial.delivered_frames,
         "completed_frames": completed.delivered_frames,
         "reused_shots": completed.reused,
