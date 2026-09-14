@@ -66,7 +66,6 @@ from cozy_runtime.author import (
     Telemetry,
     UnsupportedInput,
     WeightsOutput,
-    WeightsSink,
     uses_components,
 )
 from diffusers import AutoencoderKL, EulerDiscreteScheduler, UNet2DConditionModel
@@ -649,7 +648,6 @@ def quantize(
     ctx: Context,
     payload: QuantizeInput,
     source: SdxlModel,
-    weights: WeightsSink,
     tel: Telemetry,
 ) -> QuantizedLanes:
     """Derive the requested row-wise UNet lanes from one reviewed BF16 source.
@@ -667,7 +665,7 @@ def quantize(
                 _LANE_ENCODINGS[lane],
                 max_relative_frobenius=payload.max_relative_frobenius,
             ),
-            sink=weights, ctx=ctx, tel=tel, output=lane,
+            ctx=ctx, tel=tel, output=lane,
         )
         for lane in payload.lanes
     }

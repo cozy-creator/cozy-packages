@@ -9,21 +9,23 @@ The callable still parses its real assets and builds its real output declaration
 from __future__ import annotations
 
 from contextlib import nullcontext
-from dataclasses import replace
 from typing import Any
 
-from cozy_runtime.author import (
-    WeightsReceipt,
-    WeightsSource,
-    WeightsSourcePart,
-    WeightsSourceTensor,
-)
+import torch
 from cozy_runtime.derive.quantization import (
     QuantizationStats,
     prepare_quantization,
 )
-from h3_tables import job
+from h3_tables import job, lanes
 from h3_tables.quantization import h3_quantization_plan
+from h3_tables.source import TARGET_COMPONENT, H3FullTransformer, full_targets
+from tensorfs.derived import (
+    Part,
+    Source,
+    SourceCapability,
+    SourceInspection,
+    Tensor,
+)
 
 
 class Interrupted(RuntimeError):
@@ -35,7 +37,7 @@ class Transaction:
         self.owner, self.slot = owner, slot
         self.replayed = slot in owner.committed
         prior = owner.committed.get(slot)
-        self.receipt = replace(prior, replayed=True) if prior else None
+        self.receipt = dict(prior) if prior else None
         self.configured = False
 
     def __enter__(self) -> Transaction:
@@ -48,10 +50,12 @@ class Transaction:
         assert not self.replayed and name == "model" and raw
         self.configured = True
 
-    def commit(self) -> WeightsReceipt:
+    def commit(self) -> dict[str, Any]:
+        if self.receipt is not None:
+            return self.receipt
         assert not self.replayed and self.configured
         assert self.slot not in self.owner.committed
-        receipt = WeightsReceipt(self.slot, self.slot, self.slot, b"")
+        receipt = {"transaction_id": self.slot, "manifest": {"sha256": "11" * 32, "length": 1}}
         self.owner.committed[self.slot] = receipt
         self.owner.events.append("commit:" + self.slot)
         return receipt
@@ -59,63 +63,60 @@ class Transaction:
 
 class Recorder:
     def __init__(self) -> None:
-        self.committed: dict[str, WeightsReceipt] = {}
+        self.committed: dict[str, dict[str, Any]] = {}
         self.events: list[str] = []
         self.fail_at = ""
 
-    def structure(self, _: Any) -> WeightsSource:
-        """Source-only rows, the reviewed DiT weights, and the video VAE rows every lane
-        normalises.
+    def tensorfs_source(self, source: Any) -> SourceCapability:
+        """Native geometry values only; this stage test makes no byte custody claim."""
 
-        A lane resolves each treatment against the granted structure before it opens a
-        transaction, so a recorder that offers only droppable rows would refuse rather than
-        sequence. The video VAE is a PRODUCER-WIDE normalisation rather than a lane row, so
-        every lane resolves it — including `bf16-full`, which authors nothing — and a source
-        without it refuses `h3_component_absent`. The float32 rank-1 row is deliberate: it
-        is what the `decode_operands` scope must leave alone. These are real geometry values
-        and carry no byte custody claim.
-        """
-        plan = prepare_quantization(h3_quantization_plan())
-        rows = [
-            WeightsSourceTensor(
-                component, key, "f32", (1,), (WeightsSourcePart("value", "f32", (1,)),)
+        def inspect(_components: Any, _configs: Any) -> SourceInspection:
+            plan = prepare_quantization(h3_quantization_plan())
+            components = {
+                component: {
+                    key: Tensor("f32", (1,), job.PLAIN_SPEC, {"value": Part("f32", (1,))})
+                    for key in target.drop
+                }
+                for component, target in full_targets().items()
+            }
+            for component in TARGET_COMPONENT.values():
+                components[component].update(
+                    {
+                        tensor.key: Tensor(
+                            tensor.logical_dtype,
+                            tensor.shape,
+                            job.PLAIN_SPEC,
+                            {"value": Part(tensor.logical_dtype, tensor.shape)},
+                        )
+                        for tensor in plan.tensors
+                    }
+                )
+            components["video_vae"].update(
+                {
+                    key: Tensor("f32", shape, job.PLAIN_SPEC, {"value": Part("f32", shape)})
+                    for key, shape in (
+                        ("decoder.proj_in.weight", (2048, 24)),
+                        ("decoder.transformer_blocks.0.attn.to_q.weight", (2048, 2048)),
+                        ("post_quant_conv.weight", (24, 24, 1, 1, 1)),
+                        ("decoder.norm_out.weight", (2048,)),
+                    )
+                }
             )
-            for component, target in job._full_targets().items()
-            for key in target.drop
-        ]
-        rows.extend(
-            WeightsSourceTensor(
-                component,
-                tensor.key,
-                tensor.logical_dtype,
-                tensor.shape,
-                (WeightsSourcePart("value", tensor.logical_dtype, tensor.shape),),
-            )
-            for component in job.TARGET_COMPONENT.values()
-            for tensor in plan.tensors
-        )
-        rows.extend(
-            WeightsSourceTensor(
-                "video_vae", key, "f32", shape, (WeightsSourcePart("value", "f32", shape),)
-            )
-            for key, shape in (
-                ("decoder.proj_in.weight", (2048, 24)),
-                ("decoder.transformer_blocks.0.attn.to_q.weight", (2048, 2048)),
-                ("post_quant_conv.weight", (24, 24, 1, 1, 1)),
-                ("decoder.norm_out.weight", (2048,)),
-            )
-        )
-        return WeightsSource((), tuple(rows))
+            return SourceInspection(Source(source.checkpoint_ref, 1), components, {})
 
-    def open(self, slot: str, **_: Any) -> Transaction:
-        return Transaction(self, slot)
+        return SourceCapability(source.checkpoint_ref, 1, inspect)
 
-    def derive(self, slot: str, **_: Any) -> WeightsReceipt:
-        transaction = self.open(slot)
-        if transaction.receipt is not None:
-            return transaction.receipt
-        transaction.configured = True
-        return transaction.commit()
+    def output(self, slot: str) -> Any:
+        owner = self
+
+        class Output:
+            def open(self, _definition: Any) -> Transaction:
+                return Transaction(owner, slot)
+
+        return Output()
+
+    def adopt_model(self, receipt: dict[str, Any]) -> None:
+        assert receipt in self.committed.values()
 
     def tables(
         self, task: str, _ctx: Any, _source: Any, active: dict[str, Any], _tel: Any, _range: Any
@@ -141,7 +142,6 @@ class Recorder:
             worst_relative_frobenius=0.03125,
         )
 
-
     def cast(self, transaction: Transaction, *_: Any, **kwargs: Any) -> Any:
         """The video VAE cast, recorded rather than run.
 
@@ -152,7 +152,7 @@ class Recorder:
         self.events.append(event + ":" + kwargs["target_component"])
         if self.fail_at == event:
             raise Interrupted(event)
-        return job._lanes.CastStats(
+        return lanes.CastStats(
             converted_keys=3,
             reused_keys=0,
             source_bytes_read=1,
@@ -177,32 +177,32 @@ class Telemetry:
 
 def invoke(recorder: Recorder, fail_at: str = "") -> Any:
     recorder.fail_at = fail_at
+    module: Any = job
     original_tables = job._write_tables
-    original_quantize = job.quantize_component_into
-    original_cast = job.write_cast
-    original_cuda = job.torch.cuda.is_available
-    original_tf32 = job.torch.backends.cuda.matmul.allow_tf32
-    original_precision = job.torch.get_float32_matmul_precision()
+    original_quantize = module.quantize_component_into
+    original_cast = module.write_cast
+    original_cuda = torch.cuda.is_available
+    original_tf32 = torch.backends.cuda.matmul.allow_tf32
+    original_precision = torch.get_float32_matmul_precision()
     try:
         # Explicit computation seams only; all stage control stays in the lanes job.
-        module: Any = job
         module._write_tables = recorder.tables
         module.quantize_component_into = recorder.quantize
         module.write_cast = recorder.cast
         module.torch.cuda.is_available = lambda: True
-        source = job.H3FullTransformer.for_test()
-        return module.lanes(None, job.LaneRequest(), source, source, recorder, Telemetry())
+        source = H3FullTransformer.for_test()
+        return module.lanes(recorder, job.LaneRequest(), source, source, Telemetry())
     finally:
         job._write_tables = original_tables
-        job.quantize_component_into = original_quantize
-        job.write_cast = original_cast
-        job.torch.cuda.is_available = original_cuda
-        job.torch.set_float32_matmul_precision(original_precision)
-        job.torch.backends.cuda.matmul.allow_tf32 = original_tf32
+        module.quantize_component_into = original_quantize
+        module.write_cast = original_cast
+        torch.cuda.is_available = original_cuda
+        torch.set_float32_matmul_precision(original_precision)
+        torch.backends.cuda.matmul.allow_tf32 = original_tf32
 
 
 def main() -> None:
-    slots = tuple(job.LANES)
+    slots = tuple(lanes.LANES)
     for failure, retained in (
         ("tables:ref2va", slots[:1]),
         ("quantize:fp8-pruned", slots[:2]),

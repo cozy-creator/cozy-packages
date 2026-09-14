@@ -172,121 +172,96 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "exposes that exact operation."
     ),
     ("scripts/h3-shared-vae-repair-proof.py", "cozy_runtime.author._model"): (
-        "Bind exact native fixture manifests; retire when a public native source factory "
-        "can bind production-shaped manifests instead of test:// identities."
+        "Bind exact native fixture manifests; retire when a public native source factory can "
+        "bind production-shaped manifests instead of test:// identities. "
     ),
-    ("scripts/h3-shared-vae-repair-proof.py", "cozy_runtime.internal.weights_sink"): (
-        "Verify native four-output deduplication, interrupted resume and retained replay; "
-        "retire when the public fake weights service can construct this native host."
+    ("scripts/h3-restamp-native-proof.py", "cozy_runtime.author._model"): (
+        "Bind the native source checkpoint for the metadata-only migration proof. "
     ),
-    (
-        "scripts/h3-restamp-native-proof.py",
-        "cozy_runtime.author._model",
-    ): "Bind the native source checkpoint for the metadata-only migration proof.",
-    (
-        "scripts/h3-restamp-native-proof.py",
-        "cozy_runtime.internal.weights_sink",
-    ): "Run the real native checkpoint transaction and compare all retained tensor objects.",
-    (
-        "scripts/h3-turbo-cp-proof.py",
-        "cozy_runtime.internal.parallel",
-    ): "Verify actual PDD hooks and component scopes under Runtime's Ulysses installation.",
-    (
-        "scripts/h3-turbo-store-proof.py",
-        "cozy_runtime.author._model",
-    ): "Bind native source manifests for the overlay integration proof.",
-    (
-        "scripts/h3-turbo-store-proof.py",
-        "cozy_runtime.internal.weights_sink",
-    ): "Exercise the real native transaction host, including resume and grafts.",
+    ("scripts/h3-turbo-cp-proof.py", "cozy_runtime.internal.parallel"): (
+        "Verify actual PDD hooks and component scopes under Runtime's Ulysses installation. "
+    ),
+    ("scripts/h3-turbo-store-proof.py", "cozy_runtime.author._model"): (
+        "Bind native source manifests for the overlay integration proof. "
+    ),
     ("scripts/h3-longform-proof.py", "cozy_runtime.author._calls"): (
         "the long-form driver builds the real child broker so the chain is proven through "
         "Runtime's own call exchange rather than a fake. Retire when a public child-call "
-        "harness can construct a broker."
+        "harness can construct a broker. "
     ),
     ("scripts/h3-longform-proof.py", "cozy_runtime.author._assets"): (
-        "the same driver grants the previous shot's bytes to the next child the way the "
-        "worker does. Retire with the same public child-call harness."
+        "the same driver grants the previous shot's bytes to the next child the way the worker "
+        "does. Retire with the same public child-call harness. "
     ),
     ("scripts/sdxl-normalization-proof.py", "cozy_runtime.author._model"): (
         "the normalization driver constructs the exact-checkpoint source Runtime admits; "
-        "for_test permits test:// identities only. Retire with a public native job fixture."
+        "for_test permits test:// identities only. Retire with a public native job fixture. "
     ),
     ("scripts/sdxl-normalization-proof.py", "cozy_runtime.internal.weights_sink"): (
-        "the normalization driver proves custody and process restart through Runtime's "
-        "native weights host. Retire when the public fake service can construct this host."
+        "the normalization driver proves custody and process restart through Runtime's native "
+        "weights host. Retire when the public fake service can construct this host. "
     ),
     ("scripts/sdxl_normalization_plan.py", "cozy_runtime.author._loader"): (
         "the plan proof uses Runtime's exact constructor census to compare tensor order; "
-        "retire when that conformance census has a public driver surface."
+        "retire when that conformance census has a public driver surface. "
     ),
     ("scripts/h3-adaln-binding-proof.py", "cozy_runtime.author._model"): (
-        "Native/broker qualification driver exercises the real Runtime boundary; "
-        "retire when a public native invocation harness owns this fixture seam."
-    ),
-    ("scripts/h3-adaln-binding-proof.py", "cozy_runtime.author._services"): (
-        "Native/broker qualification driver exercises the real Runtime boundary; "
-        "retire when a public native invocation harness owns this fixture seam."
-    ),
-    ("scripts/h3-adaln-binding-proof.py", "cozy_runtime.internal.weights_sink"): (
-        "Native/broker qualification driver exercises the real Runtime boundary; "
-        "retire when a public native invocation harness owns this fixture seam."
+        "Native/broker qualification driver exercises the real Runtime boundary; retire when a "
+        "public native invocation harness owns this fixture seam. "
     ),
     ("scripts/h3-adaln-resume-proof.py", "cozy_runtime.author._model"): (
-        "Native/broker qualification driver exercises the real Runtime boundary; "
-        "retire when a public native invocation harness owns this fixture seam."
-    ),
-    ("scripts/h3-adaln-resume-proof.py", "cozy_runtime.internal.weights_sink"): (
-        "Native/broker qualification driver exercises the real Runtime boundary; "
-        "retire when a public native invocation harness owns this fixture seam."
+        "Native/broker qualification driver exercises the real Runtime boundary; retire when a "
+        "public native invocation harness owns this fixture seam. "
     ),
     ("scripts/h3-adaln-interface-proof.py", "cozy_runtime.author._calls"): (
-        "Native/broker qualification driver exercises the real Runtime boundary; "
-        "retire when a public native invocation harness owns this fixture seam."
+        "Native/broker qualification driver exercises the real Runtime boundary; retire when a "
+        "public native invocation harness owns this fixture seam. "
     ),
     ("scripts/h3-adaln-interface-proof.py", "cozy_runtime.internal"): (
-        "Native/broker qualification driver exercises the real Runtime boundary; "
-        "retire when a public native invocation harness owns this fixture seam."
+        "Native/broker qualification driver exercises the real Runtime boundary; retire when a "
+        "public native invocation harness owns this fixture seam. "
     ),
     ("scripts/h3-adaln-interface-proof.py", "cozy_runtime.internal.discovery"): (
-        "Native/broker qualification driver exercises the real Runtime boundary; "
-        "retire when a public native invocation harness owns this fixture seam."
+        "Native/broker qualification driver exercises the real Runtime boundary; retire when a "
+        "public native invocation harness owns this fixture seam. "
     ),
     ("scripts/h3-repair-proof.py", "cozy_runtime.author._model"): (
-        "the repair integration driver constructs the same exact-checkpoint job source "
-        "record as Runtime; for_test intentionally permits test:// identities only. "
-        "Retire when a public native job fixture factory owns this constructor."
-    ),
-    ("scripts/h3-repair-proof.py", "cozy_runtime.internal.weights_sink"): (
-        "the repair integration driver exercises the public job against the real Runtime "
-        "host and TensorFS writer, including interrupted resume and exact receipt replay. "
-        "Retire when the public fake weights service can construct this native host."
-    ),
-    ("scripts/h3-lane-store-proof.py", "cozy_runtime.author._model"): (
-        "the lane driver constructs the exact-checkpoint job source record Runtime builds; "
-        "for_test intentionally permits test:// identities only, and this proof needs the "
-        "real minted manifest. Retire when a public native job fixture factory owns it."
-    ),
-    ("scripts/h3-lane-store-proof.py", "cozy_runtime.internal.weights_sink"): (
-        "the lane driver runs per-component cast/encode treatments through the real "
-        "Runtime weights host and TensorFS writer, and reads the committed headers back to "
-        "prove an untreated component keeps the SOURCE's exact ObjectRefs in every lane. "
-        "Retire when the public fake weights service can construct this native host."
+        "the repair integration driver constructs the same exact-checkpoint job source record "
+        "as Runtime; for_test intentionally permits test:// identities only. Retire when a "
+        "public native job fixture factory owns this constructor. "
     ),
     ("scripts/h3-conform.py", "cozy_runtime.internal.residency"): (
         "the warm arms raise Runtime's OWN `ResidencyRefusal` — the class, the typed "
-        "`device_shortfall` code and the verbatim detail an H100 produced — so the "
-        "package's tolerance of a parked component is proven against what actually "
-        "raises it rather than a local look-alike (se-046). Retire when the author "
-        "surface names the capacity refusal a `warm` body must tolerate."
+        "`device_shortfall` code and the verbatim detail an H100 produced — so the package's "
+        "tolerance of a parked component is proven against what actually raises it rather than "
+        "a local look-alike (se-046). Retire when the author surface names the capacity "
+        "refusal a `warm` body must tolerate. "
     ),
     ("scripts/h3-conform.py", "cozy_runtime.internal.derive"): (
-        "the derive harness is Runtime's CONSTRUCTION plane and cannot become author "
-        "surface: `cozy_runtime.author` is torch-free by construction and Runtime's own "
-        "`checks/architecture.py` forbids it importing `cozy_runtime.internal`. The "
-        "supported spelling is `cozy-model-contract-proof`, which today derives only "
-        "inside a receipt-selected sandboxed build seat and has no in-process entry point "
-        "for one synthetic model. Retire this entry when it grows one."
+        "the derive harness is Runtime's CONSTRUCTION plane and cannot become author surface: "
+        "`cozy_runtime.author` is torch-free by construction and Runtime's own "
+        "`checks/architecture.py` forbids it importing `cozy_runtime.internal`. The supported "
+        "spelling is `cozy-model-contract-proof`, which today derives only inside a receipt- "
+        "selected sandboxed build seat and has no in-process entry point for one synthetic "
+        "model. Retire this entry when it grows one. "
+    ),
+    ("scripts/native_execution_fixture.py", "cozy_runtime.internal.seam"): (
+        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
+    ),
+    ("scripts/native_execution_fixture.py", "cozy_runtime.internal.weights_writer"): (
+        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
+    ),
+    ("scripts/native_execution_fixture.py", "cozy_runtime.internal.worker.grants"): (
+        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
+    ),
+    ("scripts/native_execution_fixture.py", "cozy_runtime.internal.worker.weights"): (
+        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
+    ),
+    ("scripts/native_execution_fixture.py", "cozy_runtime.internal.worker.workspace"): (
+        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
+    ),
+    ("scripts/native_execution_fixture.py", "cozy_runtime.protocol"): (
+        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
     ),
 }
 
@@ -317,7 +292,7 @@ def surface_violations(label: str, source: str, *, driver: bool) -> list[str]:
                 f"`cozy_runtime.author` surface and nothing else from the runtime; a "
                 f"private module is a coupling that breaks silently.{how}"
             )
-        if not driver and top in STORE_AND_NETWORK:
+        if not driver and top in STORE_AND_NETWORK and module != "tensorfs.derived":
             bad.append(
                 f"{label}:{line}: {module!r} — package code speaks to no store, "
                 "no hub and no network; every byte it sees arrives as a typed input"

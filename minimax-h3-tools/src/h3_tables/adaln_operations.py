@@ -12,16 +12,18 @@ from cozy_runtime.author import (
     ModelArtifact,
     Telemetry,
     UnsupportedInput,
-    WeightsConfig,
-    WeightsPart,
-    WeightsPartSource,
-    WeightsSink,
-    WeightsSource,
-    WeightsTarget,
-    WeightsTensor,
-    WeightsTransaction,
     canonical_json,
     invocable,
+)
+from tensorfs.derived import (
+    Config,
+    Derivation,
+    DerivedTransaction,
+    Part,
+    PartSource,
+    SourceInspection,
+    Target,
+    Tensor,
 )
 
 from ._table_layout import TableLayout
@@ -29,7 +31,7 @@ from .kernel import H3Topology, precompute_tables, removed_keys, source_shapes, 
 from .model_config import dual_adaln_pruned_config, dual_full_config, parse_production_config
 from .order import current_order, full_order
 from .plans import Task, TimestepPlan, parse_declared_plan
-from .source import TARGET_COMPONENT, H3FullTransformer
+from .source import TARGET_COMPONENT, H3FullTransformer, inspection
 
 PLAIN = "sha256:1fb882a7e46d0aff520f9d8a28cefd643954c19371737443101ba3c5fcc3613f"
 _SOURCE_SECTION = {"fl2va": "transformer", "ref2va": "transformer_ref"}
@@ -80,10 +82,10 @@ def _projection_config(task: Task, topology: H3Topology | None = None) -> bytes:
     )
 
 
-def _body_kind(structure: WeightsSource) -> bool:
+def _body_kind(structure: SourceInspection) -> bool:
     """Return whether the exact assembled source is already pruned."""
     current = current_order(_asset("whole-order.json")).rows
-    actual = {(tensor.component, tensor.key) for tensor in structure.tensors}
+    actual = {(component, key) for component, rows in structure.components.items() for key in rows}
     if actual == set(current):
         return True
     if actual == set(full_order(_sections(), current)):
@@ -93,8 +95,8 @@ def _body_kind(structure: WeightsSource) -> bool:
     )
 
 
-def _bindings(weights: WeightsSink, source: H3FullTransformer) -> dict[str, str]:
-    value = canonical_json.decode(weights.config(source, "model"))
+def _bindings(structure: SourceInspection) -> dict[str, str]:
+    value = canonical_json.decode(structure.configs["model"])
     if not isinstance(value, dict):
         raise UnsupportedInput("pruned H3 model has no config bindings", code="adaln_binding")
     result: dict[str, str] = {}
@@ -115,14 +117,12 @@ def _bindings(weights: WeightsSink, source: H3FullTransformer) -> dict[str, str]
     return result
 
 
-def _validate_body_config(
-    weights: WeightsSink, source: H3FullTransformer, pruned: bool
-) -> dict[str, dict[str, Any]]:
-    if set(weights.structure(source).configs) != {"model"}:
+def _validate_body_config(structure: SourceInspection, pruned: bool) -> dict[str, dict[str, Any]]:
+    if set(structure.configs) != {"model"}:
         raise UnsupportedInput(
             "H3 body requires its single construction config", code="adaln_config"
         )
-    raw = weights.config(source, "model")
+    raw = structure.configs["model"]
     if not pruned:
         if raw != dual_full_config(_sections()):
             raise UnsupportedInput(
@@ -165,9 +165,13 @@ def _validate_body_config(
 
 
 def _validate_generators(
-    structure: WeightsSource, task: Task, topology: H3Topology | None = None
+    structure: SourceInspection, task: Task, topology: H3Topology | None = None
 ) -> None:
-    tensors = {(tensor.component, tensor.key): tensor for tensor in structure.tensors}
+    tensors = {
+        (component, key): tensor
+        for component, rows in structure.components.items()
+        for key, tensor in rows.items()
+    }
     for key, (dtype, shape) in source_shapes(topology or _topology(task)).items():
         tensor = tensors.get((TARGET_COMPONENT[task], key))
         expected = "f32" if dtype == torch.float32 else "bf16"
@@ -176,9 +180,7 @@ def _validate_generators(
             or tensor.encoding != PLAIN
             or tensor.logical_dtype != expected
             or tensor.shape != shape
-            or len(tensor.parts) != 1
-            or (tensor.parts[0].name, tensor.parts[0].dtype, tensor.parts[0].shape)
-            != ("value", expected, shape)
+            or tensor.parts != {"value": Part(expected, shape)}
         ):
             raise UnsupportedInput(
                 f"H3 generating weight {key} must preserve its exact plain dtype and shape",
@@ -187,60 +189,63 @@ def _validate_generators(
 
 
 def _project(
-    weights: WeightsSink,
+    ctx: Context,
     source: H3FullTransformer,
     task: Task,
     output: str,
     topology: H3Topology | None = None,
 ) -> ModelArtifact:
-    structure = weights.structure(source)
+    structure = inspection(ctx, source)
     topology = topology or _topology(task)
     _validate_generators(structure, task, topology)
     component = TARGET_COMPONENT[task]
     selected = removed_keys(topology)
-    present = tuple(tensor.key for tensor in structure.tensors if tensor.component == component)
+    present = tuple(structure.components[component])
     config = _projection_config(task, topology)
-    return weights.derive(
-        output,
-        sources={"source": source},
-        targets={
-            component: WeightsTarget(
-                "source", component, drop=tuple(key for key in present if key not in selected)
-            )
-        },
-        configs={_METADATA: WeightsConfig(data=config)},
-        order=tuple((component, key) for key in selected),
-    ).artifact
+    with ctx.output(output).open(
+        Derivation(
+            sources={"source": structure.source},
+            targets={
+                component: Target(
+                    "source", component, drop=tuple(key for key in present if key not in selected)
+                )
+            },
+            configs={_METADATA: Config("add")},
+            order=tuple((component, key) for key in selected),
+        )
+    ) as transaction:
+        if transaction.receipt is None:
+            transaction.add_config(_METADATA, config)
+        return ctx.adopt_model(transaction.commit())
 
 
 @invocable(memoize=True)
-async def select_adaln_weights(
-    ctx: Context, *, source: H3FullTransformer, task: Task, weights: WeightsSink
-) -> Selection:
+async def select_adaln_weights(ctx: Context, *, source: H3FullTransformer, task: Task) -> Selection:
     ctx.raise_if_cancelled()
-    pruned = _body_kind(weights.structure(source))
-    layouts = _validate_body_config(weights, source, pruned)
+    structure = inspection(ctx, source)
+    pruned = _body_kind(structure)
+    layouts = _validate_body_config(structure, pruned)
     if pruned:
-        _bindings(weights, source)
+        _bindings(structure)
         if layouts[task] != _plan(task).table_keys:
             raise UnsupportedInput(
                 "retabling a previous schedule requires the full generating_model",
                 code="adaln_generating_weights",
             )
-        _validate_table_rows(weights.structure(source), task, bank=False)
-        structure = weights.structure(source)
-        ready = weights.derive(
-            "model",
-            sources={"source": source},
-            targets={
-                component: WeightsTarget("source", component)
-                for component in dict.fromkeys(tensor.component for tensor in structure.tensors)
-            },
-            configs={"model": WeightsConfig("source", "model")},
-            order=current_order(_asset("whole-order.json")).rows,
-        ).artifact
+        _validate_table_rows(structure, task, bank=False)
+        with ctx.output("model").open(
+            Derivation(
+                sources={"source": structure.source},
+                targets={
+                    component: Target("source", component) for component in structure.components
+                },
+                configs={"model": Config("copy", "source", "model")},
+                order=current_order(_asset("whole-order.json")).rows,
+            )
+        ) as transaction:
+            ready = ctx.adopt_model(transaction.commit())
         return Selection(ready, True)
-    return Selection(_project(weights, source, task, "model"), False)
+    return Selection(_project(ctx, source, task, "model"), False)
 
 
 def _bank_config(task: Task, projection: str) -> bytes:
@@ -257,7 +262,7 @@ def _bank_config(task: Task, projection: str) -> bytes:
 
 
 def _read_weight(
-    transaction: WeightsTransaction,
+    transaction: DerivedTransaction,
     component: str,
     key: str,
     dtype: torch.dtype,
@@ -275,7 +280,7 @@ def _read_weight(
 def _compute_into(
     ctx: Context,
     tel: Telemetry,
-    transaction: WeightsTransaction,
+    transaction: DerivedTransaction,
     task: Task,
     plan: TimestepPlan,
     topology: H3Topology,
@@ -283,7 +288,7 @@ def _compute_into(
     component = TARGET_COMPONENT[task]
     completed = frozenset(
         key
-        for selected, key, role in transaction.completed_parts
+        for selected, key, role in transaction.completed_parts()
         if selected == component and role == "value"
     )
 
@@ -330,7 +335,6 @@ async def compute_adaln_tables(
     source: H3FullTransformer,
     task: Task,
     plan_digest: str,
-    weights: WeightsSink,
     tel: Telemetry,
 ) -> ModelArtifact:
     plan = _plan(task)
@@ -338,12 +342,12 @@ async def compute_adaln_tables(
         raise UnsupportedInput(
             "AdaLN plan differs from the captured approved package plan", code="adaln_plan"
         )
-    structure = weights.structure(source)
+    structure = inspection(ctx, source)
     _validate_generators(structure, task)
     component = TARGET_COMPONENT[task]
-    if {(tensor.component, tensor.key) for tensor in structure.tensors} != {
+    if {(component, key) for component, rows in structure.components.items() for key in rows} != {
         (component, key) for key in removed_keys(_topology(task))
-    } or weights.config(source, _METADATA) != _projection_config(task):
+    } or structure.configs[_METADATA] != _projection_config(task):
         raise UnsupportedInput(
             "AdaLN bank input must be one minimal generating-weight projection",
             code="adaln_projection",
@@ -351,35 +355,36 @@ async def compute_adaln_tables(
     topology = _topology(task)
     tables = table_shapes(topology, plan)
     metadata = _bank_config(task, source.checkpoint_ref)
-    with weights.open(
-        "model",
-        sources={"source": source},
-        targets={
-            component: WeightsTarget(
-                "source",
-                component,
-                drop=removed_keys(topology),
-                add={
-                    key: WeightsTensor("bf16", shape, PLAIN, {"value": WeightsPart("bf16", shape)})
-                    for key, shape in tables.items()
-                },
-            )
-        },
-        configs={_METADATA: WeightsConfig(data=metadata)},
-        order=tuple((component, key) for key in tables),
+    with ctx.output("model").open(
+        Derivation(
+            sources={"source": structure.source},
+            targets={
+                component: Target(
+                    "source",
+                    component,
+                    drop=removed_keys(topology),
+                    add={
+                        key: Tensor("bf16", shape, PLAIN, {"value": Part("bf16", shape)})
+                        for key, shape in tables.items()
+                    },
+                )
+            },
+            configs={_METADATA: Config("add")},
+            order=tuple((component, key) for key in tables),
+        )
     ) as transaction:
-        if transaction.replayed:
-            assert transaction.receipt is not None
-            return transaction.receipt.artifact
+        if transaction.receipt is not None:
+            return ctx.adopt_model(transaction.receipt)
         _compute_into(ctx, tel, transaction, task, plan, topology)
         transaction.add_config(_METADATA, metadata)
-        return transaction.commit().artifact
+        return ctx.adopt_model(transaction.commit())
 
 
 def _bank_projection(
-    weights: WeightsSink, bank: H3FullTransformer, task: Task, topology: H3Topology | None = None
+    ctx: Context, bank: H3FullTransformer, task: Task, topology: H3Topology | None = None
 ) -> str:
-    value = canonical_json.decode(weights.config(bank, _METADATA))
+    structure = inspection(ctx, bank)
+    value = canonical_json.decode(structure.configs[_METADATA])
     if not isinstance(value, dict) or not isinstance(value.get("projection"), str):
         raise UnsupportedInput("AdaLN bank has no generating-weight binding", code="adaln_binding")
     projection = str(value["projection"])
@@ -387,35 +392,33 @@ def _bank_projection(
         raise UnsupportedInput(
             "AdaLN bank task, schedule or numerical contract differs", code="adaln_binding"
         )
-    _validate_table_rows(weights.structure(bank), task, bank=True, topology=topology)
+    _validate_table_rows(structure, task, bank=True, topology=topology)
     return projection
 
 
 def _validate_table_rows(
-    structure: WeightsSource, task: Task, *, bank: bool, topology: H3Topology | None = None
+    structure: SourceInspection, task: Task, *, bank: bool, topology: H3Topology | None = None
 ) -> None:
     component = TARGET_COMPONENT[task]
     tables = table_shapes(topology or _topology(task), _plan(task))
-    rows = tuple(
-        tensor
-        for tensor in structure.tensors
-        if tensor.component == component and (bank or tensor.key in tables)
-    )
-    if bank and len(rows) != len(structure.tensors):
+    rows = {
+        key: tensor
+        for key, tensor in structure.components.get(component, {}).items()
+        if bank or key in tables
+    }
+    if bank and set(structure.components) != {component}:
         raise UnsupportedInput(
             "AdaLN bank includes another task or unrelated tensors", code="adaln_bank"
         )
-    if {(tensor.component, tensor.key) for tensor in rows} != {(component, key) for key in tables}:
+    if set(rows) != set(tables):
         raise UnsupportedInput("AdaLN bank has an unexpected table set", code="adaln_bank")
-    for tensor in rows:
-        shape = tables[tensor.key]
+    for key, tensor in rows.items():
+        shape = tables[key]
         if (
             tensor.encoding != PLAIN
             or tensor.logical_dtype != "bf16"
             or tensor.shape != shape
-            or len(tensor.parts) != 1
-            or (tensor.parts[0].name, tensor.parts[0].dtype, tensor.parts[0].shape)
-            != ("value", "bf16", shape)
+            or tensor.parts != {"value": Part("bf16", shape)}
         ):
             raise UnsupportedInput(
                 "AdaLN bank has changed table geometry or encoding", code="adaln_bank"
@@ -423,13 +426,13 @@ def _validate_table_rows(
 
 
 def _require_bank_binding(
-    weights: WeightsSink,
+    ctx: Context,
     bank: H3FullTransformer,
     task: Task,
     projection: str,
     topology: H3Topology | None = None,
 ) -> None:
-    if _bank_projection(weights, bank, task, topology) != projection:
+    if _bank_projection(ctx, bank, task, topology) != projection:
         raise UnsupportedInput(
             "AdaLN bank was computed from different generating weights", code="adaln_binding"
         )
@@ -441,46 +444,41 @@ def _apply_adaln(
     source: H3FullTransformer,
     fl2va: H3FullTransformer,
     ref2va: H3FullTransformer,
-    weights: WeightsSink,
     require_pruned: bool,
 ) -> ModelArtifact:
     ctx.raise_if_cancelled()
-    structure = weights.structure(source)
+    structure = inspection(ctx, source)
     pruned = _body_kind(structure)
     if pruned != require_pruned:
         raise UnsupportedInput(
             "AdaLN attachment source has a different pruning state", code="adaln_source"
         )
-    _validate_body_config(weights, source, pruned)
+    _validate_body_config(structure, pruned)
     bindings = (
-        _bindings(weights, source)
+        _bindings(structure)
         if pruned
         else {
-            task: _project(weights, source, task, f"{task}-weights").manifest.digest
-            for task in _TASKS
+            task: _project(ctx, source, task, f"{task}-weights").manifest.digest for task in _TASKS
         }
     )
     banks = {"fl2va": fl2va, "ref2va": ref2va}
-    targets = {
-        component: WeightsTarget("source", component)
-        for component in dict.fromkeys(tensor.component for tensor in structure.tensors)
-    }
+    targets = {component: Target("source", component) for component in structure.components}
     for task in _TASKS:
-        _require_bank_binding(weights, banks[task], task, bindings[task])
+        _require_bank_binding(ctx, banks[task], task, bindings[task])
         component = TARGET_COMPONENT[task]
         tables = table_shapes(_topology(task), _plan(task))
-        targets[component] = WeightsTarget(
+        targets[component] = Target(
             "source",
             component,
             drop=tuple(tables) if pruned else removed_keys(_topology(task)),
             add={
-                key: WeightsTensor(
+                key: Tensor(
                     "bf16",
                     shape,
                     PLAIN,
                     {
-                        "value": WeightsPart(
-                            "bf16", shape, source=WeightsPartSource(task, component, key, "value")
+                        "value": Part(
+                            "bf16", shape, source=PartSource(task, component, key, "value")
                         )
                     },
                 )
@@ -492,15 +490,24 @@ def _apply_adaln(
     )
     for bound_task in _TASKS:
         config[TARGET_COMPONENT[bound_task]]["cozy_h3"][_BINDING] = bindings[bound_task]
-    configs = {name: WeightsConfig("source", name) for name in structure.configs if name != "model"}
-    configs["model"] = WeightsConfig(data=canonical_json.encode(config))
-    return weights.derive(
-        "model",
-        sources={"source": source, **banks},
-        targets=targets,
-        configs=configs,
-        order=current_order(_asset("whole-order.json")).rows,
-    ).artifact
+    configs = {
+        name: Config("copy", "source", name) for name in structure.configs if name != "model"
+    }
+    configs["model"] = Config("add")
+    with ctx.output("model").open(
+        Derivation(
+            sources={
+                "source": structure.source,
+                **{name: inspection(ctx, bank).source for name, bank in banks.items()},
+            },
+            targets=targets,
+            configs=configs,
+            order=current_order(_asset("whole-order.json")).rows,
+        )
+    ) as transaction:
+        if transaction.receipt is None:
+            transaction.add_config("model", canonical_json.encode(config))
+        return ctx.adopt_model(transaction.commit())
 
 
 @invocable(memoize=True)
@@ -510,11 +517,8 @@ async def apply_adaln(
     source: H3FullTransformer,
     fl2va: H3FullTransformer,
     ref2va: H3FullTransformer,
-    weights: WeightsSink,
 ) -> ModelArtifact:
-    return _apply_adaln(
-        ctx, source=source, fl2va=fl2va, ref2va=ref2va, weights=weights, require_pruned=False
-    )
+    return _apply_adaln(ctx, source=source, fl2va=fl2va, ref2va=ref2va, require_pruned=False)
 
 
 @invocable(memoize=True)
@@ -524,8 +528,5 @@ async def retable_adaln(
     source: H3FullTransformer,
     fl2va: H3FullTransformer,
     ref2va: H3FullTransformer,
-    weights: WeightsSink,
 ) -> ModelArtifact:
-    return _apply_adaln(
-        ctx, source=source, fl2va=fl2va, ref2va=ref2va, weights=weights, require_pruned=True
-    )
+    return _apply_adaln(ctx, source=source, fl2va=fl2va, ref2va=ref2va, require_pruned=True)

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""H3 per-component lane treatments through the real Runtime WeightsSink and TensorFS.
+"""H3 per-component lane treatments through real Runtime-bound TensorFS handles.
 
 `minimax-h3-tools/scripts/lane-proof.py` proves the DECLARATIONS a lane makes, over the
 exact H3 census, on the author surface alone. This driver proves the BYTES and, above all,
 OBJECT IDENTITY: it mints a tiny synthetic H3-shaped source in a real `tensorfs.Store`,
-derives three lanes from it through the same `WeightsSink` a worker hands the job, and
-reads the committed CozyTensors headers back.
+derives three lanes through the native source/output capabilities a worker hands the job,
+and reads the committed CozyTensors headers back.
 
 The property it exists to establish is the one that decides whether a per-component lane is
 affordable at all: a component no lane treats keeps the SOURCE's exact stored objects in
@@ -24,16 +24,18 @@ import io
 import json
 import sys
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, NoReturn
 
 import numpy as np
 import tensorfs
-from cozy_runtime.author import Model, WeightsSink, WeightsTarget
-from cozy_runtime.author._model import _derive_model
+from cozy_runtime.author import ModelArtifact, ObjectRef
 from cozy_runtime.author.fakes import fake_attempt, fake_context, fake_telemetry
 from cozy_runtime.derive.quantization import ArtifactQuantizationRequest
-from cozy_runtime.internal.weights_sink import WeightsTransactionHost
+from tensorfs.derived import Derivation, Target
+
+from native_execution_fixture import NativeExecution
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
@@ -64,11 +66,6 @@ RECIPES: dict[str, dict[str, lanes.Treatment]] = {
     "encoded": {"video_vae": lanes.Treatment(encode="fp8-rowwise/1")},
     "inherited": {},
 }
-
-
-class Source(Model[object]):
-    def load(self, loader: Any) -> None:
-        del loader
 
 
 def _fail(what: str) -> NoReturn:
@@ -165,61 +162,51 @@ def _role_bytes(store: Any, header: Any, component: str, key: str, role: str) ->
     )
 
 
-def _sink(host: Any, model: Any, slots: dict[str, int], attempt: Any) -> WeightsSink:
-    """The exact capability a worker hands a job body: public surface over the real host."""
-    return WeightsSink(
-        attempt,
-        {"source": model},
-        slots,
-        host.open,
-        host.structure,
-    )
-
-
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="h3-lane-store-proof-") as root:
+    with tempfile.TemporaryDirectory(prefix="h3-lane-store-proof-") as root, ExitStack() as stack:
         store = tensorfs.Store.init(root)
         manifest, length, values = _mint(store, LAYOUT, "51")
         source_bodies = _bodies(store, manifest)
-        model = _derive_model(Source, manifest)
         attempt = fake_attempt("h3-lane-store-proof", spool=Path(root) / "spool")
         ctx = fake_context()
         tel = fake_telemetry(attempt, ctx)
         slots = dict.fromkeys(RECIPES, SLOT_BYTES)
-        host = WeightsTransactionHost(
-            store=store,
-            owner_scope="h3-lane-store-proof",
-            request_id="lane-store-proof",
-            invocation_spec_digest="sha256:" + "11" * 32,
-            work_fingerprint="sha256:" + "22" * 32,
-            writer_session_id=1,
-            allowed_sources={manifest: length},
-            output_bounds=slots | {"overflow": SLOT_BYTES},
+        model = ModelArtifact("source", "model", ObjectRef(manifest, length), "sha256:" + "11" * 32)
+        execution = stack.enter_context(
+            NativeExecution(store, Path(root), "lane-store-proof", {"source": model}, slots)
         )
-        sink = _sink(host, model, slots, attempt)
-        structure = sink.structure(model)
+        ctx = execution.context()
+        tel = fake_telemetry(attempt, ctx)
+        with execution.client.source(manifest) as source:
+            structure = source.inspect()
         print(f"  synthetic source: {len(source_bodies)} stored roles, manifest {manifest[:23]}…")
 
         produced: dict[str, str] = {}
         for slot, components in RECIPES.items():
             selections = {
-                component: lanes.select(component, treatment, structure.tensors)
+                component: lanes.select(component, treatment, structure)
                 for component, treatment in components.items()
             }
             targets = {
                 component: lanes.apply(
-                    WeightsTarget(source="source", source_component=component),
+                    Target(source="source", source_component=component),
                     selections[component],
                 )
                 if component in selections
-                else WeightsTarget(source="source", source_component=component)
+                else Target(source="source", source_component=component)
                 for component in LAYOUT
             }
-            with sink.open(
-                slot,
-                sources={"source": model},
-                targets=targets,
-                order=tuple((t.component, t.key) for t in structure.tensors),
+            with ctx.output(slot).open(
+                Derivation(
+                    sources={"source": structure.source},
+                    configs={},
+                    targets=targets,
+                    order=tuple(
+                        (component, key)
+                        for component, tensors in structure.components.items()
+                        for key in tensors
+                    ),
+                )
             ) as transaction:
                 for component, selection in selections.items():
                     stats = job._treat(
@@ -236,7 +223,8 @@ def main() -> None:
                         f"{stats.new_bytes_written} new bytes from {stats.source_bytes_read} read"
                     )
                 receipt = transaction.commit()
-            facts = json.loads(receipt.tensorfs_receipt)
+            facts = receipt
+            ctx.adopt_model(receipt)
             produced[slot] = "sha256:" + facts["manifest"]["sha256"]
             observed = facts["inherit_observation"]
             print(
@@ -309,11 +297,11 @@ def main() -> None:
             "of the source; attn.to_q.weight -> data+scale under fp8-rowwise/1, logical f16"
         )
 
-        _overflow(store, host, attempt, ctx, tel)
+        _overflow(store, tel)
     print("h3-lane-store-proof green")
 
 
-def _overflow(store: Any, host: Any, attempt: Any, ctx: Any, tel: Any) -> None:
+def _overflow(store: Any, tel: Any) -> None:
     """An f16 cast that overflows is a typed refusal, never a silently stored inf.
 
     fp32 reaches 3.4e38 and fp16 stops at 65504, so this is the one cast failure a relative
@@ -347,31 +335,36 @@ def _overflow(store: Any, host: Any, attempt: Any, ctx: Any, tel: Any) -> None:
     writer.add_part("video_vae", key, "value", io.BytesIO(huge.tobytes()))
     committed = writer.commit()["manifest"]
     identity, size = "sha256:" + committed["sha256"], committed["length"]
-    host.allowed_sources[identity] = size
-    model = _derive_model(Source, identity)
-    sink = _sink(host, model, {"overflow": SLOT_BYTES}, attempt)
-    structure = sink.structure(model)
-    selection = lanes.select("video_vae", lanes.Treatment(cast="f16"), structure.tensors)
-    target = lanes.apply(WeightsTarget(source="source", source_component="video_vae"), selection)
-    with sink.open(
-        "overflow",
-        sources={"source": model},
-        targets={"video_vae": target},
-        order=(("video_vae", key),),
-    ) as transaction:
-        _refuses(
-            "an f16 cast of a 1e30 weight",
-            "quantization_tripwire",
-            lambda: lanes.write_cast(
-                transaction,
-                ctx,
-                tel,
-                selection=selection,
-                source="source",
-                source_component="video_vae",
-                target_component="video_vae",
-            ),
-        )
+    artifact = ModelArtifact("huge", "model", ObjectRef(identity, size), "sha256:" + "12" * 32)
+    with NativeExecution(
+        store, Path(store.root), "overflow", {"source": artifact}, {"overflow": SLOT_BYTES}
+    ) as execution:
+        ctx = execution.context()
+        with execution.client.source(identity) as source:
+            structure = source.inspect()
+        selection = lanes.select("video_vae", lanes.Treatment(cast="f16"), structure)
+        target = lanes.apply(Target(source="source", source_component="video_vae"), selection)
+        with ctx.output("overflow").open(
+            Derivation(
+                sources={"source": structure.source},
+                targets={"video_vae": target},
+                configs={},
+                order=(("video_vae", key),),
+            )
+        ) as transaction:
+            _refuses(
+                "an f16 cast of a 1e30 weight",
+                "quantization_tripwire",
+                lambda: lanes.write_cast(
+                    transaction,
+                    ctx,
+                    tel,
+                    selection=selection,
+                    source="source",
+                    source_component="video_vae",
+                    target_component="video_vae",
+                ),
+            )
 
 
 if __name__ == "__main__":

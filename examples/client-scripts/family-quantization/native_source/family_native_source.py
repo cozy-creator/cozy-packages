@@ -1,5 +1,6 @@
 """Small native source and readback jobs; family quantizers live in their packages."""
 
+import io
 import json
 
 import msgspec
@@ -10,14 +11,11 @@ from cozy_runtime.author import (
     Context,
     ModelArtifact,
     WeightsOutput,
-    WeightsPart,
     WeightsReader,
-    WeightsSink,
-    WeightsTarget,
-    WeightsTensor,
     invocable,
 )
 from cozy_runtime.derive.quantization import QuantizationSource
+from tensorfs.derived import Derivation, Part, Target, Tensor
 
 app = App()
 PLAIN = dict(tensorfs.seed_digests())["plain/1"]
@@ -25,30 +23,31 @@ PLAIN = dict(tensorfs.seed_digests())["plain/1"]
 
 @invocable(memoize=True)
 async def produce(
-    ctx: Context, *, family: str, variant: int = 0, invalid: bool = False, weights: WeightsSink
+    ctx: Context, *, family: str, variant: int = 0, invalid: bool = False
 ) -> ModelArtifact:
     component, dtype = ("unet", "f16") if family == "sdxl" else ("transformer", "bf16")
     width = 31 if invalid else 64
     names = ("block_a.weight", "block_b.weight")
     tensors = {
-        name: WeightsTensor(dtype, (8, width), PLAIN, {"value": WeightsPart(dtype, (8, width))})
-        for name in names
+        name: Tensor(dtype, (8, width), PLAIN, {"value": Part(dtype, (8, width))}) for name in names
     }
-    tensors["block_a.bias"] = WeightsTensor(dtype, (8,), PLAIN, {"value": WeightsPart(dtype, (8,))})
-    other = WeightsTensor(dtype, (8, 64), PLAIN, {"value": WeightsPart(dtype, (8, 64))})
+    tensors["block_a.bias"] = Tensor(dtype, (8,), PLAIN, {"value": Part(dtype, (8,))})
+    other = Tensor(dtype, (8, 64), PLAIN, {"value": Part(dtype, (8, 64))})
     order = (*((component, name) for name in tensors), ("shared", "untouched.weight"))
-    with weights.open(
-        "model",
-        sources={},
-        targets={
-            component: WeightsTarget(add=tensors),
-            "shared": WeightsTarget(add={"untouched.weight": other}),
-        },
-        order=order,
+    with ctx.output("model").open(
+        Derivation(
+            sources={},
+            targets={
+                component: Target(add=tensors),
+                "shared": Target(add={"untouched.weight": other}),
+            },
+            configs={},
+            order=order,
+        )
     ) as output:
-        if output.replayed:
+        if output.receipt is not None:
             assert output.receipt is not None
-            return output.receipt.artifact
+            return ctx.adopt_model(output.receipt)
         for part_component, key in order:
             ctx.raise_if_cancelled()
             n = 8 if key.endswith(".bias") else 8 * (64 if part_component == "shared" else width)
@@ -58,8 +57,8 @@ async def produce(
                 if dtype == "f16"
                 else (array.view("<u4") >> 16).astype("<u2").tobytes()
             )
-            output.add_part(part_component, key, "value", raw)
-        return output.commit().artifact
+            output.add_part(part_component, key, "value", io.BytesIO(raw))
+        return ctx.adopt_model(output.commit())
 
 
 class Facts(msgspec.Struct):
@@ -81,7 +80,7 @@ async def inspect(
         for name in ("block_a.weight", "block_b.weight"):
             row = derived.tensor(component, name)
             assert row.logical_dtype == dtype
-            assert {part.name for part in row.parts} == {"data", "scale"}
+            assert set(row.parts) == {"data", "scale"}
             assert source.identity(component, name) != derived.identity(component, name)
             data = bytearray(512)
             derived.read_part_into(component, name, "data", 0, data)

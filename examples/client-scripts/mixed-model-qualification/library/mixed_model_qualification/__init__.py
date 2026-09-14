@@ -19,53 +19,50 @@ from cozy_runtime.author import (
     Model,
     ModelArtifact,
     Telemetry,
-    WeightsConfig,
     WeightsOutput,
-    WeightsPart,
-    WeightsSink,
-    WeightsTarget,
-    WeightsTensor,
     invocable,
     uses_components,
 )
+from tensorfs.derived import Config as NativeConfig
+from tensorfs.derived import Derivation, Part, Target, Tensor
 
 BASE_REFERENCE = "paul/cozy-mixed-input-proof@0.0.0-rental-audit.20260913/f32"
 app = App()
 
 
-def write_checkpoint(artifacts: WeightsSink, scale: Literal[2, 3]) -> ModelArtifact:
+def write_checkpoint(ctx: Context, scale: Literal[2, 3]) -> ModelArtifact:
     """A bounded native checkpoint; no store path, uploaded file or receipt is invented."""
     encoding = dict(tensorfs.seed_digests())["plain/1"]
-    tensor = WeightsTensor(
+    tensor = Tensor(
         logical_dtype="f32",
         shape=(2, 2),
         encoding=encoding,
-        parts={"value": WeightsPart("f32", (2, 2))},
+        parts={"value": Part("f32", (2, 2))},
     )
-    with artifacts.open(
-        "checkpoint",
+    definition = Derivation(
         sources={},
-        targets={name: WeightsTarget(add={"weight": tensor}) for name in ("alpha", "zeta")},
-        configs={"pipeline": WeightsConfig(data=b"{}")},
+        targets={name: Target(add={"weight": tensor}) for name in ("alpha", "zeta")},
+        configs={"pipeline": NativeConfig("add")},
         order=(("alpha", "weight"), ("zeta", "weight")),
-    ) as writer:
-        if writer.replayed:
-            assert writer.receipt is not None
-            return writer.receipt.artifact
-        complete = writer.completed_parts
+    )
+    with tensorfs.derive(ctx.output("checkpoint"), definition) as writer:
+        if writer.receipt is not None:
+            return ctx.adopt_model(writer.receipt)
+        complete = writer.completed_parts()
         for name, multiplier in (("alpha", scale), ("zeta", 1)):
             if (name, "weight", "value") not in complete:
                 writer.add_part(
                     name, "weight", "value", struct.pack("<4f", multiplier, 0, 0, multiplier)
                 )
-        writer.add_config("pipeline", b"{}")
-        return writer.commit().artifact
+        if "pipeline" not in writer.completed_configs():
+            writer.add_config("pipeline", b"{}")
+        return ctx.adopt_model(writer.commit())
 
 
 @invocable(memoize=True)
-async def candidate(ctx: Context, *, artifacts: WeightsSink) -> ModelArtifact:
+async def candidate(ctx: Context) -> ModelArtifact:
     ctx.raise_if_cancelled()
-    return write_checkpoint(artifacts, 2)
+    return write_checkpoint(ctx, 2)
 
 
 app.job(candidate, weights=(WeightsOutput("checkpoint", max_new_bytes=4096),))

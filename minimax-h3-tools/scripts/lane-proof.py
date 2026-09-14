@@ -24,15 +24,12 @@ import glob
 import json
 import math
 import struct
+import sys
 from pathlib import Path
 from typing import Any, NoReturn
 
 from cozy_runtime.author import (
     UnsupportedInput,
-    WeightsSource,
-    WeightsSourcePart,
-    WeightsSourceTensor,
-    WeightsTarget,
 )
 from cozy_runtime.derive.quantization import (
     prepare_quantization,
@@ -40,7 +37,9 @@ from cozy_runtime.derive.quantization import (
 from h3_tables import job, lanes
 from h3_tables.model_config import parse_production_config
 from h3_tables.quantization import h3_quantization_plan
+from h3_tables.source import full_targets as source_full_targets
 from h3_tables.source import official_full_specs
+from tensorfs.derived import Part, Source, SourceInspection, Target, Tensor
 
 PROJECT = Path(__file__).resolve().parents[1]
 
@@ -51,6 +50,8 @@ def _headers() -> Path:
     A worktree lives beside its repo rather than inside the workspace, so the corpus is
     located by walking up from this file.
     """
+    if len(sys.argv) > 1:
+        return Path(sys.argv[1])
     for parent in (PROJECT, *PROJECT.parents):
         candidate = parent / "tensorfs/vectors/h3-headers"
         if candidate.is_dir():
@@ -94,35 +95,32 @@ def _banked(pattern: str) -> dict[str, dict[str, Any]]:
     return rows
 
 
-def _tensor(component: str, key: str, dtype: str, shape: tuple[int, ...]) -> WeightsSourceTensor:
-    return WeightsSourceTensor(
-        component=component,
-        key=key,
-        logical_dtype=dtype,
-        shape=shape,
-        parts=(WeightsSourcePart("value", dtype, shape),),
-        encoding=job.PLAIN_SPEC,
-    )
-
-
-def full_source_structures() -> dict[str, WeightsSource]:
+def full_source_structures() -> dict[str, SourceInspection]:
     """The exact FULL H3 source structure, rebuilt from facts already in this tree."""
     sections = parse_production_config(job._asset("model-config.json"))
-    dits: list[WeightsSourceTensor] = []
+    components: dict[str, dict[str, Tensor]] = {}
     for component, section in (("fl2va_dit", "transformer"), ("ref2va_dit", "transformer_ref")):
-        for key, (dtype, shape) in official_full_specs(sections[section]).items():
-            dits.append(_tensor(component, key, dtype, tuple(shape)))
-        dits.append(_tensor(component, "rope.inv_freq", "f32", (16,)))
-    shared: list[WeightsSourceTensor] = []
+        components[component] = {
+            key: Tensor(dtype, tuple(shape), job.PLAIN_SPEC, {"value": Part(dtype, tuple(shape))})
+            for key, (dtype, shape) in official_full_specs(sections[section]).items()
+        }
+        components[component]["rope.inv_freq"] = Tensor(
+            "f32", (16,), job.PLAIN_SPEC, {"value": Part("f32", (16,))}
+        )
     for component, pattern in (
         ("text_encoder", "text_encoder__model-*.safetensors"),
         ("video_vae", "vae__diffusion_pytorch_model-*.safetensors"),
         ("audio_vae", "audio_vae__diffusion_pytorch_model.safetensors"),
     ):
-        for key, row in _banked(pattern).items():
-            shared.append(
-                _tensor(component, key, LOGICAL[row["dtype"]], tuple(row["shape"]))
+        components[component] = {
+            key: Tensor(
+                LOGICAL[row["dtype"]],
+                tuple(row["shape"]),
+                job.PLAIN_SPEC,
+                {"value": Part(LOGICAL[row["dtype"]], tuple(row["shape"]))},
             )
+            for key, row in _banked(pattern).items()
+        }
     census = {
         "fl2va_dit": 639,
         "ref2va_dit": 639,
@@ -130,34 +128,37 @@ def full_source_structures() -> dict[str, WeightsSource]:
         "video_vae": 703,
         "audio_vae": 1087,
     }
-    observed = {
-        component: sum(1 for t in (*dits, *shared) if t.component == component)
-        for component in census
-    }
+    observed = {component: len(rows) for component, rows in components.items()}
     if observed != census:
         _fail(f"rebuilt source census is {observed}, expected {census}")
+    # Header census only: this fixture grants no native source or payload access.
     return {
-        "dits": WeightsSource(configs=("model",), tensors=tuple(dits)),
-        "shared": WeightsSource(configs=("model",), tensors=tuple(shared)),
+        alias: SourceInspection(
+            Source("sha256:" + "00" * 32, 0),
+            {component: components[component] for component in names},
+            {"model": b"{}"},
+        )
+        for alias, names in {
+            "dits": ("fl2va_dit", "ref2va_dit"),
+            "shared": ("text_encoder", "video_vae", "audio_vae"),
+        }.items()
     }
 
 
-def _targets(lane: lanes.Lane, granted: dict[str, WeightsSource]) -> dict[str, WeightsTarget]:
+def _targets(lane: lanes.Lane, granted: dict[str, SourceInspection]) -> dict[str, Target]:
     sections = parse_production_config(job._asset("model-config.json"))
-    full_targets = job._full_targets()
+    full_targets = source_full_targets()
     plan = prepare_quantization(h3_quantization_plan())
     selections = {
         component: lanes.select(
             component,
             treatment,
-            lanes.carried(
-                full_targets[component], granted[full_targets[component].source].tensors
-            ),
+            lanes.carried(full_targets[component], granted[full_targets[component].source]),
             dit_plan=plan,
         )
         for component, treatment in lane.components.items()
     }
-    targets: dict[str, WeightsTarget] = job._lane_targets(
+    targets: dict[str, Target] = job._lane_targets(
         lane, sections, job._table_additions(sections), full_targets, selections
     )
     return targets
@@ -207,10 +208,10 @@ def arm_census() -> None:
     # the ceilings the descriptor publishes are derived from the catalogue, not typed twice.
     ceilings = {output.name: output.max_new_bytes for output in job.LANE_OUTPUTS}
     shipped = {
-        "bf16-full": 65536,
-        "bf16-pruned": 2147614720,
-        "fp8-pruned": 70867091456,
-        "mxfp8-pruned": 70867091456,
+        "bf16-full": 12884967424,
+        "bf16-pruned": 15032516608,
+        "fp8-pruned": 83751993344,
+        "mxfp8-pruned": 83751993344,
     }
     if ceilings != shipped:
         _fail(f"lane ceilings changed: {ceilings}")
@@ -220,9 +221,9 @@ def arm_census() -> None:
     _refusals(granted)
 
 
-def _component_selection(granted: dict[str, WeightsSource]) -> None:
+def _component_selection(granted: dict[str, SourceInspection]) -> None:
     print("\n  per-component selection on the real components")
-    shared = granted["shared"].tensors
+    shared = granted["shared"]
 
     # The video VAE: h3a-027 §5 predicted 216 decoder ViT linears. The structural selector
     # takes 217 — the 216 block linears PLUS decoder.proj_out.weight [3072, 2048]. It skips
@@ -230,14 +231,14 @@ def _component_selection(granted: dict[str, WeightsSource]) -> None:
     video = lanes.select(
         "video_vae",
         lanes.Treatment(cast="f16", encode="fp8-rowwise/1"),
-        lanes.carried(job._full_targets()["video_vae"], shared),
+        lanes.carried(source_full_targets()["video_vae"], shared),
     )
     encoded = set(video.encoded)
     if len(encoded) != 217 or any(not key.startswith("decoder.") for key in encoded):
         _fail(f"video_vae selected {len(encoded)} keys, or reached outside the decoder")
     if "decoder.proj_out.weight" not in encoded or "decoder.proj_in.weight" in encoded:
         _fail("video_vae selection is not the exact 216 block linears + proj_out")
-    rows = [t for t in shared if t.component == "video_vae"]
+    rows = shared.components["video_vae"]
     if len(video.cast) != len(rows) - len(encoded):
         _fail(f"video_vae casts {len(video.cast)} of {len(rows)} rows, expected the remainder")
     print(
@@ -251,9 +252,11 @@ def _component_selection(granted: dict[str, WeightsSource]) -> None:
     # TEXT_ENCODER_KEEP holding back the token embedding, the 27-block visual tower and the
     # mergers. This arm proves the mechanism expresses that ruling EXACTLY, and it is the
     # one place the two lanes' numbers must agree.
-    conditioner = lanes.carried(job._full_targets()["text_encoder"], shared)
-    if len(conditioner) != 902:
-        _fail(f"the reviewed conditioner target carries {len(conditioner)} rows, expected 902")
+    conditioner = lanes.carried(source_full_targets()["text_encoder"], shared)
+    if len(conditioner.components["text_encoder"]) != 902:
+        _fail(
+            f"conditioner carries {len(conditioner.components['text_encoder'])} rows, expected 902"
+        )
     naive = lanes.select("text_encoder", lanes.Treatment(encode="fp8-rowwise/1"), conditioner)
     curated = lanes.select(
         "text_encoder",
@@ -269,7 +272,7 @@ def _component_selection(granted: dict[str, WeightsSource]) -> None:
         )
     if any(".layers." not in key for key in curated.encoded):
         _fail("the kept conditioner selection reached outside layers.{0..49}")
-    sizes = {t.key: math.prod(t.shape) for t in conditioner}
+    sizes = {key: math.prod(t.shape) for key, t in conditioner.components["text_encoder"].items()}
     encoded_bytes = sum(sizes[key] for key in curated.encoded) * 2
     if encoded_bytes != 48_758_784_000:
         _fail(f"conditioner selection is {encoded_bytes} source bytes, expected 48758784000")
@@ -294,18 +297,20 @@ def _component_selection(granted: dict[str, WeightsSource]) -> None:
     )
 
 
-def _refusals(granted: dict[str, WeightsSource]) -> None:
+def _refusals(granted: dict[str, SourceInspection]) -> None:
     print("\n  red arms")
-    shared = granted["shared"].tensors
-    audio = [t for t in shared if t.component == "audio_vae"]
+    shared = granted["shared"]
+    audio = shared.components["audio_vae"]
     representable = [
-        t for t in audio if t.key.endswith(".weight") and len(t.shape) == 2 and t.shape[1] % 32 == 0
+        key
+        for key, t in audio.items()
+        if key.endswith(".weight") and len(t.shape) == 2 and t.shape[1] % 32 == 0
     ]
-    if len(representable) != 6 or any("pre_block" not in t.key for t in representable):
+    if len(representable) != 6 or any("pre_block" not in key for key in representable):
         _fail(f"audio_vae has {len(representable)} structurally selectable rows, expected 6")
     print(
         f"    audio_vae carries {len(representable)} structurally selectable rows "
-        f"({', '.join(sorted(t.key for t in representable)[:2])}, ...) — all encoder "
+        f"({', '.join(sorted(representable)[:2])}, ...) — all encoder "
         "pre_block linears, so a shape rule would NOT refuse it"
     )
     _refuses(
