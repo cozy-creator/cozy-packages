@@ -19,12 +19,12 @@ from cozy_runtime.author.fakes import fake_context, fake_outputs
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "minimax-h3"))
+from cozy_runtime.models.minimax_h3.official import OfficialH3Pipeline  # noqa: E402
 from safetensors.torch import load, save  # noqa: E402
 
 import h3  # noqa: E402
 import h3_diagnostics  # noqa: E402
 from h3_activation_trace import ACTIVE_TRACE, ActivationTrace, FirstStepCaptured  # noqa: E402
-from official import OfficialH3Pipeline  # noqa: E402
 
 
 class Block(torch.nn.Module):
@@ -192,10 +192,18 @@ def main() -> None:
     seen: list[int] = []
 
     def denoise(
-        self: Any, task: str, state: Any, *, on_step: Any, cancel: Any, checks: Any = None
+        self: Any,
+        task: str,
+        state: Any,
+        *,
+        on_step: Any,
+        cancel: Any,
+        checks: Any = None,
+        sol_dense_steps: int = 10,
     ) -> Any:
         assert task == "ref2va"
         del checks
+        assert sol_dense_steps == 10
         for index in range(3):
             cancel()
             state.latents = model(**arguments)

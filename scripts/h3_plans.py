@@ -27,9 +27,8 @@ CONFORM_SCRIPT = ROOT / "scripts" / "h3-conform.py"
 sys.path.insert(0, str(H3))
 
 from cozy_runtime.author import canonical_json  # noqa: E402
+from cozy_runtime.models.minimax_h3.official import Schedule, TimestepPlan, Trunk  # noqa: E402
 from diffusers import MiniMaxH3Scheduler  # noqa: E402
-
-from official import Schedule, TimestepPlan, Trunk  # noqa: E402
 
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0

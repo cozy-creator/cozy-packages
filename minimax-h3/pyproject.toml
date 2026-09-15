@@ -3,7 +3,7 @@ name = "minimax-h3"
 version = "1.15.2"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "cozy-runtime[media]>=0.18.3,<1",
+    "cozy-runtime[media,minimax-h3]>=0.18.4,<1",
     "cozy-eval>=0.3.2,<1",
     "diffusers==0.40.0",
     "hf-xet==1.6.0",
@@ -29,22 +29,14 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 only-include = [
-    "adaln_pruned.py",
     "assembly.py",
-    "conditioner.py",
     "gates.py",
     "h3.py",
     "long_form_state.py",
-    "h3_table_layout.py",
     "h3_diagnostics.py",
     "h3_activation_trace.py",
     "h3_resident_samples.py",
-    "official.py",
-    "processor",
     "timestep-plans",
-    "tokenizer",
-    "turbo.py",
-    "vae_tiles.py",
 ]
 
 [tool.cozy]

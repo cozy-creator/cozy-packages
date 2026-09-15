@@ -144,12 +144,17 @@ def imports(tree: ast.AST, package: str = "") -> Iterator[tuple[str, int]]:
 
 
 #: The runtime surface anything in this repo may import: `cozy_runtime.author` and
-#: `cozy_runtime.derive` (cr-071's public derivation plane for job packages) and their
+#: `cozy_runtime.derive` (the public derivation plane), `cozy_runtime.models` (builtins),
+#: and their
 #: PUBLIC submodules. An underscored submodule — `author._assets`, `author._services` — is
 #: Runtime's own mechanism, and `cozy_runtime.internal` is the plane the author surface
 #: exists to hide. Both break the same way: the name stops existing on a later Runtime with
 #: nothing here having said it depended on one.
-PUBLIC_RUNTIME_ROOTS = (["cozy_runtime", "author"], ["cozy_runtime", "derive"])
+PUBLIC_RUNTIME_ROOTS = (
+    ["cozy_runtime", "author"],
+    ["cozy_runtime", "derive"],
+    ["cozy_runtime", "models"],
+)
 
 
 def public_runtime_surface(module: str) -> bool:
@@ -162,6 +167,10 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    ("scripts/h3-conform.py", "cozy_runtime.author._attention_scope"): (
+        "Read the actual active context in real CPU DiT hooks to verify scope lifetime "
+        "and exception restoration. No package serving code reads this private context."
+    ),
     ("scripts/h3-assembly-proof.py", "cozy_runtime.author._assets"): (
         "Bind native codec fixtures and their file-state guards to the author invocation. "
         "Retire when a public native asset fixture supports changed-input controls. "
@@ -356,6 +365,7 @@ ARM_PUBLIC = (
     "from cozy_runtime.author.fakes import fake_attempt, fake_input",
     "import cozy_runtime.author",
     "from cozy_runtime.derive.quantization import derive_fp8",
+    "from cozy_runtime.models.minimax_h3 import H3Model",
 )
 
 

@@ -120,6 +120,15 @@ wheels = [
 media = [
     { name = "av" },
 ]
+minimax-h3 = [
+    { name = "diffusers" },
+    { name = "numpy" },
+    { name = "safetensors" },
+    { name = "tokenizers" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "transformers" },
+]
 
 [[package]]
 name = "cryptography"
@@ -396,7 +405,7 @@ version = "1.15.2"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-eval" },
-    { name = "cozy-runtime", extra = ["media"] },
+    { name = "cozy-runtime", extra = ["media", "minimax-h3"] },
     { name = "diffusers" },
     { name = "hf-xet" },
     { name = "msgspec" },
@@ -415,7 +424,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cozy-eval", specifier = ">=0.3.2,<1" },
-    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.18.3,<1" },
+    { name = "cozy-runtime", extras = ["media", "minimax-h3"], specifier = ">=0.18.4,<1" },
     { name = "diffusers", specifier = "==0.40.0" },
     { name = "hf-xet", specifier = "==1.6.0" },
     { name = "msgspec", specifier = ">=0.19" },

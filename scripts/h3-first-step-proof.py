@@ -12,17 +12,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "minimax-h3"))
 sys.path.insert(0, str(ROOT / "examples/client-scripts/h3-first-step"))
 
-from h3_first_step import FirstStepCaptured, FirstStepTrace, tensor_record  # noqa: E402
-
-from adaln_pruned import AdaLNPrunedMiniMaxH3Transformer  # noqa: E402
-from official import canonical_timestep_plan  # noqa: E402
-from turbo import (  # noqa: E402
+from cozy_runtime.models.minimax_h3.adaln_pruned import (  # noqa: E402
+    AdaLNPrunedMiniMaxH3Transformer,
+)
+from cozy_runtime.models.minimax_h3.official import canonical_timestep_plan  # noqa: E402
+from cozy_runtime.models.minimax_h3.turbo import (  # noqa: E402
     ATTENTION_KWARG,
     OVERLAY_KWARG,
     TURBO_BANK,
     TurboOverlay,
     TurboSchedule,
 )
+from h3_first_step import FirstStepCaptured, FirstStepTrace, tensor_record  # noqa: E402
 
 
 def main() -> None:

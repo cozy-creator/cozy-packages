@@ -41,8 +41,8 @@ if len(sys.argv) > 1:
     from diffusers import MiniMaxH3Transformer3DModel
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
-    from official import canonical_timestep_plan
-    from turbo import TurboOverlay, TurboSchedule
+    from cozy_runtime.models.minimax_h3.official import canonical_timestep_plan
+    from cozy_runtime.models.minimax_h3.turbo import TurboOverlay, TurboSchedule
 
 
 CONFIG = {
