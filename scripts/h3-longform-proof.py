@@ -19,7 +19,6 @@ from pathlib import Path
 from threading import Event
 from threading import enumerate as threads
 from typing import Any, Literal, cast
-from unittest.mock import patch
 
 import av
 import msgspec
@@ -284,7 +283,8 @@ def _drive(
     if resume is not None:
         wire["resume_from"] = resume.digest
         trees[resume.digest] = (resume.path, resume.digest)
-    with patch.object(assembly, "_scan_video", scan):
+    assembly._scan_video = scan
+    try:
         result, outcome, _ = attempt(
             h3.app.get("long_form"),
             wire,
@@ -297,6 +297,8 @@ def _drive(
                 cancel=lambda: cancelled,
             ),
         )
+    finally:
+        assembly._scan_video = original_scan
     assert not any(thread.name.startswith("h3-scan") for thread in threads())
     return result, outcome, calls
 
