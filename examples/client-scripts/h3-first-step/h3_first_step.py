@@ -207,7 +207,7 @@ class TraceLoRA(H3TurboLoRA):
         on_step: Any,
         cancel: Any,
         checks: Any,
-        sol_dense_steps: int,
+        sol_dense_steps: int = 10,
     ) -> Any:
         trace = _ACTIVE.get()
         if trace is None:
