@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime>=0.18.0,<1", "cozy-mixed-model-qualification==0.0.1"]
+# dependencies = ["cozy-runtime>=0.18.0,<1", "cozy-mixed-model-qualification>=0.0.1"]
 # [tool.uv]
 # default-groups = []
 # [tool.uv.sources]

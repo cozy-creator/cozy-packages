@@ -1,8 +1,8 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
 # dependencies = [
-#   "cozy-runtime>=0.18.0,<1", "tensorfs>=0.3.42,<0.4", "numpy==2.5.1",
-#   "torch==2.13.0", "torchvision==0.28.0",
+#   "cozy-runtime>=0.18.0,<1", "tensorfs>=0.3.42,<0.4", "numpy>=2.5.1",
+#   "torch>=2.13.0", "torchvision>=0.28.0",
 #   "sdxl", "sdxl-assessment-client",
 # ]
 # [tool.uv.sources]
