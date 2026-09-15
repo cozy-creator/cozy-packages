@@ -26,7 +26,8 @@ def rank_main(rank: int, degree: int, directory: Path) -> None:
         "gloo", init_method=(directory / "rendezvous").as_uri(), rank=rank, world_size=degree
     )
     try:
-        model = MiniMaxH3Transformer3DModel(
+        model_type: Any = MiniMaxH3Transformer3DModel
+        model = model_type(
             num_attention_heads=4,
             attention_head_dim=128,
             hidden_size=8,

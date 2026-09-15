@@ -31,7 +31,9 @@ collective enqueue, actual FA3/Sol calls, every post-fusion linear and attention
 module, PDD LoRA accumulation and Turbo final output heads. This includes the
 complete50-block forward through final projections; it can expose global output
 head replication as well as shard-local GEMMs. Kernel launch counts, copies/casts,
-NCCL activity and CUDA self-time are available from profiler events.
+NCCL activity and CUDA self-time are available from profiler events. Summaries
+separate CUDA-device event self-time from CPU-event CUDA attribution; neither
+sum is presented as non-overlapping device busy time.
 
 CPU call spans, CUDA kernels and waits overlap. Do not sum them into latency.
 Per-rank forward wall time excludes trace export; leader step time includes
@@ -44,7 +46,8 @@ by the narrow wrappers without copying tensor payloads.
 Per-rank event/self-time summaries are written before trace export. Each raw trace
 is bounded at256MiB for delivery; an oversized trace is omitted with an explicit
 status in measurements. The compressed archive is bounded at256MiB, and JSON at
-16MiB by the output contract. Ordinary returned FileAssets establish custody;
+16MiB by the output contract. If the compressed archive itself exceeds its bound,
+a small empty archive and explicit trace-size status preserve the measurements. Ordinary returned FileAssets establish custody;
 ephemeral spool files alone are not completion. Keep capture logs outside source.
 
 CPU proof uses actual tiny H3 forwards with two/four Gloo ranks and checks that

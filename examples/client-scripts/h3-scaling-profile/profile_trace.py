@@ -20,7 +20,9 @@ import torch.distributed as dist
 from cozy_runtime.author._attention_scope import _ACTIVE_LAYOUT
 from cozy_runtime.internal import attention_sol
 from cozy_runtime.models.minimax_h3.turbo import OVERLAY_KWARG, LoRAFactors
+from diffusers.models import _modeling_parallel as modeling_parallel
 from diffusers.models import attention_dispatch as dispatch
+from torch.distributed import _functional_collectives as funcol
 
 MARKER = "_h3_scaling_profile"
 MAX_TRACE_BYTES = 256 << 20
@@ -40,9 +42,10 @@ class ForwardProfile:
         self.world = dist.get_world_size() if dist.is_initialized() else 1
         self.prefix = Path(marker["prefix"])
         self.step = marker["step"]
-        self.layout = _ACTIVE_LAYOUT.get()
-        if self.layout is None or self.layout.step != self.step:
+        layout = _ACTIVE_LAYOUT.get()
+        if layout is None or layout.step != self.step:
             raise RuntimeError("profile marker does not name the current denoising step")
+        self.layout = layout
         self.heads = root.config.num_attention_heads
         self.head_dim = root.config.attention_head_dim
         self.rows: list[dict[str, Any]] = []
@@ -53,7 +56,8 @@ class ForwardProfile:
         activities = [torch.profiler.ProfilerActivity.CPU]
         if self.cuda:
             activities.append(torch.profiler.ProfilerActivity.CUDA)
-        self.profiler = torch.profiler.profile(
+        profiler_type: Any = torch.profiler.profile
+        self.profiler = profiler_type(
             activities=activities, record_shapes=False, profile_memory=False, with_stack=False
         )
         self.profiler.__enter__()
@@ -102,7 +106,7 @@ class ForwardProfile:
             ) as row:
                 self.last_split_sizes = None
                 wait = function(tensor, group, **kwargs)
-                splits = self.last_split_sizes
+                splits = self.recorded_splits()
                 row["splits"] = splits
                 row["local_tokens"] = int(kwargs.get("Q_S_LOCAL", tensor.shape[1]))
 
@@ -111,8 +115,6 @@ class ForwardProfile:
                     result = wait()
                     done["output"] = shape(result)
                     if name == "qkv_exchange":
-                        if splits is None or len(splits) != self.world:
-                            raise RuntimeError("exchange did not expose its existing size gather")
                         global_tokens = sum(splits)
                         if (
                             not self.layout.live_tokens
@@ -140,6 +142,11 @@ class ForwardProfile:
 
         return call
 
+    def recorded_splits(self) -> list[int]:
+        if self.last_split_sizes is None or len(self.last_split_sizes) != self.world:
+            raise RuntimeError("exchange did not expose its existing size gather")
+        return list(self.last_split_sizes)
+
     def install(self, root: Any, overlay: Any) -> None:
         self.patch(
             dispatch,
@@ -151,7 +158,7 @@ class ForwardProfile:
             "all_to_all_single_any_o_async",
             self.exchange(dispatch.all_to_all_single_any_o_async, "output_exchange"),
         )
-        original_gather = dispatch.gather_size_by_comm
+        original_gather = modeling_parallel.gather_size_by_comm
 
         @functools.wraps(original_gather)
         def gather(size: int, group: Any) -> Any:
@@ -165,9 +172,9 @@ class ForwardProfile:
 
         self.patch(dispatch, "gather_size_by_comm", gather)
         self.patch(
-            dispatch.funcol,
+            funcol,
             "all_to_all_single",
-            self.timed(dispatch.funcol.all_to_all_single, "collective_all_to_all_enqueue"),
+            self.timed(funcol.all_to_all_single, "collective_all_to_all_enqueue"),
         )
         self.patch(attention_sol, "_native", self.timed(attention_sol._native, "sol_native"))
         self.patch(attention_sol, "_dense", self.timed(attention_sol._dense, "sol_dense_reference"))
@@ -213,6 +220,7 @@ class ForwardProfile:
             {
                 "name": event.key,
                 "calls": event.count,
+                "device_type": str(event.device_type).rsplit(".", 1)[-1].lower(),
                 "cpu_self_us": event.self_cpu_time_total,
                 "device_self_us": event.self_device_time_total,
             }
@@ -230,7 +238,12 @@ class ForwardProfile:
             "head_dim": self.head_dim,
             "forward_succeeded": succeeded,
             "forward_wall_ms": forward_wall_ms,
-            "cuda_self_time_sum_us": sum(row["device_self_us"] for row in summaries),
+            "cuda_event_self_time_sum_us": sum(
+                row["device_self_us"] for row in summaries if row["device_type"] == "cuda"
+            ),
+            "cpu_event_attributed_cuda_self_time_sum_us": sum(
+                row["device_self_us"] for row in summaries if row["device_type"] == "cpu"
+            ),
             "events": sorted(summaries, key=lambda row: row["device_self_us"], reverse=True),
             "spans": self.rows,
             "interpretation": (

@@ -180,7 +180,11 @@ def main(
             archive.add(path, arcname=path.name, recursive=False)
     document["trace_archive_bytes"] = archive_path.stat().st_size
     if archive_path.stat().st_size > MAX_ARCHIVE_BYTES:
-        raise RuntimeError("one-step trace archive exceeds the declared output bound")
+        document["trace_archive_omitted"] = "compressed trace exceeds declared asset bound"
+        archive_path = out.temporary_file(".summary-only.tar.gz")
+        with tarfile.open(archive_path, "w:gz"):
+            pass
+        trace_paths.clear()
     return Result(
         measurements=out.save_bytes(
             json.dumps(document, indent=2, allow_nan=False).encode(), media_type="application/json"
