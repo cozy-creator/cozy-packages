@@ -15,6 +15,13 @@ Creator CLI to publish that same snapshot. A missing or incompatible image stops
 publication. The Tensorhub operator checkout supplies the read-only image check;
 its normal configuration flags select the environment being released to.
 
+Prefer lower bounds for package dependencies, such as `pydantic-core>=2.46.4`.
+If a compatibility ceiling is needed, bound the major version (`>=2.46.4,<3`) or
+at most the minor version (`>=2.46.4,<2.47`). Major/minor wildcards and equivalent
+compatible-release ranges are allowed. Exact releases (`==2.46.4`, including
+short forms such as `==2.46`) and patch ceilings are rejected. Keep the exact
+tested versions in `uv.lock`; compatibility declarations must admit patch updates.
+
 When a package starts using a new Runtime API:
 
 1. Release and verify Runtime, including its public wheel artifacts.

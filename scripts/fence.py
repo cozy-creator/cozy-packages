@@ -74,6 +74,8 @@ import tokenize
 from collections.abc import Callable, Iterator
 
 import tomllib
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.version import Version
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 Fence = tuple[list[str], str]
@@ -1053,6 +1055,86 @@ def fence_publication_metadata() -> Fence:
     return bad, f"{len(projects())} packages declare one catalog and installed identity"
 
 
+def compatible_dependency(text: str) -> bool:
+    """Allow floors and major/minor ranges; exact tested versions belong in locks."""
+    try:
+        requirement = Requirement(text)
+    except InvalidRequirement:
+        return False
+    for specifier in requirement.specifier:
+        if specifier.operator in {">=", ">"}:
+            continue
+        if specifier.operator == "==" and specifier.version.endswith(".*"):
+            components = specifier.version[:-2].split(".")
+            if 1 <= len(components) <= 2 and all(part.isdecimal() for part in components):
+                continue
+        if specifier.operator == "~=" and len(Version(specifier.version).release) <= 3:
+            continue
+        if specifier.operator == "<":
+            version = Version(specifier.version)
+            if not any(version.release[2:]) and not any(
+                (version.pre, version.post is not None, version.dev is not None, version.local)
+            ):
+                continue
+        return False
+    return True
+
+
+def fence_dependency_ranges() -> Fence:
+    bad: list[str] = []
+    for project in projects():
+        path = project / "pyproject.toml"
+        document = tomllib.loads(path.read_text())
+        groups = {"project.dependencies": document["project"].get("dependencies", [])}
+        groups.update(
+            {
+                f"project.optional-dependencies.{name}": values
+                for name, values in document["project"].get("optional-dependencies", {}).items()
+            }
+        )
+        groups.update(
+            {
+                f"dependency-groups.{name}": values
+                for name, values in document.get("dependency-groups", {}).items()
+            }
+        )
+        for group, values in groups.items():
+            for requirement in values:
+                if isinstance(requirement, str) and not compatible_dependency(requirement):
+                    bad.append(
+                        f"{rel(path)}: {group}: avoid exact/patch pins; use a floor and "
+                        f"optional major/minor range: {requirement}"
+                    )
+    for text in (
+        "pydantic-core>=2.46.4",
+        "cozy-runtime[media]>=0.18.4",
+        "numpy",
+        "foo>=1; python_version >= '3.12'",
+        "foo>=2.46.4,<3",
+        "foo>=2.46.4,<2.47.0",
+        "foo==2.*",
+        "foo==2.46.*",
+        "foo~=2.46",
+        "foo~=2.46.4",
+    ):
+        if not compatible_dependency(text):
+            bad.append(f"dependency policy wrongly rejects {text}")
+    for text in (
+        "foo==1.2.3",
+        "foo===1.2.3",
+        "foo==2",
+        "foo==2.46",
+        "foo==2.46.4.*",
+        "foo<=2.46",
+        "foo<2.46.5",
+        "foo~=2.46.4.1",
+        "foo!=1.2",
+    ):
+        if compatible_dependency(text):
+            bad.append(f"dependency policy failed to reject {text}")
+    return bad, "package declarations admit patch updates; exact versions remain in uv.lock"
+
+
 FENCES = (
     ("author-surface-only", fence_author_surface),
     ("driver-boundary-armed", fence_driver_arm),
@@ -1068,6 +1150,7 @@ FENCES = (
     ("step-progress", fence_step_progress),
     ("interface-format", fence_interface_format),
     ("publication-metadata", fence_publication_metadata),
+    ("dependency-version-ranges", fence_dependency_ranges),
 )
 
 

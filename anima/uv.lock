@@ -10,7 +10,7 @@ supported-markers = [
 
 [[package]]
 name = "anima"
-version = "0.2.5"
+version = "0.2.6"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -37,26 +37,26 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.18.0,<1" },
-    { name = "diffusers", specifier = "==0.40.0" },
-    { name = "hf-xet", specifier = "==1.6.0" },
+    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.18.0" },
+    { name = "diffusers", specifier = ">=0.40.0" },
+    { name = "hf-xet", specifier = ">=1.6.0" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=2.0" },
-    { name = "pyyaml", specifier = "==6.0.3" },
-    { name = "regex", specifier = "==2026.7.19" },
-    { name = "safetensors", specifier = "==0.8.0" },
-    { name = "shellingham", specifier = "==1.5.4" },
-    { name = "tensorfs", specifier = ">=0.3.42,<0.4" },
-    { name = "tokenizers", specifier = "==0.23.1" },
-    { name = "torch", specifier = ">=2.13,<3" },
-    { name = "torchvision", specifier = ">=0.28,<1" },
-    { name = "transformers", specifier = "==5.16.1" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "regex", specifier = ">=2026.7.19" },
+    { name = "safetensors", specifier = ">=0.8.0" },
+    { name = "shellingham", specifier = ">=1.5.4" },
+    { name = "tensorfs", specifier = ">=0.3.42" },
+    { name = "tokenizers", specifier = ">=0.23.1" },
+    { name = "torch", specifier = ">=2.13" },
+    { name = "torchvision", specifier = ">=0.28" },
+    { name = "transformers", specifier = ">=5.16.1" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "mypy", specifier = "==2.3.1" },
-    { name = "ruff", specifier = "==0.16.4" },
+    { name = "mypy", specifier = ">=2.3.1" },
+    { name = "ruff", specifier = ">=0.16.4" },
 ]
 
 [[package]]
