@@ -32,8 +32,10 @@ from cozy_runtime.author import (
     Context,
     FileAsset,
     Image,
+    ImageAsset,
     Outputs,
     Telemetry,
+    VideoAsset,
     uses_components,
 )
 from cozy_runtime.author._attention_scope import _ACTIVE_LAYOUT
@@ -67,6 +69,41 @@ class Result(msgspec.Struct):
     ]
     traces: Annotated[FileAsset, AssetBound(max_bytes=32 << 20, media_types=("application/gzip",))]
     status: str
+
+
+class VideoInput(msgspec.Struct, forbid_unknown_fields=True):
+    prompt: str
+    seed: int = 7101
+    duration_s: Annotated[int, msgspec.Meta(ge=5, le=15)] = 15
+
+
+class VideoResult(msgspec.Struct):
+    video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",))]
+    continuation_frame: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
+    warnings: list[str]
+
+
+@app.entrypoint
+def generate(
+    ctx: Context,
+    payload: VideoInput,
+    assets: KeyframeAssets,
+    model: H3Model,
+    out: Outputs,
+    tel: Telemetry,
+) -> VideoResult:
+    """Render a complete 30-step clip using the ordinary H3 workflow and request policy."""
+    result = fl2va(
+        ctx,
+        FirstLastFrameToVideoInput(
+            prompt=payload.prompt, seed=payload.seed, duration_s=payload.duration_s, steps=30
+        ),
+        assets,
+        model,
+        out,
+        tel,
+    )
+    return VideoResult(result.video, result.continuation_frame, result.warnings)
 
 
 class Captured(Exception):

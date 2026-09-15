@@ -37,3 +37,11 @@ Version 2 result documents name `against_reference` explicitly because Blackwell
 comparisons need not use the H100-only FA3 artifact. Reference trajectories, checkpoint
 identity and captured input hashes must match before comparing separate experiments.
 Native-kernel tests and matched full videos remain separate qualification gates.
+
+The private App's `generate` entrypoint renders a complete 30-step video through the
+ordinary H3 workflow. It accepts `prompt`, `seed` and `duration_s`; choose attention
+through the normal scoped request override. Run identical inputs and checkpoint
+with `--attention-kernel=model/fl2va_dit=flash-attn3` and
+`--attention-kernel=model/fl2va_dit=sol-attn` for a visual pair. Record the resolved backend
+and effective dense/sparse counts from each attempt. Unlike `probe`, `generate`
+does not replace processors to force a capture trajectory or stop denoising early.
