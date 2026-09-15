@@ -12,11 +12,13 @@ import msgspec
 from cozy_runtime.author import (
     App,
     AssetBound,
+    AttentionContext,
     Context,
     ImageAsset,
     Outputs,
     Telemetry,
     VideoAsset,
+    sequence_parallel,
 )
 from cozy_runtime.models.minimax_h3 import H3TurboBase, H3TurboLoRA
 from cozy_runtime.models.minimax_h3.official import NumericalChecks, frames_for
@@ -25,6 +27,17 @@ from h3 import H3Model as WorkflowModel
 from h3 import _finish
 
 app = App()
+ATTENTION_BACKEND: Literal["sol-attn", "flash-attn3"] = "sol-attn"
+
+
+@sequence_parallel(degrees=(2, 4))
+class PinnedTurboBase(H3TurboBase, encoded_leaves="accept", fusion="accept"):
+    """Choose on every rank before preparation; request pins then verify this choice."""
+
+    def choose_attention(self, context: AttentionContext) -> str | None:
+        if context.component.rsplit("/", 1)[-1] == "fl2va_dit":
+            return ATTENTION_BACKEND
+        return None
 
 
 class Input(msgspec.Struct, forbid_unknown_fields=True):
@@ -44,7 +57,7 @@ class Result(msgspec.Struct):
 def main(
     ctx: Context,
     payload: Input,
-    base_model: H3TurboBase,
+    base_model: PinnedTurboBase,
     turbo_lora: H3TurboLoRA,
     out: Outputs,
     tel: Telemetry,

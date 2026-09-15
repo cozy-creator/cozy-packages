@@ -8,9 +8,17 @@ Wushu/Spatial adapters in this comparison.
 
 `sol_dense_steps=3` keeps the first three steps dense; `4` keeps four dense; `8`
 is an all-dense control. The first two transformer blocks, refiner, and protected
-conditioning/audio tokens retain Runtime's dense policy. Select the backend
-independently through `--attention-kernel`. A dense-step setting alone does not
-select Sol. Inspect effective backend counts before calling a clip sparse.
+conditioning/audio tokens retain Runtime's dense policy. `PinnedTurboBase` uses
+the public `choose_attention` hook to prepare Sol on every rank. The request's
+`--attention-kernel` verifies that already prepared choice; a remote request pin
+does not select a different backend during group preparation. Inspect effective
+backend counts before calling a clip sparse.
+
+For the FA3 control, stage a separate package named `h3-fa3-turbo`, changing only
+the project name and `ATTENTION_BACKEND` literal to `flash-attn3`. Keep the same
+workflow body, base/PDD checkpoints and inputs. Each package has one entrypoint
+and exactly one base/PDD pair. Do not combine both base classes into one App:
+the current package preparation can prepare models from multiple entrypoints.
 
 ## Capture and worker requirements
 
@@ -59,8 +67,8 @@ cozy run local/h3-sol-turbo/main \
 ```
 
 Make separate input files with `sol_dense_steps` set to 3, 4 and 8; hold every
-other field fixed. Use `flash-attn3` instead of `sol-attn` for the independent
-dense backend control. The component-only override is intentional: the private
+other field fixed. Use `local/h3-fa3-turbo/main` with its matching `flash-attn3`
+pin for the independently prepared dense control. The component-only override is intentional: the private
 wire55 CLI cohort predates the complete model-qualified override fix. Only the
 base model has `fl2va_dit`; the separately bound PDD adapter does not.
 
