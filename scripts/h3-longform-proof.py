@@ -11,10 +11,14 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import shutil
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
+from threading import enumerate as threads
 from typing import Any, Literal, cast
 
 import av
@@ -26,8 +30,10 @@ from cozy_runtime.author import (
     Context,
     ImageFrame,
     Invocation,
+    MediaDecoder,
     Outputs,
     Tree,
+    VideoAsset,
     attempt,
     describe,
     invocable,
@@ -38,6 +44,7 @@ from cozy_runtime.author._codec import encode_frame
 from cozy_runtime.author._media import SNIFF_BYTES, sniff
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
+import assembly
 import h3
 from long_form_state import PrefixManifest, RenderProvenance, SoftwareVersion, compatible
 from official import FPS, frames_for
@@ -110,6 +117,7 @@ def _drive(
     observed: RenderProvenance | None = None,
     mode: Literal["turbo", "standard"] = "standard",
     steps: int | None = None,
+    overlap: bool = False,
 ) -> tuple[Any, Any, list[dict[str, Any]]]:
     root.mkdir()
     spool = root / "bytes"
@@ -122,6 +130,19 @@ def _drive(
     answers: dict[int, str] = {}
     byte_grants: dict[int, list[dict[str, Any]]] = {}
     cancelled = False
+    scan_started, child_started, scan_finished = Event(), Event(), Event()
+    original_scan = assembly._scan_video
+
+    def scan(
+        decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], None]
+    ) -> assembly._Scan:
+        if overlap and not scan_started.is_set():
+            scan_started.set()
+            assert child_started.wait(10), "scan did not overlap a later child"
+            result = original_scan(decoder, asset, check)
+            scan_finished.set()
+            return result
+        return original_scan(decoder, asset, check)
 
     def exchange(kind: str, value: dict[str, Any]) -> dict[str, Any]:
         nonlocal cancelled
@@ -146,6 +167,13 @@ def _drive(
         if kind == "child_call":
             index = int(value["call_index"])
             calls.append(value)
+            if overlap and index == (0 if resume is not None else 1):
+                child_started.set()
+                assert scan_started.wait(10), "validation was deferred until all children finished"
+                if index != cancel_at:
+                    assert scan_finished.wait(10), (
+                        "validation cannot progress while child is active"
+                    )
             if index in (fail_at, cancel_at):
                 cancelled = index == cancel_at
                 return {
@@ -260,18 +288,23 @@ def _drive(
     if resume is not None:
         wire["resume_from"] = resume.digest
         trees[resume.digest] = (resume.path, resume.digest)
-    result, outcome, _ = attempt(
-        h3.app.get("long_form"),
-        wire,
-        Invocation(
-            parent,
-            root / "parent",
-            time.monotonic() + 180,
-            calls=broker,
-            trees=trees,
-            cancel=lambda: cancelled,
-        ),
-    )
+    assembly._scan_video = scan
+    try:
+        result, outcome, _ = attempt(
+            h3.app.get("long_form"),
+            wire,
+            Invocation(
+                parent,
+                root / "parent",
+                time.monotonic() + 180,
+                calls=broker,
+                trees=trees,
+                cancel=lambda: cancelled,
+            ),
+        )
+    finally:
+        assembly._scan_video = original_scan
+    assert not any(thread.name.startswith("h3-scan") for thread in threads())
     return result, outcome, calls
 
 
@@ -296,7 +329,7 @@ def main() -> None:
     assert single.delivered_frames == 124
     check_video(single.video, 124)
     single_prefix = persist_prefix(store, single.prefix, root / "retained-single", "single")
-    result, outcome, calls = _drive(root / "second", shots[:2], resume=single_prefix)
+    result, outcome, calls = _drive(root / "second", shots[:2], resume=single_prefix, overlap=True)
     assert outcome.terminal == "succeeded", outcome
     second = result.result
     assert second.complete and second.delivered == 2 and second.reused == 1
@@ -306,7 +339,7 @@ def main() -> None:
     assert sent["expected_provenance"] == msgspec.to_builtins(PROVENANCE)
     check_video(second.video, 247)
 
-    result, outcome, calls = _drive(root / "partial", shots, fail_at=2)
+    result, outcome, calls = _drive(root / "partial", shots, fail_at=2, overlap=True)
     assert outcome.terminal == "succeeded", outcome
     partial = result.result
     assert not partial.complete and partial.delivered == 2 and partial.requested == 4
@@ -337,7 +370,28 @@ def main() -> None:
     assert outcome.terminal == "succeeded", outcome
     assert result.result.complete and result.result.reused == 4 and not calls
     assert result.result.segments == completed.segments
+    assert result.result.video.read_bytes() == completed.video.read_bytes()
     check_video(result.result.video, 493)
+
+    # Valid byte grants do not make a truncated fragment a completed shot. Update the
+    # manifest's byte custody honestly while preserving the claimed full frame count.
+    damaged = root / "truncated-source"
+    shutil.copytree(complete_prefix.path, damaged, copy_function=shutil.copyfile)
+    clip = damaged / "shots/000000/video.mp4"
+    raw = clip.read_bytes()
+    clip.write_bytes(raw[: len(raw) // 2])
+    broken = msgspec.json.decode((damaged / "manifest.json").read_bytes(), type=PrefixManifest)
+    first = msgspec.structs.replace(
+        broken.shots[0], video_digest=sha(clip.read_bytes()), video_bytes=clip.stat().st_size
+    )
+    (damaged / "manifest.json").write_bytes(
+        msgspec.json.encode(msgspec.structs.replace(broken, shots=[first, *broken.shots[1:]]))
+    )
+    truncated = persist_prefix(
+        store, Tree("truncated", root=damaged), root / "retained-truncated", "truncated"
+    )
+    result, outcome, calls = _drive(root / "truncated", edited, resume=truncated)
+    assert result is None and outcome.terminal != "succeeded" and not calls, outcome
 
     changed = [h3.Shot(shots[0].prompt, shots[0].seed + 1, 5), *edited[1:]]
     result, outcome, calls = _drive(root / "changed-prefix", changed, resume=prefix)
@@ -378,7 +432,7 @@ def main() -> None:
     result, outcome, calls = _drive(root / "turbo-steps", shots, mode="turbo", steps=30)
     assert result is None and outcome.terminal != "succeeded" and not calls, outcome
 
-    result, outcome, _ = _drive(root / "cancel", shots, cancel_at=1)
+    result, outcome, _ = _drive(root / "cancel", shots, cancel_at=1, overlap=True)
     assert result is None and outcome.terminal == "canceled", outcome
     result, outcome, _ = _drive(root / "first-fails", shots, fail_at=0)
     assert result is None and outcome.terminal != "succeeded", outcome
@@ -397,8 +451,13 @@ def main() -> None:
         "completed_frames": completed.delivered_frames,
         "reused_shots": completed.reused,
         "native_prefix": complete_prefix.digest,
+        "scan_overlaps_next_child": True,
+        "retained_scan_overlaps_next_child": True,
+        "reassembly_preserves_video_bytes": True,
         "changed_intent_refused": True,
         "changed_code_refused": True,
+        "truncated_prefix_refused": True,
+        "scan_worker_joined_on_cancellation": True,
         "cancellation_remains_cancelled": True,
         "turbo_prefix": turbo_prefix.digest,
         "turbo_evaluations": 8,

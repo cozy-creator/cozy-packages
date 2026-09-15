@@ -1111,7 +1111,13 @@ class OfficialH3Pipeline:
     def condition_text(
         self, task: Task, state: Any, *, checks: NumericalChecks | None = None
     ) -> None:
-        self._run(task, "text_encoder", state, component="text_encoder")
+        try:
+            self._run(task, "text_encoder", state, component="text_encoder")
+        finally:
+            # Qwen retains image position deltas for autoregressive decoding even with
+            # use_cache=False. H3 consumes complete hidden states and never reuses that
+            # cache; keeping it makes the next serving sample fail the residency fence.
+            self.components["text_encoder"].model.rope_deltas = None
         if checks is not None:
             checks.outputs(
                 "condition_text",

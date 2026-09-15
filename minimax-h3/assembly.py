@@ -22,9 +22,12 @@ import hashlib
 import math
 from array import array
 from collections import deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from fractions import Fraction
+from threading import Event
+from types import TracebackType
 from typing import Annotated, Literal, Protocol
 
 import msgspec
@@ -253,7 +256,7 @@ def _scan_video(decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], No
                 values = array("f")
                 values.frombytes(raw)
                 values_by_channel.append(values)
-                peak = max(peak, max((abs(float(value)) for value in values), default=0.0))
+                peak = max(peak, abs(min(values, default=0.0)), abs(max(values, default=0.0)))
             chunk_start = audio_samples
             audio_peak = max(audio_peak, peak)
             if chunk_start < head_peak_samples:
@@ -262,7 +265,7 @@ def _scan_video(decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], No
             for channel, raw in enumerate(event.pcm_f32le):
                 if len(head[channel]) < head_limit * 4:
                     head[channel] += raw[: head_limit * 4 - len(head[channel])]
-                tail[channel].extend(float(value) for value in values_by_channel[channel])
+                tail[channel].extend(values_by_channel[channel])
     if header is None or header.video is None or frames == 0:
         raise InvalidRequest("video decoded no usable stream", code="invalid_request")
     return _Scan(
@@ -276,6 +279,60 @@ def _scan_video(decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], No
         audio_head_peak=head_peak,
         first_frame_digest=first_frame_digest,
     )
+
+
+class ScanAhead:
+    """Validate completed shots on one worker while the caller awaits later children.
+
+    Futures retain only bounded audio windows and clocks, never decoded videos. Assets
+    remain attempt-owned and are read again by the final encoder, including its normal
+    byte-grant checks. Leaving the scope always joins the worker before attempt cleanup.
+    """
+
+    def __init__(self, decoder: MediaDecoder, check: Callable[[], None]) -> None:
+        self._decoder = decoder
+        self._check = check
+        self._stopped = Event()
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3-scan")
+        self._pending: list[Future[_Scan]] = []
+
+    def __enter__(self) -> ScanAhead:
+        return self
+
+    def __exit__(
+        self,
+        kind: type[BaseException] | None,
+        error: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._stopped.set()
+        self._pool.shutdown(wait=True, cancel_futures=True)
+
+    def _check_active(self) -> None:
+        self._check()
+        if self._stopped.is_set():
+            raise RuntimeError("assembly scan was abandoned")
+
+    def add(self, asset: VideoAsset) -> None:
+        self._check_active()
+        if len(self._pending) >= MAX_SHOTS:
+            raise InvalidRequest("assembly needs one to eight videos", code="invalid_request")
+        # Surface an earlier validation failure before accepting more work.
+        for pending in self._pending:
+            if pending.done():
+                pending.result()
+        self._pending.append(
+            self._pool.submit(_scan_video, self._decoder, asset, self._check_active)
+        )
+
+    def finish(self, videos: Sequence[VideoAsset]) -> list[_Scan]:
+        self._check_active()
+        scans = [pending.result() for pending in self._pending]
+        if len(scans) != len(videos) or any(
+            scan.asset is not asset for scan, asset in zip(scans, videos, strict=True)
+        ):
+            raise InvalidRequest("assembly scan inputs changed", code="invalid_request")
+        return scans
 
 
 def _scan_audio(decoder: MediaDecoder, asset: AudioAsset, check: Callable[[], None]) -> _AudioScan:
@@ -459,6 +516,14 @@ def _gain_pcm(
     global_gain: float,
 ) -> tuple[bytes, ...]:
     ride = max(1, _nearest(GAIN_RIDE_SECONDS * rate))
+    # Most samples lie between the two seam rides. Preserve their exact source bytes
+    # when no global attenuation is needed, including the all-silent H3 soundtrack.
+    count = len(pcm[0]) // 4
+    if global_gain == 1.0 and (
+        (not gains.head_db or start >= ride)
+        and (not gains.tail_db or start + count <= max(0, total - ride))
+    ):
+        return pcm
     transformed: list[bytes] = []
     for raw in pcm:
         values = array("f")
@@ -738,16 +803,20 @@ def assemble(
     out: Outputs,
     tel: Telemetry,
     check: Callable[[], None],
+    scanned: ScanAhead | None = None,
 ) -> AssembleVideoResponse:
     """Run inside the current admitted attempt; the result owns its output handle."""
     if not 1 <= len(payload.videos) <= MAX_SHOTS:
         raise InvalidRequest("assembly needs one to eight videos", code="invalid_request")
     tolerance = out.video_audio_frame_samples
     scan_step = tel.step_callback(len(payload.videos), stage="scan", overall_range=(0.00, 0.10))
-    scans = []
-    for index, item in enumerate(payload.videos):
-        scans.append(_scan_video(decoder, item, check))
-        scan_step(index)
+    scans = scanned.finish(payload.videos) if scanned is not None else []
+    if scanned is None:
+        for index, item in enumerate(payload.videos):
+            scans.append(_scan_video(decoder, item, check))
+            scan_step(index)
+    else:
+        scan_step(len(scans) - 1)
     video_format = scans[0].header.video
     assert video_format is not None and video_format.nominal_frame_rate is not None
     if video_format.nominal_frame_rate != 24:

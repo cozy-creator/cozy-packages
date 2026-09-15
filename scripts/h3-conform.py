@@ -1432,6 +1432,71 @@ def arm_graph_and_dtypes() -> None:
     )
 
 
+def arm_conditioner_lifecycle() -> None:
+    print("\n== complete image conditioning releases autoregressive position cache ==")
+    torch.manual_seed(11)
+    model = build_text_conditioner(tiny_text_config())
+    arguments = {
+        "input_ids": torch.tensor([[1, 62, 60, 60, 60, 60, 63, 5]]),
+        "attention_mask": torch.ones((1, 8), dtype=torch.long),
+        "mm_token_type_ids": torch.tensor([[0, 0, 1, 1, 1, 1, 0, 0]]),
+        "pixel_values": torch.zeros((16, 24), dtype=torch.bfloat16),
+        "image_grid_thw": torch.tensor([[1, 4, 4]]),
+        "use_cache": False,
+        "output_hidden_states": True,
+    }
+    state: dict[str, Any] = {}
+
+    def run(task: str, name: str, target: Any, *, component: str) -> None:
+        assert (task, name, component) == ("fl2va", "text_encoder", "text_encoder")
+        with torch.inference_mode():
+            target["hidden"] = tuple(
+                value.clone() for value in model.model(**arguments).hidden_states
+            )
+        assert model.model.rope_deltas is not None
+        if target.get("fail"):
+            raise RuntimeError("conditioner failure")
+
+    # Exercise the real Qwen forward through the package's actual condition_text
+    # lifetime boundary, without loading unrelated DiT and VAE checkpoint components.
+    pipe = cast(OfficialH3Pipeline, SimpleNamespace(components={"text_encoder": model}, _run=run))
+    run("fl2va", "text_encoder", state, component="text_encoder")
+    check(
+        "upstream keeps one position-delta tensor despite use_cache=False",
+        model.model.rope_deltas.numel(),
+        1,
+    )
+    expected = state["hidden"]
+    model.model.rope_deltas = None
+    for index in range(4):
+        OfficialH3Pipeline.condition_text(pipe, "fl2va", state)
+        check(
+            f"conditioner call {index + 1} releases its generation cache",
+            model.model.rope_deltas is None,
+            True,
+        )
+        check(
+            f"conditioner call {index + 1} preserves every hidden state",
+            all(
+                torch.equal(left, right)
+                for left, right in zip(expected, state["hidden"], strict=True)
+            ),
+            True,
+        )
+    state["fail"] = True
+    try:
+        OfficialH3Pipeline.condition_text(pipe, "fl2va", state)
+    except RuntimeError as exc:
+        check("conditioning failure is preserved", str(exc), "conditioner failure")
+    else:
+        fail("conditioning failure", "the fixture unexpectedly succeeded")
+    check(
+        "failed conditioning also releases its position cache",
+        model.model.rope_deltas is None,
+        True,
+    )
+
+
 def arm_text_conditioner() -> None:
     print("\n== exact 50-layer pre-norm Qwen3-VL conditioner ==")
     source = tiny_text_config()
@@ -4380,6 +4445,7 @@ ARMS = {
     "reference-resolution": arm_reference_resolution,
     "graph": arm_graph_and_dtypes,
     "conditioner": arm_text_conditioner,
+    "conditioner-lifecycle": arm_conditioner_lifecycle,
     "adaln-pruned": arm_adaln_pruned,
     "processor": arm_processor,
     "media": arm_media,
