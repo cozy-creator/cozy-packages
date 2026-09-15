@@ -18,3 +18,29 @@ an unbounded packet buffer.
 Acceptance: native codec and child-broker fixtures prove identical frame/sample clocks,
 encoded bytes, bounded scan memory, rejection arms and scan/child overlap. These CPU
 fixtures do not establish real H3 rendering or the end-to-end 35-minute target.
+
+Implemented and locally qualified:
+
+- One validation worker overlaps completed-shot scans with subsequent broker children,
+  including retained prefixes. The scope joins its worker on cancellation or failure.
+- Final assembly consumes the scans once. Native 1/2/4/8-shot outputs remain byte-identical
+  to serial assembly, with the same exact video and audio clocks and bounded audio windows.
+- Valid byte grants containing a truncated prefix are refused. Partial child failure,
+  changed intent/model/code/adapter, complete reuse and cancellation retain their contracts.
+- Unity-gain audio chunks keep their original PCM bytes; peak/window scans avoid redundant
+  Python conversion. A scalar reference proves gain output bytes remain unchanged.
+
+The local comparison using two already-delivered H3 clips repeated into a four-shot
+60.2-second video produced the same MP4 digest before and after. Serial elapsed time was
+96.5 seconds before and 102.1 seconds after; scan time was 26.3 and 28.4 seconds. Other proof
+processes shared the CPU, so this is byte-integrity evidence, not an intrinsic speedup
+claim. The measured structural improvement is scan/child overlap; the final encode still
+waits for all soundtrack levels. GPU workflow timing remains unqualified.
+
+The same workflow also retained Qwen's image-position `rope_deltas` after a complete
+conditioning forward. This autoregressive cache has no H3 consumer (`use_cache=False`)
+and causes Runtime's next-sample residency check to reject reuse. `condition_text` now
+clears it in `finally`, including failed conditioning. The native package conformance arm
+runs the actual truncated 50-layer Qwen model four times, proves every hidden state remains
+bit-identical to upstream, and verifies cleanup on success and failure. Runtime separately
+measures the 512-byte CUDA allocator residue and its removal.
