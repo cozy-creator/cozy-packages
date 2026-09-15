@@ -1,4 +1,4 @@
-owner: /root/resume_queue_dev_diagnostics
-purpose: Ordinary default-home mixed-checkpoint rental qualification on parent-owned Nu13
-branch: audit/mixed-model-rental-qualification-20260913
-base: c75fb9a
+owner: /root/streaming_longform_assembly
+purpose: proto056 overlap validated assembly scans with H3 children and reduce CPU work
+branch: proto056-incremental-assembly
+base: 3d7080d5696a6035c0491fdd7576ba19a1fb8ef7

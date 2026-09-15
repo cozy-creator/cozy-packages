@@ -5,21 +5,112 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sys
 import time
+from array import array
 from pathlib import Path
 from typing import Any
 
 import av
 import numpy as np
 import tensorfs
-from cozy_runtime.author import App, Invocation, attempt, fakes
+from cozy_runtime.author import (
+    App,
+    Context,
+    InvalidRequest,
+    Invocation,
+    MediaDecoder,
+    Outputs,
+    Telemetry,
+    attempt,
+    fakes,
+    invocable,
+)
 from cozy_runtime.author._assets import GrantedInput, file_state
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
 import assembly
 
 FPS, RATE, FRAMES = 24, 32000, 362
+
+
+@invocable
+async def scanned_assembly(
+    ctx: Context,
+    *,
+    payload: assembly.AssembleVideoRequest,
+    decoder: MediaDecoder,
+    out: Outputs,
+    tel: Telemetry,
+) -> assembly.AssembleVideoResponse:
+    with assembly.ScanAhead(decoder, ctx.raise_if_cancelled) as scanning:
+        for video in payload.videos:
+            scanning.add(video)
+        scans = scanning.finish(payload.videos)
+        if len(payload.videos) == assembly.MAX_SHOTS:
+            try:
+                scanning.add(payload.videos[0])
+            except InvalidRequest:
+                pass
+            else:
+                raise AssertionError("scan queue exceeded the shot bound")
+        try:
+            scanning.finish([])
+        except InvalidRequest:
+            pass
+        else:
+            raise AssertionError("scan results were accepted for different inputs")
+        for scan in scans:
+            audio = scan.header.audio
+            assert audio is not None
+            # Only two half-second audio windows plus the replay trim are retained.
+            assert sum(map(len, (*scan.audio_head, *scan.audio_tail))) <= (
+                audio.channels * (audio.sample_rate + math.ceil(audio.sample_rate / FPS)) * 4
+            )
+        return assembly.assemble(
+            payload,
+            decoder=decoder,
+            out=out,
+            tel=tel,
+            check=ctx.raise_if_cancelled,
+            scanned=scanning,
+        )
+
+
+def unchanged_gain_bytes() -> None:
+    """Compare against the original scalar arithmetic, including overlapping rides."""
+    rate = 32000
+    generator = np.random.default_rng(1234)
+    pcm = tuple(generator.uniform(-0.9, 0.9, 1024).astype("<f4").tobytes() for _ in range(2))
+    for total in (32000, 160000):
+        for start in (0, 1024, 65000, total - 1024):
+            for head, tail in ((0.0, 0.0), (0.0, 3.0), (-9.0, 9.0)):
+                for global_gain in (1.0, 0.42):
+                    gains = assembly._Gains(head, tail)
+                    expected = []
+                    ride = rate * 2
+                    for raw in pcm:
+                        values = array("f")
+                        values.frombytes(raw)
+                        for offset, value in enumerate(values):
+                            position, db = start + offset, 0.0
+                            if head and position < ride:
+                                phase = position / (ride - 1)
+                                db += head * (1 + math.cos(math.pi * phase)) / 2
+                            if tail and position >= max(0, total - ride):
+                                phase = (position - max(0, total - ride)) / (ride - 1)
+                                db += tail * (1 - math.cos(math.pi * phase)) / 2
+                            values[offset] = float(value) * (10 ** (db / 20)) * global_gain
+                        expected.append(values.tobytes())
+                    assert assembly._gain_pcm(
+                        pcm,
+                        start=start,
+                        total=total,
+                        rate=rate,
+                        gains=gains,
+                        global_gain=global_gain,
+                    ) == tuple(expected)
 
 
 def sha(raw: bytes) -> str:
@@ -88,9 +179,10 @@ def execute(
     *,
     master: str | None = None,
     changed: bool = False,
+    scanned: bool = False,
 ) -> tuple[Any, Any, Path]:
     label = f"{count}-{'changed' if changed else master or 'segments'}"
-    work = root / label
+    work = root / (label + ("-scanned" if scanned else ""))
     work.mkdir()
     assets: dict[str, GrantedInput] = {}
     videos = []
@@ -130,9 +222,10 @@ def execute(
             stream.seek(-1, 2)
             stream.write(b"x")
     app = App()
-    app.job(assembly.assemble_video, emits_media=True)
+    handler = scanned_assembly if scanned else assembly.assemble_video
+    app.job(handler, emits_media=True)
     result, outcome, _ = attempt(
-        app.get("assemble_video"),
+        app.get(handler.__name__),
         {"payload": {"videos": videos, "master_audio": master_digest}},
         Invocation(label, work, time.monotonic() + 180, assets=assets),
     )
@@ -144,11 +237,16 @@ def main() -> None:
     root.mkdir(parents=True, exist_ok=False)
     store = tensorfs.Store.init(root / "tensorfs")
     files = fixtures(root, store)
+    unchanged_gain_bytes()
     evidence = []
     for count in (1, 2, 4, 8):
         result, outcome, work = execute(root, files, count)
         assert outcome.terminal == "succeeded", outcome
         response = result.result
+        cached, cached_outcome, _ = execute(root, files, count, scanned=True)
+        assert cached_outcome.terminal == "succeeded", cached_outcome
+        assert cached.result.video.read_bytes() == response.video.read_bytes()
+        assert cached.result.segments == response.segments
         expected = count * FRAMES - (count - 1)
         assert response.source_frames == count * FRAMES
         assert response.output_frames == expected
@@ -177,6 +275,8 @@ def main() -> None:
                 "endpoint_delta_samples": response.av_endpoint_delta_samples,
                 "native_manifest": manifest,
                 "video_digest": digest,
+                "scan_ahead_preserves_video_bytes": True,
+                "scan_audio_windows_bounded": True,
                 "actual_h3_inference": False,
             }
         )
@@ -193,6 +293,7 @@ def main() -> None:
         json.dumps(
             {
                 "codec_native_arms": evidence,
+                "gain_fast_path_matches_original_bytes": True,
                 "master_exact": True,
                 "master_mismatch_refused": True,
                 "changed_input_refused": True,

@@ -57,7 +57,7 @@ from cozy_runtime.author import (
 )
 from msgspec.structs import replace
 
-from assembly import MAX_SHOTS, AssembleVideoRequest, assemble, assemble_video
+from assembly import MAX_SHOTS, AssembleVideoRequest, ScanAhead, assemble, assemble_video
 from gates import MediaFacts, refuse_before_encode, report_after_encode
 from long_form_state import (
     MAX_PREFIX_BYTES,
@@ -1584,74 +1584,79 @@ async def long_form(
         frame = frames[-1]
     reused = len(records)
     failed_index, failure_code, failure_detail = -1, "", ""
-    for index in range(reused, len(payload.shots)):
-        ctx.raise_if_cancelled()
-        shot = payload.shots[index]
-        intent = ShotIntent(
-            prompts[index],
-            shot.seed,
-            shot.duration_s,
-            steps,
-            "" if frame is None else frame.digest,
-        )
-        try:
-            if payload.mode == "turbo":
-                call = segment_turbo(  # type: ignore[call-arg]
-                    payload=SegmentTurboInput(
-                        prompt=intent.prompt,
-                        seed=intent.seed,
-                        duration_s=intent.duration_s,
-                        expected_provenance=expected,
-                        first_frame=frame,
-                    )
-                )
-            else:
-                call = segment(  # type: ignore[call-arg]
-                    payload=SegmentInput(
-                        prompt=intent.prompt,
-                        seed=intent.seed,
-                        duration_s=intent.duration_s,
-                        steps=intent.steps,
-                        expected_provenance=expected,
-                        first_frame=frame,
-                    )
-                )
-            shot_result = await call
-        except ChildCallError as failure:
-            # A concurrent caller cancellation must not become a successful partial result.
+    with ScanAhead(decoder, ctx.raise_if_cancelled) as scanning:
+        for video in videos:
+            scanning.add(video)
+        for index in range(reused, len(payload.shots)):
             ctx.raise_if_cancelled()
-            failed_index, failure_code, failure_detail = index, failure.code, str(failure)[:512]
-            break
-        compatible(shot_result.provenance, expected)
-        expected = shot_result.provenance
-        records.append(
-            StoredShot(
-                intent=intent,
-                provenance=shot_result.provenance,
-                child_request_id=call.request_id,
-                frames=frames_for(shot.duration_s),
-                video_digest=shot_result.video.digest,
-                video_bytes=shot_result.video.size_bytes,
-                continuation_frame_digest=shot_result.continuation_frame.digest,
-                continuation_frame_bytes=shot_result.continuation_frame.size_bytes,
+            shot = payload.shots[index]
+            intent = ShotIntent(
+                prompts[index],
+                shot.seed,
+                shot.duration_s,
+                steps,
+                "" if frame is None else frame.digest,
             )
+            try:
+                if payload.mode == "turbo":
+                    call = segment_turbo(  # type: ignore[call-arg]
+                        payload=SegmentTurboInput(
+                            prompt=intent.prompt,
+                            seed=intent.seed,
+                            duration_s=intent.duration_s,
+                            expected_provenance=expected,
+                            first_frame=frame,
+                        )
+                    )
+                else:
+                    call = segment(  # type: ignore[call-arg]
+                        payload=SegmentInput(
+                            prompt=intent.prompt,
+                            seed=intent.seed,
+                            duration_s=intent.duration_s,
+                            steps=intent.steps,
+                            expected_provenance=expected,
+                            first_frame=frame,
+                        )
+                    )
+                shot_result = await call
+            except ChildCallError as failure:
+                # A concurrent caller cancellation must not become a successful partial result.
+                ctx.raise_if_cancelled()
+                failed_index, failure_code, failure_detail = index, failure.code, str(failure)[:512]
+                break
+            compatible(shot_result.provenance, expected)
+            expected = shot_result.provenance
+            records.append(
+                StoredShot(
+                    intent=intent,
+                    provenance=shot_result.provenance,
+                    child_request_id=call.request_id,
+                    frames=frames_for(shot.duration_s),
+                    video_digest=shot_result.video.digest,
+                    video_bytes=shot_result.video.size_bytes,
+                    continuation_frame_digest=shot_result.continuation_frame.digest,
+                    continuation_frame_bytes=shot_result.continuation_frame.size_bytes,
+                )
+            )
+            videos.append(shot_result.video)
+            scanning.add(shot_result.video)
+            frames.append(shot_result.continuation_frame)
+            warnings.extend(shot_result.warnings)
+            frame = frames[-1]
+        if not records:
+            raise OutputError(
+                f"shot 1 of {len(payload.shots)} failed ({failure_code}): {failure_detail}"
+            )
+        ctx.raise_if_cancelled()
+        assembled = assemble(
+            AssembleVideoRequest(videos=videos),
+            decoder=decoder,
+            out=out,
+            tel=tel,
+            check=ctx.raise_if_cancelled,
+            scanned=scanning,
         )
-        videos.append(shot_result.video)
-        frames.append(shot_result.continuation_frame)
-        warnings.extend(shot_result.warnings)
-        frame = frames[-1]
-    if not records:
-        raise OutputError(
-            f"shot 1 of {len(payload.shots)} failed ({failure_code}): {failure_detail}"
-        )
-    ctx.raise_if_cancelled()
-    assembled = assemble(
-        AssembleVideoRequest(videos=videos),
-        decoder=decoder,
-        out=out,
-        tel=tel,
-        check=ctx.raise_if_cancelled,
-    )
     if [segment.source_frames for segment in assembled.segments] != [
         record.frames for record in records
     ]:
