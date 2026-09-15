@@ -118,11 +118,12 @@ def _drive(
     mode: Literal["turbo", "standard"] = "standard",
     steps: int | None = None,
     overlap: bool = False,
+    request_id: str | None = None,
 ) -> tuple[Any, Any, list[dict[str, Any]]]:
     root.mkdir()
     spool = root / "bytes"
     spool.mkdir()
-    parent = root.name
+    parent = root.name if request_id is None else request_id
     child_name = "segment_turbo" if mode == "turbo" else "segment"
     real = next(surface for surface in describe(h3.app) if surface.name == child_name)
     observed = observed or (TURBO_PROVENANCE if mode == "turbo" else PROVENANCE)
@@ -393,7 +394,7 @@ def main() -> None:
     result, outcome, calls = _drive(root / "truncated", edited, resume=truncated)
     assert result is None and outcome.terminal != "succeeded" and not calls, outcome
 
-    changed = [h3.Shot(shots[0].prompt, shots[0].seed + 1, 5), *edited[1:]]
+    changed = [h3.Shot(shots[0].prompt, partial.segments[0].seed + 1, 5), *edited[1:]]
     result, outcome, calls = _drive(root / "changed-prefix", changed, resume=prefix)
     assert result is None and outcome.code == "prefix_intent" and not calls, outcome
     changed_code = msgspec.structs.replace(PROVENANCE, code_digest="sha256:" + "33" * 32)
@@ -432,6 +433,40 @@ def main() -> None:
     result, outcome, calls = _drive(root / "turbo-steps", shots, mode="turbo", steps=30)
     assert result is None and outcome.terminal != "succeeded" and not calls, outcome
 
+    # Optional seeds still become concrete child inputs and retained rendering facts.
+    automatic = msgspec.json.decode(
+        b'[{"prompt":"A rover moves.","duration_s":5},'
+        b'{"prompt":"The rover stops.","seed":0,"duration_s":5}]',
+        type=list[h3.Shot],
+    )
+    result, outcome, calls = _drive(root / "automatic", automatic, mode="turbo", fail_at=1)
+    assert outcome.terminal == "succeeded", outcome
+    auto_partial = result.result
+    chosen = auto_partial.segments[0].seed
+    assert isinstance(chosen, int) and len(calls) == 2
+    assert json.loads(calls[0]["payload"])["payload"]["seed"] == chosen
+    assert json.loads(calls[1]["payload"])["payload"]["seed"] == 0
+    result, outcome, calls = _drive(
+        root / "automatic-retry", automatic, mode="turbo", fail_at=1, request_id="automatic"
+    )
+    assert outcome.terminal == "succeeded" and result.result.segments[0].seed == chosen
+    assert result.result.video.read_bytes() == auto_partial.video.read_bytes()
+    result, outcome, _ = _drive(root / "automatic-new-run", automatic[:1], mode="turbo")
+    assert outcome.terminal == "succeeded" and result.result.segments[0].seed != chosen
+    auto_prefix = persist_prefix(store, auto_partial.prefix, root / "retained-auto", "auto")
+    result, outcome, calls = _drive(
+        root / "automatic-resume", automatic, mode="turbo", resume=auto_prefix
+    )
+    assert outcome.terminal == "succeeded", outcome
+    assert result.result.complete and result.result.reused == 1 and len(calls) == 1
+    assert [receipt.seed for receipt in result.result.segments] == [chosen, 0]
+    assert result.result.segments[:1] == auto_partial.segments
+    conflicting = [h3.Shot(automatic[0].prompt, chosen + 1, 5), automatic[1]]
+    result, outcome, calls = _drive(
+        root / "automatic-conflict", conflicting, mode="turbo", resume=auto_prefix
+    )
+    assert result is None and outcome.code == "prefix_intent" and not calls, outcome
+
     result, outcome, _ = _drive(root / "cancel", shots, cancel_at=1, overlap=True)
     assert result is None and outcome.terminal == "canceled", outcome
     result, outcome, _ = _drive(root / "first-fails", shots, fail_at=0)
@@ -464,6 +499,11 @@ def main() -> None:
         "turbo_adapter_change_refused": True,
         "mode_change_refused": True,
         "turbo_step_override_refused": True,
+        "automatic_seeds_recorded": True,
+        "automatic_seeds_stable_on_retry": True,
+        "automatic_seeds_differ_for_new_run": True,
+        "omitted_seed_reuses_retained_shot": True,
+        "explicit_zero_seed_preserved": True,
         "actual_h3_inference": False,
     }
     (root / "evidence.json").write_text(json.dumps(facts, indent=2) + "\n")
