@@ -1258,8 +1258,8 @@ _KEYFRAME_MAX_DECODED_BYTES = 3 * 16_777_216
 class Shot(msgspec.Struct, forbid_unknown_fields=True):
     """One segment's authored identity.
 
-    `seed` is explicit and required: cl-021 forbids a hidden same-seed or seed+i policy, so
-    the caller freezes every seed in the request or the chain is not reproducible.
+    An omitted seed is chosen per request and shot, then recorded in the delivered prefix.
+    Explicit seeds preserve reproducibility; retrying a request keeps its automatic seeds.
 
     A shot defaults to the LONGEST served cell, not the package default, and it follows
     `MAX_DURATION_S` rather than naming a number — whatever the envelope serves is what a
@@ -1271,7 +1271,7 @@ class Shot(msgspec.Struct, forbid_unknown_fields=True):
     """
 
     prompt: Prompt
-    seed: int
+    seed: int | None = None
     duration_s: DurationSeconds = MAX_DURATION_S
 
 
@@ -1404,6 +1404,14 @@ class LongFormOutput(msgspec.Struct):
 
 
 _ANCHOR_BLOCKS = ("subject_definitions", "overall_soundscape", "non_diegetic_music")
+
+
+def shot_seed(shot: Shot, request_id: str, index: int) -> int:
+    """Choose once per request/shot, without changing seeds when its attempt retries."""
+    if shot.seed is not None:
+        return shot.seed
+    identity = f"{request_id}/h3/shot/{index}".encode()
+    return int.from_bytes(hashlib.sha256(identity).digest()[:4], "big")
 
 
 def compose_shot_prompt(shot: Shot, payload: LongFormInput, *, index: int) -> str:
@@ -1577,7 +1585,13 @@ async def long_form(
             incoming = first_digest if index == 0 else records[index - 1].continuation_frame_digest
             check_intent(
                 record,
-                ShotIntent(prompts[index], shot.seed, shot.duration_s, steps, incoming),
+                ShotIntent(
+                    prompts[index],
+                    record.intent.seed if shot.seed is None else shot.seed,
+                    shot.duration_s,
+                    steps,
+                    incoming,
+                ),
                 frames_for(shot.duration_s),
             )
         expected = records[0].provenance
@@ -1592,7 +1606,7 @@ async def long_form(
             shot = payload.shots[index]
             intent = ShotIntent(
                 prompts[index],
-                shot.seed,
+                shot_seed(shot, ctx.request_id, index),
                 shot.duration_s,
                 steps,
                 "" if frame is None else frame.digest,

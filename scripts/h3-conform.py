@@ -3364,6 +3364,23 @@ def arm_interface() -> None:
             "result/provenance/turbo_lora_manifest",
         ],
     )
+    shot_fields = next(
+        field for field in jobs["long_form"]["request"]["fields"] if field["name"] == "shots"
+    )["type"]["list"]["fields"]
+    check(
+        "long-form shot seed is optional in the published interface",
+        next(field for field in shot_fields if field["name"] == "seed"),
+        {"name": "seed", "type": {"union": ["int", "null"]}, "wire": "optional"},
+    )
+    unseeded = msgspec.json.decode(
+        b'{"shots":[{"prompt":"x"},{"prompt":"y","seed":null}]}',
+        type=package.LongFormInput,
+    )
+    check(
+        "omitted and null shot seeds are automatic",
+        [s.seed for s in unseeded.shots],
+        [None, None],
+    )
     check("long-form defaults to turbo", package.LongFormInput(shots=[]).mode, "turbo")
     check(
         "long-form has no contradictory standard step default",
