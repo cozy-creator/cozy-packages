@@ -1527,8 +1527,8 @@ async def segment_turbo(
     return SegmentOutput(shot.video, shot.continuation_frame, list(shot.warnings), observed)
 
 
-app.entrypoint(segment)
-app.entrypoint(segment_turbo)
+app.entrypoint(internal=True)(segment)
+app.entrypoint(internal=True)(segment_turbo)
 
 
 async def long_form(
