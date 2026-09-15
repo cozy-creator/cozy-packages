@@ -1,7 +1,7 @@
 """The checkpoint's ordered AdaLN row labels, independent of a sampling preset.
 
-Canonical source: minimax-h3/h3_table_layout.py. The producer vendors these exact
-bytes as h3_tables._table_layout; scripts/sync-h3-table-layout.py checks the copy.
+Canonical source: cozy_runtime.models.minimax_h3.table_layout. The producer vendors
+these exact bytes as h3_tables._table_layout; scripts/sync-h3-table-layout.py checks the copy.
 """
 
 from __future__ import annotations

@@ -18,6 +18,16 @@ from cozy_runtime.author import (
     Telemetry,
     uses_components,
 )
+from cozy_runtime.models.minimax_h3.official import (
+    _DIT_COMPONENT,
+    _TRUNK,
+    MAX_FRAMES,
+    NumericalChecks,
+    OfficialH3Pipeline,
+    ReferencePolicyFacts,
+    ScheduleFacts,
+    Task,
+)
 from diffusers.modular_pipelines.minimax_h3.encoders import encode_vae_condition
 from diffusers.modular_pipelines.modular_pipeline import PipelineState
 from safetensors.torch import save
@@ -34,16 +44,6 @@ from h3 import (
 )
 from h3_activation_trace import ACTIVE_TRACE, ActivationTrace, FirstStepCaptured
 from h3_resident_samples import resident_hashes
-from official import (
-    _DIT_COMPONENT,
-    _TRUNK,
-    MAX_FRAMES,
-    NumericalChecks,
-    OfficialH3Pipeline,
-    ReferencePolicyFacts,
-    ScheduleFacts,
-    Task,
-)
 
 
 def encode(h3_pipe: Any, pixels: Any, frames: int) -> Any:
