@@ -1,0 +1,8 @@
+{
+  "packages": ["anima", "minimax-h3", "minimax-h3-tools", "sdxl"],
+  "runtime_profiles": [
+    "python3.12-cpu-linux-x86",
+    "torch2.13.0-cpu-cp312-linux-x86",
+    "torch2.13.0-cu130-cp312-linux-x86"
+  ]
+}
