@@ -21,9 +21,8 @@ from cozy_runtime.author import (
 )
 from cozy_runtime.models.minimax_h3 import H3Model
 
-from h3 import FirstLastFrameToVideoInput
+from h3 import FirstLastFrameToVideoInput, fl2va
 from h3 import H3Model as WorkflowModel
-from h3 import fl2va
 
 app = App()
 ATTENTION_BACKEND: Literal["sol-attn", "flash-attn3"] = "sol-attn"
