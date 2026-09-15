@@ -1,0 +1,22 @@
+version: '3'
+
+tasks:
+  package:check:
+    desc: Check a committed package against the active normal and private Runtime image cohort
+    requires:
+      vars: [PACKAGE]
+    env:
+      COZY_RELEASE_PACKAGE: '{{.PACKAGE}}'
+      TENSORHUB_DIR: '{{default "../tensorhub" .TENSORHUB_DIR}}'
+    cmds:
+      - uv run --script scripts/publish-package.py "$COZY_RELEASE_PACKAGE" --tensorhub-dir "$TENSORHUB_DIR" --preflight-only
+
+  package:publish:
+    desc: Validate active Runtime images, then publish the same committed snapshot using Creator
+    requires:
+      vars: [PACKAGE]
+    env:
+      COZY_RELEASE_PACKAGE: '{{.PACKAGE}}'
+      TENSORHUB_DIR: '{{default "../tensorhub" .TENSORHUB_DIR}}'
+    cmds:
+      - uv run --script scripts/publish-package.py "$COZY_RELEASE_PACKAGE" --tensorhub-dir "$TENSORHUB_DIR"

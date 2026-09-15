@@ -512,3 +512,17 @@ uv run ../scripts/h3-conform.py
 A green static, CPU, or stored-container gate does not prove accepted video generation; both public
 actions still require viewed and listened outputs from the exact released artifact on the exact
 provider-read-back accelerator identity.
+
+First-party releases use `task package:publish PACKAGE=minimax-h3` (or the other
+core package name). The task checks the package wheel's authored Runtime range
+against the measured active normal and private image inventories in
+`release-profiles.json`, then invokes `cozy package publish` on the same committed
+source snapshot. `task package:check PACKAGE=minimax-h3` runs only the check.
+Set `TENSORHUB_DIR` to a current Tensorhub checkout containing
+`cmd/check-package-runtime` and its operator configuration.
+
+Promote and verify the compatible image cohort before publishing a package that
+raises its Runtime minimum. Lockfile pins do not establish an image requirement;
+the authored `Requires-Dist` range does. This check covers Runtime compatibility,
+not model quality or GPU capacity. Explicit custom-image packages retain the
+ordinary Creator publication path outside this first-party release procedure.
