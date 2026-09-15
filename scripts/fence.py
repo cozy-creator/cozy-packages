@@ -162,6 +162,53 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    (
+        "examples/client-scripts/h3-scaling-profile/h3_scaling_profile.py",
+        "cozy_runtime._build_provenance",
+    ): (
+        "One-step scaling diagnostic profiles the reviewed Runtime calls without changing math. "
+        "Retire with the private profiling experiment; not a package inference API."
+    ),
+    (
+        "examples/client-scripts/h3-scaling-profile/h3_scaling_profile.py",
+        "cozy_runtime.models.minimax_h3",
+    ): (
+        "One-step scaling diagnostic profiles the reviewed Runtime calls without changing math. "
+        "Retire with the private profiling experiment; not a package inference API."
+    ),
+    (
+        "examples/client-scripts/h3-scaling-profile/h3_scaling_profile.py",
+        "cozy_runtime.models.minimax_h3.official",
+    ): (
+        "One-step scaling diagnostic profiles the reviewed Runtime calls without changing math. "
+        "Retire with the private profiling experiment; not a package inference API."
+    ),
+    (
+        "examples/client-scripts/h3-scaling-profile/profile_trace.py",
+        "cozy_runtime.author._attention_scope",
+    ): (
+        "One-step scaling diagnostic profiles the reviewed Runtime calls without changing math. "
+        "Retire with the private profiling experiment; not a package inference API."
+    ),
+    ("examples/client-scripts/h3-scaling-profile/profile_trace.py", "cozy_runtime.internal"): (
+        "One-step scaling diagnostic profiles the reviewed Runtime calls without changing math. "
+        "Retire with the private profiling experiment; not a package inference API."
+    ),
+    (
+        "examples/client-scripts/h3-scaling-profile/profile_trace.py",
+        "cozy_runtime.models.minimax_h3.turbo",
+    ): (
+        "One-step scaling diagnostic profiles the reviewed Runtime calls without changing math. "
+        "Retire with the private profiling experiment; not a package inference API."
+    ),
+    ("scripts/h3-scaling-profile-proof.py", "cozy_runtime.author._attention_scope"): (
+        "One-step scaling diagnostic profiles the reviewed Runtime calls without changing math. "
+        "Retire with the private profiling experiment; not a package inference API."
+    ),
+    ("scripts/h3-scaling-profile-proof.py", "cozy_runtime.internal.parallel"): (
+        "One-step scaling diagnostic profiles the reviewed Runtime calls without changing math. "
+        "Retire with the private profiling experiment; not a package inference API."
+    ),
     ("scripts/h3-assembly-proof.py", "cozy_runtime.author._assets"): (
         "Bind native codec fixtures and their file-state guards to the author invocation. "
         "Retire when a public native asset fixture supports changed-input controls. "
