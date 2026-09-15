@@ -107,7 +107,9 @@ def main(argv: list[str]) -> int:
                 assert not (location.parent / asset).exists(), f"workflow duplicates {asset}/"
             for task in ("fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo"):
                 relative = pathlib.Path("timestep-plans") / f"{task}.json"
-                assert (location.parent / relative).read_bytes() == (runtime_root / relative).read_bytes()
+                assert (location.parent / relative).read_bytes() == (
+                    runtime_root / relative
+                ).read_bytes()
         print(f"{package}: {module_name} imported from the installed wheel")
     app = module.app
     print(f"{package}: {module_name}:app registers {sorted(app._registry)}")
