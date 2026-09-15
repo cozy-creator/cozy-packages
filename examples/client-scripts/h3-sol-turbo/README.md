@@ -47,7 +47,8 @@ wire57 build as part of this attention experiment.
 Install the staged package, then render through normal `cozy run`:
 
 ```sh
-cozy package install /absolute/path/to/staged/h3-sol-turbo
+uv sync --no-dev --no-default-groups --project /absolute/path/to/staged/h3-sol-turbo
+cozy package install /absolute/path/to/staged/h3-sol-turbo --editable --no-model-download
 cozy run local/h3-sol-turbo/main \
   model.base_model=paul/minimax-h3@1.0.0-h3-audit.1/fp8-adaln-pruned \
   model.turbo_lora=paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8 \
@@ -62,6 +63,9 @@ other field fixed. Use `flash-attn3` instead of `sol-attn` for the independent
 dense backend control. The component-only override is intentional: the private
 wire55 CLI cohort predates the complete model-qualified override fix. Only the
 base model has `fl2va_dit`; the separately bound PDD adapter does not.
+
+Keep capture logs and generated comparison files outside the staged package
+directory. Creator correctly refuses an editable tree that changes during capture.
 
 A standalone `cozy run script.py` always becomes a job in the current CLI.
 Jobs cannot use a Ulysses serving group. This is why this helper uses
