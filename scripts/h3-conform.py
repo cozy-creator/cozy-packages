@@ -3201,6 +3201,16 @@ def arm_interface() -> None:
         {"fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo", "segment", "segment_turbo"},
     )
     check(
+        "only chained renderers are internal",
+        {name for name, entry in entries.items() if entry.get("internal", False)},
+        {"segment", "segment_turbo"},
+    )
+    check(
+        "public serving functions exclude chain implementation details",
+        {name for name, entry in entries.items() if not entry.get("internal", False)},
+        {"fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo"},
+    )
+    check(
         "six workflows over four tasks",
         official._WORKFLOW_TASKS,
         {
