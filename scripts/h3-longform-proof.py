@@ -14,6 +14,7 @@ import json
 import shutil
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -29,8 +30,10 @@ from cozy_runtime.author import (
     Context,
     ImageFrame,
     Invocation,
+    MediaDecoder,
     Outputs,
     Tree,
+    VideoAsset,
     attempt,
     describe,
     invocable,
@@ -130,14 +133,16 @@ def _drive(
     scan_started, child_started, scan_finished = Event(), Event(), Event()
     original_scan = assembly._scan_video
 
-    def scan(*args: Any) -> Any:
+    def scan(
+        decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], None]
+    ) -> assembly._Scan:
         if overlap and not scan_started.is_set():
             scan_started.set()
             assert child_started.wait(10), "scan did not overlap a later child"
-            result = original_scan(*args)
+            result = original_scan(decoder, asset, check)
             scan_finished.set()
             return result
-        return original_scan(*args)
+        return original_scan(decoder, asset, check)
 
     def exchange(kind: str, value: dict[str, Any]) -> dict[str, Any]:
         nonlocal cancelled
@@ -371,7 +376,7 @@ def main() -> None:
     # Valid byte grants do not make a truncated fragment a completed shot. Update the
     # manifest's byte custody honestly while preserving the claimed full frame count.
     damaged = root / "truncated-source"
-    shutil.copytree(complete_prefix.path, damaged)
+    shutil.copytree(complete_prefix.path, damaged, copy_function=shutil.copyfile)
     clip = damaged / "shots/000000/video.mp4"
     raw = clip.read_bytes()
     clip.write_bytes(raw[: len(raw) // 2])
