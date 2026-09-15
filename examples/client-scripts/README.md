@@ -37,6 +37,24 @@ retention; TensorFS stores the artifact bytes. Reuse requires that Store and its
 retained bytes. There is no need for a previous run ID or Tensorhub publication.
 Inference runs fresh; checkpoint upload and release creation are explicit effects.
 
+`prepare_checkpoint_bf16.py` prepares FP16 and FP32 factors as a separate BF16
+checkpoint through Runtime's existing bounded converter. It requires the development
+Runtime containing PR517; public0.18.2 alone does not provide that option. Pin the
+same development Runtime in the captured script and worker environment.
+
+```sh
+cozy run examples/client-scripts/prepare_checkpoint_bf16.py --rental=<name> --await
+cozy run examples/client-scripts/prepare_checkpoint_bf16.py --rental=<name> --await \
+  model.source=paul/minimax-h3-wushu-action-v7-lora@1.0.0/fp32
+```
+
+The default input is the Spatial LoRA. The script declares a1GiB output budget
+suited to these adapters; larger checkpoints require an explicit budget adjustment.
+It preserves names, configuration and already-BF16 tensors, records conversion
+error, and returns a retained artifact. Publication remains a separate explicit
+checkpoint operation. A prepared BF16 lane avoids the compatibility cast when
+using a BF16 PEFT adapter with an FP8 base model.
+
 - `h3_checkpoint_repair.py` is the completed, guarded repair recipe for exactly
   four historical H3 roots. A corrected checkpoint is refused before mutation.
   Its `[tool.cozy.weights]` metadata declares the finite output budget; `main`
