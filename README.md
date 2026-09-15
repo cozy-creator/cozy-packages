@@ -5,6 +5,10 @@ authority; this repository contains package schemas, model-specific computation,
 conformance drivers. Functions declare model defaults; explicit owner overrides live on the hub (see Model bindings). Private scripts
 select their inputs explicitly and run without publishing code to the hub.
 
+Follow [release practices](RELEASING.md) and the
+[dependency isolation qualification checklist](DEPENDENCIES.md) when changing
+dependencies or qualifying a worker image.
+
 ## Layout
 
 | path | responsibility |
