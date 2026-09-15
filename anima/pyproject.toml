@@ -1,23 +1,23 @@
 [project]
 name = "anima"
-version = "0.2.5"
+version = "0.2.6"
 description = "Anima anime text-to-image package for Cozy"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "cozy-runtime[media]>=0.18.0,<1",
-    "diffusers==0.40.0",
-    "hf-xet==1.6.0",
+    "cozy-runtime[media]>=0.18.0",
+    "diffusers>=0.40.0",
+    "hf-xet>=1.6.0",
     "msgspec>=0.19",
     "numpy>=2.0",
-    "pyyaml==6.0.3",
-    "regex==2026.7.19",
-    "safetensors==0.8.0",
-    "shellingham==1.5.4",
-    "tensorfs>=0.3.42,<0.4",
-    "tokenizers==0.23.1",
-    "torch>=2.13,<3",
-    "torchvision>=0.28,<1",
-    "transformers==5.16.1",
+    "pyyaml>=6.0.3",
+    "regex>=2026.7.19",
+    "safetensors>=0.8.0",
+    "shellingham>=1.5.4",
+    "tensorfs>=0.3.42",
+    "tokenizers>=0.23.1",
+    "torch>=2.13",
+    "torchvision>=0.28",
+    "transformers>=5.16.1",
 ]
 
 [project.entry-points."cozy.application"]
@@ -37,7 +37,7 @@ organization = "paul"
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 
 [dependency-groups]
-dev = ["mypy==2.3.1", "ruff==0.16.4"]
+dev = ["mypy>=2.3.1", "ruff>=0.16.4"]
 
 [tool.mypy]
 python_version = "3.12"

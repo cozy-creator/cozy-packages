@@ -204,7 +204,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3-tools"
-version = "2.12.2"
+version = "2.12.3"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime" },
@@ -222,17 +222,17 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", specifier = ">=0.18.0,<1" },
+    { name = "cozy-runtime", specifier = ">=0.18.0" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "tensorfs", specifier = ">=0.3.42,<0.4" },
-    { name = "torch", specifier = ">=2.13,<3" },
+    { name = "tensorfs", specifier = ">=0.3.42" },
+    { name = "torch", specifier = ">=2.13" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "mypy", specifier = "==2.3.1" },
-    { name = "ruff", specifier = "==0.16.4" },
+    { name = "mypy", specifier = ">=2.3.1" },
+    { name = "ruff", specifier = ">=0.16.4" },
 ]
 
 [[package]]
