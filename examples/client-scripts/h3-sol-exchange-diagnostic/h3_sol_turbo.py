@@ -23,6 +23,7 @@ from cozy_runtime.author import (
 )
 from cozy_runtime.models.minimax_h3 import H3TurboBase, H3TurboLoRA
 from cozy_runtime.models.minimax_h3.official import NumericalChecks, frames_for
+from exchange_diagnostic import install
 
 from h3 import H3Model as WorkflowModel
 from h3 import _finish
@@ -37,8 +38,6 @@ class PinnedTurboBase(H3TurboBase, encoded_leaves="accept", fusion="accept"):
 
     def load(self, loader: Loader) -> None:
         super().load(loader)
-        from exchange_diagnostic import install
-
         install()
 
     def choose_attention(self, context: AttentionContext) -> str | None:

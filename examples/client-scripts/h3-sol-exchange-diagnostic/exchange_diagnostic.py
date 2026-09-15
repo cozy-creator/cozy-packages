@@ -15,6 +15,10 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
+import torch
+from cozy_runtime import _build_provenance
+from cozy_runtime.internal import attention_sol
+
 _INSTALLED = False
 _RUNTIME = "d140609bf5fd07f8c67eaf7e87de433f5177f94f"
 _PARAMETERS = ("query", "key", "value", "scale", "layout", "site", "group")
@@ -56,8 +60,6 @@ def _wrap(original: Callable[..., Any]) -> Callable[..., Any]:
         if reported:
             return original(query, key, value, scale, layout, site, group)
         reported = True
-        import torch
-
         identity = {
             "pid": os.getpid(),
             "rank": torch.distributed.get_rank(group),
@@ -104,9 +106,6 @@ def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
-    from cozy_runtime import _build_provenance
-    from cozy_runtime.internal import attention_sol
-
     if _build_provenance.COMMIT != _RUNTIME:
         raise RuntimeError("h3a093 diagnostic requires the reviewed d140 Runtime cohort")
     original = attention_sol._execute_parallel

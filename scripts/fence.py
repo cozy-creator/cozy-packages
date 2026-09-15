@@ -164,6 +164,18 @@ def public_runtime_surface(module: str) -> bool:
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
     (
         "examples/client-scripts/h3-sol-exchange-diagnostic/exchange_diagnostic.py",
+        "cozy_runtime",
+    ): ("h3a093 refuses unreviewed build provenance; retire with the diagnostic."),
+    (
+        "examples/client-scripts/h3-sol-exchange-diagnostic/h3_sol_turbo.py",
+        "cozy_runtime.models.minimax_h3",
+    ): ("h3a093 preserves pinned 925 Runtime H3 classes; retire with the diagnostic."),
+    (
+        "examples/client-scripts/h3-sol-exchange-diagnostic/h3_sol_turbo.py",
+        "cozy_runtime.models.minimax_h3.official",
+    ): ("h3a093 preserves pinned checks and frame policy; retire with the diagnostic."),
+    (
+        "examples/client-scripts/h3-sol-exchange-diagnostic/exchange_diagnostic.py",
         "cozy_runtime.internal",
     ): (
         "Temporary h3a093 diagnostic wraps the pinned d140 Sol pre-QKV seam in each "
