@@ -162,6 +162,15 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    (
+        "examples/client-scripts/h3-sol-exchange-diagnostic/exchange_diagnostic.py",
+        "cozy_runtime.internal",
+    ): (
+        "Temporary h3a093 diagnostic wraps the pinned d140 Sol pre-QKV seam in each "
+        "private executor, recording metadata and synchronizing before unchanged execution. "
+        "No public author hook exposes this point. Retire with the full-H3 NCCL diagnosis; "
+        "this is not a production backend or supported public attention option."
+    ),
     ("scripts/h3-assembly-proof.py", "cozy_runtime.author._assets"): (
         "Bind native codec fixtures and their file-state guards to the author invocation. "
         "Retire when a public native asset fixture supports changed-input controls. "
