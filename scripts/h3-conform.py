@@ -4364,10 +4364,12 @@ def arm_turbo_state() -> None:
     loop = MiniMaxH3LoopDenoiser()
     observed: list[Any] = []
 
-    def denoise(task: Any, state: Any, *, on_step: Any, cancel: Any, checks: Any) -> Any:
+    def denoise(
+        task: Any, state: Any, *, on_step: Any, cancel: Any, checks: Any, sol_dense_steps: int
+    ) -> Any:
         cancel()
         block_state = loop.get_block_state(state)
-        observed.append(block_state.attention_kwargs.get(OVERLAY_KWARG))
+        observed.append((block_state.attention_kwargs.get(OVERLAY_KWARG), sol_dense_steps))
         _, block_state = loop(SimpleNamespace(transformer=dit), block_state, 0, forward["timestep"])
         on_step(0)
         return block_state.noise_pred, block_state.audio_noise_pred
@@ -4395,6 +4397,7 @@ def arm_turbo_state() -> None:
             base.sample_fl2va_turbo(
                 state,
                 turbo_lora=lora,
+                sol_dense_steps=4,
                 on_step=lambda _step: None,
                 cancel=lambda: None,
                 checks=NumericalChecks(cast(Any, fake_telemetry())),
@@ -4404,9 +4407,10 @@ def arm_turbo_state() -> None:
         torch.testing.assert_close(got, want, rtol=2e-5, atol=2e-6)
     check(
         "Diffusers denoiser received the separate overlay",
-        len(observed) == 1 and observed[0] is overlay,
+        len(observed) == 1 and observed[0][0] is overlay,
         True,
     )
+    check("sample forwards explicit Sol policy through both models", observed[0][1], 4)
     check(
         "successful sample restores the original selector",
         state.get("attention_kwargs") is original,

@@ -207,6 +207,7 @@ class TraceLoRA(H3TurboLoRA):
         on_step: Any,
         cancel: Any,
         checks: Any,
+        sol_dense_steps: int,
     ) -> Any:
         trace = _ACTIVE.get()
         if trace is None:
@@ -219,6 +220,7 @@ class TraceLoRA(H3TurboLoRA):
                 on_step=trace.step_callback(on_step),
                 cancel=cancel,
                 checks=checks,
+                sol_dense_steps=sol_dense_steps,
             )
 
 

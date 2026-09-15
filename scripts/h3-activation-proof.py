@@ -192,10 +192,18 @@ def main() -> None:
     seen: list[int] = []
 
     def denoise(
-        self: Any, task: str, state: Any, *, on_step: Any, cancel: Any, checks: Any = None
+        self: Any,
+        task: str,
+        state: Any,
+        *,
+        on_step: Any,
+        cancel: Any,
+        checks: Any = None,
+        sol_dense_steps: int = 10,
     ) -> Any:
         assert task == "ref2va"
         del checks
+        assert sol_dense_steps == 10
         for index in range(3):
             cancel()
             state.latents = model(**arguments)

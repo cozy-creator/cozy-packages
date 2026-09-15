@@ -168,6 +168,7 @@ class TracePipeline(OfficialH3Pipeline):
         on_step: Any,
         cancel: Any,
         checks: NumericalChecks | None = None,
+        sol_dense_steps: int = 10,
     ) -> ScheduleFacts:
 
         trace = ACTIVE_TRACE.get()
@@ -175,7 +176,12 @@ class TracePipeline(OfficialH3Pipeline):
             raise RuntimeError("diagnostic capture context is absent")
         with trace.observe(self.components[_DIT_COMPONENT[_TRUNK[task]]]):
             result = super().denoise(
-                task, state, on_step=trace.step_callback(on_step), cancel=cancel, checks=checks
+                task,
+                state,
+                on_step=trace.step_callback(on_step),
+                cancel=cancel,
+                checks=checks,
+                sol_dense_steps=sol_dense_steps,
             )
         trace.final_latents(state)
         return result
