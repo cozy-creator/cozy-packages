@@ -153,6 +153,9 @@ PUBLIC_RUNTIME_ROOTS = (["cozy_runtime", "author"], ["cozy_runtime", "derive"])
 
 
 def public_runtime_surface(module: str) -> bool:
+    # The builtin model facade is public; its implementation modules are not.
+    if module == "cozy_runtime.models.minimax_h3":
+        return True
     parts = module.split(".")
     return parts[:2] in PUBLIC_RUNTIME_ROOTS and not any(part.startswith("_") for part in parts[2:])
 
@@ -350,12 +353,14 @@ ARM_PRIVATE = (
     "from cozy_runtime.internal.derive import derive",
     "import cozy_runtime.internal.executor",
     "import cozy_runtime",
+    "from cozy_runtime.models.minimax_h3.official import OfficialH3Pipeline",
 )
 ARM_PUBLIC = (
     "from cozy_runtime.author import Outputs, decode_request",
     "from cozy_runtime.author.fakes import fake_attempt, fake_input",
     "import cozy_runtime.author",
     "from cozy_runtime.derive.quantization import derive_fp8",
+    "from cozy_runtime.models.minimax_h3 import H3Model",
 )
 
 
