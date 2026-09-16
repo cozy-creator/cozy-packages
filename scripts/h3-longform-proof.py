@@ -11,11 +11,13 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import shutil
 import sys
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from pathlib import Path
 from threading import Event
 from threading import enumerate as threads
@@ -32,6 +34,7 @@ from cozy_runtime.author import (
     Invocation,
     MediaDecoder,
     Outputs,
+    Telemetry,
     Tree,
     VideoAsset,
     attempt,
@@ -42,6 +45,8 @@ from cozy_runtime.author._assets import GrantedInput, file_state
 from cozy_runtime.author._calls import _Broker, _CallType
 from cozy_runtime.author._codec import encode_frame
 from cozy_runtime.author._media import SNIFF_BYTES, sniff
+from cozy_runtime.author._observations import Observation
+from cozy_runtime.author._services import ProgressFrame
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
 from cozy_runtime.models.minimax_h3.official import FPS, frames_for
@@ -62,10 +67,14 @@ TURBO_PROVENANCE = msgspec.structs.replace(PROVENANCE, turbo_lora_manifest="sha2
 
 
 @invocable
-async def segment(ctx: Context, *, payload: h3.SegmentInput, out: Outputs) -> h3.SegmentOutput:
+async def segment(
+    ctx: Context, *, payload: h3.SegmentInput, progress_steps: int, out: Outputs, tel: Telemetry
+) -> h3.SegmentOutput:
     """CPU stand-in; the real segment is a nonmemoized serving entrypoint."""
     compatible(PROVENANCE, payload.expected_provenance)
     ctx.raise_if_cancelled()
+    # A genuine author callback, forwarded while the child poll is still pending.
+    tel.step_callback(progress_steps, stage="denoise", overall_range=(0.15, 0.85))(2)
     count = frames_for(payload.duration_s)
     pixels = np.zeros((count, HEIGHT, WIDTH, 3), dtype=np.uint8)
     pixels[..., 0] = payload.seed % 251
@@ -120,6 +129,8 @@ def _drive(
     steps: int | None = None,
     overlap: bool = False,
     request_id: str | None = None,
+    progress: list[ProgressFrame] | None = None,
+    fail_after_progress_at: int = -1,
 ) -> tuple[Any, Any, list[dict[str, Any]]]:
     root.mkdir()
     spool = root / "bytes"
@@ -131,9 +142,14 @@ def _drive(
     calls: list[dict[str, Any]] = []
     answers: dict[int, str] = {}
     byte_grants: dict[int, list[dict[str, Any]]] = {}
+    child_progress: dict[int, dict[str, Any]] = {}
     cancelled = False
     scan_started, child_started, scan_finished = Event(), Event(), Event()
     original_scan = assembly._scan_video
+
+    def observe(event: ProgressFrame | Observation) -> None:
+        if progress is not None and isinstance(event, ProgressFrame):
+            progress.append(event)
 
     def scan(
         decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], None]
@@ -193,6 +209,7 @@ def _drive(
                 document["payload"]["steps"] = 30
                 document["payload"]["expected_provenance"] = None
             assert list(document) == ["payload"], document
+            document["progress_steps"] = 8 if mode == "turbo" else document["payload"]["steps"]
             # The self-call keeps the omitted model slot. Runtime resolves its frozen
             # default; this CPU stand-in has no model and consumes only the shot payload.
             incoming = document["payload"].get("first_frame")
@@ -213,17 +230,24 @@ def _drive(
                     file_state=file_state(local),
                 )
             work = root / f"child-{index}"
+            emitted: list[ProgressFrame | Observation] = []
             with ThreadPoolExecutor(max_workers=1) as pool:
                 produced, outcome, record = pool.submit(
                     attempt,
                     child_app.get("segment"),
                     document,
                     Invocation(
-                        f"{parent}-child-{index}", work, time.monotonic() + 60, assets=grants
+                        f"{parent}-child-{index}",
+                        work,
+                        time.monotonic() + 60,
+                        assets=grants,
+                        progress=emitted.append,
                     ),
                 ).result()
             assert outcome.terminal == "succeeded", outcome
             assert produced is not None
+            step = next(event for event in emitted if isinstance(event, ProgressFrame))
+            child_progress[index] = {"sequence": 1, "payload": asdict(step)}
             response: dict[str, Any] = {"warnings": [], "provenance": msgspec.to_builtins(observed)}
             outputs: list[dict[str, Any]] = []
             for field, suffix in (("video", ".mp4"), ("continuation_frame", ".png")):
@@ -256,6 +280,10 @@ def _drive(
             return {"ok": True}
         assert kind == "child_poll", kind
         index = int(value["call_index"])
+        if index in child_progress:
+            return {"ok": True, "state": "running", "progress": child_progress.pop(index)}
+        if index == fail_after_progress_at:
+            return {"ok": False, "code": "child.failed", "detail": "renderer failed after step 3"}
         return {
             "ok": True,
             "state": "succeeded",
@@ -302,6 +330,7 @@ def _drive(
                 calls=broker,
                 trees=trees,
                 cancel=lambda: cancelled,
+                progress=observe,
             ),
         )
     finally:
@@ -318,20 +347,38 @@ def check_video(video: Any, frames: int) -> None:
         assert count == frames
 
 
+def check_progress(events: list[ProgressFrame], *, complete: bool) -> None:
+    overall = [event.overall_fraction for event in events if event.overall_fraction is not None]
+    assert overall and overall == sorted(overall), overall
+    assert (overall[-1] == 1.0) is complete, overall[-1]
+    # Streamed assembly work cannot claim completion before the native prefix is saved.
+    assembly_events = [event for event in events if event.stage.startswith("Assembling video")]
+    assert assembly_events and all(event.overall_fraction != 1.0 for event in assembly_events)
+    assert any(event.position is not None for event in assembly_events)
+
+
 def main() -> None:
     root = Path(sys.argv[1]).resolve()
     root.mkdir(parents=True, exist_ok=False)
     store = tensorfs.Store.init(root / "tensorfs")
     shots = [h3.Shot(f"The rover reaches landmark {index}.", 1000 + index, 5) for index in range(4)]
-    result, outcome, calls = _drive(root / "single", shots[:1])
+    progress: list[ProgressFrame] = []
+    result, outcome, calls = _drive(root / "single", shots[:1], progress=progress)
     assert outcome.terminal == "succeeded", outcome
     single = result.result
     assert single.complete and single.delivered == single.requested == 1
     assert single.reused == 0 and len(calls) == 1 and single.failed_index == -1
     assert single.delivered_frames == 124
+    check_progress(progress, complete=True)
+    assert progress[0].stage == "Shot 1 of 1"
+    assert progress[0].stage_fraction is None and progress[0].overall_fraction == 0.0
+    assert any(event.position == 3 and event.stage.startswith("Shot 1 of 1") for event in progress)
     check_video(single.video, 124)
     single_prefix = persist_prefix(store, single.prefix, root / "retained-single", "single")
-    result, outcome, calls = _drive(root / "second", shots[:2], resume=single_prefix, overlap=True)
+    progress = []
+    result, outcome, calls = _drive(
+        root / "second", shots[:2], resume=single_prefix, overlap=True, progress=progress
+    )
     assert outcome.terminal == "succeeded", outcome
     second = result.result
     assert second.complete and second.delivered == 2 and second.reused == 1
@@ -339,15 +386,25 @@ def main() -> None:
     sent = json.loads(calls[0]["payload"])["payload"]
     assert sent["first_frame"] == single.segments[0].continuation_frame_digest
     assert sent["expected_provenance"] == msgspec.to_builtins(PROVENANCE)
+    check_progress(progress, complete=True)
+    assert progress[0].stage == "Reused 1 of 2 shots"
+    assert progress[0].overall_fraction is not None and progress[0].overall_fraction > 0.4
+    assert not any(event.stage.startswith("Shot 1 of 2") for event in progress)
     check_video(second.video, 247)
 
-    result, outcome, calls = _drive(root / "partial", shots, fail_at=2, overlap=True)
+    progress = []
+    result, outcome, calls = _drive(
+        root / "partial", shots, fail_at=2, overlap=True, progress=progress
+    )
     assert outcome.terminal == "succeeded", outcome
     partial = result.result
     assert not partial.complete and partial.delivered == 2 and partial.requested == 4
     assert partial.reused == 0 and partial.failed_index == 2 and len(calls) == 3
     assert partial.failure_code == "child.failed" and "PARTIAL DELIVERY" in partial.warnings[-1]
     assert partial.delivered_frames == 247
+    check_progress(progress, complete=False)
+    assert progress[-1].overall_fraction is not None and progress[-1].overall_fraction < 0.51
+    assert not any(event.stage.startswith("Shot 4 of 4") for event in progress)
     check_video(partial.video, 247)
     prefix = persist_prefix(store, partial.prefix, root / "retained-partial", "partial")
 
@@ -368,11 +425,17 @@ def main() -> None:
         store, completed.prefix, root / "retained-complete", "complete"
     )
 
-    result, outcome, calls = _drive(root / "reassemble", edited, resume=complete_prefix)
+    progress = []
+    result, outcome, calls = _drive(
+        root / "reassemble", edited, resume=complete_prefix, progress=progress
+    )
     assert outcome.terminal == "succeeded", outcome
     assert result.result.complete and result.result.reused == 4 and not calls
     assert result.result.segments == completed.segments
     assert result.result.video.read_bytes() == completed.video.read_bytes()
+    check_progress(progress, complete=True)
+    assert progress[0].stage == "Reused 4 of 4 shots"
+    assert not any(event.stage.startswith("Shot ") for event in progress)
     check_video(result.result.video, 493)
 
     # Valid byte grants do not make a truncated fragment a completed shot. Update the
@@ -402,11 +465,42 @@ def main() -> None:
     result, outcome, _ = _drive(root / "changed-code", edited, resume=prefix, observed=changed_code)
     assert result is None and outcome.code == "prefix_provenance", outcome
 
-    result, outcome, calls = _drive(root / "turbo", shots[:2], mode="turbo")
+    progress = []
+    result, outcome, calls = _drive(root / "turbo", shots[:2], mode="turbo", progress=progress)
     assert outcome.terminal == "succeeded", outcome
     turbo = result.result
     assert turbo.complete and len(calls) == 2
     assert all(item.provenance == TURBO_PROVENANCE for item in turbo.segments)
+    check_progress(progress, complete=True)
+    step = next(
+        event for event in progress if event.position == 3 and event.stage.startswith("Shot 2 of 2")
+    )
+    assert step.total == 8 and step.stage_fraction == 0.375
+    assert step.overall_fraction is not None
+    assert math.isclose(step.overall_fraction, (992 + 0.4125 * 992) / 2232, abs_tol=2e-6)
+
+    progress = []
+    result, outcome, _ = _drive(
+        root / "unequal-shots",
+        [shots[0], h3.Shot("The rover takes a longer path.", 42, 10)],
+        mode="turbo",
+        progress=progress,
+    )
+    assert outcome.terminal == "succeeded", outcome
+    check_progress(progress, complete=True)
+    boundary = next(event for event in progress if event.stage == "Shot 2 of 2")
+    assert boundary.overall_fraction is not None
+    # H3's served clock is 124 + 243 source frames, minus one assembly seam.
+    assert math.isclose(boundary.overall_fraction, 992 / 3303, abs_tol=2e-6)
+
+    progress = []
+    result, outcome, _ = _drive(
+        root / "fails-after-step", shots, mode="turbo", fail_after_progress_at=1, progress=progress
+    )
+    assert outcome.terminal == "succeeded" and result.result.delivered == 1, outcome
+    check_progress(progress, complete=False)
+    assert any(event.position == 3 and event.stage.startswith("Shot 2 of 4") for event in progress)
+    assert not any(event.stage.startswith("Shot 3 of 4") for event in progress)
     turbo_prefix = persist_prefix(store, turbo.prefix, root / "retained-turbo", "turbo")
     turbo_manifest = msgspec.json.decode(
         (turbo_prefix.path / "manifest.json").read_bytes(), type=PrefixManifest
@@ -505,6 +599,11 @@ def main() -> None:
         "automatic_seeds_differ_for_new_run": True,
         "omitted_seed_reuses_retained_shot": True,
         "explicit_zero_seed_preserved": True,
+        "child_steps_forwarded_with_shot_scope": True,
+        "overall_progress_monotonic": True,
+        "unequal_shots_weighted_by_frame_work": True,
+        "retained_shots_receive_immediate_credit": True,
+        "partial_delivery_stays_below_completion": True,
         "actual_h3_inference": False,
     }
     (root / "evidence.json").write_text(json.dumps(facts, indent=2) + "\n")
