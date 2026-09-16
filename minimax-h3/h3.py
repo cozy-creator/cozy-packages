@@ -88,10 +88,13 @@ from story import (
     ReferenceFrame,
     SelectedReference,
     StoryReference,
+    history_description,
+    reference_roles,
     sample_positions,
     select_references,
     shot_prompt,
     signature,
+    signature_rgb,
 )
 
 app = App()
@@ -1330,8 +1333,13 @@ def _capture_reference_frames(
     count, height, width, _ = (int(value) for value in pixels.shape)
     for index in sample_positions(count):
         check()
-        image = Image.frombytes("RGB", (width, height), bytes(pixels[index].numpy()))
-        frames.append(ReferenceFrame(out.save_image(image, format="png"), index, signature(image)))
+        raw = bytes(pixels[index].numpy())
+        image = ImageFrame(width, height, raw)
+        frames.append(
+            ReferenceFrame(
+                out.save_image(image, format="png"), index, signature_rgb(width, height, raw)
+            )
+        )
 
 
 def _render_cut(
@@ -1357,7 +1365,7 @@ def _render_cut(
     )
     if assets:
         _reference_policy(assets)
-        task = "ref2va" if turbo_lora is None else "ref2va_turbo"
+        task: Task = "ref2va" if turbo_lora is None else "ref2va_turbo"
         shot = _references_to_video(
             ctx,
             task,
@@ -1467,8 +1475,21 @@ async def long_form_cuts(
                 reference.subject,
             )
         )
+    stable = select_references(stable, [], history_frames=0)
+    history_budget = min(payload.history_frames, MAX_IMAGE_REFERENCES - len(stable))
     for index, shot in enumerate(payload.shots):
-        shot_prompt(payload.prompt, shot.prompt, stable, index=index)
+        # Text-only placeholders bound the longest possible compiled history before
+        # any GPU call. They are never submitted as assets or added to retained history.
+        worst_history = [
+            SelectedReference(
+                ImageAsset("prompt-preflight"),
+                history_description(item),
+                "",
+                subject="The existing cast and world from preceding shots",
+            )
+            for item in range(min(history_budget, 3 * index))
+        ]
+        shot_prompt(payload.prompt, shot.prompt, [*stable, *worst_history], index=index)
     planned_frames = [frames_for(shot.duration_s) for shot in payload.shots]
     render_work = [frames * steps for frames in planned_frames]
     total_work = sum(render_work) + sum(planned_frames) + 1
@@ -1495,16 +1516,18 @@ async def long_form_cuts(
                 "h3 cut reference selection",
                 shot=index + 1,
                 seed=seed,
-                references=[
-                    {
-                        "picture": slot,
-                        "digest": ref.image.digest,
-                        "subject": ref.subject,
-                        "description": ref.description,
-                    }
-                    for slot, ref in enumerate(selected, start=1)
-                ],
+                references=len(selected),
             )
+            for slot, ref in enumerate(selected, start=1):
+                for subject, description in reference_roles(ref):
+                    tel.log(
+                        "h3 cut reference",
+                        shot=index + 1,
+                        picture=slot,
+                        digest=ref.image.digest,
+                        subject=subject,
+                        description=description,
+                    )
             try:
                 with tel.scope(
                     f"Shot {index + 1} of {len(payload.shots)}",
@@ -1520,7 +1543,7 @@ async def long_form_cuts(
                                 seed,
                                 shot.duration_s,
                                 expected,
-                                payload.history_frames > 0 and index + 1 < len(payload.shots),
+                                history_budget > 0 and index + 1 < len(payload.shots),
                             ),
                             assets=assets,
                         )
@@ -1532,7 +1555,7 @@ async def long_form_cuts(
                                 steps,
                                 shot.duration_s,
                                 expected,
-                                payload.history_frames > 0 and index + 1 < len(payload.shots),
+                                history_budget > 0 and index + 1 < len(payload.shots),
                             ),
                             assets=assets,
                         )
@@ -1548,18 +1571,14 @@ async def long_form_cuts(
             frame = result.continuation_frame
             warnings.extend(result.warnings)
             completed_work += render_work[index]
-            tel.log(
-                "h3 cut reference candidates",
-                shot=index + 1,
-                frames=[
-                    {
-                        "frame_index": item.frame_index,
-                        "digest": item.image.digest,
-                        "signature": item.signature,
-                    }
-                    for item in result.reference_frames
-                ],
-            )
+            for item in result.reference_frames:
+                tel.log(
+                    "h3 cut reference candidate",
+                    shot=index + 1,
+                    frame_index=item.frame_index,
+                    digest=item.image.digest,
+                    signature=item.signature,
+                )
         if not videos:
             raise OutputError(f"shot 1 failed ({failure_code}): {failure_detail}")
         delivered_frames = sum(planned_frames[: len(videos)])

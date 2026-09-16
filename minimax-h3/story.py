@@ -40,11 +40,35 @@ class SelectedReference(msgspec.Struct):
     signature: str
     fidelity: Literal["auto", "low", "medium", "high"] = "auto"
     subject: str = ""
+    roles: tuple[tuple[str, str], ...] = ()
+
+
+def reference_roles(reference: SelectedReference) -> tuple[tuple[str, str], ...]:
+    return reference.roles or ((reference.subject, reference.description),)
 
 
 def signature(image: Image) -> str:
     """Small RGB thumbnail for deterministic near-duplicate suppression, not quality scoring."""
-    return image.convert("RGB").resize((8, 8)).tobytes().hex()
+    return signature_rgb(image.width, image.height, image.convert("RGB").tobytes())
+
+
+def signature_rgb(width: int, height: int, rgb: bytes) -> str:
+    result = bytearray()
+    for y in range(8):
+        for x in range(8):
+            offset = (
+                min(height - 1, (2 * y + 1) * height // 16) * width
+                + min(width - 1, (2 * x + 1) * width // 16)
+            ) * 3
+            result.extend(rgb[offset : offset + 3])
+    return result.hex()
+
+
+def history_description(index: int) -> str:
+    return (
+        f"Relevant character, prop and setting appearance in preceding shot {index + 1}; "
+        "the current shot description determines the action and camera composition"
+    )
 
 
 def sample_positions(frames: int) -> tuple[int, ...]:
@@ -78,9 +102,15 @@ def select_references(
         if existing is None:
             selected.append(item)
         else:
-            # One image can describe multiple subjects; preserve both descriptions.
+            if existing.fidelity != item.fidelity:
+                raise InvalidRequest(
+                    "the same image has conflicting fidelity settings", fields=["references"]
+                )
+            # One native Picture can define several Subjects without duplicating its
+            # conditioning rows or increasing its relative weight in the reference set.
             selected[selected.index(existing)] = msgspec.structs.replace(
-                existing, description=f"{existing.description}; {item.description}"
+                existing,
+                roles=tuple(dict.fromkeys((*reference_roles(existing), *reference_roles(item)))),
             )
     remaining = min(history_frames, MAX_IMAGES - len(selected))
     for view in range(3):
@@ -99,8 +129,7 @@ def select_references(
             selected.append(
                 SelectedReference(
                     candidate.image,
-                    f"Relevant character, prop and setting appearance in shot {index + 1}; "
-                    "the current shot description determines the action and camera composition",
+                    history_description(index),
                     candidate.signature,
                     subject="The existing cast and world from preceding shots",
                 )
@@ -112,19 +141,24 @@ def select_references(
 def shot_prompt(
     shared: str, description: str, references: Sequence[SelectedReference], *, index: int
 ) -> str:
-    groups: dict[str, list[tuple[int, SelectedReference]]] = {}
+    groups: dict[str, list[tuple[int, str]]] = {}
     for slot, ref in enumerate(references, start=1):
-        groups.setdefault(ref.subject or f"Reference {slot}", []).append((slot, ref))
+        for subject, details in reference_roles(ref):
+            groups.setdefault(subject or f"Reference {slot}", []).append((slot, details))
     subjects = []
     for number, (name, items) in enumerate(groups.items(), start=1):
-        descriptions = "; ".join(dict.fromkeys(ref.description for _, ref in items))
-        pictures = ", ".join(f"<Picture {slot}>" for slot, _ in items)
+        descriptions = "; ".join(dict.fromkeys(details for _, details in items))
+        pictures = ", ".join(dict.fromkeys(f"<Picture {slot}>" for slot, _ in items))
         subjects.append(f"<Subject {number}>: {name}. {descriptions}. Appearance in {pictures}.")
     parts = [
-        "Subject definitions:\n" + "\n".join(subjects) if subjects else "",
-        f"Video summary:\n{shared.strip()}" if shared.strip() else "",
-        "Retention:\nPreserve the referenced subjects' identity and relevant scene details.",
-        f"Shot {index + 1} description:\n{description.strip()}",
+        "subject_definitions:\n" + "\n".join(subjects) if subjects else "",
+        f"summary:\n{'[reference generation] ' if references else ''}{shared.strip()}",
+        "retention_analysis:\nUse the reference descriptions for relevant identity and "
+        "appearance. The current shot determines who is present, camera, pose, action, "
+        "wardrobe changes and location changes."
+        if references
+        else "",
+        f"detailed_description:\n[Shot 1]\n{description.strip()}",
     ]
     prompt = "\n\n".join(part for part in parts if part)
     if len(prompt) > 4096:
