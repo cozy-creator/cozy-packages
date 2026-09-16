@@ -1,4 +1,4 @@
-owner: /root/long_form_progress
-purpose: packages-v2#242 H3 overall and current-shot progress
+owner: /root/finish_h3_outputs
+purpose: packages-v2#242 H3 progress and final video/frame delivery; inherited /root/long_form_progress edits
 branch: feat/h3-long-form-progress
 base: 13dc792b7d86d8cbea061ffc62e9e51c5c85e12a

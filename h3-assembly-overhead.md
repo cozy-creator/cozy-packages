@@ -6,8 +6,8 @@ begins after the final GPU child completes.
 
 The first change moves the bounded validation scan of each completed shot onto one
 worker while the next child runs. Assembly consumes those private scan results without
-rescanning. Retained prefixes take the same validation path. Corrupt input, mismatched
-frames, changed intent and cancellation must remain failures; later child failure still
+rescanning. Every completed shot takes the same validation path. Corrupt input, mismatched
+frames and cancellation must remain failures; later child failure still
 assembles every completed prefix segment.
 
 Encoding still needs all audio seam levels and a global peak bound. Preserving that
@@ -22,11 +22,11 @@ fixtures do not establish real H3 rendering or the end-to-end 35-minute target.
 Implemented and locally qualified:
 
 - One validation worker overlaps completed-shot scans with subsequent broker children,
-  including retained prefixes. The scope joins its worker on cancellation or failure.
+  and the scope joins its worker on cancellation or failure.
 - Final assembly consumes the scans once. Native 1/2/4/8-shot outputs remain byte-identical
   to serial assembly, with the same exact video and audio clocks and bounded audio windows.
-- Valid byte grants containing a truncated prefix are refused. Partial child failure,
-  changed intent/model/code/adapter, complete reuse and cancellation retain their contracts.
+- Malformed clips are refused. Partial child failure, common renderer provenance,
+  and cancellation retain their contracts.
 - Unity-gain audio chunks keep their original PCM bytes; peak/window scans avoid redundant
   Python conversion. A scalar reference proves gain output bytes remain unchanged.
 
