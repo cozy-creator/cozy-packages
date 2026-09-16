@@ -84,6 +84,15 @@ from msgspec.structs import replace
 from assembly import MAX_SHOTS, AssembleVideoRequest, ScanAhead, assemble, assemble_video
 from gates import MediaFacts, refuse_before_encode, report_after_encode
 from long_form_state import RenderProvenance, compatible, provenance
+from story import (
+    ReferenceFrame,
+    SelectedReference,
+    StoryReference,
+    sample_positions,
+    select_references,
+    shot_prompt,
+    signature,
+)
 
 app = App()
 
@@ -452,6 +461,7 @@ def _finish(
     tel: Telemetry,
     cancel: Any,
     checks: NumericalChecks | None = None,
+    capture: Callable[[Any], None] | None = None,
 ) -> H3VideoOutput:
 
     cancel()
@@ -506,6 +516,8 @@ def _finish(
     frame_bytes = bytes(pixels[-1].numpy())
     with tel.stage("encode_outputs", overall_range=(0.99, 1.00)):
         continuation = out.save_image(ImageFrame(width, height, frame_bytes), format="png")
+        if capture is not None:
+            capture(pixels)
 
     tel.log(
         "h3 output geometry",
@@ -889,6 +901,7 @@ def _render_keyframes(
     first: Image | None,
     last: Image | None,
     turbo_lora: H3TurboLoRA | None = None,
+    capture: Callable[[Any], None] | None = None,
 ) -> H3VideoOutput:
     """Shared FL2VA rendering for direct requests and chained asset handoffs."""
     ctx.raise_if_cancelled()
@@ -931,6 +944,7 @@ def _render_keyframes(
         tel=tel,
         cancel=ctx.raise_if_cancelled,
         checks=checks,
+        capture=capture,
     )
 
 
@@ -945,6 +959,7 @@ def _references_to_video(
     *,
     steps: int,
     turbo_lora: H3TurboLoRA | None = None,
+    capture: Callable[[Any], None] | None = None,
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
@@ -1006,6 +1021,7 @@ def _references_to_video(
         tel=tel,
         cancel=ctx.raise_if_cancelled,
         checks=checks,
+        capture=capture,
     )
 
 
@@ -1286,6 +1302,315 @@ app.entrypoint(internal=True)(segment)
 app.entrypoint(internal=True)(segment_turbo)
 
 
+CutAssets = Annotated[
+    Assets[Mixed],
+    AssetLimits(images=MAX_IMAGE_REFERENCES, total=MAX_IMAGE_REFERENCES),
+    ImagePreparation(max_edge=8192, max_pixels=16_777_216),
+]
+
+
+class CutInput(ReferenceMediaToVideoInput):
+    expected_provenance: RenderProvenance | None = None
+    capture_history: bool = True
+
+
+class CutTurboInput(ReferenceMediaToVideoTurboInput):
+    expected_provenance: RenderProvenance | None = None
+    capture_history: bool = True
+
+
+class CutOutput(SegmentOutput):
+    reference_frames: Annotated[list[ReferenceFrame], msgspec.Meta(max_length=3)]
+
+
+def _capture_reference_frames(
+    pixels: Any, *, out: Outputs, frames: list[ReferenceFrame], check: Callable[[], None]
+) -> None:
+    """Capture candidate PNGs from the existing RGB8 decode, before any video re-encode."""
+    count, height, width, _ = (int(value) for value in pixels.shape)
+    for index in sample_positions(count):
+        check()
+        image = Image.frombytes("RGB", (width, height), bytes(pixels[index].numpy()))
+        frames.append(ReferenceFrame(out.save_image(image, format="png"), index, signature(image)))
+
+
+def _render_cut(
+    ctx: Context,
+    payload: CutInput | CutTurboInput,
+    assets: CutAssets,
+    model: H3Model,
+    out: Outputs,
+    tel: Telemetry,
+    *,
+    steps: int,
+    turbo_lora: H3TurboLoRA | None = None,
+) -> CutOutput:
+    observed = provenance(
+        model.checkpoint_ref, "" if turbo_lora is None else turbo_lora.checkpoint_ref
+    )
+    compatible(observed, payload.expected_provenance)
+    frames: list[ReferenceFrame] = []
+    capture = (
+        partial(_capture_reference_frames, out=out, frames=frames, check=ctx.raise_if_cancelled)
+        if payload.capture_history
+        else None
+    )
+    if assets:
+        _reference_policy(assets)
+        task = "ref2va" if turbo_lora is None else "ref2va_turbo"
+        shot = _references_to_video(
+            ctx,
+            task,
+            payload,
+            assets,
+            model,
+            out,
+            tel,
+            steps=steps,
+            turbo_lora=turbo_lora,
+            capture=capture,
+        )
+    else:
+        # The released Ref2VA path requires references. Its sibling FL2VA path supports
+        # text-only generation when both endpoints are absent; no image is pinned here.
+        task = "fl2va" if turbo_lora is None else "fl2va_turbo"
+        shot = _render_keyframes(
+            ctx,
+            task,
+            model,
+            out,
+            tel,
+            prompt=payload.prompt,
+            seed=payload.seed,
+            duration_s=payload.duration_s,
+            steps=steps,
+            first=None,
+            last=None,
+            turbo_lora=turbo_lora,
+            capture=capture,
+        )
+    tel.log("h3 cut rendering", native_path=task, seed=payload.seed, references=len(assets))
+    return CutOutput(shot.video, shot.continuation_frame, list(shot.warnings), observed, frames)
+
+
+@invocable(defaults={"model": _DEFAULT_MODEL_LADDER})
+async def cut_segment(
+    ctx: Context,
+    *,
+    payload: CutInput,
+    assets: CutAssets,
+    model: H3Model,
+    out: Outputs,
+    tel: Telemetry,
+) -> CutOutput:
+    return _render_cut(ctx, payload, assets, model, out, tel, steps=payload.steps)
+
+
+@invocable(
+    defaults={
+        "base_model": _DEFAULT_MODEL_LADDER,
+        "turbo_lora": _DEFAULT_TURBO_LORA_LADDER,
+    }
+)
+async def cut_segment_turbo(
+    ctx: Context,
+    *,
+    payload: CutTurboInput,
+    assets: CutAssets,
+    base_model: H3TurboBase,
+    turbo_lora: H3TurboLoRA,
+    out: Outputs,
+    tel: Telemetry,
+) -> CutOutput:
+    return _render_cut(
+        ctx, payload, assets, base_model, out, tel, steps=TURBO_STEPS, turbo_lora=turbo_lora
+    )
+
+
+app.entrypoint(internal=True)(cut_segment)
+app.entrypoint(internal=True)(cut_segment_turbo)
+
+
+class LongFormCutsInput(msgspec.Struct, forbid_unknown_fields=True):
+    shots: Annotated[list[Shot], msgspec.Meta(min_length=1, max_length=MAX_SHOTS)]
+    prompt: str = ""
+    references: Annotated[list[StoryReference], msgspec.Meta(max_length=9)] = []
+    history_frames: Annotated[int, msgspec.Meta(ge=0, le=6)] = 1
+    mode: Literal["turbo", "standard"] = "turbo"
+    steps: Steps | None = None
+
+
+async def long_form_cuts(
+    ctx: Context,
+    payload: LongFormCutsInput,
+    decoder: MediaDecoder,
+    out: Outputs,
+    tel: Telemetry,
+) -> LongFormOutput:
+    """Generate reference-conditioned camera cuts; deliver only the final film and image."""
+    ctx.raise_if_cancelled()
+    if payload.mode == "turbo" and payload.steps is not None:
+        raise InvalidRequest("turbo fixes eight PDD evaluations; omit steps", fields=["steps"])
+    steps = TURBO_STEPS if payload.mode == "turbo" else payload.steps or DEFAULT_STEPS
+    stable = []
+    for reference in payload.references:
+        ctx.raise_if_cancelled()
+        image = decoder.value(reference.image)
+        if not isinstance(image, Image):
+            raise InvalidRequest("story references must be images", fields=["references"])
+        stable.append(
+            SelectedReference(
+                reference.image,
+                reference.description,
+                signature(image),
+                reference.fidelity,
+                reference.subject,
+            )
+        )
+    for index, shot in enumerate(payload.shots):
+        shot_prompt(payload.prompt, shot.prompt, stable, index=index)
+    planned_frames = [frames_for(shot.duration_s) for shot in payload.shots]
+    render_work = [frames * steps for frames in planned_frames]
+    total_work = sum(render_work) + sum(planned_frames) + 1
+    completed_work = 0
+    videos: list[VideoAsset] = []
+    history: list[list[ReferenceFrame]] = []
+    expected = None
+    frame = None
+    warnings: list[str] = []
+    failed_index, failure_code, failure_detail = -1, "", ""
+    with ScanAhead(decoder, ctx.raise_if_cancelled) as scanning:
+        for index, shot in enumerate(payload.shots):
+            ctx.raise_if_cancelled()
+            selected = select_references(stable, history, history_frames=payload.history_frames)
+            prompt = shot_prompt(payload.prompt, shot.prompt, selected, index=index)
+            seed = shot_seed(shot, ctx.request_id, index)
+            assets = Assets[Mixed](
+                [
+                    ref.image.with_label(f"Picture {slot}").with_fidelity(ref.fidelity)
+                    for slot, ref in enumerate(selected, start=1)
+                ]
+            )
+            tel.log(
+                "h3 cut reference selection",
+                shot=index + 1,
+                seed=seed,
+                references=[
+                    {
+                        "picture": slot,
+                        "digest": ref.image.digest,
+                        "subject": ref.subject,
+                        "description": ref.description,
+                    }
+                    for slot, ref in enumerate(selected, start=1)
+                ],
+            )
+            try:
+                with tel.scope(
+                    f"Shot {index + 1} of {len(payload.shots)}",
+                    overall_range=(
+                        completed_work / total_work,
+                        (completed_work + render_work[index]) / total_work,
+                    ),
+                ):
+                    if payload.mode == "turbo":
+                        result = await cut_segment_turbo(  # type: ignore[call-arg]
+                            payload=CutTurboInput(
+                                prompt,
+                                seed,
+                                shot.duration_s,
+                                expected,
+                                payload.history_frames > 0 and index + 1 < len(payload.shots),
+                            ),
+                            assets=assets,
+                        )
+                    else:
+                        result = await cut_segment(  # type: ignore[call-arg]
+                            payload=CutInput(
+                                prompt,
+                                seed,
+                                steps,
+                                shot.duration_s,
+                                expected,
+                                payload.history_frames > 0 and index + 1 < len(payload.shots),
+                            ),
+                            assets=assets,
+                        )
+            except ChildCallError as failure:
+                ctx.raise_if_cancelled()
+                failed_index, failure_code, failure_detail = index, failure.code, str(failure)[:512]
+                break
+            compatible(result.provenance, expected)
+            expected = result.provenance
+            videos.append(result.video)
+            scanning.add(result.video)
+            history.append(result.reference_frames)
+            frame = result.continuation_frame
+            warnings.extend(result.warnings)
+            completed_work += render_work[index]
+            tel.log(
+                "h3 cut reference candidates",
+                shot=index + 1,
+                frames=[
+                    {
+                        "frame_index": item.frame_index,
+                        "digest": item.image.digest,
+                        "signature": item.signature,
+                    }
+                    for item in result.reference_frames
+                ],
+            )
+        if not videos:
+            raise OutputError(f"shot 1 failed ({failure_code}): {failure_detail}")
+        delivered_frames = sum(planned_frames[: len(videos)])
+        with tel.scope(
+            "Assembling video",
+            overall_range=(
+                completed_work / total_work,
+                (completed_work + delivered_frames) / total_work,
+            ),
+        ):
+            assembled = assemble(
+                AssembleVideoRequest(videos, transition="cut"),
+                decoder=decoder,
+                out=out,
+                tel=tel,
+                check=ctx.raise_if_cancelled,
+                scanned=scanning,
+            )
+    if (
+        assembled.output_frames != delivered_frames
+        or [item.source_frames for item in assembled.segments] != planned_frames[: len(videos)]
+    ):
+        raise OutputError("assembled cuts differ from the declared frame clock", code="shot_frames")
+    completed_work += delivered_frames
+    assert frame is not None
+    with tel.scope(
+        "Saving final frame",
+        overall_range=(completed_work / total_work, (completed_work + 1) / total_work),
+    ):
+        final_frame = out.save_image(decoder.value(frame), format="png")
+    complete = len(videos) == len(payload.shots)
+    if not complete:
+        warnings.append(
+            f"PARTIAL DELIVERY: {len(videos)} of {len(payload.shots)} shots completed; "
+            f"shot {failed_index + 1} failed ({failure_code})."
+        )
+    return LongFormOutput(
+        assembled.video,
+        final_frame,
+        complete,
+        len(videos),
+        len(payload.shots),
+        delivered_frames,
+        FPS,
+        failed_index,
+        failure_code,
+        failure_detail,
+        warnings,
+    )
+
+
 async def long_form(
     ctx: Context,
     payload: LongFormInput,
@@ -1433,4 +1758,5 @@ async def long_form(
 
 
 app.job(long_form, emits_media=True)
+app.job(long_form_cuts, emits_media=True)
 app.job(assemble_video, emits_media=True)
