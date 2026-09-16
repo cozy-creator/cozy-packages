@@ -10,7 +10,7 @@ supported-markers = [
 
 [[package]]
 name = "ast-serialize"
-version = "2.12.5"
+version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/7a/c2/feb42ca5bf2335aa16868bc53ec83f114923564763658d6a63e4c4c6ccde/ast_serialize-0.11.0.tar.gz", hash = "sha256:8b4b9862436eaf1442d6a16b7e138d4ff6ae558bdb6fde1c4cd87735093d5744", size = 953724, upload-time = "2026-09-08T14:58:39.804Z" }
 wheels = [
@@ -204,7 +204,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3-tools"
-version = "2.12.4"
+version = "2.12.5"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime" },
