@@ -99,7 +99,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.18.7"
+version = "0.18.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -110,10 +110,10 @@ dependencies = [
     { name = "protobuf" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/18/a7/4761cbde9b55fdd4992559e139726c73a300b5e7289b5e9ee59e28182642/cozy_runtime-0.18.7.tar.gz", hash = "sha256:19b7bb880ace7535d799d8ec5caa577b65bfc0601f325df64c90092b5a72f93b", size = 4159045, upload-time = "2026-09-16T00:04:54.326Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9f/a2/3e8551c35c738aee18fa331f479ed5d420e1dc0e549e88136cb1cef39955/cozy_runtime-0.18.8.tar.gz", hash = "sha256:1023153d10f88257d20428ed1c54b36f7e86537b3b9539c1a71cab14c1827eeb", size = 4160385, upload-time = "2026-09-16T00:28:35.134Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/af/ba4aa46b471f3290b635a9498e5cf1137b9a4c1c57bceb6614cc798d30fa/cozy_runtime-0.18.7-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:9fc7a5647bab143fb0c3696ac234885472df3e5a5bc50f5eea8be7af5bf8e1d0", size = 15647684, upload-time = "2026-09-16T00:04:49.491Z" },
-    { url = "https://files.pythonhosted.org/packages/84/1f/b6d99d06c08ec26a6b315985290256aa6c01d0d96c5c2d6002fd59b4b92a/cozy_runtime-0.18.7-py3-none-any.whl", hash = "sha256:205edd03ae36eb1d02212db230cab9f03ad89e30a8af9c5485994748efacf069", size = 3179525, upload-time = "2026-09-16T00:04:52.439Z" },
+    { url = "https://files.pythonhosted.org/packages/51/aa/5c5e41616f74f9b8db8b2758d27fc72cc32bb2561d0274e69b7f6f98d3bd/cozy_runtime-0.18.8-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:f11866612bf735d1538f4446fe5184b010f691ac3c108b19cba1dfb809d398f8", size = 15648412, upload-time = "2026-09-16T00:28:30.072Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/cb/09ab239ff9abd128174335fbaf276ad52d72511cfc5392fe40e2b2c825e7/cozy_runtime-0.18.8-py3-none-any.whl", hash = "sha256:c8aa3cd51e62422b39229fd6d23dee3bed19813c006aa912b89a6b21db9cb560", size = 3180253, upload-time = "2026-09-16T00:28:33.119Z" },
 ]
 
 [package.optional-dependencies]
@@ -424,7 +424,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cozy-eval", specifier = ">=0.3.2" },
-    { name = "cozy-runtime", extras = ["media", "minimax-h3"], specifier = ">=0.18.7" },
+    { name = "cozy-runtime", extras = ["media", "minimax-h3"], specifier = ">=0.18.8" },
     { name = "diffusers", specifier = ">=0.40.0" },
     { name = "hf-xet", specifier = ">=1.6.0" },
     { name = "msgspec", specifier = ">=0.19" },
