@@ -1,4 +1,4 @@
-owner: /root/streaming_longform_assembly
-purpose: proto056 overlap validated assembly scans with H3 children and reduce CPU work
-branch: proto056-incremental-assembly
-base: 3d7080d5696a6035c0491fdd7576ba19a1fb8ef7
+owner: /root/long_form_progress
+purpose: packages-v2#242 H3 overall and current-shot progress
+branch: feat/h3-long-form-progress
+base: 13dc792b7d86d8cbea061ffc62e9e51c5c85e12a
