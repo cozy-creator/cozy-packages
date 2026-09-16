@@ -44,7 +44,6 @@ from cozy_runtime.author import (
     Preflight,
     SavedVideo,
     Telemetry,
-    Tree,
     UnsupportedInput,
     VideoAsset,
     data_values,
@@ -84,17 +83,7 @@ from msgspec.structs import replace
 
 from assembly import MAX_SHOTS, AssembleVideoRequest, ScanAhead, assemble, assemble_video
 from gates import MediaFacts, refuse_before_encode, report_after_encode
-from long_form_state import (
-    MAX_PREFIX_BYTES,
-    RenderProvenance,
-    ShotIntent,
-    StoredShot,
-    check_intent,
-    compatible,
-    provenance,
-    read_prefix,
-    save_prefix,
-)
+from long_form_state import RenderProvenance, compatible, provenance
 
 app = App()
 
@@ -220,8 +209,6 @@ def _reference_policy(assets: ReferenceAssets) -> ReferencePolicyFacts:
         return validate_reference_policy(kinds)
     except ValueError as exc:
         raise UnsupportedInput(str(exc), code="reference_policy", fields=["assets"]) from exc
-
-
 
 
 def _keyframe_roles(assets: KeyframeAssets) -> tuple[int | None, int | None]:
@@ -1024,8 +1011,7 @@ def _references_to_video(
 
 # --- long-form composition -------------------------------------------------------------
 # `long_form` is a CPU composition job. Runtime runs an ordinary serving child for each
-# missing shot and retains its returned bytes. Explicit continuation reuses the native
-# prefix after validating shot intents and renderer provenance; inference is not memoized.
+# shot and owns its intermediate bytes. Inference is not memoized.
 # Only encoded asset handles cross the loop. Assembly decodes one bounded event at a time.
 
 # A hand-off frame is exactly the generation canvas, which the conditioner already bounds
@@ -1037,7 +1023,7 @@ _KEYFRAME_MAX_DECODED_BYTES = 3 * 16_777_216
 class Shot(msgspec.Struct, forbid_unknown_fields=True):
     """One segment's authored identity.
 
-    An omitted seed is chosen per request and shot, then recorded in the delivered prefix.
+    An omitted seed is chosen per request and shot, then passed to its internal child.
     Explicit seeds preserve reproducibility; retrying a request keeps its automatic seeds.
 
     A shot defaults to the LONGEST served cell, not the package default, and it follows
@@ -1058,7 +1044,7 @@ class SegmentInput(msgspec.Struct, forbid_unknown_fields=True):
     """One shot, as an ordinary request.
 
     `first_frame` is the previous shot's `continuation_frame`, passed as a verified asset
-    reference. An extending request also names the retained prefix's renderer provenance.
+    reference. The parent enforces one renderer provenance across its shots.
     """
 
     prompt: Prompt
@@ -1080,7 +1066,7 @@ class SegmentTurboInput(msgspec.Struct, forbid_unknown_fields=True):
     """One shot, as an ordinary request.
 
     `first_frame` is the previous shot's `continuation_frame`, passed as a verified asset
-    reference. An extending request also names the retained prefix's renderer provenance.
+    reference. The parent enforces one renderer provenance across its shots.
     """
 
     prompt: Prompt
@@ -1103,7 +1089,7 @@ class SegmentOutput(msgspec.Struct):
     video: Annotated[
         VideoAsset,
         AssetBound(
-            max_bytes=MAX_PREFIX_BYTES,
+            max_bytes=256 << 20,
             max_decoded_bytes=32 << 20,
             media_types=("video/mp4",),
         ),
@@ -1120,21 +1106,6 @@ class SegmentOutput(msgspec.Struct):
     provenance: RenderProvenance
 
 
-class SegmentReceipt(msgspec.Struct):
-    """What a delivered shot contributes to the assembly and to a resume."""
-
-    seed: int
-    duration_s: int
-    frames: int
-    start_frame: int
-    video_digest: str
-    video_bytes: int
-    continuation_frame_digest: str
-    first_frame_digest: str
-    child_request_id: str
-    provenance: RenderProvenance
-
-
 class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
     """A shot list with shared identity and audio anchors; defaults to eight-step PDD turbo.
 
@@ -1148,7 +1119,6 @@ class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
     non_diegetic_music: str = ""
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
-    resume_from: Annotated[Tree | None, AssetBound(max_bytes=MAX_PREFIX_BYTES)] = None
     opening_frame: Annotated[
         ImageAsset | None,
         AssetBound(
@@ -1160,19 +1130,17 @@ class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
 
 
 class LongFormOutput(msgspec.Struct):
-    """A playable full or partial delivery and exact native bytes for explicit continuation.
+    """The assembled video and final frame, with full or partial delivery status.
 
-    A later-shot failure is a successful partial delivery with complete=False and failure
-    facts. Pass prefix as resume_from in a new request to keep its shots without rendering
-    them again. Cancellation and first-shot failure remain terminal failures/cancellation.
+    A later-shot failure returns the completed portion with complete=False. Use its final
+    continuation_frame as opening_frame for a new sequence. Intermediate clips remain
+    internal to the serving calls. First-shot failure and cancellation stay terminal.
     """
 
     video: Annotated[VideoAsset, AssetBound(max_bytes=256 << 20, media_types=("video/mp4",))]
-    prefix: Annotated[Tree, AssetBound(max_bytes=MAX_PREFIX_BYTES)]
+    continuation_frame: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
     complete: bool
     delivered: int
-    reused: int
-    segments: list[SegmentReceipt]
     requested: int
     delivered_frames: int
     fps: int
@@ -1325,12 +1293,7 @@ async def long_form(
     out: Outputs,
     tel: Telemetry,
 ) -> LongFormOutput:
-    """Render only missing shots, assemble the delivered prefix and retain its native bytes.
-
-    Existing prefix intents must match the corresponding requested shots. The remaining
-    prompts may change. Every new segment uses the prefix's recorded renderer/model cohort;
-    completed shot records are preserved, never relabeled as new rendering.
-    """
+    """Render and assemble remotely; deliver only the joined video and final frame."""
     ctx.raise_if_cancelled()
     if payload.mode == "turbo" and payload.steps is not None:
         raise InvalidRequest(
@@ -1345,161 +1308,120 @@ async def long_form(
     prompts = [
         compose_shot_prompt(shot, payload, index=index) for index, shot in enumerate(payload.shots)
     ]
-    records: list[StoredShot] = []
+    # Planned frame/step work, assembly frames, and one final-frame save. Never wall time.
+    render_work = [frames_for(shot.duration_s) * steps for shot in payload.shots]
+    _, requested_frames = segment_clock([shot.duration_s for shot in payload.shots])
+    total_work = sum(render_work) + requested_frames + 1
+    completed_work = 0
     videos: list[VideoAsset] = []
-    frames: list[ImageAsset] = []
     warnings: list[str] = []
     frame = payload.opening_frame
     expected: RenderProvenance | None = None
-    if payload.resume_from is not None:
-        manifest, videos, frames = read_prefix(payload.resume_from, requested=len(payload.shots))
-        records = list(manifest.shots)
-        first_digest = records[0].intent.first_frame_digest
-        if frame is not None and frame.digest != first_digest:
-            raise InvalidRequest(
-                "opening frame differs from the retained prefix", code="prefix_intent"
-            )
-        for index, record in enumerate(records):
-            shot = payload.shots[index]
-            incoming = first_digest if index == 0 else records[index - 1].continuation_frame_digest
-            check_intent(
-                record,
-                ShotIntent(
-                    prompts[index],
-                    record.intent.seed if shot.seed is None else shot.seed,
-                    shot.duration_s,
-                    steps,
-                    incoming,
-                ),
-                frames_for(shot.duration_s),
-            )
-        expected = records[0].provenance
-        frame = frames[-1]
-    reused = len(records)
     failed_index, failure_code, failure_detail = -1, "", ""
     with ScanAhead(decoder, ctx.raise_if_cancelled) as scanning:
-        for video in videos:
-            scanning.add(video)
-        for index in range(reused, len(payload.shots)):
+        for index, shot in enumerate(payload.shots):
             ctx.raise_if_cancelled()
-            shot = payload.shots[index]
-            intent = ShotIntent(
-                prompts[index],
-                shot_seed(shot, ctx.request_id, index),
-                shot.duration_s,
-                steps,
-                "" if frame is None else frame.digest,
-            )
+            seed = shot_seed(shot, ctx.request_id, index)
             try:
-                if payload.mode == "turbo":
-                    call = segment_turbo(  # type: ignore[call-arg]
-                        payload=SegmentTurboInput(
-                            prompt=intent.prompt,
-                            seed=intent.seed,
-                            duration_s=intent.duration_s,
-                            expected_provenance=expected,
-                            first_frame=frame,
+                with tel.scope(
+                    f"Shot {index + 1} of {len(payload.shots)}",
+                    overall_range=(
+                        completed_work / total_work,
+                        (completed_work + render_work[index]) / total_work,
+                    ),
+                ):
+                    if payload.mode == "turbo":
+                        call = segment_turbo(  # type: ignore[call-arg]
+                            payload=SegmentTurboInput(
+                                prompt=prompts[index],
+                                seed=seed,
+                                duration_s=shot.duration_s,
+                                expected_provenance=expected,
+                                first_frame=frame,
+                            )
                         )
-                    )
-                else:
-                    call = segment(  # type: ignore[call-arg]
-                        payload=SegmentInput(
-                            prompt=intent.prompt,
-                            seed=intent.seed,
-                            duration_s=intent.duration_s,
-                            steps=intent.steps,
-                            expected_provenance=expected,
-                            first_frame=frame,
+                    else:
+                        call = segment(  # type: ignore[call-arg]
+                            payload=SegmentInput(
+                                prompt=prompts[index],
+                                seed=seed,
+                                duration_s=shot.duration_s,
+                                steps=steps,
+                                expected_provenance=expected,
+                                first_frame=frame,
+                            )
                         )
-                    )
-                shot_result = await call
+                    shot_result = await call
             except ChildCallError as failure:
-                # A concurrent caller cancellation must not become a successful partial result.
+                # Concurrent caller cancellation must not become a successful partial result.
                 ctx.raise_if_cancelled()
                 failed_index, failure_code, failure_detail = index, failure.code, str(failure)[:512]
                 break
             compatible(shot_result.provenance, expected)
             expected = shot_result.provenance
-            records.append(
-                StoredShot(
-                    intent=intent,
-                    provenance=shot_result.provenance,
-                    child_request_id=call.request_id,
-                    frames=frames_for(shot.duration_s),
-                    video_digest=shot_result.video.digest,
-                    video_bytes=shot_result.video.size_bytes,
-                    continuation_frame_digest=shot_result.continuation_frame.digest,
-                    continuation_frame_bytes=shot_result.continuation_frame.size_bytes,
-                )
-            )
             videos.append(shot_result.video)
             scanning.add(shot_result.video)
-            frames.append(shot_result.continuation_frame)
             warnings.extend(shot_result.warnings)
-            frame = frames[-1]
-        if not records:
+            frame = shot_result.continuation_frame
+            completed_work += render_work[index]
+        if not videos:
             raise OutputError(
                 f"shot 1 of {len(payload.shots)} failed ({failure_code}): {failure_detail}"
             )
         ctx.raise_if_cancelled()
-        assembled = assemble(
-            AssembleVideoRequest(videos=videos),
-            decoder=decoder,
-            out=out,
-            tel=tel,
-            check=ctx.raise_if_cancelled,
-            scanned=scanning,
+        _, delivered_frames = segment_clock(
+            [shot.duration_s for shot in payload.shots[: len(videos)]]
         )
+        with tel.scope(
+            "Assembling video",
+            overall_range=(
+                completed_work / total_work,
+                (completed_work + delivered_frames) / total_work,
+            ),
+        ):
+            assembled = assemble(
+                AssembleVideoRequest(videos=videos),
+                decoder=decoder,
+                out=out,
+                tel=tel,
+                check=ctx.raise_if_cancelled,
+                scanned=scanning,
+            )
     if [segment.source_frames for segment in assembled.segments] != [
-        record.frames for record in records
+        frames_for(shot.duration_s) for shot in payload.shots[: len(videos)]
     ]:
-        raise OutputError(
-            "retained shot video differs from its declared frame count", code="prefix_frames"
-        )
-    prefix = save_prefix(ctx, out, records, videos, frames)
-    starts, delivered_frames = segment_clock([record.intent.duration_s for record in records])
+        raise OutputError("shot video differs from its declared frame count", code="shot_frames")
     if assembled.output_frames != delivered_frames:
-        raise OutputError("assembled output differs from the long-form clock", code="prefix_frames")
-    complete = len(records) == len(payload.shots)
+        raise OutputError("assembled output differs from the long-form clock", code="shot_frames")
+    completed_work += delivered_frames
+    assert frame is not None
+    with tel.scope(
+        "Saving final frame",
+        overall_range=(completed_work / total_work, (completed_work + 1) / total_work),
+    ):
+        continuation_frame = out.save_image(decoder.value(frame), format="png")
+    complete = len(videos) == len(payload.shots)
     if not complete:
         warnings.append(
-            f"PARTIAL DELIVERY: {len(records)} of {len(payload.shots)} shots completed; "
-            f"shot {failed_index + 1} failed ({failure_code}). Pass prefix as resume_from "
-            "in a new request to continue without rerendering these shots."
+            f"PARTIAL DELIVERY: {len(videos)} of {len(payload.shots)} shots completed; "
+            f"shot {failed_index + 1} failed ({failure_code}). Use continuation_frame as "
+            "opening_frame in a new request to continue from the delivered video."
         )
-    receipts = [
-        SegmentReceipt(
-            seed=record.intent.seed,
-            duration_s=record.intent.duration_s,
-            frames=record.frames,
-            start_frame=starts[index],
-            video_digest=record.video_digest,
-            video_bytes=record.video_bytes,
-            continuation_frame_digest=record.continuation_frame_digest,
-            first_frame_digest=record.intent.first_frame_digest,
-            child_request_id=record.child_request_id,
-            provenance=record.provenance,
-        )
-        for index, record in enumerate(records)
-    ]
     tel.log(
         "h3 long-form delivery",
         mode=payload.mode,
         steps=steps,
         complete=complete,
-        delivered=len(records),
+        delivered=len(videos),
         requested=len(payload.shots),
-        reused=reused,
         delivered_frames=delivered_frames,
         failed_index=failed_index,
     )
     return LongFormOutput(
         video=assembled.video,
-        prefix=prefix,
+        continuation_frame=continuation_frame,
         complete=complete,
-        delivered=len(records),
-        reused=reused,
-        segments=receipts,
+        delivered=len(videos),
         requested=len(payload.shots),
         delivered_frames=delivered_frames,
         fps=FPS,
