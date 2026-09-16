@@ -1,18 +1,16 @@
 # Long-form video
 
-The long-form entrypoint renders 1–8 shots in sequence. Each shot starts from the
-previous shot's final frame. Shared subject and sound descriptions are repeated in
-every prompt. It returns a playable video and a prefix directory containing the
-original clips, continuation frames, and their recorded rendering inputs.
+`long_form` renders 1–8 shots in sequence and assembles them on the rental. Each shot
+starts from the previous shot's final frame. Shared subject and sound descriptions
+are repeated in every prompt.
+
+The delivered files are the final assembled MP4 and final continuation PNG. Intermediate
+shot clips and frames remain internal to the serving calls; no prefix directory is
+produced or downloaded.
 
 Four 15-second shots produce 1,445 frames at 24 fps (60.208 seconds); eight produce
 2,889 frames (120.375 seconds). One repeated frame is removed at each join. This
 is shot-to-shot continuation: appearance and sound can still drift between shots.
-
-You can start with one shot, inspect its video, and extend its returned prefix to
-two, four, or eight shots. Each extension renders only the added shots. The CPU
-composition job awaits one serving call at a time; Runtime owns model admission
-and warm executor reuse.
 
 Save a request such as this as `shots.json`:
 
@@ -37,43 +35,28 @@ cozy run paul/minimax-h3/long_form --input shots.json --rental=your-rental --awa
 ```
 
 `complete`, `delivered`, and `requested` report whether all requested shots finished.
-Each shot's `seed` is optional. Omit it (or use `null`) to choose a seed automatically;
-set an integer for a specific seed. Automatic seeds differ by request and shot and stay
-stable when that request retries. The result's segment receipts and retained prefix
-record the actual seeds used.
+Each shot's seed is optional; an omitted or null seed derives from the request and shot
+index and stays stable when that request retries. Explicit zero is a valid seed.
 
-If a later shot fails, the result contains a playable partial video, its prefix, and
-the failure details. Failure on the first shot fails the request. Cancellation
-remains cancellation.
+A later-shot failure returns the assembled completed portion and its final frame with
+`complete=false` and failure details. Failure on the first shot fails the request;
+cancellation remains cancellation.
 
-To extend or recover a delivered prefix, keep its complete directory. The new
-request's `resume_from` field takes that retained native Tree. Attach the collected
-prefix directory to that field:
+To generate a new sequence from the delivered endpoint, put only the new shots in
+`next-shots.json` and attach the final frame:
 
 ```sh
-cozy run paul/minimax-h3/long_form --input extended.json --rental=your-rental \
-  --asset resume_from=/path/to/collected/prefix --await --out ./extended-video
+cozy run paul/minimax-h3/long_form --input next-shots.json --rental=your-rental \
+  --asset opening_frame=/path/to/continuation.png --await --out ./next-video
 ```
 
-The CLI supplies `resume_from` from this attachment; the JSON contains the shot
-list and shared descriptions as before.
+The new request renders its own shots and returns its own assembled video. Runtime's
+existing request and child records own execution recovery; the package does not export
+intermediate state as an output or memoize model inference.
 
-Include the original completed shots at the start of `extended.json`. Their
-prompts, seeds, durations, shared descriptions, step count and opening frame must
-match. Seeds may remain omitted: completed shots reuse their recorded seeds. An explicit
-seed must match the retained shot. You may edit the remaining shots or append more shots,
-up to eight total.
-The response's `reused` count identifies shots that were kept. Supplying a complete
-prefix with the same shot list assembles it again without rendering any shot.
+Progress identifies the current shot and child phase. Overall progress weights planned
+frame × step work, assembly frames, and saving the final image. It is not an elapsed-time
+estimate. A partial delivery remains below 100% of the requested work.
 
-The prefix records the exact model manifest, package code, and rendering software.
-An extension refuses a different rendering cohort instead of describing old clips
-as if they were newly generated. This is explicit reuse of completed clips;
-ordinary inference is not memoized. Keep the matching package/runtime cohort when
-extending a prefix. Currently the package hash is conservative: editing H3's own
-composer or assembler also changes that cohort. Editing an external client script
-does not change it.
-
-The final video and the prefix each have a 256 MiB encoded-byte limit. Runtime
-decodes bounded media events during assembly; it does not hold a complete decoded
-multi-minute video in memory.
+The assembled video has a 256 MiB encoded-byte limit. Runtime decodes bounded media
+events during assembly instead of holding the entire decoded video in memory.

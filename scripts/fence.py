@@ -216,9 +216,9 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "the same driver grants the previous shot's bytes to the next child the way the worker "
         "does. Retire with the same public child-call harness. "
     ),
-    ("scripts/h3-longform-proof.py", "cozy_runtime.author._media"): (
-        "Use the worker's byte sniffer in the native Tree fixture; suffix guesses hid a "
-        "real JSON manifest refusal. Retire when this proof uses the worker projection service. "
+    ("scripts/h3-longform-proof.py", "cozy_runtime.author._services"): (
+        "Observe real progress frames and settle the final image through Runtime's codec "
+        "boundary. Retire when a public settled-output fixture exists. "
     ),
     ("scripts/h3-longform-proof.py", "cozy_runtime.author._codec"): (
         "The host fixture encodes the child's registered frames through Runtime's exact "

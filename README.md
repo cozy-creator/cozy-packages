@@ -150,11 +150,11 @@ The H3 package exposes both official actions from one model generation. Its norm
 `long_form` defaults to `mode="turbo"`: each shot uses eight PDD evaluations, the
 published FP8-pruned base and the separate PDD-8 adapter. Omit `steps` in turbo mode.
 For standard sampling, select `mode="standard"`; omitted `steps` then means 30,
-with explicit 30/40/50 also supported. The CPU parent retains the same native shot
-prefix and assembles it with the same continuation-frame handoffs. Prefix records
-include the exact base and adapter manifests; switching modes or adapter bytes
-cannot relabel retained shots. Four-GPU placement is chosen when submitting the run,
-not by the composition function.
+with explicit 30/40/50 also supported. The CPU parent renders and assembles remotely,
+returning only the joined MP4 and the last continuation frame. Intermediate shot clips
+stay inside the serving calls. A partial delivery includes its playable completed portion
+and final frame; pass that frame as `opening_frame` in a new request to continue.
+Four-GPU placement is chosen when submitting the run, not by the composition function.
 
 The `fl2va_turbo` and `ref2va_turbo` functions take two independent model slots:
 `base_model: H3TurboBase` holds an AdaLN-pruned five-root checkpoint, and

@@ -3438,20 +3438,17 @@ def arm_interface() -> None:
             "non_diegetic_music",
             "mode",
             "steps",
-            "resume_from",
             "opening_frame",
         ],
     )
     check(
-        "long_form reports the delivered prefix and the shot that stopped it",
+        "long_form returns only final media and delivery status",
         [field["name"] for field in jobs["long_form"]["result"]["fields"]],
         [
             "video",
-            "prefix",
+            "continuation_frame",
             "complete",
             "delivered",
-            "reused",
-            "segments",
             "requested",
             "delivered_frames",
             "fps",
