@@ -1345,6 +1345,11 @@ async def long_form(
     prompts = [
         compose_shot_prompt(shot, payload, index=index) for index, shot in enumerate(payload.shots)
     ]
+    # Work coordinates, not elapsed-time estimates: each shot contributes its planned
+    # frame/step work, assembly contributes output frames, and retaining the prefix one unit.
+    render_work = [frames_for(shot.duration_s) * steps for shot in payload.shots]
+    _, requested_frames = segment_clock([shot.duration_s for shot in payload.shots])
+    total_work = sum(render_work) + requested_frames + 1
     records: list[StoredShot] = []
     videos: list[VideoAsset] = []
     frames: list[ImageAsset] = []
@@ -1376,6 +1381,13 @@ async def long_form(
         expected = records[0].provenance
         frame = frames[-1]
     reused = len(records)
+    completed_work = sum(render_work[:reused])
+    if reused:
+        tel.progress(
+            1.0,
+            stage=f"Reused {reused} of {len(payload.shots)} shots",
+            overall_fraction=completed_work / total_work,
+        )
     failed_index, failure_code, failure_detail = -1, "", ""
     with ScanAhead(decoder, ctx.raise_if_cancelled) as scanning:
         for video in videos:
@@ -1391,28 +1403,35 @@ async def long_form(
                 "" if frame is None else frame.digest,
             )
             try:
-                if payload.mode == "turbo":
-                    call = segment_turbo(  # type: ignore[call-arg]
-                        payload=SegmentTurboInput(
-                            prompt=intent.prompt,
-                            seed=intent.seed,
-                            duration_s=intent.duration_s,
-                            expected_provenance=expected,
-                            first_frame=frame,
+                with tel.scope(
+                    f"Shot {index + 1} of {len(payload.shots)}",
+                    overall_range=(
+                        completed_work / total_work,
+                        (completed_work + render_work[index]) / total_work,
+                    ),
+                ):
+                    if payload.mode == "turbo":
+                        call = segment_turbo(  # type: ignore[call-arg]
+                            payload=SegmentTurboInput(
+                                prompt=intent.prompt,
+                                seed=intent.seed,
+                                duration_s=intent.duration_s,
+                                expected_provenance=expected,
+                                first_frame=frame,
+                            )
                         )
-                    )
-                else:
-                    call = segment(  # type: ignore[call-arg]
-                        payload=SegmentInput(
-                            prompt=intent.prompt,
-                            seed=intent.seed,
-                            duration_s=intent.duration_s,
-                            steps=intent.steps,
-                            expected_provenance=expected,
-                            first_frame=frame,
+                    else:
+                        call = segment(  # type: ignore[call-arg]
+                            payload=SegmentInput(
+                                prompt=intent.prompt,
+                                seed=intent.seed,
+                                duration_s=intent.duration_s,
+                                steps=intent.steps,
+                                expected_provenance=expected,
+                                first_frame=frame,
+                            )
                         )
-                    )
-                shot_result = await call
+                    shot_result = await call
             except ChildCallError as failure:
                 # A concurrent caller cancellation must not become a successful partial result.
                 ctx.raise_if_cancelled()
@@ -1437,29 +1456,42 @@ async def long_form(
             frames.append(shot_result.continuation_frame)
             warnings.extend(shot_result.warnings)
             frame = frames[-1]
+            completed_work += render_work[index]
         if not records:
             raise OutputError(
                 f"shot 1 of {len(payload.shots)} failed ({failure_code}): {failure_detail}"
             )
         ctx.raise_if_cancelled()
-        assembled = assemble(
-            AssembleVideoRequest(videos=videos),
-            decoder=decoder,
-            out=out,
-            tel=tel,
-            check=ctx.raise_if_cancelled,
-            scanned=scanning,
-        )
+        starts, delivered_frames = segment_clock([record.intent.duration_s for record in records])
+        with tel.scope(
+            "Assembling video",
+            overall_range=(
+                completed_work / total_work,
+                (completed_work + delivered_frames) / total_work,
+            ),
+        ):
+            assembled = assemble(
+                AssembleVideoRequest(videos=videos),
+                decoder=decoder,
+                out=out,
+                tel=tel,
+                check=ctx.raise_if_cancelled,
+                scanned=scanning,
+            )
     if [segment.source_frames for segment in assembled.segments] != [
         record.frames for record in records
     ]:
         raise OutputError(
             "retained shot video differs from its declared frame count", code="prefix_frames"
         )
-    prefix = save_prefix(ctx, out, records, videos, frames)
-    starts, delivered_frames = segment_clock([record.intent.duration_s for record in records])
     if assembled.output_frames != delivered_frames:
         raise OutputError("assembled output differs from the long-form clock", code="prefix_frames")
+    completed_work += delivered_frames
+    with tel.scope(
+        "Saving resume prefix",
+        overall_range=(completed_work / total_work, (completed_work + 1) / total_work),
+    ):
+        prefix = save_prefix(ctx, out, records, videos, frames)
     complete = len(records) == len(payload.shots)
     if not complete:
         warnings.append(
