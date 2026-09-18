@@ -1,10 +1,10 @@
 [project]
 name = "minimax-h3"
 version = "1.15.5"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media,minimax-h3]>=0.18.9",
-    "cozy-eval>=0.3.2",
+    "cozy-runtime[media,minimax-h3]>=0.18.12",
+    "cozy-eval>=0.7.2",
     "diffusers>=0.40.0",
     "hf-xet>=1.6.0",
     "msgspec>=0.19",
@@ -15,8 +15,8 @@ dependencies = [
     "safetensors>=0.8.0",
     "shellingham>=1.5.4",
     "tokenizers>=0.23.1",
-    "torch>=2.13",
-    "torchvision>=0.28",
+    "torch>=2.14",
+    "torchvision>=0.29",
     "transformers>=5.16.1",
 ]
 
