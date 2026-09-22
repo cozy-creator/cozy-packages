@@ -357,8 +357,10 @@ Telemetry, never result fields.
 
 ### Release closure
 
-The package lock targets CPython 3.12 and pins released Diffusers, Transformers, and the
-PyTorch 2.13/CUDA 13.0 family. Cozy Runtime, TensorFS, and Cozy Eval resolve from PyPI like any
+Packages declare Python 3.12 or newer; workers select a compatible interpreter from their
+current supported window (3.12, 3.13, and 3.14). A lock records the resolved dependencies,
+not a restriction to one Python minor version. Locks pin released Diffusers, Transformers, and the
+PyTorch 2.14/CUDA 13.0 family. Cozy Runtime, TensorFS, and Cozy Eval resolve from PyPI like any
 dependency; each package declares ranges for image-owned names and the lock records the exact
 resolution. The five minimal tokenizer/processor data files are bundled from the pinned official
 MiniMax snapshot and are the sole unweighted authority; the bound artifact owns only weighted
