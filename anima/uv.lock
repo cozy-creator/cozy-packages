@@ -11,7 +11,7 @@ supported-markers = [
 
 [[package]]
 name = "anima"
-version = "0.2.9"
+version = "0.2.10"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -38,7 +38,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.18.8" },
+    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.18.12" },
     { name = "diffusers", specifier = ">=0.40.0" },
     { name = "hf-xet", specifier = ">=1.6.0" },
     { name = "msgspec", specifier = ">=0.19" },
@@ -178,7 +178,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.18.8"
+version = "0.18.12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -189,10 +189,10 @@ dependencies = [
     { name = "protobuf" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9f/a2/3e8551c35c738aee18fa331f479ed5d420e1dc0e549e88136cb1cef39955/cozy_runtime-0.18.8.tar.gz", hash = "sha256:1023153d10f88257d20428ed1c54b36f7e86537b3b9539c1a71cab14c1827eeb", size = 4160385, upload-time = "2026-09-16T00:28:35.134Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d2/90/2c5e04baa06802a4db3661f5b7235b1c1087fec5d32ee0d67f92857f5924/cozy_runtime-0.18.12.tar.gz", hash = "sha256:5d169e4b267463c0c802ba7be66b16e46e9d0a2f6bf4a802afd9ceba890a6708", size = 4268335, upload-time = "2026-09-22T05:52:47.212Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/51/aa/5c5e41616f74f9b8db8b2758d27fc72cc32bb2561d0274e69b7f6f98d3bd/cozy_runtime-0.18.8-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:f11866612bf735d1538f4446fe5184b010f691ac3c108b19cba1dfb809d398f8", size = 15648412, upload-time = "2026-09-16T00:28:30.072Z" },
-    { url = "https://files.pythonhosted.org/packages/fb/cb/09ab239ff9abd128174335fbaf276ad52d72511cfc5392fe40e2b2c825e7/cozy_runtime-0.18.8-py3-none-any.whl", hash = "sha256:c8aa3cd51e62422b39229fd6d23dee3bed19813c006aa912b89a6b21db9cb560", size = 3180253, upload-time = "2026-09-16T00:28:33.119Z" },
+    { url = "https://files.pythonhosted.org/packages/41/45/318fb15032e3086a11ab4c52ff1cb75a6b9a124fa2a8280838e0d1452602/cozy_runtime-0.18.12-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:7bd0f15a8b9d02d835f8b453e60a90aa322f3caf2311d97f31b492008c004468", size = 15661960, upload-time = "2026-09-22T05:52:42.144Z" },
+    { url = "https://files.pythonhosted.org/packages/27/2f/51f14642da96793b2f538b8c86fa884316a06292befd8ca063b5cdb09752/cozy_runtime-0.18.12-py3-none-any.whl", hash = "sha256:19175aa63985fda517eb986eea3c447dcd11287e9b50c9f3a09714139dac1382", size = 3193793, upload-time = "2026-09-22T05:52:45.021Z" },
 ]
 
 [package.optional-dependencies]
