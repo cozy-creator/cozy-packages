@@ -321,6 +321,28 @@ def _drive(
     return result, outcome, calls
 
 
+def canonical_media_digest(video: Any) -> str:
+    """Hash decoded media, excluding muxer/container metadata.
+
+    MP4 container bytes are not a stable identity across retries: codec/muxer metadata
+    and packet layout may differ even when decoded frames and samples are identical.
+    The retry proof therefore compares this canonical decoded representation instead.
+    """
+    digest = hashlib.sha256()
+    with av.open(io.BytesIO(video.read_bytes()), mode="r") as container:
+        stream = container.streams.video[0]
+        digest.update(f"video:{stream.width}x{stream.height}:{stream.average_rate}".encode())
+        for frame in container.decode(video=0):
+            digest.update(frame.to_ndarray(format="rgb24").tobytes())
+    with av.open(io.BytesIO(video.read_bytes()), mode="r") as container:
+        if container.streams.audio:
+            stream = container.streams.audio[0]
+            digest.update(f"audio:{stream.sample_rate}:{stream.channels}".encode())
+            for frame in container.decode(audio=0):
+                digest.update(frame.to_ndarray().tobytes())
+    return "sha256:" + digest.hexdigest()
+
+
 def check_video(video: Any, frames: int) -> None:
     with av.open(io.BytesIO(video.read_bytes()), mode="r") as container:
         count = 0
@@ -428,13 +450,13 @@ def main() -> None:
     assert outcome.terminal == "succeeded", outcome
     chosen = json.loads(calls[0]["payload"])["payload"]["seed"]
     assert isinstance(chosen, int) and json.loads(calls[1]["payload"])["payload"]["seed"] == 0
-    original_video = result.result.video.read_bytes()
+    original_media_digest = canonical_media_digest(result.result.video)
     result, outcome, calls = _drive(
         root / "automatic-retry", automatic, mode="turbo", request_id="automatic"
     )
     assert outcome.terminal == "succeeded", outcome
     assert json.loads(calls[0]["payload"])["payload"]["seed"] == chosen
-    assert result.result.video.read_bytes() == original_video
+    assert canonical_media_digest(result.result.video) == original_media_digest
     result, outcome, calls = _drive(root / "automatic-new", automatic[:1], mode="turbo")
     assert (
         outcome.terminal == "succeeded"
