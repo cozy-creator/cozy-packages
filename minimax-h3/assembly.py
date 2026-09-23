@@ -1,11 +1,11 @@
 """One fixed, CPU-only long-video assembler over Runtime media events.
 
-This is not an editor. It accepts `MAX_SHOTS` completed shots, removes replay frames only
+This is not an editor. It accepts a streamed list of completed shots, removes replay frames only
 for continuous joins, chooses segment audio or one exclusive master track, and
 commits one deterministic MP4 through Runtime's streaming sink.
 
 It is H3's own module rather than a separate project (h3a-024): assembly is the second half
-of `long_form`, its bound IS `long_form`'s `MAX_SHOTS`, and it adds no dependency the package
+of `long_form` (which retains its own eight-shot bound), and it adds no dependency the package
 does not already carry — `cozy-runtime[media]` is already H3's decode and encode surface. As
 a separate package it carried its own Runtime pin, nobody restamped it, and it rotted out of
 reach at `cozy-runtime>=0.2.13` while the daemon moved to 0.10.0.
@@ -49,8 +49,8 @@ from cozy_runtime.author import (
     invocable,
 )
 
-# se-014's own bound, and `long_form`'s: a chain emits at most this many shots and the
-# assembler takes at most that many videos. ONE number, in the module that enforces it.
+# `long_form` retains this deliberate eight-shot bound. Camera-cut composition uses the
+# same streaming assembler without an artificial segment-count limit.
 MAX_SHOTS = 8
 
 MAX_INPUT_BYTES = 256 << 20
@@ -69,7 +69,7 @@ class AssembleVideoRequest(msgspec.Struct, forbid_unknown_fields=True):
             max_decoded_bytes=MAX_EVENT_BYTES,
             media_types=("video/mp4",),
         ),
-        msgspec.Meta(min_length=1, max_length=MAX_SHOTS),
+        msgspec.Meta(min_length=1),
     ]
     master_audio: Annotated[
         AudioAsset | None,
@@ -316,8 +316,6 @@ class ScanAhead:
 
     def add(self, asset: VideoAsset) -> None:
         self._check_active()
-        if len(self._pending) >= MAX_SHOTS:
-            raise InvalidRequest("assembly needs one to eight videos", code="invalid_request")
         # Surface an earlier validation failure before accepting more work.
         for pending in self._pending:
             if pending.done():
@@ -794,7 +792,7 @@ async def assemble_video(
     out: Outputs,
     tel: Telemetry,
 ) -> AssembleVideoResponse:
-    """Join 1..`MAX_SHOTS` completed shots into one deterministic MP4.
+    """Join one or more completed shots into one deterministic MP4.
 
     Registered by `h3` as a job, because only a job is child-callable and because assembly
     is run-to-completion CPU work with no ladder to price against. The videos ride as asset
@@ -813,8 +811,8 @@ def assemble(
     scanned: ScanAhead | None = None,
 ) -> AssembleVideoResponse:
     """Run inside the current admitted attempt; the result owns its output handle."""
-    if not 1 <= len(payload.videos) <= MAX_SHOTS:
-        raise InvalidRequest("assembly needs one to eight videos", code="invalid_request")
+    if not payload.videos:
+        raise InvalidRequest("assembly needs at least one video", code="invalid_request")
     tolerance = out.video_audio_frame_samples
     scan_step = tel.step_callback(len(payload.videos), stage="scan", overall_range=(0.00, 0.10))
     scans = scanned.finish(payload.videos) if scanned is not None else []

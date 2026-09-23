@@ -1440,10 +1440,15 @@ app.entrypoint(internal=True)(cut_segment_turbo)
 
 
 class LongFormCutsInput(msgspec.Struct, forbid_unknown_fields=True):
-    shots: Annotated[list[Shot], msgspec.Meta(min_length=1, max_length=MAX_SHOTS)]
+    # Camera-cut stories are streamed one shot at a time; unlike a continuous take,
+    # they are not capped at the eight-shot continuation limit. Runtime and the output
+    # sink still enforce each shot's <=15s media bounds and the final asset byte limit.
+    shots: Annotated[list[Shot], msgspec.Meta(min_length=1)]
     prompt: str = ""
     references: Annotated[list[StoryReference], msgspec.Meta(max_length=9)] = []
-    history_frames: Annotated[int, msgspec.Meta(ge=0, le=6)] = 1
+    # None selects the bounded recency/diversity pool automatically. An explicit value
+    # caps the number of historical candidates, with zero disabling generated references.
+    history_frames: Annotated[int, msgspec.Meta(ge=0, le=MAX_IMAGE_REFERENCES)] | None = None
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
 
@@ -1476,7 +1481,7 @@ async def long_form_cuts(
             )
         )
     stable = select_references(stable, [], history_frames=0)
-    history_budget = min(payload.history_frames, MAX_IMAGE_REFERENCES - len(stable))
+    history_enabled = payload.history_frames is None or payload.history_frames > 0
     for index, shot in enumerate(payload.shots):
         # Text-only placeholders bound the longest possible compiled history before
         # any GPU call. They are never submitted as assets or added to retained history.
@@ -1487,7 +1492,12 @@ async def long_form_cuts(
                 "",
                 subject="The existing cast and world from preceding shots",
             )
-            for item in range(min(history_budget, 3 * index))
+            for item in range(
+                min(
+                    MAX_IMAGE_REFERENCES - len(stable),
+                    index if payload.history_frames is None else payload.history_frames,
+                )
+            )
         ]
         shot_prompt(payload.prompt, shot.prompt, [*stable, *worst_history], index=index)
     planned_frames = [frames_for(shot.duration_s) for shot in payload.shots]
@@ -1543,7 +1553,7 @@ async def long_form_cuts(
                                 seed,
                                 shot.duration_s,
                                 expected,
-                                history_budget > 0 and index + 1 < len(payload.shots),
+                                history_enabled and index + 1 < len(payload.shots),
                             ),
                             assets=assets,
                         )
@@ -1555,7 +1565,7 @@ async def long_form_cuts(
                                 steps,
                                 shot.duration_s,
                                 expected,
-                                history_budget > 0 and index + 1 < len(payload.shots),
+                                history_enabled and index + 1 < len(payload.shots),
                             ),
                             assets=assets,
                         )

@@ -128,7 +128,7 @@ def drive(
     root: Path,
     *,
     count: int = 3,
-    history: int = 1,
+    history: int | None = None,
     anchor: bool = False,
     fail: int = -1,
     cancel: int = -1,
@@ -260,9 +260,10 @@ def drive(
             for index in range(count)
         ],
         "prompt": "A red rover with four wheels beside a woodland stream. No dialogue.",
-        "history_frames": history,
         "mode": "turbo" if turbo else "standard",
     }
+    if history is not None:
+        wire["history_frames"] = history
     if prompt is not None:
         wire["prompt"] = prompt
     assets = {}
@@ -335,8 +336,8 @@ def drive(
     assert all("[Shot 1]" in row["payload"]["prompt"] for row in sent)
     assert sent[0]["payload"]["seed"] == 0
     assert len(sent[0]["assets"]) == int(anchor)
-    assert all(len(row["assets"]) <= min(9, history + int(anchor)) for row in sent)
-    if history and delivered > 1:
+    assert all(len(row["assets"]) <= 9 for row in sent)
+    if history != 0 and delivered > 1:
         prior = json.loads(answers[0]["result"])["reference_frames"][0]["image"]["digest"]
         assert any(item["asset"] == prior for item in sent[1]["assets"])
     return {"frames": result.result.delivered_frames, "calls": sent, "events": len(events)}
@@ -350,8 +351,14 @@ def main() -> None:
         "anchors": drive(root / "anchors", anchor=True, history=3),
         "text_only": drive(root / "text-only", history=0, count=2),
         "standard": drive(root / "standard", turbo=False, count=2),
+        "arbitrary_cut_count": drive(root / "arbitrary", count=10),
         "partial": drive(root / "partial", fail=2),
     }
+    # Automatic history pools every completed shot and gives recent shots room for
+    # additional interior candidates, while the camera-cut path accepts more than the
+    # continuous eight-shot bound.
+    assert len(results["history"]["calls"][2]["assets"]) >= 2
+    assert len(results["arbitrary_cut_count"]["calls"]) == 10
     drive(root / "canceled", cancel=1)
     drive(root / "first-fails", fail=0)
     repeated = drive(root / "retry", request_id="history")

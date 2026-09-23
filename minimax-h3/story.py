@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import Annotated, Literal
 
@@ -66,8 +67,9 @@ def signature_rgb(width: int, height: int, rgb: bytes) -> str:
 
 def history_description(index: int) -> str:
     return (
-        f"Relevant character, prop and setting appearance in preceding shot {index + 1}; "
-        "the current shot description determines the action and camera composition"
+        f"Appearance and state reference from preceding shot {index + 1}; use it for "
+        "relevant character, prop and setting continuity, not as an exact frame to copy. "
+        "The current shot description determines the action and camera composition."
     )
 
 
@@ -87,14 +89,17 @@ def select_references(
     stable: Sequence[SelectedReference],
     history: Sequence[Sequence[ReferenceFrame]],
     *,
-    history_frames: int,
+    history_frames: int | None,
 ) -> list[SelectedReference]:
-    """Stable anchors first; recent clips' middle views before additional views.
+    """Reserve authored references, then choose a diverse and recent history subset.
 
-    The conservative default uses one historical view. Larger budgets are an explicit
-    experiment; this policy does not claim blur detection or semantic relevance scoring.
+    Every prior shot contributes candidates; ``None`` fills the remaining native image
+    budget, while an integer optionally caps historical images. The deterministic
+    recency/coverage score is a selection policy, not an image-quality or semantic judge.
     """
-    if not 0 <= history_frames <= 6 or len(stable) > MAX_IMAGES:
+    if history_frames is not None and not 0 <= history_frames <= MAX_IMAGES:
+        raise InvalidRequest("history reference count exceeds its bound", code="reference_policy")
+    if len(stable) > MAX_IMAGES:
         raise InvalidRequest("reference budget exceeds its bound", code="reference_policy")
     selected: list[SelectedReference] = []
     for item in stable:
@@ -112,29 +117,49 @@ def select_references(
                 existing,
                 roles=tuple(dict.fromkeys((*reference_roles(existing), *reference_roles(item)))),
             )
-    remaining = min(history_frames, MAX_IMAGES - len(selected))
-    for view in range(3):
-        for index in range(len(history) - 1, -1, -1):
-            if remaining == 0:
-                return selected
-            if view >= len(history[index]):
-                continue
-            candidate = history[index][view]
+    remaining = (
+        MAX_IMAGES - len(selected)
+        if history_frames is None
+        else min(history_frames, MAX_IMAGES - len(selected))
+    )
+    # Newest copy wins exact/near-duplicate suppression. Midpoint wins within a shot.
+    pool: list[tuple[int, int, ReferenceFrame]] = []
+    for index in range(len(history) - 1, -1, -1):
+        for view, candidate in enumerate(history[index]):
             if any(
                 candidate.image.digest == ref.image.digest
                 or _similar(candidate.signature, ref.signature)
                 for ref in selected
+            ) or any(
+                candidate.image.digest == ref.image.digest
+                or _similar(candidate.signature, ref.signature)
+                for _, _, ref in pool
             ):
                 continue
-            selected.append(
-                SelectedReference(
-                    candidate.image,
-                    history_description(index),
-                    candidate.signature,
-                    subject="The existing cast and world from preceding shots",
-                )
+            pool.append((index, view, candidate))
+    per_shot: dict[int, int] = {}
+    while remaining and pool:
+        def score(item: tuple[int, int, ReferenceFrame]) -> tuple[float, int, int]:
+            index, view, _ = item
+            recency = math.exp(-(len(history) - index) / 2.5)
+            coverage = 0.45 if per_shot.get(index, 0) == 0 else 0.0
+            position = (0.04, 0.0, 0.03)[view]
+            return recency + coverage + position, index, -view
+
+        index, view, candidate = max(pool, key=score)
+        pool.remove((index, view, candidate))
+        if per_shot.get(index, 0) >= 2:
+            continue
+        selected.append(
+            SelectedReference(
+                candidate.image,
+                history_description(index),
+                candidate.signature,
+                subject="The existing cast and world from preceding shots",
             )
-            remaining -= 1
+        )
+        per_shot[index] = per_shot.get(index, 0) + 1
+        remaining -= 1
     return selected
 
 
