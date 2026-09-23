@@ -330,16 +330,18 @@ def canonical_media_digest(video: Any) -> str:
     """
     digest = hashlib.sha256()
     with av.open(io.BytesIO(video.read_bytes()), mode="r") as container:
-        stream = container.streams.video[0]
-        digest.update(f"video:{stream.width}x{stream.height}:{stream.average_rate}".encode())
-        for frame in container.decode(video=0):
-            digest.update(frame.to_ndarray(format="rgb24").tobytes())
+        video_stream = container.streams.video[0]
+        digest.update(
+            f"video:{video_stream.width}x{video_stream.height}:{video_stream.average_rate}".encode()
+        )
+        for video_frame in container.decode(video=0):
+            digest.update(video_frame.to_ndarray(format="rgb24").tobytes())
     with av.open(io.BytesIO(video.read_bytes()), mode="r") as container:
         if container.streams.audio:
-            stream = container.streams.audio[0]
-            digest.update(f"audio:{stream.sample_rate}:{stream.channels}".encode())
-            for frame in container.decode(audio=0):
-                digest.update(frame.to_ndarray().tobytes())
+            audio_stream = container.streams.audio[0]
+            digest.update(f"audio:{audio_stream.sample_rate}:{audio_stream.channels}".encode())
+            for audio_frame in container.decode(audio=0):
+                digest.update(audio_frame.to_ndarray().tobytes())
     return "sha256:" + digest.hexdigest()
 
 
