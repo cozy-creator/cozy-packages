@@ -36,14 +36,21 @@ not reference strength. A photograph containing two named subjects occupies one 
 slot with two Subject definitions. Avoid unnecessary global references: they may constrain
 a scene even when its prompt does not mention them.
 
-`history_frames` defaults to one and accepts zero through six. Stable references reserve
-slots first. History selects recent clips' middle frames before extra quarter and
-three-quarter views, with exact duplicate and coarse thumbnail similarity suppression.
-This is a provisional selection policy, not an image quality or semantic relevance judge.
-The nine-image ceiling and Runtime's reference token budget still apply. At nine stable
-slots, no history is captured. With no supplied images, the first shot uses the existing
-text-only path; later shots can use its generated references. With no images and
-`history_frames=0`, every shot is an independent text-only generation.
+By default, `history_frames` is automatic: each new shot contributes a midpoint
+appearance/state candidate to a bounded recency pool. If slots remain under H3's nine-image
+limit, the newest shots may contribute their quarter and three-quarter candidates as
+additional diverse views; older shots contribute one or none. Exact duplicates and coarse
+thumbnail matches are suppressed. Set `history_frames=0` for independent text-only shots,
+or set an integer (0 through 9) to cap the number of generated history candidates. Stable
+references reserve slots first, and the native H3 vision-token budget is checked before
+denoising. This is a provisional selection policy, not an image-quality or semantic
+relevance judge. There is no artificial eight-shot limit for camera-cut stories; each shot
+still has the native 5–15 second duration bound and the final MP4 byte bound.
+
+Generated history entries are described as appearance/state references, never as exact
+frames to reproduce. Each shot's current prompt controls its action, pose, camera and
+scene state. With no supplied images, the first shot uses the existing text-only path and
+later shots use the bounded pool of generated references.
 
 Turbo is the default. `mode="standard"` enables the existing 30/40/50 step schedules.
 Seeds are optional and reproducible across attempts of the same request. The parent
