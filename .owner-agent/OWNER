@@ -1,4 +1,4 @@
-owner: /root/finish_h3_outputs
-purpose: packages-v2#245 H3 reference-conditioned camera-cut storytelling
-branch: feat/h3-reference-cuts
-base: efcac50adbf5f7ef6515f23881c6e4c6494f3433
+owner: /root/h3_cuts_finish
+purpose: packages-v2#246 follow-up: recency-diverse history pool for arbitrary camera-cut stories
+branch: feat/h3-reference-cut-default-history-20260923
+base: origin/master 66a650486546dc1298c5cdb08e5b10ca94fef9d1
