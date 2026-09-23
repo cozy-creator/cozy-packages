@@ -224,6 +224,20 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "The host fixture encodes the child's registered frames through Runtime's exact "
         "post-phase codec before returning byte grants. Retire with a public child harness. "
     ),
+    ("scripts/h3-cuts-proof.py", "cozy_runtime.author._calls"): (
+        "Qualify cuts through Runtime's real broker; retire with a public child-call harness."
+    ),
+    ("scripts/h3-cuts-proof.py", "cozy_runtime.author._assets"): (
+        "Issue verified synthetic reference grants; retire with a public child-call harness."
+    ),
+    ("scripts/h3-cuts-proof.py", "cozy_runtime.author._services"): (
+        "Observe scoped child progress and settle the final parent image; retire with a "
+        "public settled-output fixture."
+    ),
+    ("scripts/h3-cuts-proof.py", "cozy_runtime.author._codec"): (
+        "Project real encoded child outputs under exact SHA-256 grants; retire with a "
+        "public host projection fixture."
+    ),
     ("scripts/sdxl-normalization-proof.py", "cozy_runtime.author._model"): (
         "the normalization driver constructs the exact-checkpoint source Runtime admits; "
         "for_test permits test:// identities only. Retire with a public native job fixture. "

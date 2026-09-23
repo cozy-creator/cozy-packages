@@ -1,4 +1,4 @@
-owner: /root/finish_rollout
-purpose: publish core package revisions after isolated dependency and H3 final-output qualification
-branch: release/complete-package-environments
-base: 13dc792b7d86d8cbea061ffc62e9e51c5c85e12a
+owner: /root/finish_h3_outputs
+purpose: packages-v2#245 H3 reference-conditioned camera-cut storytelling
+branch: feat/h3-reference-cuts
+base: efcac50adbf5f7ef6515f23881c6e4c6494f3433

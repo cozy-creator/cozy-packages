@@ -1,7 +1,7 @@
 """One fixed, CPU-only long-video assembler over Runtime media events.
 
-This is not an editor. It accepts `MAX_SHOTS` completed shots, removes exactly the replayed
-first frame from every later shot, chooses segment audio or one exclusive master track, and
+This is not an editor. It accepts `MAX_SHOTS` completed shots, removes replay frames only
+for continuous joins, chooses segment audio or one exclusive master track, and
 commits one deterministic MP4 through Runtime's streaming sink.
 
 It is H3's own module rather than a separate project (h3a-024): assembly is the second half
@@ -75,6 +75,7 @@ class AssembleVideoRequest(msgspec.Struct, forbid_unknown_fields=True):
         AudioAsset | None,
         AssetBound(max_bytes=MAX_INPUT_BYTES, max_decoded_bytes=MAX_EVENT_BYTES),
     ] = None
+    transition: Literal["continuous", "cut"] = "continuous"
 
 
 class SegmentReceipt(msgspec.Struct):
@@ -404,6 +405,8 @@ def _segment_selections(
     video: DecodedVideoFormat,
     audio: DecodedAudioFormat,
     tolerance: int,
+    *,
+    trim_replay: bool = True,
 ) -> list[_AudioSelection]:
     assert video.nominal_frame_rate is not None
     selections: list[_AudioSelection] = []
@@ -419,7 +422,7 @@ def _segment_selections(
                 f"segment {index + 1} soundtrack differs from its frame clock by {drift} samples",
                 code="invalid_request",
             )
-        selected_frames = scan.frames - int(index > 0)
+        selected_frames = scan.frames - int(trim_replay and index > 0)
         if selected_frames <= 0:
             raise InvalidRequest(
                 f"segment {index + 1} has no frame after the fixed replay trim",
@@ -431,7 +434,9 @@ def _segment_selections(
         )
         selected = cumulative - output_audio
         source_start = (
-            _nearest(Fraction(audio.sample_rate, 1) / video.nominal_frame_rate) if index else 0
+            _nearest(Fraction(audio.sample_rate, 1) / video.nominal_frame_rate)
+            if trim_replay and index
+            else 0
         )
         from_source = max(0, min(selected, scan.audio_samples - source_start))
         selections.append(
@@ -581,6 +586,7 @@ def _segment_events(
     global_gain: float,
     check: Callable[[], None],
     on_frame: Callable[[int], None],
+    trim_replay: bool = True,
 ) -> Iterator[DecodedMediaEvent]:
     video = scans[0].header.video
     audio = scans[0].header.audio
@@ -598,7 +604,7 @@ def _segment_events(
                 if isinstance(event, DecodedMediaHeader):
                     continue
                 if isinstance(event, DecodedVideoFrame):
-                    if index and seen_frames == 0:
+                    if trim_replay and index and seen_frames == 0:
                         seen_frames += 1
                         continue
                     rgb_hashes[index].update(event.rgb)
@@ -680,6 +686,7 @@ def _master_events(
     padding: int,
     check: Callable[[], None],
     on_frame: Callable[[int], None],
+    trim_replay: bool = True,
 ) -> Iterator[DecodedMediaEvent]:
     video = scans[0].header.video
     assert video is not None and video.nominal_frame_rate is not None
@@ -699,7 +706,7 @@ def _master_events(
                     check()
                     if not isinstance(event, DecodedVideoFrame):
                         continue
-                    if index and seen_frames == 0:
+                    if trim_replay and index and seen_frames == 0:
                         seen_frames += 1
                         continue
                     frame_time = Fraction(output_frame, 1) / video.nominal_frame_rate
@@ -830,8 +837,10 @@ def assemble(
     ):
         raise InvalidRequest("video formats differ between segments", code="invalid_request")
 
+    trim_replay = payload.transition == "continuous"
     source_frames = sum(scan.frames for scan in scans)
-    output_frames = source_frames - (len(scans) - 1)
+    replay_frames = len(scans) - 1 if trim_replay else 0
+    output_frames = source_frames - replay_frames
     rgb_hashes: list[_Hash] = [hashlib.sha256() for _ in scans]
     master_samples = 0
     if payload.master_audio is None:
@@ -844,8 +853,14 @@ def assemble(
                 "segment-audio assembly requires one common soundtrack on every video",
                 code="invalid_request",
             )
-        selections = _segment_selections(scans, video_format, audio_format, tolerance)
-        gains = _seam_gains(scans, selections, audio_format)
+        selections = _segment_selections(
+            scans, video_format, audio_format, tolerance, trim_replay=trim_replay
+        )
+        gains = (
+            _seam_gains(scans, selections, audio_format)
+            if trim_replay
+            else [_Gains() for _ in scans]
+        )
         global_gain = _global_gain(scans, selections, gains, audio_format)
         saved = out.save_video_stream(
             _segment_events(
@@ -855,6 +870,7 @@ def assemble(
                 gains,
                 rgb_hashes,
                 global_gain=global_gain,
+                trim_replay=trim_replay,
                 check=check,
                 on_frame=tel.step_callback(
                     output_frames, stage="assemble", overall_range=(0.10, 1.00)
@@ -890,6 +906,7 @@ def assemble(
                 rgb_hashes,
                 target_audio=target_audio,
                 padding=audio_padded,
+                trim_replay=trim_replay,
                 check=check,
                 on_frame=tel.step_callback(
                     output_frames, stage="assemble", overall_range=(0.10, 1.00)
@@ -932,7 +949,7 @@ def assemble(
     cumulative_frames = 0
     prior_audio = 0
     for index, (scan, gain) in enumerate(zip(scans, gains, strict=True)):
-        selected_frames = scan.frames - int(index > 0)
+        selected_frames = scan.frames - int(trim_replay and index > 0)
         cumulative_frames += selected_frames
         cumulative_audio = _nearest(
             Fraction(cumulative_frames * audio_format.sample_rate, 1)
@@ -958,7 +975,7 @@ def assemble(
                 media_type=scan.asset.media_type,
                 source_frames=scan.frames,
                 selected_frames=selected_frames,
-                replay_frame_digest=scan.first_frame_digest if index else None,
+                replay_frame_digest=scan.first_frame_digest if trim_replay and index else None,
                 selected_rgb_digest="sha256:" + rgb_hashes[index].hexdigest(),
                 segment_soundtrack_samples=scan.audio_samples,
                 selected_audio_samples=segment_audio,
@@ -980,7 +997,7 @@ def assemble(
         master_audio_digest=master_audio_digest,
         source_frames=source_frames,
         output_frames=output_frames,
-        replay_frames_removed=len(scans) - 1,
+        replay_frames_removed=replay_frames,
         submitted_audio_samples=saved.submitted_audio_samples,
         decoded_audio_samples=audio_facts.decoded_samples,
         audio_trimmed_samples=audio_trimmed,

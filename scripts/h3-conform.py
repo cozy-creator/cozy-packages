@@ -3225,12 +3225,21 @@ def arm_interface() -> None:
     check(
         "official actions, turbo functions and the model-bearing segment",
         set(entries),
-        {"fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo", "segment", "segment_turbo"},
+        {
+            "fl2va",
+            "ref2va",
+            "fl2va_turbo",
+            "ref2va_turbo",
+            "segment",
+            "segment_turbo",
+            "cut_segment",
+            "cut_segment_turbo",
+        },
     )
     check(
         "only chained renderers are internal",
         {name for name, entry in entries.items() if entry.get("internal", False)},
-        {"segment", "segment_turbo"},
+        {"segment", "segment_turbo", "cut_segment", "cut_segment_turbo"},
     )
     check(
         "public serving functions exclude chain implementation details",
@@ -3359,7 +3368,7 @@ def arm_interface() -> None:
     check(
         "composition and assembly are CPU jobs",
         set(jobs),
-        {"long_form", "assemble_video"},
+        {"long_form", "long_form_cuts", "assemble_video"},
     )
     # The one property decision #601 turns on: the composer holds NO device while its shots
     # render. A model slot here would make one attempt hold eight shots.
