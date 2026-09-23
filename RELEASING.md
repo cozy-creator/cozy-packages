@@ -4,21 +4,31 @@ Publish first-party packages through the checked release command:
 
 ```sh
 uv run --no-project python scripts/publish-package.py minimax-h3 \
-  --tensorhub ../tensorhub --dotenv ../tensorhub/.env \
-  --profile torch2.13.0-cu130-cp312-linux-x86
+  --tensorhub ../tensorhub \
+  --dotenv ../tensorhub/.env \
+  --profile torch2.14.0-cu130-cp312-linux-x86 \
+  --check-only
 ```
 
-Commit the package source and lockfile first. The command builds an immutable
-snapshot, checks its authored Runtime requirements against the active
-normal and private worker images for each named profile, and invokes the ordinary
-Creator CLI to publish that same snapshot. A missing image or incompatible
-Runtime API stops this first-party release preflight. This check does not prove
-that the package's full dependency environment installs or executes. Complete the
+Run this from the packages checkout after committing the package source and
+lockfile. `--tensorhub` points at the Tensorhub operator checkout that supplies
+the active worker-image records. `--dotenv` is a local path to that checkout's
+operator environment; keep the file outside version control and never copy its
+values into release notes or issue reports. The current CUDA worker profile is
+`torch2.14.0-cu130-cp312-linux-x86`.
+
+The preflight builds an immutable snapshot and checks its authored Runtime
+requirements against the active normal and private worker images. A missing
+image or incompatible Runtime API stops this first-party release preflight. The
+check does not prove that the package's full dependency environment installs or
+executes. Complete the
 [dependency qualification checklist](DEPENDENCIES.md) as well. Baked application
 dependencies are a reuse optimization; a version mismatch must be resolved in
 the package's isolated environment rather than treated as a global image limit.
-The Tensorhub operator checkout supplies the read-only image check;
-its normal configuration flags select the environment being released to.
+After the read-only preflight passes, rerun the same command without
+`--check-only` to publish the committed snapshot through the ordinary Creator
+CLI. The Tensorhub operator checkout supplies the read-only image check; its
+normal configuration flags select the environment being released to.
 
 Prefer lower bounds for package dependencies, such as `pydantic-core>=2.46.4`.
 If a compatibility ceiling is needed, bound the major version (`>=2.46.4,<3`) or
