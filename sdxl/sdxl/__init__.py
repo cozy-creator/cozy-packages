@@ -41,7 +41,6 @@ checkpoint or revision — `package.toml` and the deploy binding do.
 from __future__ import annotations
 
 import hashlib
-import json
 import random
 from enum import Enum, IntEnum
 from typing import Annotated, Any, Literal
@@ -433,7 +432,7 @@ def _finite(torch: Any, value: Any) -> float:
 
 
 def _tokenizer(assets: Any, name: str) -> Any:
-    """Build one CLIP tokenizer from the selected checkpoint's asset closure.
+    """Build one CLIP tokenizer from vocabulary/merge assets in the checkpoint.
 
     Deliberately NOT ``from_pretrained``: that spelling can resolve against the Hub when
     given a non-path and would make model execution depend on mutable network state. The
@@ -441,14 +440,17 @@ def _tokenizer(assets: Any, name: str) -> Any:
     anywhere. Missing or duplicate model assets are a Runtime admission error, never a
     source-tree or network fallback.
     """
+    settings = {
+        "tokenizer": ("replace", "<|endoftext|>", 77),
+        "tokenizer_2": ("replace", "!", 77),
+    }[name]
     with assets.materialized(name) as root:
-        settings = json.loads((root / "tokenizer_config.json").read_text())
         return CLIPTokenizer(
             vocab=str(root / "vocab.json"),
             merges=str(root / "merges.txt"),
-            errors=settings["errors"],
-            pad_token=settings["pad_token"],
-            model_max_length=settings["model_max_length"],
+            errors=settings[0],
+            pad_token=settings[1],
+            model_max_length=settings[2],
         )
 
 
