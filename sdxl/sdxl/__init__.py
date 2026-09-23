@@ -41,10 +41,8 @@ checkpoint or revision — `package.toml` and the deploy binding do.
 from __future__ import annotations
 
 import hashlib
-import json
 import random
 from enum import Enum, IntEnum
-from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import cozy_runtime.derive as derive
@@ -168,12 +166,6 @@ _WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
 #: every boot, so the binding came up DEGRADED for nothing. 512px pays the same first-call
 #: costs at a shape every card fits.
 _WARM_SIDE = 512
-
-#: The tokenizer vocabularies this package BUNDLES. They are its own asset, exactly like
-#: the model library it imports — not an artifact identifier, not a catalog ref, and not
-#: something a construction config may carry (a path in a construction config refuses).
-_TOKENIZERS = Path(__file__).resolve().parent
-
 
 class Txt2ImgInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: str
@@ -332,9 +324,18 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
     """
 
     pipe: SdxlPipeline
+    tokenizers: tuple[Any, Any]
 
     def load(self, loader: Loader) -> None:
         self.pipe = loader.construct(SdxlPipeline, factory=build_pipeline)
+        # Tokenizers are model semantics, not package code. Runtime admits the selected
+        # CozyTensors asset closure and exposes it only through this bounded, read-only
+        # view. ``materialized`` is a short-lived adapter for CLIPTokenizer's path-based
+        # constructor; the tokenizer owns its parsed vocabulary after construction.
+        self.tokenizers = (
+            _tokenizer(loader.assets, "tokenizer"),
+            _tokenizer(loader.assets, "tokenizer_2"),
+        )
 
     def warm(self, ctx: Context) -> None:
         """One dry step — tokenize, encode, denoise, decode — at the default request's
@@ -342,8 +343,7 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
         cost. The runtime calls it once per fill, before the placement serves. Outputs
         are dropped, so no schedule: the tensors carry their own dtype and device."""
         ctx.raise_if_cancelled()
-        tokenizers = (_tokenizer("tokenizer"), _tokenizer("tokenizer_2"))
-        prompt, pooled = self.encode(*_tokenize(tokenizers, ""))
+        prompt, pooled = self.encode(*_tokenize(self.tokenizers, ""))
         side = _WARM_SIDE // 8
         latents = prompt.new_empty((2, 4, side, side)).normal_()
         time_ids = prompt.new_tensor([[_WARM_SIDE, _WARM_SIDE, 0, 0, _WARM_SIDE, _WARM_SIDE]] * 2)
@@ -431,23 +431,27 @@ def _finite(torch: Any, value: Any) -> float:
     return round(float(torch.nan_to_num(value, 0.0, 0.0, 0.0).abs().max()), 4)
 
 
-def _tokenizer(name: str) -> Any:
-    """One bundled CLIP tokenizer, built from its own two files.
+def _tokenizer(assets: Any, name: str) -> Any:
+    """Build one CLIP tokenizer from vocabulary/merge assets in the checkpoint.
 
-    Deliberately NOT `from_pretrained`: that spelling takes a string it will resolve
-    against the Hub when it is not a directory, so it is a fetch this package might one
-    day make by accident — and `fence.py::no-identifiers-in-code` refuses it for exactly
-    that reason. The direct constructor takes the two files and cannot reach anywhere.
+    Deliberately NOT ``from_pretrained``: that spelling can resolve against the Hub when
+    given a non-path and would make model execution depend on mutable network state. The
+    direct constructor takes a Runtime-created read-only materialization and cannot reach
+    anywhere. Missing or duplicate model assets are a Runtime admission error, never a
+    source-tree or network fallback.
     """
-    root = _TOKENIZERS / name
-    settings = json.loads((root / "tokenizer_config.json").read_text())
-    return CLIPTokenizer(
-        vocab=str(root / "vocab.json"),
-        merges=str(root / "merges.txt"),
-        errors=settings["errors"],
-        pad_token=settings["pad_token"],
-        model_max_length=settings["model_max_length"],
-    )
+    settings = {
+        "tokenizer": ("replace", "<|endoftext|>", 77),
+        "tokenizer_2": ("replace", "!", 77),
+    }[name]
+    with assets.materialized(name) as root:
+        return CLIPTokenizer(
+            vocab=str(root / "vocab.json"),
+            merges=str(root / "merges.txt"),
+            errors=settings[0],
+            pad_token=settings[1],
+            model_max_length=settings[2],
+        )
 
 
 def _tokenize(tokenizers: tuple[Any, Any], prompt: str) -> tuple[Any, Any]:
@@ -526,10 +530,9 @@ def generate(
     classifier_free = payload.guidance > 1.0
 
     with tel.stage("tokenize", overall_range=(0.00, 0.02)):
-        tokenizers = (_tokenizer("tokenizer"), _tokenizer("tokenizer_2"))
-        ids, ids_2 = _tokenize(tokenizers, payload.prompt)
+        ids, ids_2 = _tokenize(model.tokenizers, payload.prompt)
         if classifier_free:
-            neg, neg_2 = _tokenize(tokenizers, payload.negative_prompt)
+            neg, neg_2 = _tokenize(model.tokenizers, payload.negative_prompt)
 
     with tel.stage("encode", overall_range=(0.02, 0.10)):
         prompt, pooled = model.encode(ids, ids_2)

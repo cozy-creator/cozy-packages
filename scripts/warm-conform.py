@@ -16,6 +16,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import torch
@@ -88,6 +89,15 @@ def initialize_fixture(pipe: Any) -> None:
                     parameter.fill_(1)
                 else:
                     parameter.uniform_(-0.02, 0.02, generator=generator)
+
+
+class FakeTokenizer:
+    """Minimal test double; production tokenizers are always checkpoint assets."""
+
+    model_max_length = 77
+
+    def __call__(self, *_args: Any, **_kwargs: Any) -> Any:
+        return SimpleNamespace(input_ids=torch.zeros((1, self.model_max_length), dtype=torch.long))
 
 
 def sdxl_config() -> Config:
@@ -164,7 +174,7 @@ def arm_sdxl() -> None:
     decoded: list[tuple[int, ...]] = []
     inputs_of(pipe.components["unet"], unet_inputs)
     decodes_of(pipe.components["vae"], decoded)
-    model = package.SdxlModel.for_test(pipe=pipe)
+    model = package.SdxlModel.for_test(pipe=pipe, tokenizers=(FakeTokenizer(), FakeTokenizer()))
     ctx = warm_with_fakes(model)
     check("warm ran without an attempt", ctx.request_id, "")
     check("scopes: encode, one denoise step, decode", [c.method for c in model.harness.calls],
@@ -175,7 +185,10 @@ def arm_sdxl() -> None:
     check("decoded one 512px frame", decoded, [(1, 3, 512, 512)])
     unet = pipe.components["unet"]
     check("HiDiffusion applied for the step", unet._cozy_hidiffusion_active, True)
-    arm_cancelled(package.SdxlModel.for_test(pipe=package.build_pipeline(sdxl_config())))
+    arm_cancelled(package.SdxlModel.for_test(
+        pipe=package.build_pipeline(sdxl_config()),
+        tokenizers=(FakeTokenizer(), FakeTokenizer()),
+    ))
 
 
 def arm_anima() -> None:
