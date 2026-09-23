@@ -48,13 +48,6 @@ async def scanned_assembly(
         for video in payload.videos:
             scanning.add(video)
         scans = scanning.finish(payload.videos)
-        if len(payload.videos) == assembly.MAX_SHOTS:
-            try:
-                scanning.add(payload.videos[0])
-            except InvalidRequest:
-                pass
-            else:
-                raise AssertionError("scan queue exceeded the shot bound")
         try:
             scanning.finish([])
         except InvalidRequest:
@@ -68,6 +61,14 @@ async def scanned_assembly(
             assert sum(map(len, (*scan.audio_head, *scan.audio_tail))) <= (
                 audio.channels * (audio.sample_rate + math.ceil(audio.sample_rate / FPS)) * 4
             )
+        if len(payload.videos) == assembly.MAX_SHOTS:
+            # The shared assembler no longer imposes the continuous take's eight-shot
+            # bound; camera-cut callers may enqueue another bounded segment.
+            with assembly.ScanAhead(decoder, ctx.raise_if_cancelled) as unbounded:
+                for video in payload.videos:
+                    unbounded.add(video)
+                unbounded.add(payload.videos[0])
+                assert len(unbounded.finish([*payload.videos, payload.videos[0]])) == 9
         return assembly.assemble(
             payload,
             decoder=decoder,
