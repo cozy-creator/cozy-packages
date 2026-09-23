@@ -5,10 +5,10 @@
 
 [project]
 name = "sdxl"
-version = "2.3.11"
+version = "2.3.12"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media]>=0.18.12",
+    "cozy-runtime[media]>=0.18.16",
     "diffusers>=0.40.0",
     "hf-xet>=1.6.0",
     "hidiffusion>=0.1.10",
@@ -18,7 +18,7 @@ dependencies = [
     "regex>=2026.7.19",
     "safetensors>=0.8.0",
     "shellingham>=1.5.4",
-    "tensorfs>=0.3.42",
+    "tensorfs>=0.3.46",
     "tokenizers>=0.23.1",
     "torch>=2.14",
     "transformers>=5.16.1",
