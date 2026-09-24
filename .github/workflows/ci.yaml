@@ -23,7 +23,7 @@ jobs:
         run: |
           uv venv --python 3.12
           uv pip install --refresh-package cozy-runtime \
-            "cozy-runtime>=0.18.12,<1" \
+            "cozy-runtime>=0.18.18,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences
