@@ -1336,8 +1336,8 @@ class CutOutput(SegmentOutput):
     reference_midpoint: HistoryImage
     reference_quarter: HistoryImage
     reference_three_quarter: HistoryImage
-    reference_frame_indices: tuple[int, int, int]
-    reference_signatures: tuple[str, str, str]
+    reference_frame_indices: Annotated[list[int], msgspec.Meta(min_length=3, max_length=3)]
+    reference_signatures: Annotated[list[str], msgspec.Meta(min_length=3, max_length=3)]
 
     def references(self) -> list[ReferenceFrame]:
         return [
@@ -1432,8 +1432,8 @@ def _render_cut(
         midpoint.image,
         quarter.image,
         three_quarter.image,
-        (midpoint.frame_index, quarter.frame_index, three_quarter.frame_index),
-        (midpoint.signature, quarter.signature, three_quarter.signature),
+        [midpoint.frame_index, quarter.frame_index, three_quarter.frame_index],
+        [midpoint.signature, quarter.signature, three_quarter.signature],
     )
 
 
