@@ -238,6 +238,11 @@ def drive(
             return item
 
         answer = project(result.result)
+        assert {item["output_id"] for item in outputs} == {
+            "video", "continuation_frame", "reference_midpoint", "reference_quarter",
+            "reference_three_quarter",
+        }
+        assert len(result.result.references()) == 3
         answers[index] = {
             "ok": True,
             "state": "succeeded",
