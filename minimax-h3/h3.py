@@ -1323,7 +1323,7 @@ class CutTurboInput(ReferenceMediaToVideoTurboInput):
 
 
 class CutOutput(SegmentOutput):
-    reference_frames: Annotated[list[ReferenceFrame], msgspec.Meta(max_length=3)]
+    """A serving child returns only fixed public media; history is captured by the parent."""
 
 
 def _capture_reference_frames(
@@ -1357,12 +1357,6 @@ def _render_cut(
         model.checkpoint_ref, "" if turbo_lora is None else turbo_lora.checkpoint_ref
     )
     compatible(observed, payload.expected_provenance)
-    frames: list[ReferenceFrame] = []
-    capture = (
-        partial(_capture_reference_frames, out=out, frames=frames, check=ctx.raise_if_cancelled)
-        if payload.capture_history
-        else None
-    )
     if assets:
         _reference_policy(assets)
         task: Task = "ref2va" if turbo_lora is None else "ref2va_turbo"
@@ -1376,7 +1370,6 @@ def _render_cut(
             tel,
             steps=steps,
             turbo_lora=turbo_lora,
-            capture=capture,
         )
     else:
         # The released Ref2VA path requires references. Its sibling FL2VA path supports
@@ -1395,10 +1388,9 @@ def _render_cut(
             first=None,
             last=None,
             turbo_lora=turbo_lora,
-            capture=capture,
         )
     tel.log("h3 cut rendering", native_path=task, seed=payload.seed, references=len(assets))
-    return CutOutput(shot.video, shot.continuation_frame, list(shot.warnings), observed, frames)
+    return CutOutput(shot.video, shot.continuation_frame, list(shot.warnings), observed)
 
 
 @invocable(defaults={"model": _DEFAULT_MODEL_LADDER})
@@ -1459,8 +1451,12 @@ async def long_form_cuts(
     decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
+    model: H3Model,
 ) -> LongFormOutput:
     """Generate reference-conditioned camera cuts; deliver only the final film and image."""
+    # The parent declares the serving model slot so Creator captures a concrete
+    # default for its managed Ref2VA children. The child owns actual model use.
+    del model
     ctx.raise_if_cancelled()
     if payload.mode == "turbo" and payload.steps is not None:
         raise InvalidRequest("turbo fixes eight PDD evaluations; omit steps", fields=["steps"])
@@ -1577,11 +1573,22 @@ async def long_form_cuts(
             expected = result.provenance
             videos.append(result.video)
             scanning.add(result.video)
-            history.append(result.reference_frames)
+            decoded = decoder.decode_video(result.video)
+            candidates: list[ReferenceFrame] = []
+            for frame_index in sample_positions(decoded.frame_count):
+                ctx.raise_if_cancelled()
+                raw = decoded.frames_rgb[frame_index]
+                image = out.save_image(
+                    ImageFrame(decoded.width, decoded.height, raw), format="png"
+                )
+                candidates.append(
+                    ReferenceFrame(image, frame_index, signature_rgb(decoded.width, decoded.height, raw))
+                )
+            history.append(candidates if history_enabled else [])
             frame = result.continuation_frame
             warnings.extend(result.warnings)
             completed_work += render_work[index]
-            for item in result.reference_frames:
+            for item in history[-1]:
                 tel.log(
                     "h3 cut reference candidate",
                     shot=index + 1,
@@ -1787,5 +1794,5 @@ async def long_form(
 
 
 app.job(long_form, emits_media=True)
-app.job(long_form_cuts, emits_media=True)
+app.job(long_form_cuts, emits_media=True, defaults={"model": _DEFAULT_MODEL_LADDER})
 app.job(assemble_video, emits_media=True)
