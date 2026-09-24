@@ -1314,16 +1314,41 @@ CutAssets = Annotated[
 
 class CutInput(ReferenceMediaToVideoInput):
     expected_provenance: RenderProvenance | None = None
-    capture_history: bool = True
 
 
 class CutTurboInput(ReferenceMediaToVideoTurboInput):
     expected_provenance: RenderProvenance | None = None
-    capture_history: bool = True
+
+
+HistoryImage = Annotated[
+    ImageAsset,
+    AssetBound(
+        max_bytes=_KEYFRAME_MAX_BYTES,
+        max_decoded_bytes=_KEYFRAME_MAX_DECODED_BYTES,
+        media_types=("image/png",),
+    ),
+]
 
 
 class CutOutput(SegmentOutput):
-    reference_frames: Annotated[list[ReferenceFrame], msgspec.Meta(max_length=3)]
+    """Fixed child assets are durably forwarded by Runtime to subsequent shots."""
+
+    reference_midpoint: HistoryImage
+    reference_quarter: HistoryImage
+    reference_three_quarter: HistoryImage
+    reference_frame_indices: Annotated[list[int], msgspec.Meta(min_length=3, max_length=3)]
+    reference_signatures: Annotated[list[str], msgspec.Meta(min_length=3, max_length=3)]
+
+    def references(self) -> list[ReferenceFrame]:
+        return [
+            ReferenceFrame(image, index, fingerprint)
+            for image, index, fingerprint in zip(
+                (self.reference_midpoint, self.reference_quarter, self.reference_three_quarter),
+                self.reference_frame_indices,
+                self.reference_signatures,
+                strict=True,
+            )
+        ]
 
 
 def _capture_reference_frames(
@@ -1358,10 +1383,8 @@ def _render_cut(
     )
     compatible(observed, payload.expected_provenance)
     frames: list[ReferenceFrame] = []
-    capture = (
-        partial(_capture_reference_frames, out=out, frames=frames, check=ctx.raise_if_cancelled)
-        if payload.capture_history
-        else None
+    capture = partial(
+        _capture_reference_frames, out=out, frames=frames, check=ctx.raise_if_cancelled
     )
     if assets:
         _reference_policy(assets)
@@ -1398,7 +1421,20 @@ def _render_cut(
             capture=capture,
         )
     tel.log("h3 cut rendering", native_path=task, seed=payload.seed, references=len(assets))
-    return CutOutput(shot.video, shot.continuation_frame, list(shot.warnings), observed, frames)
+    if len(frames) != 3:
+        raise OutputError("cut renderer did not capture three interior reference frames")
+    midpoint, quarter, three_quarter = frames
+    return CutOutput(
+        shot.video,
+        shot.continuation_frame,
+        list(shot.warnings),
+        observed,
+        midpoint.image,
+        quarter.image,
+        three_quarter.image,
+        [midpoint.frame_index, quarter.frame_index, three_quarter.frame_index],
+        [midpoint.signature, quarter.signature, three_quarter.signature],
+    )
 
 
 @invocable(defaults={"model": _DEFAULT_MODEL_LADDER})
@@ -1553,7 +1589,6 @@ async def long_form_cuts(
                                 seed,
                                 shot.duration_s,
                                 expected,
-                                history_enabled and index + 1 < len(payload.shots),
                             ),
                             assets=assets,
                         )
@@ -1565,7 +1600,6 @@ async def long_form_cuts(
                                 steps,
                                 shot.duration_s,
                                 expected,
-                                history_enabled and index + 1 < len(payload.shots),
                             ),
                             assets=assets,
                         )
@@ -1577,11 +1611,12 @@ async def long_form_cuts(
             expected = result.provenance
             videos.append(result.video)
             scanning.add(result.video)
-            history.append(result.reference_frames)
+            candidates = result.references() if history_enabled else []
+            history.append(candidates)
             frame = result.continuation_frame
             warnings.extend(result.warnings)
             completed_work += render_work[index]
-            for item in result.reference_frames:
+            for item in candidates:
                 tel.log(
                     "h3 cut reference candidate",
                     shot=index + 1,

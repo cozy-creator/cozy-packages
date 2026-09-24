@@ -238,6 +238,11 @@ def drive(
             return item
 
         answer = project(result.result)
+        assert {item["output_id"] for item in outputs} == {
+            "video", "continuation_frame", "reference_midpoint", "reference_quarter",
+            "reference_three_quarter",
+        }
+        assert len(result.result.references()) == 3
         answers[index] = {
             "ok": True,
             "state": "succeeded",
@@ -338,7 +343,7 @@ def drive(
     assert len(sent[0]["assets"]) == int(anchor)
     assert all(len(row["assets"]) <= 9 for row in sent)
     if history != 0 and delivered > 1:
-        prior = json.loads(answers[0]["result"])["reference_frames"][0]["image"]["digest"]
+        prior = json.loads(answers[0]["result"])["reference_midpoint"]["digest"]
         assert any(item["asset"] == prior for item in sent[1]["assets"])
     return {"frames": result.result.delivered_frames, "calls": sent, "events": len(events)}
 
