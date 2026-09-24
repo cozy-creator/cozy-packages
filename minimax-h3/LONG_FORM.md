@@ -59,8 +59,10 @@ completed portion with `complete=false`; first-shot failure and cancellation sta
 
 Reference PNGs, selection records and intermediate clips stay internal on the worker.
 Shot logs record reference digests, source frame indices, subject roles, seeds and native
-render paths. Three candidate frames come directly from each needed shot's existing RGB8
-decode, without decoding its compressed MP4 again. Generated references can still carry
+render paths. Each child returns three required, bounded PNG assets from its existing RGB8 decode,
+with fixed output paths and frame indices/signatures. Runtime forwards these retained
+assets to later children; the CPU parent does not decode the compressed MP4 to create
+references. Only the final video and continuation image are public results. Generated references can still carry
 artifacts or stale state. Shared voices, music and identity are not guaranteed across
 independent generations. CPU contract checks do not establish improved H3 video quality.
 
