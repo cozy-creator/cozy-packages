@@ -27,8 +27,11 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     width: Annotated[int, msgspec.Meta(ge=256, le=2752, multiple_of=32)] = 1024
     height: Annotated[int, msgspec.Meta(ge=256, le=2752, multiple_of=32)] = 1024
     steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 40
-    seed: Annotated[int, msgspec.Meta(ge=0, le=9223372036854775807)] | None = None
+    seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     background: Background = "normal"
+
+    def resolved_seed(self) -> int:
+        return self.seed if self.seed is not None else secrets.randbits(53)
 
     def __post_init__(self) -> None:
         if self.width * self.height > 5_000_000:
@@ -79,7 +82,7 @@ def generate(
     out: Outputs,
     tel: Telemetry,
 ) -> ImageOutput:
-    seed = payload.seed if payload.seed is not None else secrets.randbits(63)
+    seed = payload.resolved_seed()
     ctx.raise_if_cancelled()
     with tel.stage("encoding prompt", overall_range=(0.0, 0.1)):
         embeds, mask = model.encode(reference_prompt(payload.prompt, payload.background))
