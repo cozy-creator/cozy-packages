@@ -168,8 +168,74 @@ async def renderer(
         stubbed.provenance = original[2]
 
 
+@invocable
+async def motion_renderer(
+    ctx: Context,
+    *,
+    payload: h3.MotionInput,
+    assets: h3.CutAssets,
+    turbo: bool,
+    out: Outputs,
+    tel: Telemetry,
+) -> h3.MotionOutput:
+    from cozy_runtime.models.minimax_h3.continuation import AVContext
+
+    def refs(_ctx: Any, task: str, request: Any, images: Any, *_: Any, **kwargs: Any) -> Any:
+        assert task == ("ref2va_turbo" if turbo else "ref2va")
+        ROUTES.append(task)
+        assert images and kwargs["expected_context_provenance"] == CODE
+        context, delivery = kwargs["context"], kwargs["delivery"]
+        if context is not None:
+            assert len(context.frames) == payload.context_frames
+            assert context.provenance == CODE
+        assert delivery.prefix_frames == (0 if context is None else payload.context_frames)
+        tel.step_callback(payload.steps, stage="denoise", overall_range=(0.15, 0.85))(2)
+        count = delivery.delivered_frames
+        rgb = np.full((count, HEIGHT, WIDTH, 3), request.seed % 251, dtype=np.uint8)
+        for index in range(count):
+            rgb[index, :, index % 90 : index % 90 + 6, 2] = 230
+        audio = np.zeros((2, count * RATE // FPS), np.float32)
+        video = out.save_video(rgb, fps=FPS, audio=audio, sample_rate=RATE)
+        frame = out.save_image(ImageFrame(WIDTH, HEIGHT, rgb[-1].tobytes()), format="png")
+        tail = AVContext(
+            rgb[-56:].copy(),
+            torch.from_numpy(
+                audio[:, -((count * RATE // FPS) - ((count - 56) * RATE // FPS)) :].copy()
+            ),
+            RATE,
+            count - 56,
+            count,
+            CODE,
+        )
+        kwargs["completed_state"](tail)
+        return h3.H3VideoOutput(video, frame, [])
+
+    stubbed = cast(Any, h3)
+    original = h3._references_to_video, stubbed.provenance, stubbed.context_provenance
+    h3._references_to_video = cast(Any, refs)
+    stubbed.provenance = lambda model, adapter="": RenderProvenance(model, CODE, [], adapter)
+    stubbed.context_provenance = lambda _: CODE
+    model = SimpleNamespace(
+        checkpoint_ref=MODEL,
+        pipe=SimpleNamespace(export_completed_av_tail=lambda state, **_: state),
+    )
+    try:
+        return h3._render_motion(
+            ctx,
+            payload,
+            assets,
+            cast(Any, model),
+            out,
+            tel,
+            turbo_lora=cast(Any, SimpleNamespace(checkpoint_ref=LORA)) if turbo else None,
+        )
+    finally:
+        h3._references_to_video, stubbed.provenance, stubbed.context_provenance = original
+
+
 CHILD = App()
 CHILD.job(renderer, emits_media=True)
+CHILD.job(motion_renderer, emits_media=True)
 CHILD.job(reference_renderer, emits_media=True)
 
 
@@ -186,10 +252,13 @@ def drive(
     bad: str = "",
     reference_failure: bool = False,
     reference_cancel: bool = False,
+    continuous: bool = False,
+    context_frames: int = 39,
+    duration_s: int = 5,
 ) -> dict[str, Any]:
     root.mkdir()
     parent = root.name if request_id is None else request_id
-    export = "cut_segment_turbo" if turbo else "cut_segment"
+    export = ("motion_segment" if continuous else "cut_segment") + ("_turbo" if turbo else "")
     surface = next(item for item in describe(h3.app) if item.name == export)
     calls: list[dict[str, Any]] = []
     events: list[Any] = []
@@ -206,7 +275,7 @@ def drive(
             input_id=path,
             local=local,
             digest=digest,
-            media_type="image/png",
+            media_type="application/octet-stream" if path == "payload.context" else "image/png",
             length=local.stat().st_size,
             file_state=file_state(local),
             order=order,
@@ -259,18 +328,24 @@ def drive(
             for name in ("base_model", "turbo_lora") if turbo else ("model",):
                 assert wire.pop(name) is None
             assert "first_frame" not in wire["payload"] and "last_frame" not in wire["payload"]
-            if turbo:
+            if turbo and not continuous:
                 wire["payload"]["steps"] = 30
             wire["turbo"] = turbo
             grants = {
                 f"assets.{i}.asset": grant(f"assets.{i}.asset", item["asset"], i)
                 for i, item in enumerate(wire["assets"])
             }
+            if continuous and wire["payload"].get("context") is not None:
+                grants["payload.context"] = grant("payload.context", wire["payload"]["context"])
         emitted: list[Any] = []
         with ThreadPoolExecutor(max_workers=1) as pool:
             result, outcome, record = pool.submit(
                 attempt,
-                CHILD.get("reference_renderer" if is_reference else "renderer"),
+                CHILD.get(
+                    "reference_renderer"
+                    if is_reference
+                    else ("motion_renderer" if continuous else "renderer")
+                ),
                 wire,
                 Invocation(
                     f"{parent}-child-{index}",
@@ -320,7 +395,13 @@ def drive(
 
         answer = project(result.result)
         assert {item["output_id"] for item in outputs} == (
-            {"image"} if is_reference else {"video", "continuation_frame"}
+            {"image"}
+            if is_reference
+            else (
+                {"video", "continuation_frame", "context"}
+                if continuous
+                else {"video", "continuation_frame"}
+            )
         )
         answers[index] = {
             "ok": True,
@@ -339,7 +420,7 @@ def drive(
             {
                 "prompt": f"Camera angle {index}: {{Rover}} moves across {{Bridge}}.",
                 "references": ["Rover", "Bridge"] if index % 2 == 0 else ["Bridge", "Rover"],
-                "duration_s": 5,
+                "duration_s": duration_s,
                 **({"seed": 0} if index == 0 else {}),
             }
             for index in range(count)
@@ -361,6 +442,11 @@ def drive(
         ],
         "mode": "turbo" if turbo else "standard",
     }
+    if continuous:
+        wire["context_frames"] = context_frames
+        # Omitted selections default to all declared references, in declaration order.
+        for index in range(0, count, 2):
+            del wire["shots"][index]["references"]
     if prompt is not None:
         wire["prompt"] = prompt
     if bad == "unknown":
@@ -377,8 +463,7 @@ def drive(
         wire["shots"][-1]["prompt"] += " {Absent}"
     elif bad == "too-many-references":
         wire["references"] = [
-            {"name": f"Person{i}", "kind": "character", "prompt": "A person"}
-            for i in range(10)
+            {"name": f"Person{i}", "kind": "character", "prompt": "A person"} for i in range(10)
         ]
     elif bad == "legacy":
         wire["history_frames"] = 0
@@ -390,16 +475,18 @@ def drive(
                 "h3",
                 export,
                 cast(type[msgspec.Struct], surface.payload_type),
-                h3.SegmentOutput,
+                h3.MotionOutput if continuous else h3.SegmentOutput,
             ),
             (
-                REFERENCE_BINDING.interface_digest, "qwen_image_2", "generate_image"
+                REFERENCE_BINDING.interface_digest,
+                "qwen_image_2",
+                "generate_image",
             ): REFERENCE_BINDING,
         },
         exchange,
     )
     result, outcome, record = attempt(
-        h3.app.get("long_form_cuts"),
+        h3.app.get("long_form" if continuous else "long_form_cuts"),
         wire,
         Invocation(
             parent,
@@ -440,7 +527,9 @@ def drive(
     with PILImage.open(io.BytesIO(final.read_bytes())) as a, PILImage.open(source[last]) as b:
         assert a.tobytes() == b.tobytes()
     with av.open(io.BytesIO(result.result.video.read_bytes()), mode="r") as container:
-        assert sum(1 for _ in container.decode(video=0)) == delivered * frames_for(5)
+        assert sum(1 for _ in container.decode(video=0)) == delivered * (
+            duration_s * FPS if continuous else frames_for(duration_s)
+        )
     overall = [
         event.overall_fraction
         for event in events
@@ -460,6 +549,13 @@ def drive(
             "<Subject 1>" in row["payload"]["prompt"]
             and "fully_preserved" in row["payload"]["prompt"]
         )
+    if continuous:
+        assert sent[0]["payload"].get("context") is None
+        for index, row in enumerate(sent[1:], 1):
+            assert (
+                row["payload"]["context"]
+                == json.loads(answers[index + 1]["result"])["context"]["digest"]
+            )
     return {"frames": result.result.delivered_frames, "calls": sent, "events": len(events)}
 
 
@@ -483,8 +579,14 @@ def main() -> None:
     )
     drive(root / "oversized-prompt", prompt="x" * 3500, refuse=True)
     for bad in (
-        "unknown", "duplicate", "empty", "seed", "seed-too-large", "unselected",
-        "legacy", "too-many-references",
+        "unknown",
+        "duplicate",
+        "empty",
+        "seed",
+        "seed-too-large",
+        "unselected",
+        "legacy",
+        "too-many-references",
     ):
         drive(root / bad, bad=bad, refuse=True)
     refs = [StoryReference(f"Person{i}", "character", "A person.") for i in range(9)]

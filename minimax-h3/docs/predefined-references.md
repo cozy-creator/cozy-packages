@@ -68,5 +68,5 @@ bounded assembly, two public assets, stable seeds, preflight refusal, cancellati
 and partial delivery. This is a CPU composition proof, not Qwen/H3 inference,
 package-index transport, or visual-quality qualification.
 
-The existing `long_form` continues to use first-frame continuation and its own
+The `long_form` API also reuses fixed references and completed AV context, with its own
 previously defined shot bound. It is not routed through this reference generator.

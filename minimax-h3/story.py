@@ -85,7 +85,12 @@ def select_references(
 
 
 def shot_prompt(
-    shared: str, description: str, references: Sequence[StoryReference], *, index: int
+    shared: str,
+    description: str,
+    references: Sequence[StoryReference],
+    *,
+    index: int,
+    continuous: bool = False,
 ) -> str:
     labels = {reference.name: f"<Subject {slot}>" for slot, reference in enumerate(references, 1)}
 
@@ -118,14 +123,21 @@ def shot_prompt(
             "its photographed viewpoint and framing are not part of this subject"
         )
         retention.append(f"{label} (appears in [Shot 1]): fully_preserved - {preserved}.")
+    direction = (
+        "One continuous shot. Continue the preceding action and camera motion seamlessly; "
+        "preserve the same environment and soundscape, with no cut or establishing view. "
+        if continuous
+        else "One continuous shot. Compose a new camera view and animate the subjects "
+    )
     prompt = "\n\n".join(
         (
             "subject_definitions:\n" + "\n".join(subjects),
             "summary:\n[reference generation] " + substitute(shared),
             "retention_analysis:\n" + "\n".join(retention),
             "detailed_description:\n[Shot 1]\n"
-            "One continuous shot. Compose a new camera view and animate the subjects "
-            "according to this shot description:\n" + substitute(description),
+            + direction
+            + "according to this shot description:\n"
+            + substitute(description),
         )
     )
     if len(prompt) > 4096:
