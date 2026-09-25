@@ -340,6 +340,8 @@ def drive(
         wire["references"][1]["name"] = "Rover"
     elif bad == "empty":
         wire["references"][0]["prompt"] = " "
+    elif bad == "seed":
+        wire["references"][1]["seed"] = -1
     elif bad == "unselected":
         wire["shots"][-1]["prompt"] += " {Absent}"
     elif bad == "legacy":
@@ -439,7 +441,7 @@ def main() -> None:
         repeated["calls"][1]["payload"]["seed"] == results["fixed"]["calls"][1]["payload"]["seed"]
     )
     drive(root / "oversized-prompt", prompt="x" * 3500, refuse=True)
-    for bad in ("unknown", "duplicate", "empty", "unselected", "legacy"):
+    for bad in ("unknown", "duplicate", "empty", "seed", "unselected", "legacy"):
         drive(root / bad, bad=bad, refuse=True)
     refs = [StoryReference(f"Person{i}", "character", "A person.") for i in range(9)]
     named = validate_references(refs)

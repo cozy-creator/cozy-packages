@@ -48,3 +48,11 @@ Reference: https://github.com/MiniMax-AI/MiniMax-H3/blob/main/skills/h3-prompt-w
   Ref2VA routing, hard cuts, bounded frame assembly, two public outputs, deterministic
   seeds, preflight refusal, cancellation and partial delivery. It does not prove the
   quality of Qwen or H3 model outputs, nor the package-index transport.
+
+CPU qualification on 2026-09-25 passed against the Runtime decoder change in the
+Qwen implementation worktree, using its real broker, media codecs and custody checks.
+Evidence: `/home/fidika/cozy_v2/outputs/h3-predefined-proof-20260925-native2/evidence.json`.
+The renderers are synthetic: this is not a Qwen/H3 quality or package-index proof.
+Package 1.16.0 requires Runtime 0.18.21 and reference-image 0.1.0 or newer. Its lock
+must be refreshed once those artifacts are published; no private checkout source is
+committed as a dependency.

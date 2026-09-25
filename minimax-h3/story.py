@@ -21,7 +21,7 @@ class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
     name: Annotated[str, msgspec.Meta(min_length=1, max_length=48)]
     kind: Literal["character", "scene"]
     prompt: Annotated[str, msgspec.Meta(min_length=1, max_length=1024)]
-    seed: int | None = None
+    seed: Annotated[int, msgspec.Meta(ge=0, le=9223372036854775807)] | None = None
 
 
 def reference_seed(reference: StoryReference, request_id: str) -> int:
