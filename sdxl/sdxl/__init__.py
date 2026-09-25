@@ -41,6 +41,7 @@ checkpoint or revision — `package.toml` and the deploy binding do.
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 from enum import Enum, IntEnum
 from typing import Annotated, Any, Literal
@@ -328,10 +329,8 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
 
     def load(self, loader: Loader) -> None:
         self.pipe = loader.construct(SdxlPipeline, factory=build_pipeline)
-        # Tokenizers are model semantics, not package code. Runtime admits the selected
-        # CozyTensors asset closure and exposes it only through this bounded, read-only
-        # view. ``materialized`` is a short-lived adapter for CLIPTokenizer's path-based
-        # constructor; the tokenizer owns its parsed vocabulary after construction.
+        # Tokenizers are model semantics, not package code: their vocab and merges are
+        # CozyTensors assets, read as verified bytes. Loading writes no file.
         self.tokenizers = (
             _tokenizer(loader.assets, "tokenizer"),
             _tokenizer(loader.assets, "tokenizer_2"),
@@ -432,26 +431,23 @@ def _finite(torch: Any, value: Any) -> float:
 
 
 def _tokenizer(assets: Any, name: str) -> Any:
-    """Build one CLIP tokenizer from vocabulary/merge assets in the checkpoint.
+    """Build one CLIP tokenizer from the checkpoint's vocabulary/merge asset bytes.
 
-    Deliberately NOT ``from_pretrained``: that spelling can resolve against the Hub when
-    given a non-path and would make model execution depend on mutable network state. The
-    direct constructor takes a Runtime-created read-only materialization and cannot reach
-    anywhere. Missing or duplicate model assets are a Runtime admission error, never a
-    source-tree or network fallback.
+    Deliberately NOT ``from_pretrained``: that spelling can resolve against the Hub and
+    would make model execution depend on mutable network state. The in-memory constructor
+    cannot reach anywhere and touches no filesystem. Missing model assets are a Runtime
+    admission error, never a source-tree or network fallback.
     """
-    settings = {
-        "tokenizer": ("replace", "<|endoftext|>", 77),
-        "tokenizer_2": ("replace", "!", 77),
-    }[name]
-    with assets.materialized(name) as root:
-        return CLIPTokenizer(
-            vocab=str(root / "vocab.json"),
-            merges=str(root / "merges.txt"),
-            errors=settings[0],
-            pad_token=settings[1],
-            model_max_length=settings[2],
-        )
+    pad = {"tokenizer": "<|endoftext|>", "tokenizer_2": "!"}[name]
+    vocab = json.loads(assets.read(f"{name}/vocab.json"))
+    merges = [
+        tuple(line.split(" "))
+        for line in assets.read(f"{name}/merges.txt").decode().splitlines()
+        if line and not line.startswith("#version")
+    ]
+    return CLIPTokenizer(
+        vocab=vocab, merges=merges, errors="replace", pad_token=pad, model_max_length=77
+    )
 
 
 def _tokenize(tokenizers: tuple[Any, Any], prompt: str) -> tuple[Any, Any]:
