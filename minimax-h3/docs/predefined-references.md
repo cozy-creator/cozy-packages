@@ -1,15 +1,20 @@
 # Fixed subjects for camera-cut stories
 
 `long_form_cuts` generates one fixed image per named character or scene using
-`paul/reference-image/generate` before rendering any H3 shot. Character images use a
+`paul/qwen-image-2/generate_image` before rendering any H3 shot. Character images use a
 plain white background. Scene images contain the described location. The whole
 request declares one to nine references; each shot explicitly selects its named
 references. Each shot is an independent Ref2VA generation, with no first/last-frame
 anchor and no references sampled from earlier generated video.
 
 The parent is normal Python composition running in Runtime on the selected
-machine. It awaits sequential Qwen calls, followed by sequential H3 calls. The
-worker owns model placement, memory admission and eviction between packages.
+machine without reserving GPUs. It submits the bounded reference set concurrently,
+waits for every reference, then runs sequential H3 shots. Results remain associated
+with definition order even if images finish out of order; a failed or canceled
+reference cancels and drains its siblings before the parent returns. Runtime owns
+GPU placement and concurrency: degree-one Qwen calls can use separate GPU replicas,
+then H3 can use its supported multi-GPU group. Package coroutines alone do not prove
+physical GPU parallelism; that requires the scheduler cohort and a rented proof.
 Installing either package does not pull weights; explicit model preparation or
 inference preparation supplies them. No Creator process runs on the worker.
 
@@ -33,27 +38,32 @@ Reference: https://github.com/MiniMax-AI/MiniMax-H3/blob/main/skills/h3-prompt-w
 
 ## Qualification and dependencies
 
-The application dependency resolves only from the explicitly named `cozy-paul`
-organization index at `http://127.0.0.1:8819/v1/index/paul/simple/` for this local-Hub
-qualification. It is not a PyPI application package. The lock must record the
-published `reference-image` wheel from that index; there is no fallback to PyPI,
-Tensorhub.com, or a local checkout. The lock resolves published `paul/reference-image@0.1.1` from that Hub.
-Refresh it with:
+The consumer declares `qwen-image-2>=0.1.0` and explicitly maps it to the
+`tensorhub-paul` index at `https://tensorhub.com/v1/index/paul/simple/`.
+There is no PyPI or local-checkout fallback. A selected development Hub must be
+applied consistently to index resolution, lock verification and publication;
+changing the package namespace or weakening wheel hashes is not an override.
+This qualification lock honestly records the local Hub at `127.0.0.1:8819`.
+Refresh/verify it with an explicit named-index override:
 
 ```sh
-uv lock --project minimax-h3 --python 3.12 --upgrade-package cozy-runtime
+uv lock --project minimax-h3 --python 3.12 \
+  --index tensorhub-paul=http://127.0.0.1:8819/v1/index/paul/simple/
 ```
 
-H3 1.16.0 requires Runtime 0.18.24 or newer for the qualified managed-call,
+It is not a production-index lock. Select the matching Hub for local publication;
+regenerate and review the lock against production when that package exists there.
+
+H3 1.17.0 requires Runtime 0.18.24 or newer for the qualified managed-call,
 media-decoder and recovery cohort. Creator captures the dependency's immutable
 implementation and generated caller interface. The source implementation takes
 injected execution arguments; its installed caller exposes the flat
-`prompt`, `width`, `height`, `steps`, `seed` and `background` parameters used here.
+`prompt`, `aspect_ratio`, `megapixels`, `steps`, `seed` and `background` parameters used here.
 
-`scripts/h3-cuts-proof.py` compiles that caller from the actual reference-image
+`scripts/h3-cuts-proof.py` compiles that caller from the actual qwen-image-2
 package interface, then exercises Runtime's real broker, generated result types,
 media codecs and custody checks with synthetic renderers. It checks reference
-identity/order, independent Ref2VA routing, ten cuts without a shot-count cap,
+concurrent submission, reverse-completion identity/order, sibling cancellation, independent Ref2VA routing, ten cuts without a shot-count cap,
 bounded assembly, two public assets, stable seeds, preflight refusal, cancellation
 and partial delivery. This is a CPU composition proof, not Qwen/H3 inference,
 package-index transport, or visual-quality qualification.

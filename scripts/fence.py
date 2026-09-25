@@ -224,6 +224,10 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "The host fixture encodes the child's registered frames through Runtime's exact "
         "post-phase codec before returning byte grants. Retire with a public child harness. "
     ),
+    ("scripts/h3-cuts-proof.py", "cozy_runtime.internal"): (
+        "Compile the committed Qwen interface into Runtime's actual managed caller; "
+        "retire with a public generated-caller fixture."
+    ),
     ("scripts/h3-cuts-proof.py", "cozy_runtime.author._calls"): (
         "Qualify cuts through Runtime's real broker; retire with a public child-call harness."
     ),

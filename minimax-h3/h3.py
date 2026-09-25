@@ -7,6 +7,7 @@ stages weighted roots, and joins those two boundaries.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import queue
 from collections.abc import Awaitable, Callable, Iterator, Sequence
@@ -84,8 +85,10 @@ from msgspec.structs import replace
 from assembly import MAX_SHOTS, AssembleVideoRequest, ScanAhead, assemble, assemble_video
 from gates import MediaFacts, refuse_before_encode, report_after_encode
 from long_form_state import RenderProvenance, compatible, provenance
-from reference_image import ImageOutput as ReferenceImageOutput
-from reference_image import generate as generate_reference
+from qwen_image_2 import AspectRatio as ReferenceAspectRatio
+from qwen_image_2 import ImageOutput as ReferenceImageOutput
+from qwen_image_2 import Megapixels as ReferenceMegapixels
+from qwen_image_2 import generate_image as generate_reference
 from story import (
     StoryReference,
     image_prompt,
@@ -1433,23 +1436,31 @@ async def long_form_cuts(
     # Managed dependencies install an asynchronous flat caller for the source
     # entrypoint, whose own annotations describe its injected implementation.
     reference_generator = cast(Callable[..., Awaitable[ReferenceImageOutput]], generate_reference)
-    for reference in payload.references:
+    async def create_reference(reference: StoryReference) -> ReferenceImageOutput:
         ctx.raise_if_cancelled()
-        with tel.scope(
-            f"Creating reference {reference.name}",
-            overall_range=(
-                completed_work / total_work,
-                (completed_work + reference_steps) / total_work,
-            ),
-        ):
-            generated = await reference_generator(
+        # Concurrent child progress has no ordered overall range. Runtime owns
+        # GPU admission; this CPU composer submits at most nine independent calls.
+        with tel.scope(f"Creating reference {reference.name}"):
+            return await reference_generator(
                 prompt=image_prompt(reference),
-                width=1024,
-                height=1024,
+                aspect_ratio=ReferenceAspectRatio.SQUARE,
+                megapixels=ReferenceMegapixels.MP1,
                 steps=reference_steps,
                 seed=reference_seed(reference, ctx.request_id),
                 background="white" if reference.kind == "character" else "normal",
             )
+
+    tasks = [asyncio.create_task(create_reference(reference)) for reference in payload.references]
+    try:
+        generated_references = await asyncio.gather(*tasks)
+    except BaseException:
+        # A failed/cancelled reference must not leave sibling children running.
+        # Drain cancellation before returning the original failure to Runtime.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+    for reference, generated in zip(payload.references, generated_references, strict=True):
         images[reference.name] = generated.image
         tel.log(
             "h3 fixed reference",

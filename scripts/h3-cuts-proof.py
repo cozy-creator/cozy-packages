@@ -55,8 +55,8 @@ async def reference_renderer(
     ctx: Context,
     *,
     prompt: str,
-    width: int,
-    height: int,
+    aspect_ratio: str,
+    megapixels: int,
     steps: int,
     seed: int,
     background: Literal["normal", "white"],
@@ -64,7 +64,7 @@ async def reference_renderer(
     tel: Telemetry,
 ) -> ReferenceOutput:
     ctx.raise_if_cancelled()
-    assert width == height == 1024 and steps == 40
+    assert aspect_ratio == "1:1" and megapixels == 1 and steps == 40
     tel.step_callback(steps, stage="denoise", overall_range=(0.1, 0.9))(2)
     rgb = bytes((seed % 251, 128, 255)) * WIDTH * HEIGHT
     image = out.save_image(ImageFrame(WIDTH, HEIGHT, rgb), format="png")
@@ -75,13 +75,13 @@ async def reference_renderer(
 # calls the actual generated flat-argument proxy, including its model envelope.
 ROOT = Path(__file__).resolve().parents[1]
 reference_interface = package_interface.canonical_bytes(
-    static_interface.build(ROOT / "reference-image")
+    static_interface.build(ROOT / "qwen-image-2")
 )
-reference_code = interface_wheel.generate(reference_interface)["reference_image/__init__.py"]
-reference_module = ModuleType("reference_image")
-sys.modules["reference_image"] = reference_module
+reference_code = interface_wheel.generate(reference_interface)["qwen_image_2/__init__.py"]
+reference_module = ModuleType("qwen_image_2")
+sys.modules["qwen_image_2"] = reference_module
 exec(compile(reference_code, "generated-reference-image-caller", "exec"), reference_module.__dict__)
-REFERENCE_BINDING = cast(Any, reference_module).__cozy_bindings__["generate"]
+REFERENCE_BINDING = cast(Any, reference_module).__cozy_bindings__["generate_image"]
 sys.path.insert(0, str(ROOT / "minimax-h3"))
 import h3  # noqa: E402
 from long_form_state import RenderProvenance  # noqa: E402
@@ -184,6 +184,7 @@ def drive(
     prompt: str | None = None,
     refuse: bool = False,
     bad: str = "",
+    reference_failure: bool = False,
 ) -> dict[str, Any]:
     root.mkdir()
     parent = root.name if request_id is None else request_id
@@ -195,6 +196,8 @@ def drive(
     answers: dict[int, dict[str, Any]] = {}
     pending: dict[int, dict[str, Any]] = {}
     cancelled = False
+    completed_references: set[int] = set()
+    canceled_children: set[int] = set()
 
     def grant(path: str, digest: str, order: int = 0) -> GrantedInput:
         local = source[digest]
@@ -212,8 +215,20 @@ def drive(
         nonlocal cancelled
         index = int(value["call_index"])
         if kind in ("child_cancel", "child_forget"):
+            if kind == "child_cancel":
+                canceled_children.add(index)
             return {"ok": True}
         if kind == "child_poll":
+            if index < 2:
+                # Both requests must be submitted before awaiting either result.
+                # Settle the second first to prove identity is definition ordered.
+                assert len(calls) == 2
+                if index == 0 and 1 not in completed_references:
+                    return {"ok": True, "state": "running"}
+                if index == 1 and reference_failure:
+                    return {"ok": False, "code": "child.failed", "detail": "reference failed"}
+                if index not in pending:
+                    completed_references.add(index)
             if index in pending:
                 return {"ok": True, "state": "running", "progress": pending.pop(index)}
             return answers[index]
@@ -224,7 +239,7 @@ def drive(
             cancelled = shot_index == cancel
             return {"ok": False, "code": "child.failed", "detail": "synthetic interruption"}
         wire = json.loads(value["payload"])
-        is_reference = value["export"] == "generate"
+        is_reference = value["export"] == "generate_image"
         if is_reference:
             assert wire["models"] == {"model": None}
             wire = wire["payload"]
@@ -236,6 +251,7 @@ def drive(
             )
             grants = {}
         else:
+            assert completed_references == {0, 1}, "H3 started before every reference settled"
             for name in ("base_model", "turbo_lora") if turbo else ("model",):
                 assert wire.pop(name) is None
             assert "first_frame" not in wire["payload"] and "last_frame" not in wire["payload"]
@@ -367,7 +383,9 @@ def drive(
                 cast(type[msgspec.Struct], surface.payload_type),
                 h3.SegmentOutput,
             ),
-            (REFERENCE_BINDING.interface_digest, "reference_image", "generate"): REFERENCE_BINDING,
+            (
+                REFERENCE_BINDING.interface_digest, "qwen_image_2", "generate_image"
+            ): REFERENCE_BINDING,
         },
         exchange,
     )
@@ -383,6 +401,10 @@ def drive(
             progress=events.append,
         ),
     )
+    if reference_failure:
+        assert result is None and outcome.terminal != "succeeded", outcome
+        assert len(calls) == 2 and 0 in canceled_children
+        return {}
     if refuse:
         assert result is None and outcome.terminal != "succeeded" and not calls, outcome
         return {}
@@ -438,6 +460,7 @@ def main() -> None:
         "partial": drive(root / "partial", fail=2),
     }
     assert len(results["arbitrary_cut_count"]["calls"]) == 10
+    drive(root / "reference-failed", reference_failure=True)
     drive(root / "canceled", cancel=1)
     drive(root / "first-fails", fail=0)
     repeated = drive(root / "retry", request_id="fixed")
@@ -463,7 +486,10 @@ def main() -> None:
                 "native_routes": ROUTES,
                 "actual_h3_inference": False,
                 "reference_interface_digest": REFERENCE_BINDING.interface_digest,
-                "reference_caller": "Runtime-generated reference_image.generate",
+                "reference_caller": "Runtime-generated qwen_image_2.generate_image",
+                "reference_submission_concurrent": True,
+                "reverse_reference_completion": True,
+                "reference_failure_cancels_siblings": True,
                 "two_public_assets": True,
                 "cuts_preserve_all_frames": True,
                 "reference_slots_and_tokens_bounded": True,
