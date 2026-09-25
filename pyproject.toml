@@ -6,7 +6,7 @@
 [tool.mypy]
 python_version = "3.12"
 files = [
-    "anima", "minimax-h3", "sdxl", "reference-image", "scripts", "examples",
+    "anima", "minimax-h3", "sdxl", "qwen-image-2", "scripts", "examples",
     "minimax-h3-tools/src",
 ]
 strict = true
@@ -56,7 +56,7 @@ disallow_subclassing_any = false
 [tool.ruff]
 line-length = 100
 src = [
-    "anima", "minimax-h3", "sdxl", "reference-image", "scripts", "examples",
+    "anima", "minimax-h3", "sdxl", "qwen-image-2", "scripts", "examples",
     "minimax-h3-tools",
 ]
 exclude = [".venv"]

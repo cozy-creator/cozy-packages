@@ -24,8 +24,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 #: package directory -> (module to import, compiled peers that must load beside it)
 PACKAGES = {
-    "reference-image": (
-        "reference_image",
+    "qwen-image-2": (
+        "qwen_image_2",
         ("torch", "torchvision", "torchvision.ops", "transformers", "diffusers", "tensorfs"),
     ),
     "anima": (

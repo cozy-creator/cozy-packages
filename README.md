@@ -17,7 +17,7 @@ dependencies or qualifying a worker image.
 | `sdxl/` | SDXL text-to-image package plus the family's lane-selecting quantize job (se-008, cr-073, se-023) |
 | `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
 | `minimax-h3-tools/` | H3 timestep-table and structural precompute jobs (cr-071) |
-| `reference-image/` | Qwen-Image-2.1 reference image generation; optional white background and native Runtime execution (research model licence) |
+| `qwen-image-2/` | Qwen-Image-2.1 reference image generation; optional white background and native Runtime execution (research model licence) |
 | `examples/` | private `main()` scripts for one-off repairs and diagnostics; run directly with `cozy run` |
 | `*/package.toml` | the `[application]` entry point only; it carries no model bindings |
 | `*/pyproject.toml` | release metadata; its one `cozy.application` entry point matches `package.toml` |
@@ -330,7 +330,7 @@ Ref2VA preserves request order and enforces the official product bounds: at most
 3 standalone audio clips, and 12 entries total. Video and audio clips are 2–15 seconds, with at most
 15 seconds per modality in aggregate. A video's embedded soundtrack belongs to that video and does
 not consume the standalone-audio count. Standalone audio cannot be the only reference modality.
-The package selects reference-image sizes automatically. Images with `auto` fidelity
+The package selects qwen-image-2 sizes automatically. Images with `auto` fidelity
 start at a 1024-pixel short edge; `low`, `medium`, and `high` fidelity select 256, 1024,
 and 2048 pixels respectively. Diffusers rounds both axes to its 32-pixel grid. Explicit
 fidelity hints keep their sizes; automatic images step down together through 1024,
@@ -477,7 +477,7 @@ uv pip install --python .venv-check/bin/python \
 
 .venv-check/bin/python scripts/fence.py
 .venv-check/bin/python -m mypy
-.venv-check/bin/ruff check anima/ minimax-h3/ minimax-h3-tools/ sdxl/ reference-image/ scripts/ examples/
+.venv-check/bin/ruff check anima/ minimax-h3/ minimax-h3-tools/ sdxl/ qwen-image-2/ scripts/ examples/
 ```
 
 `scripts/fence.py` prints one line per fence and exits non-zero on the first red one. Read the
