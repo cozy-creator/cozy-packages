@@ -541,12 +541,18 @@ def _finish(
         fps=FPS,
         requested_duration_s=duration_s,
         duration_seconds=round(frames / FPS, 3),
-        sampled_frames=frames if sampled_frames is None else sampled_frames,
         denoise_rows=denoise_rows(
             frames if sampled_frames is None else sampled_frames, height, width
         ),
         sample_rate=sample_rate,
     )
+    if sampled_frames is not None:
+        tel.log(
+            "h3 continuation window",
+            sampled_frames=sampled_frames,
+            delivered_frames=frames,
+            trimmed_frames=sampled_frames - frames,
+        )
     tel.log(
         "h3 schedule facts",
         timestep_plan_digest=schedule.timestep_plan_digest,
