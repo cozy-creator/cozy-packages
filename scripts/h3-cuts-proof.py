@@ -51,7 +51,7 @@ class ReferenceOutput(msgspec.Struct):
 
 
 @invocable
-async def generate(
+async def reference_renderer(
     ctx: Context,
     *,
     prompt: str,
@@ -170,7 +170,7 @@ async def renderer(
 
 CHILD = App()
 CHILD.job(renderer, emits_media=True)
-CHILD.job(generate, emits_media=True)
+CHILD.job(reference_renderer, emits_media=True)
 
 
 def drive(
@@ -250,7 +250,7 @@ def drive(
         with ThreadPoolExecutor(max_workers=1) as pool:
             result, outcome, record = pool.submit(
                 attempt,
-                CHILD.get("generate" if is_reference else "renderer"),
+                CHILD.get("reference_renderer" if is_reference else "renderer"),
                 wire,
                 Invocation(
                     f"{parent}-child-{index}",
