@@ -27,3 +27,8 @@ def compatible(actual: RenderProvenance, expected: RenderProvenance | None) -> N
             "shots in one rendering must use the same base model and adapter",
             code="render_provenance",
         )
+
+
+def context_provenance(renderer: RenderProvenance) -> str:
+    """Record model selections for native context compatibility without code hashes."""
+    return msgspec.json.encode(renderer).decode("utf-8")
