@@ -37,8 +37,8 @@ The application dependency resolves only from the explicitly named `cozy-paul`
 organization index at `http://127.0.0.1:8819/v1/index/paul/simple/` for this local-Hub
 qualification. It is not a PyPI application package. The lock must record the
 published `reference-image` wheel from that index; there is no fallback to PyPI,
-Tensorhub.com, or a local checkout. Publish `paul/reference-image@0.1.0` to that Hub
-before refreshing H3's lock:
+Tensorhub.com, or a local checkout. The lock resolves published `paul/reference-image@0.1.1` from that Hub.
+Refresh it with:
 
 ```sh
 uv lock --project minimax-h3 --python 3.12 --upgrade-package cozy-runtime
