@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Check the reference-image request and PNG contract in its installed dependency cohort."""
+"""Check the qwen-image-2 request and PNG contract in its installed dependency cohort."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ import torch
 from cozy_runtime.author import canonical_json, describe
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "reference-image"))
+sys.path.insert(0, str(ROOT / "qwen-image-2"))
 
-from reference_image import (  # noqa: E402
+from qwen_image_2 import (  # noqa: E402
     _TIER_DEMAND,
     AspectRatio,
     GenerateInput,
@@ -92,6 +92,6 @@ assert rgb_image(pixels).getpixel((0, 0)) == (255, 255, 255)
 pixels[0, 3, 0, 0] = 1
 assert rgb_image(pixels).getpixel((0, 0)) == (255, 0, 0)
 (surface,) = describe(app)
-assert surface.name == "generate" and surface.kind == "entrypoint"
+assert surface.name == "generate_image" and surface.kind == "entrypoint"
 assert {binding.param for binding in surface.model_bindings} == {"model"}
-print("reference-image: 27 buckets, defaults, seeds, hardcut refusals and PNG pixels passed")
+print("qwen-image-2: 27 buckets, defaults, seeds, hardcut refusals and PNG pixels passed")

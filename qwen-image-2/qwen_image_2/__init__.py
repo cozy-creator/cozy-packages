@@ -139,7 +139,7 @@ def rgb_image(decoded: Any) -> Image.Image:
 
 
 @app.entrypoint(defaults={"model": [{"gpu": "*", "lane": "paul/reference-image@0.1.0/original"}]})
-def generate(
+def generate_image(
     ctx: Context,
     payload: GenerateInput,
     model: QwenImage21Model,

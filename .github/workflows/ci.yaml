@@ -23,7 +23,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          every='["anima","sdxl","minimax-h3-tools","reference-image"]'
+          every='["anima","sdxl","minimax-h3-tools","qwen-image-2"]'
           if [ -z "$PR" ]; then
             printf 'code=true\nh3=true\npackages=%s\n' "$every" >> "$GITHUB_OUTPUT"
             exit 0
@@ -37,7 +37,7 @@ jobs:
               "") continue ;;
               anima/*|scripts/anima-*) pick[anima]=1 ;;
               sdxl/*|scripts/sdxl*) pick[sdxl]=1 ;;
-              reference-image/*|scripts/reference-image-*) pick[reference-image]=1 ;;
+              qwen-image-2/*|scripts/qwen-image-2-*) pick[qwen-image-2]=1 ;;
               minimax-h3/*|minimax-h3-tools/*|examples/*|scripts/h3*|scripts/tensorfs_seeds.py)
                 h3=true; pick[minimax-h3-tools]=1 ;;
               docs/*) continue ;;
@@ -83,7 +83,7 @@ jobs:
 
       - name: Lint
         run: >-
-          uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ reference-image/ examples/
+          uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ qwen-image-2/ examples/
 
       - name: Types
         run: uv run --no-project mypy
@@ -93,14 +93,14 @@ jobs:
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          for package in anima minimax-h3 sdxl minimax-h3-tools reference-image; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools qwen-image-2; do
             uv lock --check --project "$package"
           done
 
       - name: Every package builds a wheel
         run: |
           mkdir -p dist/packages
-          for package in anima minimax-h3 sdxl minimax-h3-tools reference-image; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools qwen-image-2; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done
@@ -113,8 +113,8 @@ jobs:
 
       - name: Reference image wheel retains model licence and attribution
         run: |
-          unzip -l dist/packages/reference-image/reference_image-*.whl | grep -F 'reference_image/LICENSE.model.txt'
-          unzip -l dist/packages/reference-image/reference_image-*.whl | grep -F 'reference_image/Notice'
+          unzip -l dist/packages/qwen-image-2/qwen_image_2-*.whl | grep -F 'qwen_image_2/LICENSE.model.txt'
+          unzip -l dist/packages/qwen-image-2/qwen_image_2-*.whl | grep -F 'qwen_image_2/Notice'
 
       # Each package has its own environment; native wheel requirements are checked
       # inside each environment before its compiled import proof below. Different package versions
@@ -252,8 +252,8 @@ jobs:
         run: sdxl/.venv/bin/python scripts/sdxl-normalization-proof.py
 
       - name: Reference image request and output contract
-        if: matrix.package == 'reference-image'
-        run: reference-image/.venv/bin/python scripts/reference-image-conform.py
+        if: matrix.package == 'qwen-image-2'
+        run: qwen-image-2/.venv/bin/python scripts/qwen-image-2-conform.py
 
       - name: Warm arms
         if: matrix.package == 'anima' || matrix.package == 'sdxl'

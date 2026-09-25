@@ -1,6 +1,6 @@
-# Reference image
+# Qwen Image 2
 
-`generate` creates one PNG from text using Qwen-Image-2.1. The model checkpoint is
+`generate_image` creates one PNG from text using Qwen-Image-2.1. The model checkpoint is
 selected independently from the package. TensorFS owns model downloads and bytes;
 Runtime owns construction, memory residency and component execution.
 
@@ -58,3 +58,41 @@ is not established by the request-contract checks.
 | 9:16 | 768×1376 | 1088×1952 | 1536×2752 |
 | 21:9 | 1568×672 | 2208×960 | 3136×1344 |
 | 9:21 | 672×1568 | 960×2208 | 1344×3136 |
+
+## Python dependency
+
+This is an ordinary Python distribution (`qwen-image-2`) published on the Hub
+organization's Python package index. In a Cozy package, declare the dependency
+and pin it to the Hub index in the **consumer's** `pyproject.toml`:
+
+```toml
+[project]
+dependencies = ["qwen-image-2>=0.1.0"]
+
+[tool.uv.sources]
+qwen-image-2 = { index = "tensorhub-paul" }
+
+[[tool.uv.index]]
+name = "tensorhub-paul"
+url = "http://127.0.0.1:8819/v1/index/paul/simple/"
+explicit = true
+```
+
+Use the Hub URL reachable from that consumer. This source mapping tells uv to
+resolve this distribution only from that index; it is consumer configuration,
+not transitive wheel metadata. Import its generated managed caller:
+
+```python
+from qwen_image_2 import AspectRatio, Megapixels, generate_image
+
+image = await generate_image(
+    prompt="An explorer in a blue coat",
+    aspect_ratio=AspectRatio.PORTRAIT,
+    megapixels=Megapixels.MP1,
+)
+```
+
+The Hub package is `paul/qwen-image-2`; its callable is `generate_image`. The
+existing default model selection remains `paul/reference-image@0.1.0/original`.
+Installing the wheel alone does not turn GPU execution into an in-process call;
+Cozy supplies the managed caller when composing package functions.
