@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import secrets
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 import msgspec
 import numpy as np
-from PIL import Image
-
 from cozy_runtime.author import (
     App,
     AssetBound,
@@ -18,6 +16,7 @@ from cozy_runtime.author import (
     Telemetry,
 )
 from cozy_runtime.models.qwen_image21 import QwenImage21Model
+from PIL import Image
 
 app = App()
 Background = Literal["normal", "white"]
@@ -37,7 +36,10 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
 
 
 class ImageOutput(msgspec.Struct):
-    image: Annotated[ImageAsset, AssetBound(max_bytes=32 << 20, media_types=("image/png",))]
+    image: Annotated[
+        ImageAsset,
+        AssetBound(max_bytes=32 << 20, max_decoded_bytes=20 << 20, media_types=("image/png",)),
+    ]
     width: int
     height: int
     seed: int
@@ -52,10 +54,10 @@ def reference_prompt(prompt: str, background: Background) -> str:
     return prompt
 
 
-def rgb_image(decoded: object) -> Image.Image:
+def rgb_image(decoded: Any) -> Image.Image:
     """Preserve native RGBA semantics and flatten alpha over white for H3 references."""
     # The model returns B,C,H,W in [-1,1], just as upstream VaeImageProcessor consumes.
-    pixels = decoded[0].detach().float().cpu().permute(1, 2, 0).numpy()  # type: ignore[index]
+    pixels = decoded[0].detach().float().cpu().permute(1, 2, 0).numpy()
     if not np.isfinite(pixels).all():
         raise ValueError("Qwen Image decoder produced non-finite pixels")
     pixels = ((pixels / 2 + 0.5).clip(0, 1) * 255).round().astype(np.uint8)
@@ -89,7 +91,9 @@ def generate(
             height=payload.height,
             steps=payload.steps,
             seed=seed,
-            on_step=tel.step_callback(payload.steps, stage="generating image", overall_range=(0.1, 0.9)),
+            on_step=tel.step_callback(
+                payload.steps, stage="generating image", overall_range=(0.1, 0.9)
+            ),
             cancel=ctx.raise_if_cancelled,
         )
     ctx.raise_if_cancelled()

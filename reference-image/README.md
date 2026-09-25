@@ -7,7 +7,7 @@ Runtime owns construction, memory residency and component execution.
 Use `background=white` for a character reference or `background=normal` for a scene.
 Native RGBA decoding is composited over white because the v1 API produces RGB PNGs;
 it does not promise transparent outputs. `seed` is optional and the chosen seed is
-returned. Width and height are multiples of32, default1024; steps default40.
+returned. Width and height are multiples of 32, default 1024; steps default 40.
 
 The upstream model is under the Qwen Research License, for noncommercial research
 and evaluation. This wrapper is not an authorization for commercial model use.

@@ -73,6 +73,7 @@
             },
             "asset_bound": {
               "max_bytes": 33554432,
+              "max_decoded_bytes": 20971520,
               "media_types": [
                 "image/png"
               ]
