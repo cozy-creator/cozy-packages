@@ -1,19 +1,70 @@
 name: ci
-
 on:
-  push:
   pull_request:
-  merge_group:
-
+  push:
+    branches: [master]
+  workflow_dispatch:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  # Decides which heavy environments a PR needs. Master and dispatch run everything.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.plan.outputs.code }}
+      h3: ${{ steps.plan.outputs.h3 }}
+      packages: ${{ steps.plan.outputs.packages }}
+    steps:
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          every='["anima","sdxl","minimax-h3-tools","reference-image"]'
+          if [ -z "$PR" ]; then
+            printf 'code=true\nh3=true\npackages=%s\n' "$every" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)')
+          code=false h3=false all=false
+          declare -A pick=()
+          while IFS= read -r f; do
+            case "$f" in
+              "") continue ;;
+              anima/*|scripts/anima-*) pick[anima]=1 ;;
+              sdxl/*|scripts/sdxl*) pick[sdxl]=1 ;;
+              reference-image/*|scripts/reference-image-*) pick[reference-image]=1 ;;
+              minimax-h3/*|minimax-h3-tools/*|examples/*|scripts/h3*|scripts/tensorfs_seeds.py)
+                h3=true; pick[minimax-h3-tools]=1 ;;
+              docs/*) continue ;;
+              */*) all=true ;;
+              *.md) continue ;;
+              *) all=true ;;
+            esac
+            code=true
+          done <<< "$files"
+          if [ "$all" = true ]; then
+            h3=true packages=$every
+          else
+            packages=$(jq -cn '$ARGS.positional' --args "${!pick[@]}")
+          fi
+          printf 'code=%s\nh3=%s\npackages=%s\n' "$code" "$h3" "$packages" | tee -a "$GITHUB_OUTPUT"
+
   checks:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.12.7"
+          save-cache: ${{ github.ref == 'refs/heads/master' }}
       - run: uv python install 3.12
 
       # Check the same Runtime contract required by the H3 serving and producer packages.
@@ -72,23 +123,24 @@ jobs:
         run: uv run --no-project python scripts/torch_family.py --self-check
 
       - name: Native checkpoint repair script and resume
+        if: needs.changes.outputs.h3 == 'true'
         run: .venv/bin/python scripts/h3-repair-proof.py
 
   h3-conformance:
-    # Independent so a failure in static analysis cannot silently skip the red arms.
     name: H3 deterministic conformance
+    needs: changes
+    if: needs.changes.outputs.h3 == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.12.7"
+          enable-cache: false
       - run: uv python install 3.12
 
-      # This is the exact locked source environment and a CPU semantic proof. It is not the
-      # separately required clean installed-wheel or GPU generation proof. --no-cache avoids
-      # retaining a second copy of the roughly 7.6 GiB CUDA closure on the hosted runner.
+      # --no-cache: a second copy of the ~7.6 GiB CUDA closure does not fit the runner disk.
       - name: Exact locked environment
         run: |
           uv lock --check --project minimax-h3
@@ -150,9 +202,9 @@ jobs:
           PYCODE
 
   package-locks:
-    # Independent so a failure to materialize an exact dependency environment cannot hide
-    # behind static analysis. The checks job separately builds and imports every project wheel.
     name: Package exact locked environments
+    needs: changes
+    if: needs.changes.outputs.packages != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -162,12 +214,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [anima, sdxl, minimax-h3-tools, reference-image]
+        package: ${{ fromJSON(needs.changes.outputs.packages) }}
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.12.7"
+          enable-cache: false
       - run: uv python install 3.12
       - name: Exact locked environment
         run: |
