@@ -12,11 +12,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / name) for name in ("sdxl", "anima")]
 
-import anima  # noqa: E402
-import sdxl  # noqa: E402
 from cozy_runtime.author import InvalidRequest  # noqa: E402
 from cozy_runtime.author._loader import ModelAssets  # noqa: E402
 from cozy_runtime.internal import sandbox  # noqa: E402
+
+import anima  # noqa: E402
+import sdxl  # noqa: E402
 
 
 def assets(values: dict[str, bytes]) -> ModelAssets:
