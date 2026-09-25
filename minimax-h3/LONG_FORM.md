@@ -6,7 +6,7 @@ for deliberate continuation of one camera take.
 ## Stories with camera cuts
 
 `long_form_cuts` first generates fixed reference images with Qwen-Image-2.1 through
-`paul/reference-image/generate`, then renders independent H3 shots using those images.
+`paul/qwen-image-2/generate_image`, then renders independent H3 shots using those images.
 Define one to nine named characters and scenes. Characters receive a plain white
 background; scene references describe the empty location. Each shot selects only the
 names relevant to it. There is no feedback from generated shots, no previous-frame
@@ -28,7 +28,7 @@ conditioning, and no first/last-frame anchor. Every generated frame is retained 
 ```
 
 ```sh
-cozy package install paul/reference-image
+cozy package install paul/qwen-image-2
 cozy package install paul/minimax-h3
 cozy run paul/minimax-h3/long_form_cuts --input story.json --rental=your-rental --await --out ./film
 ```

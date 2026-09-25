@@ -74,7 +74,7 @@ qwen-image-2 = { index = "tensorhub-paul" }
 
 [[tool.uv.index]]
 name = "tensorhub-paul"
-url = "http://127.0.0.1:8819/v1/index/paul/simple/"
+url = "https://tensorhub.com/v1/index/paul/simple/"
 explicit = true
 ```
 
