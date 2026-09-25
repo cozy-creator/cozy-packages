@@ -3,7 +3,7 @@ name = "minimax-h3"
 version = "1.16.0"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media,minimax-h3]>=0.18.21",
+    "cozy-runtime[media,minimax-h3]>=0.18.23",
     "cozy-eval>=0.7.2",
     "diffusers>=0.40.0",
     "hf-xet>=1.6.0",
@@ -47,3 +47,12 @@ organization = "paul"
 
 [tool.uv]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+# The application dependency belongs to this qualification Hub, never PyPI.
+[tool.uv.sources]
+reference-image = { index = "cozy-paul" }
+
+[[tool.uv.index]]
+name = "cozy-paul"
+url = "http://127.0.0.1:8819/v1/index/paul/simple/"
+explicit = true

@@ -31,28 +31,32 @@ reference custody and output assembly.
 
 Reference: https://github.com/MiniMax-AI/MiniMax-H3/blob/main/skills/h3-prompt-writing/references/ref-en.txt
 
-## Implementation checkpoints
+## Qualification and dependencies
 
-- Package PR: https://github.com/cozy-creator/packages/pull/256
-- The published dependency must be resolved from Tensorhub's existing organization
-  package index. The Python import is `reference_image.generate`; the exact admitted
-  caller interface and model defaults belong to that dependency's release.
-- Creator's existing `publishedSubmission` originally captured only self-callables;
-  published cross-package dependency capture is a required rollout gate, owned outside
-  this package. It must freeze the dependency's implementation and callable overlay.
-- The parent decodes bounded media received from children, despite having no uploaded
-  media in its request. Runtime must permit that decoder capability while retaining
-  per-asset input grants and decoded-byte bounds.
-- `scripts/h3-cuts-proof.py` exercises real Runtime broker/codec custody with synthetic
-  image/video renderers. It proves fixed reference identities and ordering, independent
-  Ref2VA routing, hard cuts, bounded frame assembly, two public outputs, deterministic
-  seeds, preflight refusal, cancellation and partial delivery. It does not prove the
-  quality of Qwen or H3 model outputs, nor the package-index transport.
+The application dependency resolves only from the explicitly named `cozy-paul`
+organization index at `http://127.0.0.1:8819/v1/index/paul/simple/` for this local-Hub
+qualification. It is not a PyPI application package. The lock must record the
+published `reference-image` wheel from that index; there is no fallback to PyPI,
+Tensorhub.com, or a local checkout. Publish `paul/reference-image@0.1.0` to that Hub
+before refreshing H3's lock:
 
-CPU qualification on 2026-09-25 passed against the Runtime decoder change in the
-Qwen implementation worktree, using its real broker, media codecs and custody checks.
-Evidence: `/home/fidika/cozy_v2/outputs/h3-predefined-proof-20260925-native2/evidence.json`.
-The renderers are synthetic: this is not a Qwen/H3 quality or package-index proof.
-Package 1.16.0 requires Runtime 0.18.21 and reference-image 0.1.0 or newer. Its lock
-must be refreshed once those artifacts are published; no private checkout source is
-committed as a dependency.
+```sh
+uv lock --project minimax-h3 --python 3.12 --upgrade-package cozy-runtime
+```
+
+H3 1.16.0 requires Runtime 0.18.23 or newer for the qualified managed-call,
+media-decoder and recovery cohort. Creator captures the dependency's immutable
+implementation and generated caller interface. The source implementation takes
+injected execution arguments; its installed caller exposes the flat
+`prompt`, `width`, `height`, `steps`, `seed` and `background` parameters used here.
+
+`scripts/h3-cuts-proof.py` compiles that caller from the actual reference-image
+package interface, then exercises Runtime's real broker, generated result types,
+media codecs and custody checks with synthetic renderers. It checks reference
+identity/order, independent Ref2VA routing, ten cuts without a shot-count cap,
+bounded assembly, two public assets, stable seeds, preflight refusal, cancellation
+and partial delivery. This is a CPU composition proof, not Qwen/H3 inference,
+package-index transport, or visual-quality qualification.
+
+The existing `long_form` continues to use first-frame continuation and its own
+previously defined shot bound. It is not routed through this reference generator.

@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import queue
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from fractions import Fraction
 from functools import partial
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 import msgspec
 import torch
@@ -80,11 +80,12 @@ from cozy_runtime.models.minimax_h3.official import (
     validate_reference_policy,
 )
 from msgspec.structs import replace
-from reference_image import generate as generate_reference
 
 from assembly import MAX_SHOTS, AssembleVideoRequest, ScanAhead, assemble, assemble_video
 from gates import MediaFacts, refuse_before_encode, report_after_encode
 from long_form_state import RenderProvenance, compatible, provenance
+from reference_image import ImageOutput as ReferenceImageOutput
+from reference_image import generate as generate_reference
 from story import (
     StoryReference,
     image_prompt,
@@ -1429,6 +1430,9 @@ async def long_form_cuts(
     total_work = sum(render_work) + sum(planned_frames) + 1 + len(by_name) * reference_steps
     completed_work = 0
     images: dict[str, ImageAsset] = {}
+    # Managed dependencies install an asynchronous flat caller for the source
+    # entrypoint, whose own annotations describe its injected implementation.
+    reference_generator = cast(Callable[..., Awaitable[ReferenceImageOutput]], generate_reference)
     for reference in payload.references:
         ctx.raise_if_cancelled()
         with tel.scope(
@@ -1438,7 +1442,7 @@ async def long_form_cuts(
                 (completed_work + reference_steps) / total_work,
             ),
         ):
-            generated = await generate_reference(
+            generated = await reference_generator(
                 prompt=image_prompt(reference),
                 width=1024,
                 height=1024,

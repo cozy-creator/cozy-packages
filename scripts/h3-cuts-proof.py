@@ -38,6 +38,7 @@ from cozy_runtime.author._assets import Asset, GrantedInput, file_state
 from cozy_runtime.author._calls import _Broker, _CallType
 from cozy_runtime.author._codec import encode_frame
 from cozy_runtime.author._services import ProgressFrame, settle_frame
+from cozy_runtime.internal import interface_wheel, package_interface, static_interface
 from cozy_runtime.models.minimax_h3.official import FPS, MAX_CONDITIONER_VISION_TOKENS, frames_for
 from PIL import Image as PILImage
 
@@ -70,12 +71,18 @@ async def generate(
     return ReferenceOutput(image, WIDTH, HEIGHT, seed)
 
 
-# The reference model is synthetic, but remains an independently brokered media child.
-# Publication/real-model qualification separately exercises the generated SDK overlay.
+# Compile the real package's caller contract. Only rendering is synthetic: H3
+# calls the actual generated flat-argument proxy, including its model envelope.
+ROOT = Path(__file__).resolve().parents[1]
+reference_interface = package_interface.canonical_bytes(
+    static_interface.build(ROOT / "reference-image")
+)
+reference_code = interface_wheel.generate(reference_interface)["reference_image/__init__.py"]
 reference_module = ModuleType("reference_image")
-reference_module.generate = generate  # type: ignore[attr-defined]
 sys.modules["reference_image"] = reference_module
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
+exec(compile(reference_code, "generated-reference-image-caller", "exec"), reference_module.__dict__)
+REFERENCE_BINDING = cast(Any, reference_module).__cozy_bindings__["generate"]
+sys.path.insert(0, str(ROOT / "minimax-h3"))
 import h3  # noqa: E402
 from long_form_state import RenderProvenance  # noqa: E402
 from story import (  # noqa: E402
@@ -219,6 +226,8 @@ def drive(
         wire = json.loads(value["payload"])
         is_reference = value["export"] == "generate"
         if is_reference:
+            assert wire["models"] == {"model": None}
+            wire = wire["payload"]
             assert wire["background"] == ("white" if index == 0 else "normal")
             assert (
                 "white studio" in wire["prompt"]
@@ -346,7 +355,6 @@ def drive(
         wire["shots"][-1]["prompt"] += " {Absent}"
     elif bad == "legacy":
         wire["history_frames"] = 0
-    reference_surface = next(item for item in describe(CHILD) if item.name == "generate")
     broker = _Broker(
         parent,
         {
@@ -357,13 +365,7 @@ def drive(
                 cast(type[msgspec.Struct], surface.payload_type),
                 h3.SegmentOutput,
             ),
-            ("", __name__, "generate"): _CallType(
-                "sha256:" + "6" * 64,
-                __name__,
-                "generate",
-                cast(type[msgspec.Struct], reference_surface.payload_type),
-                ReferenceOutput,
-            ),
+            (REFERENCE_BINDING.interface_digest, "reference_image", "generate"): REFERENCE_BINDING,
         },
         exchange,
     )
@@ -458,6 +460,8 @@ def main() -> None:
                 "cases": results,
                 "native_routes": ROUTES,
                 "actual_h3_inference": False,
+                "reference_interface_digest": REFERENCE_BINDING.interface_digest,
+                "reference_caller": "Runtime-generated reference_image.generate",
                 "two_public_assets": True,
                 "cuts_preserve_all_frames": True,
                 "reference_slots_and_tokens_bounded": True,
