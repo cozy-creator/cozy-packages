@@ -22,6 +22,7 @@ class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
     kind: Literal["character", "scene"]
     prompt: Annotated[str, msgspec.Meta(min_length=1, max_length=1024)]
     seed: Annotated[int, msgspec.Meta(ge=0, le=9223372036854775807)] | None = None
+    description: Annotated[str, msgspec.Meta(max_length=256)] = ""
 
 
 def reference_seed(reference: StoryReference, request_id: str) -> int:
@@ -106,8 +107,8 @@ def shot_prompt(
     for slot, reference in enumerate(references, 1):
         label = labels[reference.name]
         subjects.append(
-            f"{label} is {reference.name}, the {reference.kind} in <Picture {slot}>: "
-            f"{reference.prompt.strip()}"
+            f"{label} is {reference.name}, the {reference.kind} shown in <Picture {slot}>."
+            + (f" {reference.description.strip()}" if reference.description.strip() else "")
         )
         preserved = (
             "identity, face, body proportions, hair and clothing; the portrait's white "

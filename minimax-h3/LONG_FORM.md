@@ -43,7 +43,9 @@ Use `{name}` in shared and shot prompts to link actions to the exact Subject lab
 Reference names begin with a letter and contain only letters, digits, `_` or `-`.
 A shot must select every name it uses; the shared prompt must therefore avoid names
 absent from any shot. All references, names and compiled prompt lengths are checked
-before the first image generation. Descriptions should focus on appearance to preserve.
+before the first image generation. The reference `prompt` is used only for image generation. An optional short
+`description` (up to 256 characters) can identify the appearance to preserve in H3;
+studio posing and image-generation instructions are not repeated in video prompts.
 The compiler defines each character/environment separately and retains its visual
 identity; it does not preserve the still image's pose, white backdrop or viewpoint.
 
