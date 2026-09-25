@@ -23,7 +23,7 @@ jobs:
         run: |
           uv venv --python 3.12
           uv pip install --refresh-package cozy-runtime \
-            "cozy-runtime>=0.18.20,<1" \
+            "cozy-runtime>=0.18.21,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences
@@ -32,7 +32,7 @@ jobs:
 
       - name: Lint
         run: >-
-          uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ examples/
+          uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ reference-image/ examples/
 
       - name: Types
         run: uv run --no-project mypy
@@ -42,14 +42,14 @@ jobs:
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          for package in anima minimax-h3 sdxl minimax-h3-tools; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools reference-image; do
             uv lock --check --project "$package"
           done
 
       - name: Every package builds a wheel
         run: |
           mkdir -p dist/packages
-          for package in anima minimax-h3 sdxl minimax-h3-tools; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools reference-image; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done
@@ -59,6 +59,11 @@ jobs:
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/job.py'
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/whole-order.json'
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/dit-full-specs.json'
+
+      - name: Reference image wheel retains model licence and attribution
+        run: |
+          unzip -l dist/packages/reference-image/reference_image-*.whl | grep -F 'reference_image/LICENSE.model.txt'
+          unzip -l dist/packages/reference-image/reference_image-*.whl | grep -F 'reference_image/Notice'
 
       # The torch family is ABI-coupled — torchvision's compiled ops link against torch's
       # C++ ABI — and #633 gives one PlatformTarget exactly ONE family. A package that
@@ -156,7 +161,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [anima, sdxl, minimax-h3-tools]
+        package: [anima, sdxl, minimax-h3-tools, reference-image]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -189,6 +194,10 @@ jobs:
       - name: SDXL normalization and native process restart
         if: matrix.package == 'sdxl'
         run: sdxl/.venv/bin/python scripts/sdxl-normalization-proof.py
+
+      - name: Reference image request and output contract
+        if: matrix.package == 'reference-image'
+        run: reference-image/.venv/bin/python scripts/reference-image-conform.py
 
       - name: Warm arms
         if: matrix.package == 'anima' || matrix.package == 'sdxl'

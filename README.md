@@ -17,6 +17,7 @@ dependencies or qualifying a worker image.
 | `sdxl/` | SDXL text-to-image package plus the family's lane-selecting quantize job (se-008, cr-073, se-023) |
 | `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
 | `minimax-h3-tools/` | H3 timestep-table and structural precompute jobs (cr-071) |
+| `reference-image/` | Qwen-Image-2.1 reference image generation; optional white background and native Runtime execution (research model licence) |
 | `examples/` | private `main()` scripts for one-off repairs and diagnostics; run directly with `cozy run` |
 | `*/package.toml` | the `[application]` entry point only; it carries no model bindings |
 | `*/pyproject.toml` | release metadata; its one `cozy.application` entry point matches `package.toml` |
@@ -476,7 +477,7 @@ uv pip install --python .venv-check/bin/python \
 
 .venv-check/bin/python scripts/fence.py
 .venv-check/bin/python -m mypy
-.venv-check/bin/ruff check anima/ minimax-h3/ minimax-h3-tools/ sdxl/ scripts/ examples/
+.venv-check/bin/ruff check anima/ minimax-h3/ minimax-h3-tools/ sdxl/ reference-image/ scripts/ examples/
 ```
 
 `scripts/fence.py` prints one line per fence and exits non-zero on the first red one. Read the
@@ -486,7 +487,7 @@ ran red.
 The committed interface snapshots are NOT checkable from this shared environment. Each
 `metadata/package-interface.json` is emitted by that package's own LOCKED `cozy-runtime`, and
 different runtime versions emit different documents — 0.11.1 adds an `invocable` key that
-0.7.0 and 0.10.0 do not. The four packages lock different versions, so a shared environment
+0.7.0 and 0.10.0 do not. Package locks can select different versions, so a shared environment
 reports a mismatch for every one of them, which reads as interface drift rather than as the
 wrong interpreter. Compare from the package's own venv, as CI does:
 

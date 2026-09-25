@@ -936,6 +936,7 @@ def fence_step_progress() -> Fence:
     bad: list[str] = _anima_progress_ladder()
     required: dict[str, set[str]] = {
         "sdxl/sdxl/__init__.py": {"denoise"},
+        "reference-image/reference_image/__init__.py": {"generating image"},
         "minimax-h3/h3.py": {"denoise"},
     }
     for rel, stages in required.items():
@@ -1021,7 +1022,7 @@ def fence_interface_format() -> Fence:
 
 def fence_publication_metadata() -> Fence:
     bad: list[str] = []
-    expected_projects = {"anima", "sdxl", "minimax-h3", "minimax-h3-tools"}
+    expected_projects = {"anima", "sdxl", "minimax-h3", "minimax-h3-tools", "reference-image"}
     actual_projects = {
         rel(path.parent)
         for path in ROOT.rglob("package.toml")
