@@ -8,6 +8,42 @@ Current private capture and preparation require Runtime 0.16.10 or newer on
 both the local client and private worker. The script captures its dependencies.
 
 
+## Qwen reference-image preparation
+
+Use the standard command to prepare a complete model on an existing rental:
+
+```sh
+cozy model upload \
+  hf://Qwen/Qwen-Image-2.1@790c92633540aa0cb11d9abf19eb46d861714758 \
+  paul/reference-image --rental=YOUR_RENTAL --await
+```
+
+Runtime 0.18.23 owns the reviewed download, native TensorFS conversion, and required
+configuration, tokenizer and license preparation. Upload returns an immutable
+checkpoint. Publish its release separately, using the returned checkpoint ID:
+
+```sh
+cozy model publish paul/reference-image --release 0.1.0 \
+  --lane original=sha256:CHECKPOINT_DIGEST
+```
+
+`prepare_reference_image.py` is an optional composition example using those same
+native operations. It has no adjacent helper, local model implementation, or
+embedded tensor census:
+
+```sh
+cozy run examples/client-scripts/prepare_reference_image.py --describe
+cozy run examples/client-scripts/prepare_reference_image.py \
+  --rental=YOUR_RENTAL --allow-publish paul/reference-image --await
+```
+
+Edit its source pin and destination constants before use. `PUBLISH_RELEASE=False`
+keeps upload separate from release mutation; setting it to `True` explicitly adds
+`publish_release` to the composition. This example requires public Runtime 0.18.23
+or newer on both client and worker. These commands describe the workflow; they do
+not establish GPU execution or image-quality qualification.
+
+
 `sdxl_prepare.py` is the small starting example:
 
 ```sh
