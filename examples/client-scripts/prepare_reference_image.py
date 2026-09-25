@@ -213,8 +213,9 @@ async def prepare(ctx: Context, *, source: QuantizationSource, metadata: Tree) -
             "Native TensorFS layout and processor configuration; original tensor values unchanged."
         ),
         "notice": (
-            "Qwen-Image-2.1 is licensed under the Qwen Research License Agreement. "
-            "Noncommercial research and evaluation only."
+            "Qwen is licensed under the Qwen RESEARCH LICENSE AGREEMENT, "
+            "Copyright (c) 2026 Hangzhou Tongyi Laboratory Technology Co., Ltd. "
+            "All Rights Reserved."
         ),
         "license_zlib_base64": base64.urlsafe_b64encode(
             zlib.compress((metadata.path / "LICENSE").read_bytes(), 9)
