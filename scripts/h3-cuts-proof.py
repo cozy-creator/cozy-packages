@@ -185,6 +185,7 @@ def drive(
     refuse: bool = False,
     bad: str = "",
     reference_failure: bool = False,
+    reference_cancel: bool = False,
 ) -> dict[str, Any]:
     root.mkdir()
     parent = root.name if request_id is None else request_id
@@ -224,6 +225,9 @@ def drive(
                 # Settle the second first to prove identity is definition ordered.
                 assert len(calls) == 2
                 if index == 0 and 1 not in completed_references:
+                    return {"ok": True, "state": "running"}
+                if index == 1 and reference_cancel:
+                    cancelled = True
                     return {"ok": True, "state": "running"}
                 if index == 1 and reference_failure:
                     return {"ok": False, "code": "child.failed", "detail": "reference failed"}
@@ -371,6 +375,11 @@ def drive(
         wire["references"][1]["seed"] = 9007199254740992
     elif bad == "unselected":
         wire["shots"][-1]["prompt"] += " {Absent}"
+    elif bad == "too-many-references":
+        wire["references"] = [
+            {"name": f"Person{i}", "kind": "character", "prompt": "A person"}
+            for i in range(10)
+        ]
     elif bad == "legacy":
         wire["history_frames"] = 0
     broker = _Broker(
@@ -401,6 +410,10 @@ def drive(
             progress=events.append,
         ),
     )
+    if reference_cancel:
+        assert result is None and outcome.terminal == "canceled", outcome
+        assert len(calls) == 2
+        return {}
     if reference_failure:
         assert result is None and outcome.terminal != "succeeded", outcome
         assert len(calls) == 2 and 0 in canceled_children
@@ -461,6 +474,7 @@ def main() -> None:
     }
     assert len(results["arbitrary_cut_count"]["calls"]) == 10
     drive(root / "reference-failed", reference_failure=True)
+    drive(root / "reference-canceled", reference_cancel=True)
     drive(root / "canceled", cancel=1)
     drive(root / "first-fails", fail=0)
     repeated = drive(root / "retry", request_id="fixed")
@@ -468,7 +482,10 @@ def main() -> None:
         repeated["calls"][1]["payload"]["seed"] == results["fixed"]["calls"][1]["payload"]["seed"]
     )
     drive(root / "oversized-prompt", prompt="x" * 3500, refuse=True)
-    for bad in ("unknown", "duplicate", "empty", "seed", "seed-too-large", "unselected", "legacy"):
+    for bad in (
+        "unknown", "duplicate", "empty", "seed", "seed-too-large", "unselected",
+        "legacy", "too-many-references",
+    ):
         drive(root / bad, bad=bad, refuse=True)
     refs = [StoryReference(f"Person{i}", "character", "A person.") for i in range(9)]
     named = validate_references(refs)
