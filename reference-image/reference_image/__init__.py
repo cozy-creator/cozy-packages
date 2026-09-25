@@ -46,7 +46,7 @@ class Megapixels(IntEnum):
     MP4 = 4
 
 
-# Tier4 uses Qwen2.1 native recommendations; lower tiers scale and snap to32px.
+# Tier 4 uses Qwen2.1 native recommendations; lower tiers scale and snap to 32px.
 # Ultrawide/tall extend the grid at the same area and latent patch stride.
 _BUCKETS: dict[tuple[AspectRatio, Megapixels], tuple[int, int]] = {
     (AspectRatio.SQUARE, Megapixels.MP1): (1024, 1024),

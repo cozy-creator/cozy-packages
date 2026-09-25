@@ -15,10 +15,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "reference-image"))
 
 from reference_image import (  # noqa: E402
+    _TIER_DEMAND,
     AspectRatio,
     GenerateInput,
     Megapixels,
-    _TIER_DEMAND,
     app,
     reference_prompt,
     rgb_image,
@@ -94,4 +94,4 @@ assert rgb_image(pixels).getpixel((0, 0)) == (255, 0, 0)
 (surface,) = describe(app)
 assert surface.name == "generate" and surface.kind == "entrypoint"
 assert {binding.param for binding in surface.model_bindings} == {"model"}
-print("reference-image: 27 resolution buckets, defaults, seeds, hardcut refusals and PNG pixels passed")
+print("reference-image: 27 buckets, defaults, seeds, hardcut refusals and PNG pixels passed")

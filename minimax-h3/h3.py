@@ -84,9 +84,7 @@ from msgspec.structs import replace
 from assembly import MAX_SHOTS, AssembleVideoRequest, ScanAhead, assemble, assemble_video
 from gates import MediaFacts, refuse_before_encode, report_after_encode
 from long_form_state import RenderProvenance, compatible, provenance
-from reference_image import AspectRatio as ReferenceAspectRatio
 from reference_image import ImageOutput as ReferenceImageOutput
-from reference_image import Megapixels as ReferenceMegapixels
 from reference_image import generate as generate_reference
 from story import (
     StoryReference,
@@ -1446,8 +1444,8 @@ async def long_form_cuts(
         ):
             generated = await reference_generator(
                 prompt=image_prompt(reference),
-                aspect_ratio=ReferenceAspectRatio.SQUARE,
-                megapixels=ReferenceMegapixels.MP1,
+                width=1024,
+                height=1024,
                 steps=reference_steps,
                 seed=reference_seed(reference, ctx.request_id),
                 background="white" if reference.kind == "character" else "normal",
