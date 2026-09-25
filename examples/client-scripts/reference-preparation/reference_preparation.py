@@ -10,6 +10,7 @@ from cozy_runtime.author import (
     App,
     AssetBound,
     Context,
+    Loader,
     Model,
     ModelArtifact,
     Tree,
@@ -164,11 +165,16 @@ def configuration(root: Any) -> dict[str, Any]:
     return result
 
 
+class Source(Model[object]):
+    def load(self, loader: Loader) -> None:
+        raise RuntimeError("Preparation reads native parts without loading the model")
+
+
 @invocable(memoize=True)
 async def prepare(
     ctx: Context,
     *,
-    source: Model[object],
+    source: Source,
     metadata: Annotated[Tree, AssetBound(max_bytes=64 << 20)],
 ) -> ModelArtifact:
     capability = ctx.tensorfs_source(source)
