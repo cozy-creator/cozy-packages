@@ -23,7 +23,7 @@ jobs:
         run: |
           uv venv --python 3.12
           uv pip install --refresh-package cozy-runtime \
-            "cozy-runtime>=0.18.20,<1" \
+            "cozy-runtime>=0.18.21,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences
@@ -32,7 +32,7 @@ jobs:
 
       - name: Lint
         run: >-
-          uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ examples/
+          uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ reference-image/ examples/
 
       - name: Types
         run: uv run --no-project mypy
@@ -42,14 +42,14 @@ jobs:
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          for package in anima minimax-h3 sdxl minimax-h3-tools; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools reference-image; do
             uv lock --check --project "$package"
           done
 
       - name: Every package builds a wheel
         run: |
           mkdir -p dist/packages
-          for package in anima minimax-h3 sdxl minimax-h3-tools; do
+          for package in anima minimax-h3 sdxl minimax-h3-tools reference-image; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done
@@ -60,13 +60,16 @@ jobs:
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/whole-order.json'
           unzip -l dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl | grep -F 'h3_tables/assets/dit-full-specs.json'
 
-      # The torch family is ABI-coupled — torchvision's compiled ops link against torch's
-      # C++ ABI — and #633 gives one PlatformTarget exactly ONE family. A package that
-      # drifts onto a second torch fails with undefined-symbol errors at load, so the locks
-      # are compared to each other here rather than discovered on a card.
-      - name: One torch family across every package
+      - name: Reference image wheel retains model licence and attribution
         run: |
-          uv run --no-project python scripts/torch_family.py
+          unzip -l dist/packages/reference-image/reference_image-*.whl | grep -F 'reference_image/LICENSE.model.txt'
+          unzip -l dist/packages/reference-image/reference_image-*.whl | grep -F 'reference_image/Notice'
+
+      # Each package has its own environment; native wheel requirements are checked
+      # inside each environment before its compiled import proof below. Different package versions
+      # are supported and must not be rejected by a global equality rule.
+      - name: Native cohort validation accepts independent package environments
+        run: uv run --no-project python scripts/torch_family.py --self-check
 
       - name: Native checkpoint repair script and resume
         run: .venv/bin/python scripts/h3-repair-proof.py
@@ -91,6 +94,9 @@ jobs:
           uv lock --check --project minimax-h3
           cd minimax-h3
           uv sync --locked --no-cache
+
+      - name: The H3 environment owns a compatible native dependency cohort
+        run: minimax-h3/.venv/bin/python scripts/torch_family.py
 
       - name: Arms
         run: minimax-h3/.venv/bin/python scripts/h3-conform.py
@@ -156,7 +162,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [anima, sdxl, minimax-h3-tools]
+        package: [anima, sdxl, minimax-h3-tools, reference-image]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -170,6 +176,8 @@ jobs:
           uv sync --locked --no-cache --no-install-project
       # The compiled extensions are the ABI proof: they raise undefined-symbol errors
       # against the wrong torch, and nothing cheaper observes that.
+      - name: The package owns a compatible native dependency cohort
+        run: ${{ matrix.package }}/.venv/bin/python scripts/torch_family.py
       - name: The locked stack imports
         run: ${{ matrix.package }}/.venv/bin/python scripts/package_import.py ${{ matrix.package }}
 
@@ -189,6 +197,10 @@ jobs:
       - name: SDXL normalization and native process restart
         if: matrix.package == 'sdxl'
         run: sdxl/.venv/bin/python scripts/sdxl-normalization-proof.py
+
+      - name: Reference image request and output contract
+        if: matrix.package == 'reference-image'
+        run: reference-image/.venv/bin/python scripts/reference-image-conform.py
 
       - name: Warm arms
         if: matrix.package == 'anima' || matrix.package == 'sdxl'
