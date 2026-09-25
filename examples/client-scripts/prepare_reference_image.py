@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime>=0.18.20,<1", "tensorfs>=0.3.50,<0.4"]
+# dependencies = ["cozy-runtime>=0.18.20,<1", "tensorfs>=0.3.51,<0.4"]
 # ///
 """Prepare the exact research checkpoint with native TensorFS source-part inheritance.
 
@@ -217,9 +217,7 @@ async def prepare(ctx: Context, *, source: QuantizationSource, metadata: Tree) -
             "Copyright (c) 2026 Hangzhou Tongyi Laboratory Technology Co., Ltd. "
             "All Rights Reserved."
         ),
-        "license_zlib_base64": base64.urlsafe_b64encode(
-            zlib.compress((metadata.path / "LICENSE").read_bytes(), 9)
-        ).decode(),
+        "license_sha256": FILES["LICENSE"][1],
     }
     config["provenance"] = provenance
     definition = Derivation(
@@ -227,6 +225,11 @@ async def prepare(ctx: Context, *, source: QuantizationSource, metadata: Tree) -
         targets={c: Target(source="source", source_component=c) for c in inspection.components},
         configs={"model": Config("add")},
         order=tuple((c, k) for c, k, _shape, _dtype in census),
+        files={
+            "LICENSE": (metadata.path / "LICENSE").read_bytes(),
+            "Notice": (provenance["notice"] + "\n").encode(),
+            "CHANGES.txt": (provenance["conversion"] + "\n").encode(),
+        },
     )
     with derive(ctx.output("model"), definition) as transaction:
         if transaction.receipt is not None:
