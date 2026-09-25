@@ -44,14 +44,13 @@ source, the roughly 100 GB film source, bank variants, environments and free spa
 This does not multiply by GPU count. Actual native deduplication can reduce the
 requirement; verify real free space and closure overlap before submission.
 
-There is no measured completion-time estimate yet. Proposed incremental spending
-ceiling: **$10 including any missing-source download**, not an approved rental.
-At actual worker price R dollars/hour, that permits at most 10/R additional billed
-hours; use the real quote. The current catalog lists one H100 SXM at $3.53/hour
-but does not quote 2/4-H100 availability. Never present a multiplied single-card
-price as a provider quote. If the budget cannot cover the next arm, stop before
-starting it; coordinate a checkpoint pause for an explicit budget limit, not an
-arbitrary no-progress timeout. No new rental is required by this plan.
+There is no measured completion-time estimate yet. The root's acquiring Shalsha
+2-H100-NVL worker is quoted at **$6.4634/hour**: another10/30/60 minutes would
+cost about $1.08/$3.23/$6.46, excluding any separately billed storage. These are
+estimates, **not spending limits, safety cutoffs or stop times**. The user permits
+continued paid work; continue while progress is real and stop only for an actual
+blocker or explicit instruction. Full-source acquisition may dominate elapsed time
+and must be measured. No new rental is requested by this plan.
 
 ## Ordinary CLI entry and genuine artifact boundary
 
@@ -112,18 +111,16 @@ was fabricated merely to make a dry-run appear complete.
    new library revision/computation and actual bank production, with equal table
    bytes. Whole-package closure changes may also invalidate cheap projections;
    do not promise finer-grained invalidation than the current implementation.
-5. **Positive schedule-plan invalidation.** In that private qualification copy,
-   use `coverage_variant.py` to retain only the existing 30-step schedule and
-   regenerate first-distinct table keys using the same rules as `parse_plan`.
-   The validated FL fixture has 60 timesteps and 92 block rows; it is deliberately
-   refused by the unmodified production launch pin. Validate it with
-   `parse_plan(..., launch=False)`, then pin that exact digest in the copy's
-   `LAUNCH_PLAN_DIGESTS` and captured asset. This is a private coverage variant,
-   not a new public API or a production schedule approval. Old digests/banks must
-   refuse; new bank computation must miss and its metadata must bind the new
-   projection/plan. Generate `compute_fl.py` with `--fl-plan-digest` set to the
-   new captured digest to run just that bank rather than recomputing Ref2VA. Do
-   not substitute a 30→40 wrapper-argument change for this arm.
+5. **Coverage-plan refusal control.** `coverage_variant.py` retains the existing
+   30-step schedule and regenerates first-distinct table keys. The private FL
+   fixture has60 timesteps and92 block rows. It passes the structural validator
+   and is correctly refused by the unchanged production launch pin. Use this as
+   a negative plan control only; do not widen `LAUNCH_PLAN_DIGESTS` or call it a
+   production positive bank. Positive changed-plan production remains dependent
+   on an independently reviewed new production plan. `compute_fl.py` can use the
+   exact currently captured plan digest to qualify a single task. Never substitute
+   a30→40 wrapper-argument change for plan invalidation.
+
 6. **Numerical and graft custody checks.** Compare all bank header/part hashes and
    coverage maps, including the exact 106 generator-key deletion set. Compare
    representative original-weight/full calculations with table lookups for both
