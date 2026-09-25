@@ -25,8 +25,8 @@ composition and movement. `{name}` in authored prompt text becomes the associate
 subject label. Missing, duplicate and unknown names are rejected before generation.
 The still is never described as a starting frame or a target video composition.
 
-The existing `long_form` continuous-shot API remains available for intentional
-first-frame continuation. This is an explicit input-contract change to
+The `long_form` continuous-shot API uses fixed references and completed AV-tail
+continuation. This is an explicit input-contract change to
 `long_form_cuts`: generated-shot history is removed, not silently ignored.
 
 Final outputs remain only the assembled MP4 and last frame. Fixed images and

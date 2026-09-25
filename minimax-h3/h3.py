@@ -475,6 +475,7 @@ def _finish(
     checks: NumericalChecks | None = None,
     capture: Callable[[Any], None] | None = None,
     delivered_frames: int | None = None,
+    sampled_frames: int | None = None,
 ) -> H3VideoOutput:
 
     cancel()
@@ -540,7 +541,10 @@ def _finish(
         fps=FPS,
         requested_duration_s=duration_s,
         duration_seconds=round(frames / FPS, 3),
-        denoise_rows=denoise_rows(frames, height, width),
+        sampled_frames=frames if sampled_frames is None else sampled_frames,
+        denoise_rows=denoise_rows(
+            frames if sampled_frames is None else sampled_frames, height, width
+        ),
         sample_rate=sample_rate,
     )
     tel.log(
@@ -1044,6 +1048,7 @@ def _references_to_video(
         checks=checks,
         capture=capture,
         delivered_frames=None if delivery is None else delivery.delivered_frames,
+        sampled_frames=None if delivery is None else delivery.sample_frames,
     )
 
     if completed_state is not None:
@@ -1161,7 +1166,7 @@ class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
     shots: Annotated[list[ContinuousShot], msgspec.Meta(min_length=1, max_length=MAX_SHOTS)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
     prompt: str = ""
-    context_frames: Literal[22, 39, 56] = 39
+    context_frames: Literal[22, 39, 56] = 22
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
 
@@ -1384,7 +1389,9 @@ app.entrypoint(internal=True)(cut_segment)
 app.entrypoint(internal=True)(cut_segment_turbo)
 
 
-MotionContextAsset = Annotated[FileAsset, AssetBound(max_bytes=256 << 20)]
+MotionContextAsset = Annotated[
+    FileAsset, AssetBound(max_bytes=256 << 20, media_types=("application/octet-stream",))
+]
 
 
 class MotionInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -1392,7 +1399,7 @@ class MotionInput(msgspec.Struct, forbid_unknown_fields=True):
     seed: int
     duration_s: DurationSeconds
     steps: int
-    context_frames: Literal[22, 39, 56] = 39
+    context_frames: Literal[22, 39, 56] = 22
     expected_provenance: RenderProvenance | None = None
     context: MotionContextAsset | None = None
 
