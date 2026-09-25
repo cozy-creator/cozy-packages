@@ -1,6 +1,6 @@
 [project]
 name = "minimax-h3"
-version = "1.17.0"
+version = "1.17.1"
 requires-python = ">=3.12"
 dependencies = [
     "cozy-runtime[media,minimax-h3]>=0.18.24",
