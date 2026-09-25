@@ -31,9 +31,9 @@ from story import shot_prompt, validate_references
 
 
 class Comparison(msgspec.Struct):
-    context_22: Annotated[VideoAsset, AssetBound(max_bytes=256 << 20)]
-    context_39: Annotated[VideoAsset, AssetBound(max_bytes=256 << 20)]
-    context_56: Annotated[VideoAsset, AssetBound(max_bytes=256 << 20)]
+    context_22: Annotated[VideoAsset, AssetBound(max_bytes=256 << 20, media_types=("video/mp4",))]
+    context_39: Annotated[VideoAsset, AssetBound(max_bytes=256 << 20, media_types=("video/mp4",))]
+    context_56: Annotated[VideoAsset, AssetBound(max_bytes=256 << 20, media_types=("video/mp4",))]
 
 
 class ComparisonInput(msgspec.Struct, forbid_unknown_fields=True):
