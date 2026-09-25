@@ -24,7 +24,7 @@ assert (payload.width, payload.height, payload.background) == (1024, 1024, "norm
 # not deliver its seed in the result document. No model or inference is invoked.
 random_bits = secrets.randbits
 try:
-    secrets.randbits = lambda bits: (1 << bits) - 1
+    secrets.randbits = lambda k: (1 << k) - 1
     seed = payload.resolved_seed()
     assert canonical_json.decode(canonical_json.encode({"seed": seed}))["seed"] == seed
 finally:
