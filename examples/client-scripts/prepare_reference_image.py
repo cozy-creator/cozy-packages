@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime>=0.18.20,<1", "tensorfs>=0.3.51,<0.4"]
+# dependencies = ["cozy-runtime>=0.18.21,<1", "tensorfs>=0.3.51,<0.4"]
 # ///
 """Prepare the exact research checkpoint with native TensorFS source-part inheritance.
 
