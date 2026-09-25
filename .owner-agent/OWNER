@@ -1,4 +1,4 @@
-owner: /root/h3_cuts_finish
-purpose: packages-v2#246 follow-up: recency-diverse history pool for arbitrary camera-cut stories
-branch: feat/h3-reference-cut-default-history-20260923
-base: origin/master 66a650486546dc1298c5cdb08e5b10ca94fef9d1
+owner=/root
+purpose=Qwen native script preparation without foreign-input legacy path
+branch=fix/qwen-native-script-20260925
+base=b47993c2f9b8ff7eb299b5d4421ea7e86d7aa725
