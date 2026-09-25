@@ -44,6 +44,7 @@ import hashlib
 import json
 import random
 from enum import Enum, IntEnum
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import cozy_runtime.derive as derive
@@ -329,8 +330,8 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
 
     def load(self, loader: Loader) -> None:
         self.pipe = loader.construct(SdxlPipeline, factory=build_pipeline)
-        # Tokenizers are model semantics, not package code: their vocab and merges are
-        # CozyTensors assets, read as verified bytes. Loading writes no file.
+        # Checkpoint vocabularies override the standard SDXL CLIP vocabulary. Both
+        # sources are read-only and the parsed tokenizers survive between requests.
         self.tokenizers = (
             _tokenizer(loader.assets, "tokenizer"),
             _tokenizer(loader.assets, "tokenizer_2"),
@@ -431,18 +432,26 @@ def _finite(torch: Any, value: Any) -> float:
 
 
 def _tokenizer(assets: Any, name: str) -> Any:
-    """Build one CLIP tokenizer from the checkpoint's vocabulary/merge asset bytes.
+    """Use checkpoint overrides, or bundled CLIP data when the whole pair is absent.
 
-    Deliberately NOT ``from_pretrained``: that spelling can resolve against the Hub and
-    would make model execution depend on mutable network state. The in-memory constructor
-    cannot reach anywhere and touches no filesystem. Missing model assets are a Runtime
-    admission error, never a source-tree or network fallback.
+    A partial override still fails through ModelAssets; mixing vocabularies and merges
+    from different sources would silently change the model's tokenization. No download
+    or temporary file is needed, including during read-only admission.
     """
     pad = {"tokenizer": "<|endoftext|>", "tokenizer_2": "!"}[name]
-    vocab = json.loads(assets.read(f"{name}/vocab.json"))
+    vocab_name, merges_name = f"{name}/vocab.json", f"{name}/merges.txt"
+    names = assets.names()
+    if vocab_name in names or merges_name in names:
+        vocab_bytes = assets.read(vocab_name)
+        merges_bytes = assets.read(merges_name)
+    else:
+        root = Path(__file__).parent
+        vocab_bytes = (root / "clip_vocab.json").read_bytes()
+        merges_bytes = (root / "clip_merges.txt").read_bytes()
+    vocab = json.loads(vocab_bytes)
     merges = [
         tuple(line.split(" "))
-        for line in assets.read(f"{name}/merges.txt").decode().splitlines()
+        for line in merges_bytes.decode().splitlines()
         if line and not line.startswith("#version")
     ]
     return CLIPTokenizer(

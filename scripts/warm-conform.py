@@ -92,7 +92,7 @@ def initialize_fixture(pipe: Any) -> None:
 
 
 class FakeTokenizer:
-    """Minimal test double; production tokenizers are always checkpoint assets."""
+    """Minimal tokenizer for the toy-width lifecycle fixture."""
 
     model_max_length = 77
 
