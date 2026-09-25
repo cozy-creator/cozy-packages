@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import queue
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from fractions import Fraction
 from functools import partial
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 import msgspec
 import torch
@@ -84,17 +84,15 @@ from msgspec.structs import replace
 from assembly import MAX_SHOTS, AssembleVideoRequest, ScanAhead, assemble, assemble_video
 from gates import MediaFacts, refuse_before_encode, report_after_encode
 from long_form_state import RenderProvenance, compatible, provenance
+from reference_image import ImageOutput as ReferenceImageOutput
+from reference_image import generate as generate_reference
 from story import (
-    ReferenceFrame,
-    SelectedReference,
     StoryReference,
-    history_description,
-    reference_roles,
-    sample_positions,
+    image_prompt,
+    reference_seed,
     select_references,
     shot_prompt,
-    signature,
-    signature_rgb,
+    validate_references,
 )
 
 app = App()
@@ -1309,6 +1307,7 @@ CutAssets = Annotated[
     Assets[Mixed],
     AssetLimits(images=MAX_IMAGE_REFERENCES, total=MAX_IMAGE_REFERENCES),
     ImagePreparation(max_edge=8192, max_pixels=16_777_216),
+    msgspec.Meta(min_length=1),
 ]
 
 
@@ -1318,53 +1317,6 @@ class CutInput(ReferenceMediaToVideoInput):
 
 class CutTurboInput(ReferenceMediaToVideoTurboInput):
     expected_provenance: RenderProvenance | None = None
-
-
-HistoryImage = Annotated[
-    ImageAsset,
-    AssetBound(
-        max_bytes=_KEYFRAME_MAX_BYTES,
-        max_decoded_bytes=_KEYFRAME_MAX_DECODED_BYTES,
-        media_types=("image/png",),
-    ),
-]
-
-
-class CutOutput(SegmentOutput):
-    """Fixed child assets are durably forwarded by Runtime to subsequent shots."""
-
-    reference_midpoint: HistoryImage
-    reference_quarter: HistoryImage
-    reference_three_quarter: HistoryImage
-    reference_frame_indices: Annotated[list[int], msgspec.Meta(min_length=3, max_length=3)]
-    reference_signatures: Annotated[list[str], msgspec.Meta(min_length=3, max_length=3)]
-
-    def references(self) -> list[ReferenceFrame]:
-        return [
-            ReferenceFrame(image, index, fingerprint)
-            for image, index, fingerprint in zip(
-                (self.reference_midpoint, self.reference_quarter, self.reference_three_quarter),
-                self.reference_frame_indices,
-                self.reference_signatures,
-                strict=True,
-            )
-        ]
-
-
-def _capture_reference_frames(
-    pixels: Any, *, out: Outputs, frames: list[ReferenceFrame], check: Callable[[], None]
-) -> None:
-    """Capture candidate PNGs from the existing RGB8 decode, before any video re-encode."""
-    count, height, width, _ = (int(value) for value in pixels.shape)
-    for index in sample_positions(count):
-        check()
-        raw = bytes(pixels[index].numpy())
-        image = ImageFrame(width, height, raw)
-        frames.append(
-            ReferenceFrame(
-                out.save_image(image, format="png"), index, signature_rgb(width, height, raw)
-            )
-        )
 
 
 def _render_cut(
@@ -1377,64 +1329,26 @@ def _render_cut(
     *,
     steps: int,
     turbo_lora: H3TurboLoRA | None = None,
-) -> CutOutput:
+) -> SegmentOutput:
     observed = provenance(
         model.checkpoint_ref, "" if turbo_lora is None else turbo_lora.checkpoint_ref
     )
     compatible(observed, payload.expected_provenance)
-    frames: list[ReferenceFrame] = []
-    capture = partial(
-        _capture_reference_frames, out=out, frames=frames, check=ctx.raise_if_cancelled
+    _reference_policy(assets)
+    task: Task = "ref2va" if turbo_lora is None else "ref2va_turbo"
+    shot = _references_to_video(
+        ctx,
+        task,
+        payload,
+        assets,
+        model,
+        out,
+        tel,
+        steps=steps,
+        turbo_lora=turbo_lora,
     )
-    if assets:
-        _reference_policy(assets)
-        task: Task = "ref2va" if turbo_lora is None else "ref2va_turbo"
-        shot = _references_to_video(
-            ctx,
-            task,
-            payload,
-            assets,
-            model,
-            out,
-            tel,
-            steps=steps,
-            turbo_lora=turbo_lora,
-            capture=capture,
-        )
-    else:
-        # The released Ref2VA path requires references. Its sibling FL2VA path supports
-        # text-only generation when both endpoints are absent; no image is pinned here.
-        task = "fl2va" if turbo_lora is None else "fl2va_turbo"
-        shot = _render_keyframes(
-            ctx,
-            task,
-            model,
-            out,
-            tel,
-            prompt=payload.prompt,
-            seed=payload.seed,
-            duration_s=payload.duration_s,
-            steps=steps,
-            first=None,
-            last=None,
-            turbo_lora=turbo_lora,
-            capture=capture,
-        )
     tel.log("h3 cut rendering", native_path=task, seed=payload.seed, references=len(assets))
-    if len(frames) != 3:
-        raise OutputError("cut renderer did not capture three interior reference frames")
-    midpoint, quarter, three_quarter = frames
-    return CutOutput(
-        shot.video,
-        shot.continuation_frame,
-        list(shot.warnings),
-        observed,
-        midpoint.image,
-        quarter.image,
-        three_quarter.image,
-        [midpoint.frame_index, quarter.frame_index, three_quarter.frame_index],
-        [midpoint.signature, quarter.signature, three_quarter.signature],
-    )
+    return SegmentOutput(shot.video, shot.continuation_frame, list(shot.warnings), observed)
 
 
 @invocable(defaults={"model": _DEFAULT_MODEL_LADDER})
@@ -1446,7 +1360,7 @@ async def cut_segment(
     model: H3Model,
     out: Outputs,
     tel: Telemetry,
-) -> CutOutput:
+) -> SegmentOutput:
     return _render_cut(ctx, payload, assets, model, out, tel, steps=payload.steps)
 
 
@@ -1465,7 +1379,7 @@ async def cut_segment_turbo(
     turbo_lora: H3TurboLoRA,
     out: Outputs,
     tel: Telemetry,
-) -> CutOutput:
+) -> SegmentOutput:
     return _render_cut(
         ctx, payload, assets, base_model, out, tel, steps=TURBO_STEPS, turbo_lora=turbo_lora
     )
@@ -1475,16 +1389,14 @@ app.entrypoint(internal=True)(cut_segment)
 app.entrypoint(internal=True)(cut_segment_turbo)
 
 
+class CutShot(Shot, kw_only=True):
+    references: Annotated[list[str], msgspec.Meta(min_length=1, max_length=9)]
+
+
 class LongFormCutsInput(msgspec.Struct, forbid_unknown_fields=True):
-    # Camera-cut stories are streamed one shot at a time; unlike a continuous take,
-    # they are not capped at the eight-shot continuation limit. Runtime and the output
-    # sink still enforce each shot's <=15s media bounds and the final asset byte limit.
-    shots: Annotated[list[Shot], msgspec.Meta(min_length=1)]
+    shots: Annotated[list[CutShot], msgspec.Meta(min_length=1)]
+    references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
     prompt: str = ""
-    references: Annotated[list[StoryReference], msgspec.Meta(max_length=9)] = []
-    # None selects the bounded recency/diversity pool automatically. An explicit value
-    # caps the number of historical candidates, with zero disabling generated references.
-    history_frames: Annotated[int, msgspec.Meta(ge=0, le=MAX_IMAGE_REFERENCES)] | None = None
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
 
@@ -1501,47 +1413,52 @@ async def long_form_cuts(
     if payload.mode == "turbo" and payload.steps is not None:
         raise InvalidRequest("turbo fixes eight PDD evaluations; omit steps", fields=["steps"])
     steps = TURBO_STEPS if payload.mode == "turbo" else payload.steps or DEFAULT_STEPS
-    stable = []
-    for reference in payload.references:
-        ctx.raise_if_cancelled()
-        image = decoder.value(reference.image)
-        if not isinstance(image, Image):
-            raise InvalidRequest("story references must be images", fields=["references"])
-        stable.append(
-            SelectedReference(
-                reference.image,
-                reference.description,
-                signature(image),
-                reference.fidelity,
-                reference.subject,
-            )
+    by_name = validate_references(payload.references)
+    selected_references = [
+        select_references(shot.references, by_name, index=index)
+        for index, shot in enumerate(payload.shots)
+    ]
+    prompts = [
+        shot_prompt(payload.prompt, shot.prompt, selected, index=index)
+        for index, (shot, selected) in enumerate(
+            zip(payload.shots, selected_references, strict=True)
         )
-    stable = select_references(stable, [], history_frames=0)
-    history_enabled = payload.history_frames is None or payload.history_frames > 0
-    for index, shot in enumerate(payload.shots):
-        # Text-only placeholders bound the longest possible compiled history before
-        # any GPU call. They are never submitted as assets or added to retained history.
-        worst_history = [
-            SelectedReference(
-                ImageAsset("prompt-preflight"),
-                history_description(item),
-                "",
-                subject="The existing cast and world from preceding shots",
-            )
-            for item in range(
-                min(
-                    MAX_IMAGE_REFERENCES - len(stable),
-                    index if payload.history_frames is None else payload.history_frames,
-                )
-            )
-        ]
-        shot_prompt(payload.prompt, shot.prompt, [*stable, *worst_history], index=index)
+    ]
     planned_frames = [frames_for(shot.duration_s) for shot in payload.shots]
     render_work = [frames * steps for frames in planned_frames]
-    total_work = sum(render_work) + sum(planned_frames) + 1
+    reference_steps = 40
+    total_work = sum(render_work) + sum(planned_frames) + 1 + len(by_name) * reference_steps
     completed_work = 0
+    images: dict[str, ImageAsset] = {}
+    # Managed dependencies install an asynchronous flat caller for the source
+    # entrypoint, whose own annotations describe its injected implementation.
+    reference_generator = cast(Callable[..., Awaitable[ReferenceImageOutput]], generate_reference)
+    for reference in payload.references:
+        ctx.raise_if_cancelled()
+        with tel.scope(
+            f"Creating reference {reference.name}",
+            overall_range=(
+                completed_work / total_work,
+                (completed_work + reference_steps) / total_work,
+            ),
+        ):
+            generated = await reference_generator(
+                prompt=image_prompt(reference),
+                width=1024,
+                height=1024,
+                steps=reference_steps,
+                seed=reference_seed(reference, ctx.request_id),
+                background="white" if reference.kind == "character" else "normal",
+            )
+        images[reference.name] = generated.image
+        tel.log(
+            "h3 fixed reference",
+            subject=reference.name,
+            reference_kind=reference.kind,
+            digest=generated.image.digest,
+        )
+        completed_work += reference_steps
     videos: list[VideoAsset] = []
-    history: list[list[ReferenceFrame]] = []
     expected = None
     frame = None
     warnings: list[str] = []
@@ -1549,31 +1466,27 @@ async def long_form_cuts(
     with ScanAhead(decoder, ctx.raise_if_cancelled) as scanning:
         for index, shot in enumerate(payload.shots):
             ctx.raise_if_cancelled()
-            selected = select_references(stable, history, history_frames=payload.history_frames)
-            prompt = shot_prompt(payload.prompt, shot.prompt, selected, index=index)
+            selected = selected_references[index]
+            prompt = prompts[index]
             seed = shot_seed(shot, ctx.request_id, index)
             assets = Assets[Mixed](
                 [
-                    ref.image.with_label(f"Picture {slot}").with_fidelity(ref.fidelity)
-                    for slot, ref in enumerate(selected, start=1)
+                    images[ref.name].with_label(f"Picture {slot}")
+                    for slot, ref in enumerate(selected, 1)
                 ]
             )
             tel.log(
-                "h3 cut reference selection",
-                shot=index + 1,
-                seed=seed,
-                references=len(selected),
+                "h3 cut reference selection", shot=index + 1, seed=seed, references=len(selected)
             )
-            for slot, ref in enumerate(selected, start=1):
-                for subject, description in reference_roles(ref):
-                    tel.log(
-                        "h3 cut reference",
-                        shot=index + 1,
-                        picture=slot,
-                        digest=ref.image.digest,
-                        subject=subject,
-                        description=description,
-                    )
+            for slot, ref in enumerate(selected, 1):
+                tel.log(
+                    "h3 cut reference",
+                    shot=index + 1,
+                    picture=slot,
+                    digest=images[ref.name].digest,
+                    subject=ref.name,
+                    description=ref.prompt,
+                )
             try:
                 with tel.scope(
                     f"Shot {index + 1} of {len(payload.shots)}",
@@ -1611,19 +1524,9 @@ async def long_form_cuts(
             expected = result.provenance
             videos.append(result.video)
             scanning.add(result.video)
-            candidates = result.references() if history_enabled else []
-            history.append(candidates)
             frame = result.continuation_frame
             warnings.extend(result.warnings)
             completed_work += render_work[index]
-            for item in candidates:
-                tel.log(
-                    "h3 cut reference candidate",
-                    shot=index + 1,
-                    frame_index=item.frame_index,
-                    digest=item.image.digest,
-                    signature=item.signature,
-                )
         if not videos:
             raise OutputError(f"shot 1 failed ({failure_code}): {failure_detail}")
         delivered_frames = sum(planned_frames[: len(videos)])

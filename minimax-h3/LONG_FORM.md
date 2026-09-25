@@ -5,66 +5,66 @@ for deliberate continuation of one camera take.
 
 ## Stories with camera cuts
 
-`long_form_cuts` generates each shot with native Ref2VA appearance references. References
-do not become pinned first or last frames. Every generated frame is retained at the cut.
-The worker assembles the film and returns only the final MP4 and last PNG.
+`long_form_cuts` first generates fixed reference images with Qwen-Image-2.1 through
+`paul/reference-image/generate`, then renders independent H3 shots using those images.
+Define one to nine named characters and scenes. Characters receive a plain white
+background; scene references describe the empty location. Each shot selects only the
+names relevant to it. There is no feedback from generated shots, no previous-frame
+conditioning, and no first/last-frame anchor. Every generated frame is retained at cuts.
 
 ```json
 {
-  "prompt": "A small red rover with four black wheels travels beside a woodland stream. Natural light, realistic textures, water and wheel sounds, no speech.",
+  "prompt": "A cinematic action film at dusk. Realistic photography. Dialogue is in English.",
+  "references": [
+    {"name": "Lena", "kind": "character", "prompt": "An adult woman with short black hair, a blue motorcycle jacket, black trousers and worn boots."},
+    {"name": "Omar", "kind": "character", "prompt": "An adult man with curly dark hair, a green bomber jacket, grey trousers and brown boots."},
+    {"name": "Depot", "kind": "scene", "prompt": "An abandoned rain-soaked train depot, rusted blue train cars, concrete pillars and yellow overhead lights at dusk."}
+  ],
   "shots": [
-    {"prompt": "Wide view across the stream as the rover approaches a wooden bridge."},
-    {"prompt": "Low side angle beside the bridge. The rover climbs onto the boards."},
-    {"prompt": "Overhead camera looking straight down as the rover crosses the bridge."},
-    {"prompt": "Close view from ahead of the rover as it reaches a sunlit clearing."}
+    {"references": ["Lena", "Omar", "Depot"], "duration_s": 10, "prompt": "Low tracking shot in {Depot}. {Lena} ducks under {Omar}'s swinging arm, slides over a bench and turns to face him. Rain splashes under their boots."},
+    {"references": ["Lena", "Depot"], "duration_s": 5, "prompt": "New tight side angle in {Depot}. {Lena} catches her breath behind a concrete pillar, glances left and says, <d>[English] Your move.</d>"}
   ]
 }
 ```
 
 ```sh
+cozy package install paul/reference-image
+cozy package install paul/minimax-h3
 cozy run paul/minimax-h3/long_form_cuts --input story.json --rental=your-rental --await --out ./film
 ```
 
-`references` optionally supplies up to nine stable image references. Each item has an
-`image`, a required `description` of relevant appearance, an optional `subject` name,
-and optional `fidelity` (`auto`, `low`, `medium`, `high`). Give pictures of the same person,
-prop or location the same subject name so they define one subject from several views.
-Descriptions should identify the appearance to preserve; each shot prompt specifies its
-own current action, pose, camera and scene state. The wrapper compiles ordered native
-Picture numbers inside Subject definitions. Fidelity controls image presentation size,
-not reference strength. A photograph containing two named subjects occupies one Picture
-slot with two Subject definitions. Avoid unnecessary global references: they may constrain
-a scene even when its prompt does not mention them.
+The two model packages run on the selected machine. Installing a package alone does
+not download model weights. Explicit model preparation can warm the machine; inference
+also downloads missing models as a fallback. The CPU parent awaits all reference images
+first, then awaits each video shot. Runtime handles model placement and memory between
+the image and video models.
 
-By default, `history_frames` is automatic: each new shot contributes a midpoint
-appearance/state candidate to a bounded recency pool. If slots remain under H3's nine-image
-limit, the newest shots may contribute their quarter and three-quarter candidates as
-additional diverse views; older shots contribute one or none. Exact duplicates and coarse
-thumbnail matches are suppressed. Set `history_frames=0` for independent text-only shots,
-or set an integer (0 through 9) to cap the number of generated history candidates. Stable
-references reserve slots first, and the native H3 vision-token budget is checked before
-denoising. This is a provisional selection policy, not an image-quality or semantic
-relevance judge. There is no artificial eight-shot limit for camera-cut stories; each shot
-still has the native 5–15 second duration bound and the final MP4 byte bound.
-
-Generated history entries are described as appearance/state references, never as exact
-frames to reproduce. Each shot's current prompt controls its action, pose, camera and
-scene state. With no supplied images, the first shot uses the existing text-only path and
-later shots use the bounded pool of generated references.
+Use `{name}` in shared and shot prompts to link actions to the exact Subject label.
+Reference names begin with a letter and contain only letters, digits, `_` or `-`.
+A shot must select every name it uses; the shared prompt must therefore avoid names
+absent from any shot. All references, names and compiled prompt lengths are checked
+before the first image generation. The reference `prompt` is used only for image generation. An optional short
+`description` (up to 256 characters) can identify the appearance to preserve in H3;
+studio posing and image-generation instructions are not repeated in video prompts.
+The compiler defines each character/environment separately and retains its visual
+identity; it does not preserve the still image's pose, white backdrop or viewpoint.
 
 Turbo is the default. `mode="standard"` enables the existing 30/40/50 step schedules.
-Seeds are optional and reproducible across attempts of the same request. The parent
-reports each shot's child progress and overall work. A later failure delivers the
-completed portion with `complete=false`; first-shot failure and cancellation stay terminal.
+Reference generation uses 40 steps and 1024×1024 PNGs. Reference and shot seeds are
+optional and stable across attempts of the same request. There is no eight-shot cap;
+each shot has H3's native 5–15 second bound and the assembled MP4 has a 256 MiB limit.
 
-Reference PNGs, selection records and intermediate clips stay internal on the worker.
-Shot logs record reference digests, source frame indices, subject roles, seeds and native
-render paths. Each child returns three required, bounded PNG assets from its existing RGB8 decode,
-with fixed output paths and frame indices/signatures. Runtime forwards these retained
-assets to later children; the CPU parent does not decode the compressed MP4 to create
-references. Only the final video and continuation image are public results. Generated references can still carry
-artifacts or stale state. Shared voices, music and identity are not guaranteed across
-independent generations. CPU contract checks do not establish improved H3 video quality.
+Only the assembled MP4 and final PNG are downloaded. Fixed reference images and
+intermediate clips remain retained child results on the worker. Logs record reference
+names and digests, selected subjects, seeds and native render paths. The parent reports
+reference generation, individual shot progress, assembly and overall progress. A later
+shot failure delivers the completed portion with `complete=false`; reference-generation
+failure, first-shot failure and cancellation stay terminal.
+
+The previous `history_frames` and uploaded-image reference fields are removed from this
+API. Use ordinary `ref2va` for direct authored-image conditioning, or `long_form` below
+for deliberate continuation. Fixed references avoid recycling generated defects but do
+not guarantee visual quality or identity; real inference remains a separate quality gate.
 
 ## Continuous takes
 
