@@ -44,7 +44,7 @@ before refreshing H3's lock:
 uv lock --project minimax-h3 --python 3.12 --upgrade-package cozy-runtime
 ```
 
-H3 1.16.0 requires Runtime 0.18.23 or newer for the qualified managed-call,
+H3 1.16.0 requires Runtime 0.18.24 or newer for the qualified managed-call,
 media-decoder and recovery cohort. Creator captures the dependency's immutable
 implementation and generated caller interface. The source implementation takes
 injected execution arguments; its installed caller exposes the flat
