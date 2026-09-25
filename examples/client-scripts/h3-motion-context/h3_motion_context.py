@@ -21,6 +21,9 @@ from cozy_runtime.models.minimax_h3.continuation import plan_continuation
 
 from assembly import AssembleVideoRequest, assemble
 from h3 import (
+    H3Model as H3Model,
+    H3TurboBase as H3TurboBase,
+    H3TurboLoRA as H3TurboLoRA,
     MotionInput,
     _create_references,
     app,
