@@ -72,7 +72,8 @@ The adoption script refuses pruned inputs and produces a real native receipt wit
 zero tensor payload production. A bound Model is an attempt capability; it cannot
 be passed directly to a managed child. `prepare_callers.py` therefore requires an
 actual completed CLI ModelArtifact result and never invents a producer/receipt.
-It emits compute, caller-only edit, schedule40 and wrong-plan callers under normal
+It emits full compute, single-task FL compute, caller-only edit, schedule40 and
+wrong-plan callers under normal
 outputs. A private tools checkout may be supplied for same-version code/plan tests;
 that generated private path is never published.
 
@@ -112,13 +113,17 @@ was fabricated merely to make a dry-run appear complete.
    bytes. Whole-package closure changes may also invalidate cheap projections;
    do not promise finer-grained invalidation than the current implementation.
 5. **Positive schedule-plan invalidation.** In that private qualification copy,
-   retain only the existing 30-step schedule and regenerate first-distinct table
-   keys using the same rules as `parse_plan`. Validate it with
+   use `coverage_variant.py` to retain only the existing 30-step schedule and
+   regenerate first-distinct table keys using the same rules as `parse_plan`.
+   The validated FL fixture has 60 timesteps and 92 block rows; it is deliberately
+   refused by the unmodified production launch pin. Validate it with
    `parse_plan(..., launch=False)`, then pin that exact digest in the copy's
    `LAUNCH_PLAN_DIGESTS` and captured asset. This is a private coverage variant,
    not a new public API or a production schedule approval. Old digests/banks must
    refuse; new bank computation must miss and its metadata must bind the new
-   projection/plan. Do not substitute a 30→40 wrapper-argument change for this arm.
+   projection/plan. Generate `compute_fl.py` with `--fl-plan-digest` set to the
+   new captured digest to run just that bank rather than recomputing Ref2VA. Do
+   not substitute a 30→40 wrapper-argument change for this arm.
 6. **Numerical and graft custody checks.** Compare all bank header/part hashes and
    coverage maps, including the exact 106 generator-key deletion set. Compare
    representative original-weight/full calculations with table lookups for both
@@ -136,3 +141,9 @@ was fabricated merely to make a dry-run appear complete.
 No image/video inference or partial denoising is memoized here. Bank correctness,
 full-vs-table numerical equivalence and whole-model perceptual quality are distinct
 gates. Trusted cross-machine memo mappings remain outside this phase.
+
+Validation: both ordinary CLI dry-runs pass, including the adoption rerun on
+CLI `0.0.0-f9654a7190aa`. Geometry is source-derived and the coverage fixture passes
+the structural parser while failing the production launch pin as expected. The
+caller generator was syntax-checked using a genuine historical small-fixture
+receipt; those generated test callers were not submitted and are not H3 proof.
