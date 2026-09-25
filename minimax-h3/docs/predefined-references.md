@@ -1,7 +1,7 @@
 # Fixed subjects for camera-cut stories
 
 `long_form_cuts` generates one fixed image per named character or scene using
-`paul/qwen-image/generate` before rendering any H3 shot. Character images use a
+`paul/reference-image/generate` before rendering any H3 shot. Character images use a
 plain white background. Scene images contain the described location. The whole
 request declares one to nine references; each shot explicitly selects its named
 references. Each shot is an independent Ref2VA generation, with no first/last-frame
@@ -30,3 +30,21 @@ needs a real matched render; conformance only establishes routing, input validat
 reference custody and output assembly.
 
 Reference: https://github.com/MiniMax-AI/MiniMax-H3/blob/main/skills/h3-prompt-writing/references/ref-en.txt
+
+## Implementation checkpoints
+
+- Package PR: https://github.com/cozy-creator/packages/pull/256
+- The published dependency must be resolved from Tensorhub's existing organization
+  package index. The Python import is `reference_image.generate`; the exact admitted
+  caller interface and model defaults belong to that dependency's release.
+- Creator's existing `publishedSubmission` originally captured only self-callables;
+  published cross-package dependency capture is a required rollout gate, owned outside
+  this package. It must freeze the dependency's implementation and callable overlay.
+- The parent decodes bounded media received from children, despite having no uploaded
+  media in its request. Runtime must permit that decoder capability while retaining
+  per-asset input grants and decoded-byte bounds.
+- `scripts/h3-cuts-proof.py` exercises real Runtime broker/codec custody with synthetic
+  image/video renderers. It proves fixed reference identities and ordering, independent
+  Ref2VA routing, hard cuts, bounded frame assembly, two public outputs, deterministic
+  seeds, preflight refusal, cancellation and partial delivery. It does not prove the
+  quality of Qwen or H3 model outputs, nor the package-index transport.

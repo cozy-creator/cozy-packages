@@ -1,191 +1,132 @@
-"""Bounded native image references for independent camera-cut shots."""
+"""Named, fixed character and scene references for independent camera-cut shots."""
 
 from __future__ import annotations
 
-import math
+import hashlib
+import re
 from collections.abc import Sequence
 from typing import Annotated, Literal
 
 import msgspec
-from cozy_runtime.author import AssetBound, Image, ImageAsset, InvalidRequest
+from cozy_runtime.author import InvalidRequest
 
 MAX_IMAGES = 9
+_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,47}\Z")
+_PLACEHOLDER = re.compile(r"\{([A-Za-z][A-Za-z0-9_-]*)\}")
 
 
 class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
-    image: Annotated[
-        ImageAsset,
-        AssetBound(max_bytes=64 << 20, max_decoded_bytes=3 * 16_777_216),
-    ]
-    description: Annotated[str, msgspec.Meta(min_length=1, max_length=512)]
-    subject: Annotated[str, msgspec.Meta(max_length=64)] = ""
-    fidelity: Literal["auto", "low", "medium", "high"] = "auto"
+    """One image to generate before the first video shot; names are request-local IDs."""
+
+    name: Annotated[str, msgspec.Meta(min_length=1, max_length=48)]
+    kind: Literal["character", "scene"]
+    prompt: Annotated[str, msgspec.Meta(min_length=1, max_length=1024)]
+    seed: int | None = None
 
 
-class ReferenceFrame(msgspec.Struct):
-    image: Annotated[
-        ImageAsset,
-        AssetBound(
-            max_bytes=64 << 20,
-            max_decoded_bytes=3 * 16_777_216,
-            media_types=("image/png",),
-        ),
-    ]
-    frame_index: int
-    signature: str
+def reference_seed(reference: StoryReference, request_id: str) -> int:
+    if reference.seed is not None:
+        return reference.seed
+    identity = f"{request_id}/h3/reference/{reference.name}".encode()
+    return int.from_bytes(hashlib.sha256(identity).digest()[:4], "big")
 
 
-class SelectedReference(msgspec.Struct):
-    image: ImageAsset
-    description: str
-    signature: str
-    fidelity: Literal["auto", "low", "medium", "high"] = "auto"
-    subject: str = ""
-    roles: tuple[tuple[str, str], ...] = ()
-
-
-def reference_roles(reference: SelectedReference) -> tuple[tuple[str, str], ...]:
-    return reference.roles or ((reference.subject, reference.description),)
-
-
-def signature(image: Image) -> str:
-    """Small RGB thumbnail for deterministic near-duplicate suppression, not quality scoring."""
-    return signature_rgb(image.width, image.height, image.convert("RGB").tobytes())
-
-
-def signature_rgb(width: int, height: int, rgb: bytes) -> str:
-    result = bytearray()
-    for y in range(8):
-        for x in range(8):
-            offset = (
-                min(height - 1, (2 * y + 1) * height // 16) * width
-                + min(width - 1, (2 * x + 1) * width // 16)
-            ) * 3
-            result.extend(rgb[offset : offset + 3])
-    return result.hex()
-
-
-def history_description(index: int) -> str:
+def image_prompt(reference: StoryReference) -> str:
+    if reference.kind == "character":
+        return (
+            f"{reference.prompt.strip()}\n"
+            "A single full-body character reference portrait, clear face and clothing, "
+            "neutral standing pose with visible hands and feet, on a plain white studio "
+            "background. One subject, one view, no panels or labels."
+        )
     return (
-        f"Appearance and state reference from preceding shot {index + 1}; use it for "
-        "relevant character, prop and setting continuity, not as an exact frame to copy. "
-        "The current shot description determines the action and camera composition."
+        f"{reference.prompt.strip()}\n"
+        "An environment reference image showing the architecture, materials and defining "
+        "features of the location, without people, labels or panels."
     )
 
 
-def sample_positions(frames: int) -> tuple[int, ...]:
-    """Prefer a clip's middle, then its quarter and three-quarter views; exclude endpoints."""
-    return tuple(dict.fromkeys((frames // 2, frames // 4, 3 * frames // 4)))
-
-
-def _similar(left: str, right: str) -> bool:
-    a, b = bytes.fromhex(left), bytes.fromhex(right)
-    if len(a) != 192 or len(b) != 192:
-        raise InvalidRequest("reference thumbnail signature is invalid", code="reference_signature")
-    return sum(abs(x - y) for x, y in zip(a, b, strict=True)) <= 4 * len(a)
+def validate_references(references: Sequence[StoryReference]) -> dict[str, StoryReference]:
+    if not 1 <= len(references) <= MAX_IMAGES:
+        raise InvalidRequest("declare between one and nine references", fields=["references"])
+    by_name: dict[str, StoryReference] = {}
+    for reference in references:
+        if not _NAME.fullmatch(reference.name):
+            raise InvalidRequest(
+                "reference names must start with a letter and use letters, digits, _ or -",
+                fields=["references"],
+            )
+        if reference.name in by_name:
+            raise InvalidRequest(
+                f"duplicate reference name: {reference.name}", fields=["references"]
+            )
+        if not reference.prompt.strip():
+            raise InvalidRequest(
+                f"reference {reference.name} has an empty prompt", fields=["references"]
+            )
+        by_name[reference.name] = reference
+    return by_name
 
 
 def select_references(
-    stable: Sequence[SelectedReference],
-    history: Sequence[Sequence[ReferenceFrame]],
-    *,
-    history_frames: int | None,
-) -> list[SelectedReference]:
-    """Reserve authored references, then choose a diverse and recent history subset.
-
-    Every prior shot contributes candidates; ``None`` fills the remaining native image
-    budget, while an integer optionally caps historical images. The deterministic
-    recency/coverage score is a selection policy, not an image-quality or semantic judge.
-    """
-    if history_frames is not None and not 0 <= history_frames <= MAX_IMAGES:
-        raise InvalidRequest("history reference count exceeds its bound", code="reference_policy")
-    if len(stable) > MAX_IMAGES:
-        raise InvalidRequest("reference budget exceeds its bound", code="reference_policy")
-    selected: list[SelectedReference] = []
-    for item in stable:
-        existing = next((ref for ref in selected if ref.image.digest == item.image.digest), None)
-        if existing is None:
-            selected.append(item)
-        else:
-            if existing.fidelity != item.fidelity:
-                raise InvalidRequest(
-                    "the same image has conflicting fidelity settings", fields=["references"]
-                )
-            # One native Picture can define several Subjects without duplicating its
-            # conditioning rows or increasing its relative weight in the reference set.
-            selected[selected.index(existing)] = msgspec.structs.replace(
-                existing,
-                roles=tuple(dict.fromkeys((*reference_roles(existing), *reference_roles(item)))),
-            )
-    remaining = (
-        MAX_IMAGES - len(selected)
-        if history_frames is None
-        else min(history_frames, MAX_IMAGES - len(selected))
-    )
-    # Newest copy wins exact/near-duplicate suppression. Midpoint wins within a shot.
-    pool: list[tuple[int, int, ReferenceFrame]] = []
-    for index in range(len(history) - 1, -1, -1):
-        for view, candidate in enumerate(history[index]):
-            if any(
-                candidate.image.digest == ref.image.digest
-                or _similar(candidate.signature, ref.signature)
-                for ref in selected
-            ) or any(
-                candidate.image.digest == ref.image.digest
-                or _similar(candidate.signature, ref.signature)
-                for _, _, ref in pool
-            ):
-                continue
-            pool.append((index, view, candidate))
-    per_shot: dict[int, int] = {}
-    while remaining and pool:
-        def score(item: tuple[int, int, ReferenceFrame]) -> tuple[float, int, int]:
-            index, view, _ = item
-            recency = math.exp(-(len(history) - index) / 2.5)
-            coverage = 0.45 if per_shot.get(index, 0) == 0 else 0.0
-            position = (0.04, 0.0, 0.03)[view]
-            return recency + coverage + position, index, -view
-
-        index, view, candidate = max(pool, key=score)
-        pool.remove((index, view, candidate))
-        if per_shot.get(index, 0) >= 2:
-            continue
-        selected.append(
-            SelectedReference(
-                candidate.image,
-                history_description(index),
-                candidate.signature,
-                subject="The existing cast and world from preceding shots",
-            )
+    names: Sequence[str], by_name: dict[str, StoryReference], *, index: int
+) -> list[StoryReference]:
+    if not 1 <= len(names) <= MAX_IMAGES or len(set(names)) != len(names):
+        raise InvalidRequest(
+            f"shot {index + 1} must select one to nine distinct reference names", fields=["shots"]
         )
-        per_shot[index] = per_shot.get(index, 0) + 1
-        remaining -= 1
-    return selected
+    missing = [name for name in names if name not in by_name]
+    if missing:
+        raise InvalidRequest(
+            f"shot {index + 1} selects unknown references: {', '.join(missing)}", fields=["shots"]
+        )
+    return [by_name[name] for name in names]
 
 
 def shot_prompt(
-    shared: str, description: str, references: Sequence[SelectedReference], *, index: int
+    shared: str, description: str, references: Sequence[StoryReference], *, index: int
 ) -> str:
-    groups: dict[str, list[tuple[int, str]]] = {}
-    for slot, ref in enumerate(references, start=1):
-        for subject, details in reference_roles(ref):
-            groups.setdefault(subject or f"Reference {slot}", []).append((slot, details))
-    subjects = []
-    for number, (name, items) in enumerate(groups.items(), start=1):
-        descriptions = "; ".join(dict.fromkeys(details for _, details in items))
-        pictures = ", ".join(dict.fromkeys(f"<Picture {slot}>" for slot, _ in items))
-        subjects.append(f"<Subject {number}>: {name}. {descriptions}. Appearance in {pictures}.")
-    parts = [
-        "subject_definitions:\n" + "\n".join(subjects) if subjects else "",
-        f"summary:\n{'[reference generation] ' if references else ''}{shared.strip()}",
-        "retention_analysis:\nUse the reference descriptions for relevant identity and "
-        "appearance. The current shot determines who is present, camera, pose, action, "
-        "wardrobe changes and location changes."
-        if references
-        else "",
-        f"detailed_description:\n[Shot 1]\n{description.strip()}",
-    ]
-    prompt = "\n\n".join(part for part in parts if part)
+    labels = {reference.name: f"<Subject {slot}>" for slot, reference in enumerate(references, 1)}
+
+    def substitute(text: str) -> str:
+        def replace(match: re.Match[str]) -> str:
+            name = match.group(1)
+            if name not in labels:
+                raise InvalidRequest(
+                    f"shot {index + 1} mentions {{{name}}} without selecting that reference",
+                    fields=["shots", "prompt"],
+                )
+            return labels[name]
+
+        return _PLACEHOLDER.sub(replace, text.strip())
+
+    if not description.strip():
+        raise InvalidRequest(f"shot {index + 1} has an empty prompt", fields=["shots"])
+    subjects, retention = [], []
+    for slot, reference in enumerate(references, 1):
+        label = labels[reference.name]
+        subjects.append(
+            f"{label} is {reference.name}, the {reference.kind} in <Picture {slot}>: "
+            f"{reference.prompt.strip()}"
+        )
+        preserved = (
+            "identity, face, body proportions, hair and clothing; the portrait's white "
+            "background and pose are not part of this subject"
+            if reference.kind == "character"
+            else "the environment's architecture, materials and defining features; "
+            "its photographed viewpoint and framing are not part of this subject"
+        )
+        retention.append(f"{label} (appears in [Shot 1]): fully_preserved - {preserved}.")
+    prompt = "\n\n".join(
+        (
+            "subject_definitions:\n" + "\n".join(subjects),
+            "summary:\n[reference generation] " + substitute(shared),
+            "retention_analysis:\n" + "\n".join(retention),
+            "detailed_description:\n[Shot 1]\n"
+            "One continuous shot. Compose a new camera view and animate the subjects "
+            "according to this shot description:\n" + substitute(description),
+        )
+    )
     if len(prompt) > 4096:
         raise InvalidRequest(
             f"shot {index + 1}'s shared prompt, reference descriptions and shot exceed 4096 "
