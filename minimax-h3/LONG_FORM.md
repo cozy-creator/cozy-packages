@@ -84,7 +84,7 @@ Inference is not memoized. A later-segment failure returns the completed portion
     {"name": "stream", "kind": "scene", "prompt": "A woodland stream beside a small wooden bridge."}
   ],
   "prompt": "A continuous tracking shot. Flowing water, light wind and quiet wheels. No music or voices.",
-  "context_frames": 39,
+  "context_frames": 22,
   "shots": [
     {"prompt": "{rover} travels beside {stream}."},
     {"prompt": "{rover} approaches the bridge beside {stream}."},
@@ -114,7 +114,7 @@ segment samples 243 frames and delivers 240. Subsequent 10-second segments sampl
 Five default segments deliver exactly 1,200 frames (50 seconds), without replay-frame
 removal or visual crossfade. Every prompt and frame plan is validated before Qwen runs.
 The native generation limit is 362 frames: 13 new seconds plus 56 context frames cannot
-fit and is rejected; 13 seconds plus 39 context frames fits. The default 39 is an
+fit and is rejected; 13 seconds plus 39 context frames fits. The default 22 is an
 experiment setting, not a quality claim. Longer context may improve continuity, but this
 requires matched-source visual and listening comparisons. Cuts or identity/audio drift
 remain possible; the API does not guarantee seamless video.

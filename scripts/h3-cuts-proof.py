@@ -39,6 +39,7 @@ from cozy_runtime.author._calls import _Broker, _CallType
 from cozy_runtime.author._codec import encode_frame
 from cozy_runtime.author._services import ProgressFrame, settle_frame
 from cozy_runtime.internal import interface_wheel, package_interface, static_interface
+from cozy_runtime.models.minimax_h3.continuation import AVContext
 from cozy_runtime.models.minimax_h3.official import FPS, MAX_CONDITIONER_VISION_TOKENS, frames_for
 from PIL import Image as PILImage
 
@@ -178,8 +179,6 @@ async def motion_renderer(
     out: Outputs,
     tel: Telemetry,
 ) -> h3.MotionOutput:
-    from cozy_runtime.models.minimax_h3.continuation import AVContext
-
     def refs(_ctx: Any, task: str, request: Any, images: Any, *_: Any, **kwargs: Any) -> Any:
         assert task == ("ref2va_turbo" if turbo else "ref2va")
         ROUTES.append(task)
@@ -361,8 +360,11 @@ def drive(
 
         def project(item: Any, path: str = "") -> Any:
             if isinstance(item, Asset):
-                frame = record.frames[item.ref]
-                raw = encode_frame(frame.codec, frame.facts, frame.raw.read_bytes())
+                if item.kind == "file":
+                    raw = item.read_bytes()
+                else:
+                    frame = record.frames[item.ref]
+                    raw = encode_frame(frame.codec, frame.facts, frame.raw.read_bytes())
                 digest = sha(raw)
                 local = root / (digest[7:] + (".png" if item.kind == "image" else ".mp4"))
                 local.write_bytes(raw)
