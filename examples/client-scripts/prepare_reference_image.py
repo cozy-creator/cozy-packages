@@ -1,13 +1,27 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
 # dependencies = ["cozy-runtime>=0.18.21,<1", "tensorfs>=0.3.51,<0.4"]
+# [tool.cozy.models]
+# source = "hf://Qwen/Qwen-Image-2.1@790c92633540aa0cb11d9abf19eb46d861714758"
+# [tool.cozy.weights]
+# model = 8388608
 # ///
 """Prepare the exact research checkpoint with native TensorFS source-part inheritance.
 
-Run through `cozy run ./prepare_reference_image.py`. Download and conversion are
-memoized library operations; editing this composition does not invalidate them.
-No publication happens here. The returned checkpoint retains the original research
-licence and identifies this configuration-only conversion in its provenance config.
+Run through the ordinary CLI, which prepares the injected native source before main:
+
+    cozy run ./prepare_reference_image.py \
+      --source-profile source=hf/qwen/qwen-image-2.1/original/1 \
+      --publish-to paul/reference-image --await
+
+Use --describe or --dry-run first. The source is pinned in PEP723 metadata; an explicit
+model.source= override may select an already retained checkpoint. This producer owns
+its bounded output and can publish through --publish-to without forwarding a child's
+receipt. TensorFS source CAS bytes are reusable; this foreign-input preparation has a
+different operation identity from the download_huggingface script facade.
+
+No automatic release is created. LICENSE, Notice and change notices are ordinary
+checkpoint files retained alongside the original tensor references.
 """
 
 from __future__ import annotations
@@ -16,29 +30,21 @@ import base64
 import hashlib
 import json
 import zlib
-from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any
 
 from cozy_runtime.author import (
     Context,
+    Model,
     ModelArtifact,
-    ScriptContext,
+    Telemetry,
     Tree,
     canonical_json,
-    invocable,
 )
-from cozy_runtime.author.sources import convert_cozytensors, download_huggingface, source_files
-from cozy_runtime.derive.quantization import QuantizationSource
+from cozy_runtime.author.sources import download_huggingface, source_files
 from tensorfs.derived import Config, Derivation, Target, derive
 
 REPOSITORY = "Qwen/Qwen-Image-2.1"
 REVISION = "790c92633540aa0cb11d9abf19eb46d861714758"
-PROFILE = "hf/qwen/qwen-image-2.1/original/1"
-CARRIERS = (
-    "transformer/diffusion_pytorch_model.safetensors.index.json",
-    "text_encoder/model.safetensors.index.json",
-    "vae/diffusion_pytorch_model.safetensors",
-)
 FILES = {
     "transformer/config.json": [
         370,
@@ -182,8 +188,7 @@ def configuration(root: Any) -> dict[str, Any]:
     return result
 
 
-@invocable(memoize=True)
-async def prepare(ctx: Context, *, source: QuantizationSource, metadata: Tree) -> ModelArtifact:
+def prepare(ctx: Context, *, source: Model[object], metadata: Tree) -> ModelArtifact:
     capability = ctx.tensorfs_source(source)
     inspection = capability.inspect()
     census = json.loads(zlib.decompress(base64.urlsafe_b64decode(_CENSUS)))
@@ -243,12 +248,9 @@ async def prepare(ctx: Context, *, source: QuantizationSource, metadata: Tree) -
         return ctx.adopt_model(transaction.commit())
 
 
-async def main(ctx: ScriptContext) -> ModelArtifact:
-    source = await download_huggingface(REPOSITORY, revision=REVISION, carriers=CARRIERS)
-    converted = await convert_cozytensors(source, profile=PROFILE)
+async def main(ctx: Context, *, source: Model[object], tel: Telemetry) -> ModelArtifact:
     metadata_source = await download_huggingface(REPOSITORY, revision=REVISION, files=tuple(FILES))
     metadata = await source_files(metadata_source)
-    call = cast(Callable[..., Awaitable[ModelArtifact]], prepare)
-    prepared = await call(source=converted, metadata=metadata)
-    ctx.log(f"Prepared research checkpoint: {prepared.manifest.digest}")
+    prepared = prepare(ctx, source=source, metadata=metadata)
+    tel.log(f"Prepared research checkpoint: {prepared.manifest.digest}")
     return prepared
