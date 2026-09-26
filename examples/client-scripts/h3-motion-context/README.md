@@ -7,6 +7,12 @@ The output is three paired 20-second MP4s. Private context is never a final outp
 Logs record sample/delivery clocks, common predecessor/context digests and observed times.
 It does not compute a perceptual score or establish seamlessness.
 
+The private schema-2 context contains three independently encoded native audio/video
+windows (22, 39 and 56 frames) from the actual delivered predecessor tail. The chosen
+window is selected before continuation; a shorter window is never sliced from the
+56-frame encoding. The model owns VAE residency while exporting the context, whose
+file contract is bounded to 64 MiB.
+
 Prepare an owned qualification directory from the exact candidate serving wheel:
 
 ```sh
@@ -28,6 +34,9 @@ machine-specific paths and locks outside the distributed repository. Preserve th
 explicit Qwen package index in that private capture. Normal published qualification
 uses portable package requirements.
 
-The same private candidate retains `long_form` for the separate 50-second composition
-qualification. It must not be published as the serving release: the extra comparison
+The same private candidate retains `long_form` for the separate 60-second composition
+qualifications: six ten-second segments, initially selecting 22 context frames, for
+both the cinematic fantasy scene and the four-character train action scene. These
+continuous outputs remain unqualified until the complete real CLI runs succeed.
+It must not be published as the serving release: the extra comparison
 entrypoint belongs only to this experiment.

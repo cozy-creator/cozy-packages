@@ -1396,7 +1396,7 @@ app.entrypoint(internal=True)(cut_segment_turbo)
 
 
 MotionContextAsset = Annotated[
-    FileAsset, AssetBound(max_bytes=256 << 20, media_types=("application/octet-stream",))
+    FileAsset, AssetBound(max_bytes=64 << 20, media_types=("application/octet-stream",))
 ]
 
 
@@ -1440,7 +1440,7 @@ def _render_motion(
     saved_context: list[FileAsset] = []
 
     def save_completed_context(state: Any) -> None:
-        tail = model.pipe.export_completed_av_tail(state, provenance=native_provenance)
+        tail = model.export_completed_av_tail(state, provenance=native_provenance)
         saved_context.append(
             out.save_bytes(encode_context(tail), media_type="application/octet-stream")
         )
