@@ -39,7 +39,7 @@ async def main() -> None:
     segment = StorySegment(
         summary="[reference generation] <Hero> walks through <Depot>.",
         detailed_description="[Shot 1]\n<Hero> walks through <Depot>.",
-        overall_soundscape="Rain and footsteps.", non_diegetic_music="N/A",
+        overall_soundscape="Rain and footsteps.", non_diegetic_music="N/A", duration_s=10,
     )
     text = segment_prompt(
         "Photorealistic.", segment, index=0,

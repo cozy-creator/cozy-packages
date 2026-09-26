@@ -1170,9 +1170,9 @@ class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
 
     segments: Annotated[list[StorySegment], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
-    subject_definitions: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
-    retention_analysis: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
     style: str = ""
+    overall_soundscape: str = ""
+    non_diegetic_music: str = ""
     context_frames: Literal[22, 39, 56] = 22
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
@@ -1513,15 +1513,15 @@ app.entrypoint(internal=True)(motion_segment_turbo)
 
 
 class CutSegment(StorySegment):
-    duration_s: DurationSeconds = MAX_DURATION_S
+    pass
 
 
 class LongFormCutsInput(msgspec.Struct, forbid_unknown_fields=True):
     segments: Annotated[list[CutSegment], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
-    subject_definitions: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
-    retention_analysis: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
     style: str = ""
+    overall_soundscape: str = ""
+    non_diegetic_music: str = ""
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
 
@@ -1578,8 +1578,8 @@ async def long_form_cuts(
     steps = TURBO_STEPS if payload.mode == "turbo" else payload.steps or DEFAULT_STEPS
     prompts = compile_segments(
         payload.style, payload.segments, payload.references,
-        subject_definitions=payload.subject_definitions,
-        retention_analysis=payload.retention_analysis,
+        overall_soundscape=payload.overall_soundscape,
+        non_diegetic_music=payload.non_diegetic_music,
     )
     planned_frames = [frames_for(shot.duration_s) for shot in payload.segments]
     render_work = [frames * steps for frames in planned_frames]
@@ -1731,8 +1731,8 @@ async def long_form(
     )
     prompts = compile_segments(
         payload.style, payload.segments, payload.references,
-        subject_definitions=payload.subject_definitions,
-        retention_analysis=payload.retention_analysis,
+        overall_soundscape=payload.overall_soundscape,
+        non_diegetic_music=payload.non_diegetic_music,
     )
     # Motion context shares the native window with new frames. Shorten requested
     # segments to its whole-second budget instead of refusing a valid 5-15s request.
