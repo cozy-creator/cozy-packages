@@ -49,6 +49,7 @@ from cozy_runtime.author import (
     VideoAsset,
     data_values,
     invocable,
+    prefetch,
 )
 from cozy_runtime.models.minimax_h3.continuation import (
     AVContext,
@@ -1598,6 +1599,7 @@ async def long_form_cuts(
     reference_work = sum(ref.image is None for ref in payload.references) * reference_steps
     total_work = sum(render_work) + sum(planned_frames) + 1 + reference_work
     completed_work = 0
+    prefetch(cut_segment_turbo if payload.mode == "turbo" else cut_segment)
     images = await _create_references(ctx, payload.references, tel)
     completed_work = reference_work
     videos: list[VideoAsset] = []
@@ -1785,6 +1787,7 @@ async def long_form(
     requested_frames = sum(plan.delivered_frames for plan in plans)
     reference_work = sum(ref.image is None for ref in payload.references) * 40
     total_work = sum(render_work) + requested_frames + 1 + reference_work
+    prefetch(motion_segment_turbo if payload.mode == "turbo" else motion_segment)
     images = await _create_references(ctx, payload.references, tel)
     completed_work = reference_work
     videos: list[VideoAsset] = []
