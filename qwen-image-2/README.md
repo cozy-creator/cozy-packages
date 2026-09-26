@@ -97,7 +97,7 @@ and pin it to the Hub index in the **consumer's** `pyproject.toml`:
 
 ```toml
 [project]
-dependencies = ["qwen-image-2>=0.1.0"]
+dependencies = ["qwen-image-2>=0.2.0"]
 
 [tool.uv.sources]
 qwen-image-2 = { index = "tensorhub-paul" }
