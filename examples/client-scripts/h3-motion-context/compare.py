@@ -6,12 +6,10 @@
 # ///
 """Run next to the prepared private candidate directory using cozy run compare.py."""
 
-from typing import Any
-
-from h3_motion_context import ComparisonInput, StoryReference, compare
+from h3_motion_context import Comparison, ComparisonInput, StoryReference, compare
 
 
-async def main() -> Any:
+async def main() -> Comparison:
     return await compare(  # type: ignore[call-arg]
         payload=ComparisonInput(
             references=[
