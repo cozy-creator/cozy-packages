@@ -128,7 +128,7 @@ class Result(msgspec.Struct):
     next_noise: list[float]
 
 
-@app.entrypoint(defaults={"adapter": [{"gpu": "*", "lane": BASE_REFERENCE}]})
+@app.entrypoint(defaults={"adapter": [{"gpu": "*", "gpus": 1, "lane": BASE_REFERENCE}]})
 def combine(
     ctx: Context,
     payload: Request,

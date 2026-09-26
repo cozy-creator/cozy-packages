@@ -138,7 +138,7 @@ def rgb_image(decoded: Any) -> Image.Image:
     return image
 
 
-@app.entrypoint(defaults={"model": [{"gpu": "*", "lane": "paul/reference-image@0.1.0/original"}]})
+@app.entrypoint(defaults={"model": [{"gpu": "*", "gpus": 1, "lane": "paul/reference-image@0.1.0/original"}]})
 def generate_image(
     ctx: Context,
     payload: GenerateInput,
