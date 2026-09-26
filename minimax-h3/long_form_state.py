@@ -34,7 +34,7 @@ class RenderProvenance(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     turbo_lora_manifest: str = ""
 
 
-def code_digest() -> str:
+def code_digest(*, native_only: bool = False) -> str:
     """Hash installed workflow and builtin inference payloads, excluding bookkeeping."""
     distribution = importlib.metadata.distribution("minimax-h3")
     digest = hashlib.sha256()
@@ -48,7 +48,7 @@ def code_digest() -> str:
         )
     count = 0
     total = 0
-    for member in sorted(files, key=str):
+    for member in sorted(() if native_only else files, key=str):
         path = PurePosixPath(str(member))
         if any(part.endswith(".dist-info") for part in path.parts) or "__pycache__" in path.parts:
             continue
@@ -71,7 +71,7 @@ def code_digest() -> str:
             while block := stream.read(1 << 20):
                 digest.update(block)
         count += 1
-    if count == 0:
+    if count == 0 and not native_only:
         raise InvalidRequest("H3 package source inventory is empty", code="render_code")
     # The Runtime version can stay constant during content-addressed development.
     # Record the builtin's actual installed code/assets as well as its version.
@@ -125,3 +125,14 @@ def compatible(actual: RenderProvenance, expected: RenderProvenance | None) -> N
             "shots in one rendering must use the same base and adapter bytes, code, and software",
             code="render_provenance",
         )
+
+
+def context_provenance(renderer: RenderProvenance) -> str:
+    """Native inference compatibility excludes the independently evolving composer."""
+    native = RenderProvenance(
+        renderer.model_manifest,
+        code_digest(native_only=True),
+        renderer.software,
+        renderer.turbo_lora_manifest,
+    )
+    return "sha256:" + hashlib.sha256(msgspec.json.encode(native)).hexdigest()
