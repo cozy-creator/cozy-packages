@@ -7,7 +7,6 @@ stages weighted roots, and joins those two boundaries.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import queue
 from collections.abc import Awaitable, Callable, Iterator, Sequence
@@ -71,6 +70,7 @@ from cozy_runtime.models.minimax_h3.official import (
     FPS,
     MAX_AUDIO_REFERENCES,
     MAX_CONDITIONER_VISION_TOKENS,
+    MAX_FRAMES,
     MAX_IMAGE_REFERENCES,
     MAX_REFERENCES,
     MAX_VIDEO_REFERENCES,
@@ -101,6 +101,7 @@ from story import (
     StoryReference,
     image_prompt,
     reference_seed,
+    resolve_reference_images,
     select_references,
     shot_prompt,
     validate_references,
@@ -1171,7 +1172,9 @@ class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
 
     shots: Annotated[list[ContinuousShot], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
-    prompt: str = ""
+    style: str = ""
+    soundscape: str = ""
+    music: str = ""
     context_frames: Literal[22, 39, 56] = 22
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
@@ -1518,7 +1521,9 @@ class CutShot(Shot, kw_only=True):
 class LongFormCutsInput(msgspec.Struct, forbid_unknown_fields=True):
     shots: Annotated[list[CutShot], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
-    prompt: str = ""
+    style: str = ""
+    soundscape: str = ""
+    music: str = ""
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
 
@@ -1529,17 +1534,16 @@ async def _create_references(
     tel: Telemetry,
 ) -> dict[str, ImageAsset]:
     reference_steps = 40
-    images: dict[str, ImageAsset] = {}
     # Managed dependencies install an asynchronous flat caller for the source
     # entrypoint, whose own annotations describe its injected implementation.
     reference_generator = cast(Callable[..., Awaitable[ReferenceImageOutput]], generate_reference)
 
-    async def create_reference(reference: StoryReference) -> ReferenceImageOutput:
+    async def create_reference(reference: StoryReference) -> ImageAsset:
         ctx.raise_if_cancelled()
         # Concurrent child progress has no ordered overall range. Runtime owns
         # GPU admission; this CPU composer submits at most nine independent calls.
         with tel.scope(f"Creating reference {reference.name}"):
-            return await reference_generator(
+            result = await reference_generator(
                 prompt=image_prompt(reference),
                 aspect_ratio=ReferenceAspectRatio.SQUARE,
                 megapixels=ReferenceMegapixels.MP1,
@@ -1547,24 +1551,17 @@ async def _create_references(
                 seed=reference_seed(reference, ctx.request_id),
                 background="white" if reference.kind == "character" else "normal",
             )
+            return result.image
 
-    tasks = [asyncio.create_task(create_reference(reference)) for reference in references]
-    try:
-        generated_references = await asyncio.gather(*tasks)
-    except BaseException:
-        # A failed/cancelled reference must not leave sibling children running.
-        # Drain cancellation before returning the original failure to Runtime.
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
-    for reference, generated in zip(references, generated_references, strict=True):
-        images[reference.name] = generated.image
+    images = await resolve_reference_images(references, create_reference)
+    for reference in references:
+        ctx.raise_if_cancelled()
         tel.log(
             "h3 fixed reference",
             subject=reference.name,
             reference_kind=reference.kind,
-            digest=generated.image.digest,
+            source="attached" if reference.image is not None else "generated",
+            digest=images[reference.name].digest,
         )
     return images
 
@@ -1587,7 +1584,10 @@ async def long_form_cuts(
         for index, shot in enumerate(payload.shots)
     ]
     prompts = [
-        shot_prompt(payload.prompt, shot.prompt, selected, index=index)
+        shot_prompt(
+            payload.style, shot.prompt, selected, index=index,
+            soundscape=payload.soundscape, music=payload.music,
+        )
         for index, (shot, selected) in enumerate(
             zip(payload.shots, selected_references, strict=True)
         )
@@ -1595,10 +1595,11 @@ async def long_form_cuts(
     planned_frames = [frames_for(shot.duration_s) for shot in payload.shots]
     render_work = [frames * steps for frames in planned_frames]
     reference_steps = 40
-    total_work = sum(render_work) + sum(planned_frames) + 1 + len(by_name) * reference_steps
+    reference_work = sum(ref.image is None for ref in payload.references) * reference_steps
+    total_work = sum(render_work) + sum(planned_frames) + 1 + reference_work
     completed_work = 0
     images = await _create_references(ctx, payload.references, tel)
-    completed_work = len(by_name) * reference_steps
+    completed_work = reference_work
     videos: list[VideoAsset] = []
     expected = None
     frame = None
@@ -1626,7 +1627,7 @@ async def long_form_cuts(
                     picture=slot,
                     digest=images[ref.name].digest,
                     subject=ref.name,
-                    description=ref.prompt,
+                    description=ref.description,
                 )
             try:
                 with tel.scope(
@@ -1746,25 +1747,47 @@ async def long_form(
         for index, shot in enumerate(payload.shots)
     ]
     prompts = [
-        shot_prompt(payload.prompt, shot.prompt, selected, index=index, continuous=True)
+        shot_prompt(
+            payload.style, shot.prompt, selected, index=index, continuous=True,
+            soundscape=payload.soundscape, music=payload.music,
+        )
         for index, (shot, selected) in enumerate(
             zip(payload.shots, selected_references, strict=True)
         )
     ]
-    # Validate every generation window before spending anything on reference images.
+    # Motion context shares the native window with new frames. Shorten requested
+    # segments to its whole-second budget instead of refusing a valid 5-15s request.
+    durations = [
+        min(shot.duration_s, (MAX_FRAMES - (payload.context_frames if index else 0)) // FPS)
+        for index, shot in enumerate(payload.shots)
+    ]
+    warnings: list[str] = []
+    for index, (shot, duration) in enumerate(zip(payload.shots, durations, strict=True)):
+        if duration != shot.duration_s:
+            warning = (
+                f"Shot {index + 1}: shortened from {shot.duration_s}s to {duration}s "
+                f"to fit {payload.context_frames} motion-context frames."
+            )
+            warnings.append(warning)
+            tel.log(
+                "Adjusted segment duration", shot=index + 1,
+                requested_seconds=shot.duration_s, delivered_seconds=duration,
+                context_frames=payload.context_frames,
+            )
+    # Validate every adjusted generation window before creating reference images.
     plans = [
         plan_continuation(
-            shot.duration_s * FPS, context_frames=payload.context_frames if index else 0
+            duration * FPS, context_frames=payload.context_frames if index else 0
         )
-        for index, shot in enumerate(payload.shots)
+        for index, duration in enumerate(durations)
     ]
     render_work = [plan.sample_frames * steps for plan in plans]
     requested_frames = sum(plan.delivered_frames for plan in plans)
-    total_work = sum(render_work) + requested_frames + 1 + len(by_name) * 40
+    reference_work = sum(ref.image is None for ref in payload.references) * 40
+    total_work = sum(render_work) + requested_frames + 1 + reference_work
     images = await _create_references(ctx, payload.references, tel)
-    completed_work = len(by_name) * 40
+    completed_work = reference_work
     videos: list[VideoAsset] = []
-    warnings: list[str] = []
     frame = None
     context = None
     expected: RenderProvenance | None = None
@@ -1790,7 +1813,7 @@ async def long_form(
                     child_payload = MotionInput(
                         prompt=prompts[index],
                         seed=seed,
-                        duration_s=shot.duration_s,
+                        duration_s=durations[index],
                         steps=steps,
                         expected_provenance=expected,
                         context=context,
