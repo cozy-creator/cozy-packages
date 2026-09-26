@@ -1173,6 +1173,8 @@ class ContinuousShot(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Prompt
     seed: int | None = None
     duration_s: DurationSeconds = 10
+    overall_soundscape: str | None = None
+    non_diegetic_music: str | None = None
     references: Annotated[list[str], msgspec.Meta(max_length=9)] | None = None
     dialogue: Annotated[list[DialogueLine], msgspec.Meta(max_length=16)] = msgspec.field(
         default_factory=list
@@ -1531,6 +1533,8 @@ app.entrypoint(internal=True)(motion_segment_turbo)
 
 class CutShot(Shot, kw_only=True):
     references: Annotated[list[str], msgspec.Meta(min_length=1, max_length=9)]
+    overall_soundscape: str | None = None
+    non_diegetic_music: str | None = None
     dialogue: Annotated[list[DialogueLine], msgspec.Meta(max_length=16)] = msgspec.field(
         default_factory=list
     )
@@ -1612,13 +1616,16 @@ async def long_form_cuts(
             payload.style,
             payload.soundscape,
             payload.music,
+            *(shot.overall_soundscape for shot in payload.shots if shot.overall_soundscape is not None),
+            *(shot.non_diegetic_music for shot in payload.shots if shot.non_diegetic_music is not None),
             *(reference.description for reference in payload.references),
         ],
     )
     prompts = [
         shot_prompt(
             payload.style, shot.prompt, selected, index=index,
-            soundscape=payload.soundscape, music=payload.music,
+            soundscape=payload.soundscape if shot.overall_soundscape is None else shot.overall_soundscape,
+            music=payload.music if shot.non_diegetic_music is None else shot.non_diegetic_music,
             dialogue=shot.dialogue, speakers=speakers, screen_text=shot.screen_text,
         )
         for index, (shot, selected) in enumerate(
@@ -1788,13 +1795,16 @@ async def long_form(
             payload.style,
             payload.soundscape,
             payload.music,
+            *(shot.overall_soundscape for shot in payload.shots if shot.overall_soundscape is not None),
+            *(shot.non_diegetic_music for shot in payload.shots if shot.non_diegetic_music is not None),
             *(reference.description for reference in payload.references),
         ],
     )
     prompts = [
         shot_prompt(
-            payload.style, shot.prompt, selected, index=index, continuous=True,
-            soundscape=payload.soundscape, music=payload.music,
+            payload.style, shot.prompt, selected, index=index,
+            soundscape=payload.soundscape if shot.overall_soundscape is None else shot.overall_soundscape,
+            music=payload.music if shot.non_diegetic_music is None else shot.non_diegetic_music,
             dialogue=shot.dialogue, speakers=speakers, screen_text=shot.screen_text,
         )
         for index, (shot, selected) in enumerate(

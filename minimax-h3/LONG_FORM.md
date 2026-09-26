@@ -61,13 +61,21 @@ Package code never opens client filenames or downloads supplied references itsel
 `style` controls shared visual treatment; location appearance belongs in a scene
 reference, and events/camera actions belong in shot prompts. Optional `soundscape`
 and `music` provide shared audio direction. Set `music` to `N/A` for no score.
-When omitted, audio sections defer to explicit shot instructions rather than inventing
-speech or a score. Keep synchronized dialogue inside the shot prompt, using stable
+Each shot can override these with `overall_soundscape` and `non_diegetic_music`.
+An omitted or null override inherits its shared value; an empty string deliberately
+leaves that section blank. Both section headings are emitted for every shot without
+generated filler. Use `N/A` for an explicit silence/no-score instruction, not an empty string.
+Keep synchronized dialogue inside the shot prompt, using stable
 speaker IDs and the official form `{Lena} (S1) says, <d>[English] Your move.</d>`.
 
-The compiler emits `subject_definitions`, `summary`, `detailed_description`,
-`overall_soundscape`, and `non_diegetic_music`. Generated `retention_analysis` and
-`fully_preserved` prose are omitted. Style opens the detailed description before `[Shot 1]`.
+The compiler follows the official six-section reference format: `subject_definitions`,
+`summary`, `retention_analysis`, `detailed_description`, `overall_soundscape`, and
+`non_diegetic_music`. `summary` identifies the reference-generation task; retention
+records the visual role of each referenced character or environment. Style opens the
+detailed description, followed by `[Shot 1]` and the authored shot without an injected
+camera/continuity/narration preamble. Continuation still uses prior audio/video context;
+the writer supplies any desired direction in style or shot text. Actions and dialogue
+use `<Subject N>`; `<Picture N>` identifies the source image in each subject definition.
 It preserves explicit dialogue and display text. Quotation delimiters in scene
 directions are removed; it does not run an LLM rewrite or infer speakers.
 The compiler defines each character/environment separately and retains its visual
@@ -227,8 +235,8 @@ Manual H3 dialogue remains supported with an empty `dialogue` list. A story must
 either structured dialogue or manual `<d>`/`(S1)` markup, so automatic IDs cannot collide
 with hand-authored IDs. Manual `<d>` bodies are preserved, including literal braces.
 Keep dialogue in the detailed shot description, not `soundscape` or `music`; the latter
-sections describe ambience and audience-only score. The default direction follows
-explicitly described vocal cues and keeps ambience and physical sounds between lines.
+sections describe ambience and audience-only score. The writer supplies vocal cues,
+ambience and physical sounds between lines; no generic vocal direction is inserted.
 An empty dialogue list does **not** mean total silence. Only explicit soundscape `N/A`
 requests total silence; music `N/A` requests no score.
 

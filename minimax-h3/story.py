@@ -217,7 +217,6 @@ def shot_prompt(
     references: Sequence[StoryReference],
     *,
     index: int,
-    continuous: bool = False,
     soundscape: str = "",
     music: str = "",
     dialogue: Sequence[DialogueLine] = (),
@@ -268,6 +267,7 @@ def shot_prompt(
             fields=["soundscape", "music"],
         )
     subjects: list[str] = []
+    retention: list[str] = []
     for slot, reference in enumerate(references, 1):
         label = labels[reference.name.casefold()]
         appearance = _unquote_narrative(reference.description.strip())
@@ -275,15 +275,12 @@ def shot_prompt(
             f"{label} is {reference.name}, the {reference.kind} shown in <Picture {slot}>."
             + (f" {appearance}" if appearance else "")
         )
-    if continuous and index > 0:
-        direction = (
-            "Continue the preceding action and camera motion seamlessly; preserve the same "
-            "environment and soundscape, with no cut or establishing view. "
+        retained = (
+            "the identity and defining visual features of the referenced character"
+            if reference.kind == "character"
+            else "the architecture, materials and defining features of the referenced environment"
         )
-    elif continuous:
-        direction = "Begin one continuous camera take. Establish the opening composition and action. "
-    else:
-        direction = "One continuous shot. Compose a new camera view and animate the subjects. "
+        retention.append(f"{label} (appears in [Shot 1]): fully_preserved - {retained}.")
     description = substitute(description)
     if not description.strip():
         raise InvalidRequest(
@@ -316,35 +313,17 @@ def shot_prompt(
         part if part.startswith("<d>") else _STORY_MARKER.sub(literal, part)
         for part in _DIALOGUE_BODY.split(description)
     )
-    direction += (
-        "Vocal content follows the explicitly described lines and cues. Between them, "
-        "the described ambience and physical sounds continue. "
-    )
-    prompt = "\n\n".join(
-        (
-            "subject_definitions:\n" + "\n".join(subjects),
-            "summary:\n[reference generation] Generate the described shot using "
-            + ", ".join(labels.values())
-            + " as visual references for the defined subjects and environment.",
-            "detailed_description:\n"
-            + (substitute(style) + "\n" if style.strip() else "")
-            + "[Shot 1]\n"
-            + direction
-            + "\n"
-            + description,
-            "overall_soundscape:\n"
-            + substitute(
-                soundscape
-                or "Ambient and physical sounds accompany the visible action; "
-                "they continue between spoken lines."
-            ),
-            "non_diegetic_music:\n"
-            + substitute(
-                music
-                or "Background music is present only when explicitly specified."
-            ),
-        )
-    )
+    sections = [
+        "subject_definitions:\n" + "\n".join(subjects),
+        "summary:\n[reference generation] The video depicts " + ", ".join(labels.values()) + ".",
+        "retention_analysis:\n" + "\n".join(retention),
+        "detailed_description:\n"
+        + (substitute(style) + "\n" if style.strip() else "")
+        + "[Shot 1]\n" + description,
+    ]
+    sections.append("overall_soundscape:\n" + substitute(soundscape))
+    sections.append("non_diegetic_music:\n" + substitute(music))
+    prompt = "\n\n".join(sections)
     if len(prompt) > 4096:
         raise InvalidRequest(
             f"shot {index + 1}'s style, audio, reference descriptions and shot exceed 4096 "

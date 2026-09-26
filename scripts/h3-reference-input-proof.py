@@ -38,7 +38,7 @@ async def main() -> None:
     selected = select_references(["HERO", "depot"], validate_references([hero, depot]), index=0)
     text = shot_prompt(
         "Photorealistic.", "{hErO} walks through {DEPOT}.", selected,
-        index=0, continuous=True, soundscape="Rain and footsteps.", music="N/A",
+        index=0, soundscape="Rain and footsteps.", music="N/A",
     )
     assert hero.description in text and "<Subject 1> walks through <Subject 2>" in text
     sections = (
@@ -48,10 +48,6 @@ async def main() -> None:
     positions = [text.index(section + ":") for section in sections]
     assert positions == sorted(positions)
     assert text.index("Photorealistic.") < text.index("[Shot 1]\n")
-    assert "Continue the preceding" not in text
-    assert "Continue the preceding" in shot_prompt(
-        "", "{hero} continues walking.", selected, index=1, continuous=True
-    )
     assert depot.description in image_prompt(depot)
     for invalid in ([hero, StoryReference("HERO", "scene", "Duplicate")], [StoryReference("empty", "scene")]):
         try:
