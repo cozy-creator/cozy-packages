@@ -26,6 +26,7 @@ from pathlib import Path
 from threading import Event, get_ident
 from types import SimpleNamespace
 from typing import Any, Literal, cast, get_type_hints
+from unittest.mock import patch
 
 import msgspec
 import numpy as np
@@ -1880,10 +1881,10 @@ def arm_adaln_pruned() -> None:
                         return
     observe("all canonical block rows equal the dynamic fixture", f"{len(evaluations)} evaluations")
 
-    local = torch.tensor([0.0, _as_float32(0.999)], dtype=torch.float32)
-    full_temb = full.time_embedder(full.time_proj(local))
-    table_rows = pruned.time_embedder(pruned.time_proj(local))
-    hidden = torch.randn(1, 4, config["hidden_size"])
+    local_steps = torch.tensor([0.0, _as_float32(0.999)], dtype=torch.float32)
+    full_temb = full.time_embedder(full.time_proj(local_steps))
+    table_rows = pruned.time_embedder(pruned.time_proj(local_steps))
+    hidden = torch.randn(1, 4, full.config.hidden_size)
     indices = torch.tensor([0, 0, 1, 0])
     check(
         "final normalization table equals the dynamic fixture",
@@ -2488,14 +2489,14 @@ def arm_media() -> None:
         ),
         ("h264", DEFAULT_FRAMES, "aac", True),
     )
-    decoded = fake_media_decoder(attempt).value(
+    decoded_video = fake_media_decoder(attempt).value(
         fake_input(finished.video, attempt=attempt.request_id, max_decoded_bytes=1 << 30)
     )
-    assert isinstance(decoded, DecodedVideo)
+    assert isinstance(decoded_video, DecodedVideo)
     played = torch.stack(
         [
             torch.frombuffer(bytearray(frame), dtype=torch.uint8).reshape(64, 96, 3)
-            for frame in decoded.frames_rgb
+            for frame in decoded_video.frames_rgb
         ]
     )
     error = (played.float() - reference.float()).pow(2).mean()
@@ -2503,10 +2504,10 @@ def arm_media() -> None:
     check(
         "the runtime decodes the mp4 back to the clip's geometry, clock and soundtrack",
         (
-            decoded.frame_count,
-            (decoded.width, decoded.height),
-            decoded.time_base * decoded.frame_durations[0],
-            None if decoded.soundtrack is None else decoded.soundtrack.channels,
+            decoded_video.frame_count,
+            (decoded_video.width, decoded_video.height),
+            decoded_video.time_base * decoded_video.frame_durations[0],
+            None if decoded_video.soundtrack is None else decoded_video.soundtrack.channels,
         ),
         (DEFAULT_FRAMES, (96, 64), Fraction(1, FPS), 2),
     )
@@ -2707,9 +2708,9 @@ def arm_numerics() -> None:
 
     # Real stored FP8 supports conversion but not every observer reduction. Track
     # actual casts so a whole-weight float32 copy cannot pass the bounded proof.
-    class CastSizes(TorchDispatchMode):  # type: ignore[misc]  # Torch is absent in static CI.
+    class CastSizes(TorchDispatchMode):
         def __init__(self) -> None:
-            super().__init__()
+            TorchDispatchMode.__init__(self)
             self.elements: list[int] = []
 
         def __torch_dispatch__(
@@ -2771,14 +2772,15 @@ def arm_numerics() -> None:
     )
 
     module = torch.nn.Linear(4, 4)
-    module.register_buffer("derived_rotary", torch.tensor([float("nan")]), persistent=False)
+    rotary_buffer = torch.tensor([float("nan")])
+    module.register_buffer("derived_rotary", rotary_buffer, persistent=False)
     refusal(
         "nonpersistent resident buffer is inspected",
         lambda: checks.component("rotary", module),
         "numerical_nonfinite",
     )
     check("bad resident buffer is named", telemetry.rows[-1]["tensor"], "derived_rotary")
-    module.derived_rotary.fill_(1)
+    rotary_buffer.fill_(1)
     checks.component("rotary", module)
 
     value = torch.ones(1, 4)
@@ -2821,18 +2823,13 @@ def arm_numerics() -> None:
     finally:
         foreign.remove()
 
-    original_register = module.register_forward_hook
-    module.register_forward_hook = fail_forward
-    try:
+    with patch.object(module, "register_forward_hook", side_effect=fail_forward):
         refusal("second hook registration failure cleans first", bad_input, "RuntimeError")
         check(
             "registration failure leaves no diagnostic hooks",
             (len(module._forward_pre_hooks), len(module._forward_hooks)),
             (0, 0),
         )
-    finally:
-        module.register_forward_hook = original_register
-
     # Execute the real official scheduler with finite extremes: its update overflows.
     video_scheduler, audio_scheduler = MiniMaxH3Scheduler(), MiniMaxH3Scheduler()
     for scheduler in (video_scheduler, audio_scheduler):
@@ -2872,11 +2869,11 @@ def arm_numerics() -> None:
 def arm_resident_fill() -> None:
     print("\n== resident weights are scanned once per fill ==")
 
-    class Kernels(TorchDispatchMode):  # type: ignore[misc]  # Torch is absent in static CI.
+    class Kernels(TorchDispatchMode):
         """Every dispatched operator; a reused verdict must launch none at all."""
 
         def __init__(self) -> None:
-            super().__init__()
+            TorchDispatchMode.__init__(self)
             self.dispatched = 0
 
         def __torch_dispatch__(
@@ -2951,7 +2948,7 @@ def arm_resident_fill() -> None:
 
     print("\n== step checks settle once, after the loop ==")
 
-    class Sampler(torch.nn.Module):  # type: ignore[misc]
+    class Sampler(torch.nn.Module):
         def __init__(self) -> None:
             super().__init__()
             self.calls = 0
@@ -3408,7 +3405,7 @@ def arm_interface() -> None:
         {"name": "seed", "type": {"union": ["int", "null"]}, "wire": "optional"},
     )
     unseeded = msgspec.json.decode(
-        b'{"shots":[{"prompt":"x"},{"prompt":"y","seed":null}]}',
+        b'{"references":[{"name":"scene","kind":"scene","description":"Garden"}],"shots":[{"prompt":"x"},{"prompt":"y","seed":null}]}',
         type=package.LongFormInput,
     )
     check(
@@ -3416,10 +3413,12 @@ def arm_interface() -> None:
         [s.seed for s in unseeded.shots],
         [None, None],
     )
-    check("long-form defaults to turbo", package.LongFormInput(shots=[]).mode, "turbo")
+    check(
+        "long-form defaults to turbo", package.LongFormInput(references=[], shots=[]).mode, "turbo"
+    )
     check(
         "long-form has no contradictory standard step default",
-        package.LongFormInput(shots=[]).steps,
+        package.LongFormInput(references=[], shots=[]).steps,
         None,
     )
     check(
@@ -3706,7 +3705,7 @@ def reference_pdd_plan(step_sizes: Any, start: int, block_size: int) -> Any:
     return plan
 
 
-class ReferenceParallelHead(torch.nn.Module):  # type: ignore[misc]
+class ReferenceParallelHead(torch.nn.Module):
     def __init__(self, source: Any, num_steps: int) -> None:
         super().__init__()
         self.num_steps = num_steps
@@ -3724,7 +3723,7 @@ class ReferenceParallelHead(torch.nn.Module):  # type: ignore[misc]
         return torch.nn.functional.linear(hidden_states, weight, bias)
 
 
-class ReferenceLoRALinear(torch.nn.Module):  # type: ignore[misc]
+class ReferenceLoRALinear(torch.nn.Module):
     def __init__(self, base: Any, rank: int, alpha: float) -> None:
         super().__init__()
         self.base = base
@@ -3920,19 +3919,21 @@ def arm_turbo_plan() -> None:
     _, turbo, _, _ = turbo_layout()
     check("the two grids share only the origin", set(turbo.video) & set(turbo.audio), {0.0})
     for modality, shift in grids.items():
-        plan = pdd_head_plan(shift, steps, block)
+        head_plan = pdd_head_plan(shift, steps, block)
         step_sizes = pdd_time_grid(shift, steps).diff()
         check(
             f"{modality} head plan rows are the reference's per-block plans",
             all(
-                torch.equal(plan[index], reference_pdd_plan(step_sizes, index * block, block)[0])
+                torch.equal(
+                    head_plan[index], reference_pdd_plan(step_sizes, index * block, block)[0]
+                )
                 for index in range(steps // block)
             ),
             True,
         )
         check(
             f"{modality} head plan rows sum to one",
-            torch.allclose(plan.sum(1), torch.ones(8, dtype=torch.float64)),
+            torch.allclose(head_plan.sum(1), torch.ones(8, dtype=torch.float64)),
             True,
         )
     refusal(
@@ -4014,11 +4015,11 @@ def arm_turbo_heads() -> None:
     red("whole-shard projection changes GEMM row shapes", len(set(untiled.rows)), 1)
 
 
-class _GemmRows(TorchDispatchMode):  # type: ignore[misc]
+class _GemmRows(TorchDispatchMode):
     """Observe real projection shapes without substituting any numeric operation."""
 
     def __init__(self) -> None:
-        super().__init__()
+        TorchDispatchMode.__init__(self)
         self.rows: list[int] = []
         self.strides: list[tuple[int, int]] = []
 
@@ -4030,11 +4031,11 @@ class _GemmRows(TorchDispatchMode):  # type: ignore[misc]
         return func(*args, **(kwargs or {}))
 
 
-class _Allocations(TorchDispatchMode):  # type: ignore[misc]
+class _Allocations(TorchDispatchMode):
     """Every tensor an operator allocates: new storage, not a view of one seen before."""
 
     def __init__(self, *known: Any) -> None:
-        super().__init__()
+        TorchDispatchMode.__init__(self)
         self.known = {t.untyped_storage().data_ptr() for t in known}
         self.sizes: list[int] = []
 
@@ -4082,7 +4083,7 @@ def arm_turbo_lora() -> None:
 
     refusal(
         "a prequantized operand cannot silently change the LoRA computation",
-        lambda: factors.accumulate(SimpleNamespace(payload=x, scale=1.0), base.clone()),
+        lambda: factors.accumulate(SimpleNamespace(payload=x, scale=1.0), base.clone()),  # type: ignore[arg-type]  # Deliberately invalid input exercises the runtime refusal.
         "ValueError",
     )
     refusal(

@@ -10,9 +10,25 @@ files = [
     "minimax-h3-tools/src",
 ]
 strict = true
+show_error_codes = true
+warn_unused_configs = true
+enable_error_code = ["ignore-without-code"]
+follow_imports = "silent"
 warn_unreachable = true
 disallow_any_generics = true
 implicit_reexport = false
+# These optional upstream Torch APIs have no typed call signature. Keep checking
+# their callers, arguments with available stubs, and every first-party function.
+untyped_calls_exclude = [
+    "torch.cuda.streams.Event",
+    "torch._tensor.Tensor.split",
+    "torch._tensor.Tensor.unique",
+    "torch.functional.unique",
+    "torch.backends.cuda",
+    "torch.utils._python_dispatch.TorchDispatchMode",
+]
+# Resolve sibling author modules in focused checks as well as the complete file set.
+mypy_path = ["anima", "sdxl", "minimax-h3", "minimax-h3-tools/src", "qwen-image-2", "scripts"]
 
 # Static checks install the typed Runtime distribution from PyPI. Heavy model libraries remain
 # absent to check the package-facing contracts without their large third-party stub trees.
@@ -20,11 +36,9 @@ implicit_reexport = false
 [[tool.mypy.overrides]]
 module = [
     "torch.*", "torchvision.*", "transformers.*", "tokenizers.*", "numpy.*", "PIL.*",
-    "safetensors.*", "diffusers.*", "tfsbench", "tensorfs", "tensorfs.*", "cozy_eval.*",
+    "safetensors.*", "diffusers.*", "tfsbench",
     "av", "av.*",
     "merge_arithmetic",
-    # The pinned private scratch probe requires the unmerged LoRA development cohort.
-    "cozy_runtime.internal.lora",
     "attention_backends",
 ]
 ignore_missing_imports = true

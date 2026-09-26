@@ -49,7 +49,9 @@ def main(
         raise ValueError("H3 VAE returned invalid reconstruction geometry or values")
     rgb, _ = _rgb8(torch, video)
     facts = output_integrity(rgb.numpy())
-    tel.metric("vae.grid_peak_ratio", float(facts.grid_peak_ratio))
+    if facts.grid_peak_ratio is None:
+        raise ValueError("H3 VAE grid diagnostic did not produce a measurement")
+    tel.metric("vae.grid_peak_ratio", facts.grid_peak_ratio)
     for name, value in hashes.items():
         tel.log("resident tensor fingerprint", tensor=name, sha256=value)
     ctx.raise_if_cancelled()

@@ -145,7 +145,7 @@ def main() -> None:
         }
         del decoded
         torch.cuda.empty_cache()
-    latents = None
+    del latents
 
     # `encode_vae_condition` has no autocast, so the encode side must not move at all.
     pixels = torch.randn(1, 3, 5, 128, 128, generator=torch.Generator().manual_seed(2)).to(device)

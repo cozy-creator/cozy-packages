@@ -94,7 +94,7 @@ from story import (  # noqa: E402
     validate_references,
 )
 
-MODEL, CODE, LORA = ("sha256:" + value * 64 for value in ("1", "2", "3"))
+MODEL, LORA = ("sha256:" + value * 64 for value in ("1", "3"))
 WIDTH, HEIGHT, RATE = 96, 64, 32000
 ROUTES: list[str] = []
 

@@ -74,7 +74,7 @@ jobs:
         run: |
           uv venv --python 3.12
           uv pip install --refresh-package cozy-runtime \
-            "cozy-runtime>=0.18.21,<1" \
+            "cozy-runtime>=0.18.28,<1" "cozy-eval>=0.7.2" "tensorfs>=0.3.54" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
       - name: Fences
@@ -86,7 +86,7 @@ jobs:
           uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ qwen-image-2/ examples/
 
       - name: Types
-        run: uv run --no-project mypy
+        run: sh scripts/typecheck.sh
 
       # A package with no `[project]` pyproject and no lock resolves no `ResolvedWheelSet`
       # and cannot publish at all, so a stale or absent lock is a release-blocking fact and

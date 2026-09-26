@@ -8,7 +8,6 @@ are qualified by the separate binding/resume/numerical drivers, not by this proo
 from __future__ import annotations
 
 import argparse
-import hashlib
 import io
 import json
 import subprocess
@@ -35,7 +34,7 @@ from cozy_runtime.author._calls import _Broker, _CallType
 from cozy_runtime.internal import (
     installed_interfaces,
     interface_wheel,
-    package_environment,
+    package_installation,
     package_interface,
 )
 from cozy_runtime.internal.discovery import Discovered
@@ -74,7 +73,7 @@ def run_overlay(root: Path) -> None:
     surfaces = describe(job.app)
     assert "precompute-adaln" not in {surface.name for surface in surfaces}
     bindings = {
-        ("", surface.fn.__module__, surface.fn.__name__): _CallType(
+        (surface.fn.__module__, surface.fn.__name__): _CallType(
             "sha256:" + "f" * 64,
             surface.fn.__module__,
             surface.fn.__name__,
@@ -189,7 +188,7 @@ def main() -> None:
         interface,
         distribution="minimax-h3-tools",
         version=str(metadata["Version"]),
-        implementation_digest="sha256:" + hashlib.sha256(implementation).hexdigest(),
+        implementation_filename=args.implementation_wheel.name,
         implementation_wheel=implementation,
     )
     with tempfile.TemporaryDirectory(prefix="h3-adaln-overlay-") as area:
@@ -200,8 +199,14 @@ def main() -> None:
             assert b"Requires-Dist: torch" in preserved
             assert archive.read("h3_tables/assets/timestep-plan.fl2va.json")
         exports = installed_interfaces.read(
-            package_environment.InstalledEnvironment(
-                root, root, Path(sys.executable), b"", "", "sha256:" + "a" * 64, True
+            package_installation.InstalledEnvironment(
+                installation_id="overlay-proof",
+                generation=root,
+                site_packages=root,
+                python=Path(sys.executable),
+                package="minimax-h3-tools",
+                release="sha256:" + "a" * 64,
+                reused=True,
             )
         )
         assert "precompute_adaln" not in {row["export"] for row in exports}
