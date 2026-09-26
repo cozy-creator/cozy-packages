@@ -1599,7 +1599,7 @@ async def long_form_cuts(
     planned_frames = [frames_for(shot.duration_s) for shot in payload.segments]
     render_work = [frames * steps for frames in planned_frames]
     reference_steps = 40
-    reference_work = sum(ref.image is None for ref in payload.references) * reference_steps
+    reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * reference_steps
     total_work = sum(render_work) + sum(planned_frames) + 1 + reference_work
     completed_work = 0
     prefetch(cut_segment_turbo if payload.mode == "turbo" else cut_segment)
@@ -1777,7 +1777,7 @@ async def long_form(
     ]
     render_work = [plan.sample_frames * steps for plan in plans]
     requested_frames = sum(plan.delivered_frames for plan in plans)
-    reference_work = sum(ref.image is None for ref in payload.references) * 40
+    reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * 40
     total_work = sum(render_work) + requested_frames + 1 + reference_work
     prefetch(motion_segment_turbo if payload.mode == "turbo" else motion_segment)
     images = await _create_references(ctx, payload.references, tel)
