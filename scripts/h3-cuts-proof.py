@@ -474,18 +474,14 @@ def drive(
     broker = _Broker(
         parent,
         {
-            ("", "h3", export): _CallType(
+            ("h3", export): _CallType(
                 "sha256:" + "5" * 64,
                 "h3",
                 export,
                 cast(type[msgspec.Struct], surface.payload_type),
                 h3.MotionOutput if continuous else h3.SegmentOutput,
             ),
-            (
-                REFERENCE_BINDING.interface_digest,
-                "qwen_image_2",
-                "generate_image",
-            ): REFERENCE_BINDING,
+            ("qwen_image_2", "generate_image"): REFERENCE_BINDING,
         },
         exchange,
     )
