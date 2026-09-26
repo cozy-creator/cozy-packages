@@ -1,7 +1,7 @@
 # Fixed subjects for camera-cut stories
 
-`long_form_cuts` generates one fixed image per named character or scene using
-`paul/qwen-image-2/generate_image` before rendering any H3 shot. Character images use a
+`long_form_cuts` uses a supplied `image` or generates it from the shared `description`
+using `paul/qwen-image-2/generate_image` before rendering any H3 shot. Generated character images use a
 plain white background. Scene images contain the described location. The whole
 request declares one to nine references; each shot explicitly selects its named
 references. Each shot is an independent Ref2VA generation, with no first/last-frame
@@ -22,11 +22,11 @@ Each selected image defines an independent `<Subject N>` describing a reusable
 character or environment, linked to its `<Picture N>`. Retention analysis specifies
 identity and appearance or environment features, while the shot supplies its own
 composition and movement. `{name}` in authored prompt text becomes the associated
-subject label. Missing, duplicate and unknown names are rejected before generation.
+subject label. Names are case-insensitive. Missing, duplicate and unknown names are rejected before generation.
 The still is never described as a starting frame or a target video composition.
 
-The existing `long_form` continuous-shot API remains available for intentional
-first-frame continuation. This is an explicit input-contract change to
+The `long_form` continuous-shot API uses fixed references and completed AV-tail
+continuation. This is an explicit input-contract change to
 `long_form_cuts`: generated-shot history is removed, not silently ignored.
 
 Final outputs remain only the assembled MP4 and last frame. Fixed images and
@@ -68,5 +68,6 @@ bounded assembly, two public assets, stable seeds, preflight refusal, cancellati
 and partial delivery. This is a CPU composition proof, not Qwen/H3 inference,
 package-index transport, or visual-quality qualification.
 
-The existing `long_form` continues to use first-frame continuation and its own
-previously defined shot bound. It is not routed through this reference generator.
+The `long_form` API uses this same mixed reference resolver and completed AV context,
+with no shot-count cap. See [LONG_FORM.md](../LONG_FORM.md) for JSON filenames,
+`style`, the six-section prompt format and shared audio direction.
