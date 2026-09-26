@@ -1595,8 +1595,12 @@ async def long_form_cuts(
         [shot.prompt for shot in payload.shots],
         [shot.dialogue for shot in payload.shots],
         selected_references,
-        shared=[payload.style, payload.soundscape, payload.music,
-                *(reference.description for reference in payload.references)],
+        shared=[
+            payload.style,
+            payload.soundscape,
+            payload.music,
+            *(reference.description for reference in payload.references),
+        ],
     )
     prompts = [
         shot_prompt(
@@ -1766,8 +1770,12 @@ async def long_form(
         [shot.prompt for shot in payload.shots],
         [shot.dialogue for shot in payload.shots],
         selected_references,
-        shared=[payload.style, payload.soundscape, payload.music,
-                *(reference.description for reference in payload.references)],
+        shared=[
+            payload.style,
+            payload.soundscape,
+            payload.music,
+            *(reference.description for reference in payload.references),
+        ],
     )
     prompts = [
         shot_prompt(

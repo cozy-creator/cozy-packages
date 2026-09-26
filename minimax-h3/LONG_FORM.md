@@ -196,8 +196,8 @@ Manual H3 dialogue remains supported with an empty `dialogue` list. A story must
 either structured dialogue or manual `<d>`/`(S1)` markup, so automatic IDs cannot collide
 with hand-authored IDs. Manual `<d>` bodies are preserved, including literal braces.
 Keep dialogue in the detailed shot description, not `soundscape` or `music`; the latter
-sections describe ambience and audience-only score. The default direction follows explicitly described vocal cues and keeps ambience and
-physical sounds between lines.
+sections describe ambience and audience-only score. The default direction follows
+explicitly described vocal cues and keeps ambience and physical sounds between lines.
 An empty dialogue list does **not** mean total silence. Only explicit soundscape `N/A`
 requests total silence; music `N/A` requests no score.
 
