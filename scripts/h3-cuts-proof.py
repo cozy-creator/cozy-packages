@@ -427,18 +427,20 @@ def drive(
             }
             for index in range(count)
         ],
-        "prompt": "An adventure beside a woodland stream. No dialogue.",
+        "style": "Photorealistic nature photography.",
+        "soundscape": "A flowing woodland stream. No dialogue.",
+        "music": "N/A",
         "references": [
             {
                 "name": "Rover",
                 "kind": "character",
-                "prompt": "A red robot with four wheels.",
+                "description": "A red robot with four wheels.",
                 "seed": 21,
             },
             {
                 "name": "Bridge",
                 "kind": "scene",
-                "prompt": "A stone bridge over a woodland stream.",
+                "description": "A stone bridge over a woodland stream.",
                 "seed": 22,
             },
         ],
@@ -450,13 +452,13 @@ def drive(
         for index in range(0, count, 2):
             del wire["shots"][index]["references"]
     if prompt is not None:
-        wire["prompt"] = prompt
+        wire["style"] = prompt
     if bad == "unknown":
         wire["shots"][-1]["references"] = ["Absent"]
     elif bad == "duplicate":
-        wire["references"][1]["name"] = "Rover"
+        wire["references"][1]["name"] = "ROVER"
     elif bad == "empty":
-        wire["references"][0]["prompt"] = " "
+        wire["references"][0]["description"] = " "
     elif bad == "seed":
         wire["references"][1]["seed"] = -1
     elif bad == "seed-too-large":
@@ -465,25 +467,21 @@ def drive(
         wire["shots"][-1]["prompt"] += " {Absent}"
     elif bad == "too-many-references":
         wire["references"] = [
-            {"name": f"Person{i}", "kind": "character", "prompt": "A person"} for i in range(10)
+            {"name": f"Person{i}", "kind": "character", "description": "A person"} for i in range(10)
         ]
     elif bad == "legacy":
         wire["history_frames"] = 0
     broker = _Broker(
         parent,
         {
-            ("", "h3", export): _CallType(
+            ("h3", export): _CallType(
                 "sha256:" + "5" * 64,
                 "h3",
                 export,
                 cast(type[msgspec.Struct], surface.payload_type),
                 h3.MotionOutput if continuous else h3.SegmentOutput,
             ),
-            (
-                REFERENCE_BINDING.interface_digest,
-                "qwen_image_2",
-                "generate_image",
-            ): REFERENCE_BINDING,
+            ("qwen_image_2", "generate_image"): REFERENCE_BINDING,
         },
         exchange,
     )
@@ -529,8 +527,10 @@ def drive(
     with PILImage.open(io.BytesIO(final.read_bytes())) as a, PILImage.open(source[last]) as b:
         assert a.tobytes() == b.tobytes()
     with av.open(io.BytesIO(result.result.video.read_bytes()), mode="r") as container:
-        assert sum(1 for _ in container.decode(video=0)) == delivered * (
-            duration_s * FPS if continuous else frames_for(duration_s)
+        assert sum(1 for _ in container.decode(video=0)) == sum(
+            min(duration_s, (362 - (context_frames if index else 0)) // FPS) * FPS
+            if continuous else frames_for(duration_s)
+            for index in range(delivered)
         )
     overall = [
         event.overall_fraction
