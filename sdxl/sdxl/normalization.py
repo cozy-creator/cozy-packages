@@ -11,6 +11,8 @@ import msgspec
 import numpy as np
 from cozy_runtime.author import (
     Context,
+    MemoDistribution,
+    MemoResource,
     ModelArtifact,
     Telemetry,
     UnsupportedInput,
@@ -274,7 +276,17 @@ def _assemble_normalized(
         return ctx.adopt_model(transaction.receipt or transaction.commit())
 
 
-@invocable(memoize=True)
+_NORMALIZATION_MEMO = (
+    SourceTensor, TensorRoute, NormalizationPlan,
+    "tensorfs.derived", MemoResource("sdxl", "normalization.json"),
+    MemoDistribution("tensorfs"), MemoDistribution("numpy"), MemoDistribution("msgspec"),
+)
+
+
+@invocable(memoize=True, memo_dependencies=(
+    *_NORMALIZATION_MEMO, _component_plan, _normalize, _validate, _bytes,
+    _validate_position_ids, _targets,
+))
 async def normalize_component(
     ctx: Context,
     *,
@@ -286,7 +298,9 @@ async def normalize_component(
     return _normalize(source, ctx, tel, _component_plan(PLAN, component))
 
 
-@invocable(memoize=True)
+@invocable(memoize=True, memo_dependencies=(
+    *_NORMALIZATION_MEMO, _assemble_normalized, _component_plan,
+))
 async def assemble_normalized(
     ctx: Context,
     *,

@@ -26,6 +26,7 @@ from tensorfs.derived import (
     Tensor,
 )
 
+from ._memo import ADALN
 from ._table_layout import TableLayout
 from .kernel import H3Topology, precompute_tables, removed_keys, source_shapes, table_shapes
 from .model_config import dual_adaln_pruned_config, dual_full_config, parse_production_config
@@ -219,7 +220,7 @@ def _project(
         return ctx.adopt_model(transaction.commit())
 
 
-@invocable(memoize=True)
+@invocable(memoize=True, memo_dependencies=ADALN)
 async def select_adaln_weights(ctx: Context, *, source: H3FullTransformer, task: Task) -> Selection:
     ctx.raise_if_cancelled()
     structure = inspection(ctx, source)
@@ -328,7 +329,7 @@ def _compute_into(
     tel.metric("h3.adaln.reused_tables", float(len(completed)), unit="tables")
 
 
-@invocable(memoize=True)
+@invocable(memoize=True, memo_dependencies=ADALN)
 async def compute_adaln_tables(
     ctx: Context,
     *,
@@ -510,7 +511,7 @@ def _apply_adaln(
         return ctx.adopt_model(transaction.commit())
 
 
-@invocable(memoize=True)
+@invocable(memoize=True, memo_dependencies=ADALN)
 async def apply_adaln(
     ctx: Context,
     *,
@@ -521,7 +522,7 @@ async def apply_adaln(
     return _apply_adaln(ctx, source=source, fl2va=fl2va, ref2va=ref2va, require_pruned=False)
 
 
-@invocable(memoize=True)
+@invocable(memoize=True, memo_dependencies=ADALN)
 async def retable_adaln(
     ctx: Context,
     *,
