@@ -229,10 +229,17 @@ def reference_sections(references: Sequence[StoryReference]) -> tuple[str, str]:
             pictures += 1
             label_kind = f"Picture {pictures}"
         label = f"<{reference.name}>"
-        definitions.append(
-            f"{label} is the {reference.kind} shown in <{label_kind}>."
-            + (f" {reference.description}" if reference.description else "")
-        )
+        prompt_label = f"<{label_kind}>"
+        if reference.kind == "audio":
+            definitions.append(
+                f"{prompt_label} is the supplied audio reference for {label}."
+                + (f" {reference.description}" if reference.description else "")
+            )
+        else:
+            definitions.append(
+                f"{label} is the {reference.kind} shown in {prompt_label}."
+                + (f" {reference.description}" if reference.description else "")
+            )
         preserved = (
             "the identity and defining visual features of the referenced character"
             if reference.kind == "character"
@@ -244,5 +251,5 @@ def reference_sections(references: Sequence[StoryReference]) -> tuple[str, str]:
             f"fully_preserved - {preserved}."
             if reference.retention_analysis is None else reference.retention_analysis
         )
-        retention.append(f"{label}: {analysis}")
+        retention.append(f"{prompt_label if reference.kind == 'audio' else label}: {analysis}")
     return "\n".join(definitions), "\n".join(retention)
