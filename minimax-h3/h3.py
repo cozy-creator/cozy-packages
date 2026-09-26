@@ -820,7 +820,9 @@ def fl2va(
     return _keyframes_to_video(ctx, "fl2va", payload, assets, model, out, tel, steps=payload.steps)
 
 
-@app.entrypoint
+@app.entrypoint(
+    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER}
+)
 def fl2va_turbo(
     ctx: Context,
     payload: FirstLastFrameToVideoTurboInput,
@@ -860,7 +862,10 @@ def ref2va(
     )
 
 
-@app.entrypoint(preflight=preflight_reference_media_turbo)
+@app.entrypoint(
+    preflight=preflight_reference_media_turbo,
+    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
+)
 def ref2va_turbo(
     ctx: Context,
     payload: ReferenceMediaToVideoTurboInput,
