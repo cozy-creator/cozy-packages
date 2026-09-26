@@ -20,6 +20,7 @@ from cozy_runtime.derive.quantization import (
 )
 from tensorfs.derived import Config, Derivation
 
+from ._memo import STRUCTURE
 from .adaln_operations import (
     Selection,
     _plan,
@@ -148,7 +149,7 @@ async def precompute_adaln(
     )
 
 
-@invocable(memoize=True)
+@invocable(memoize=True, memo_dependencies=STRUCTURE)
 async def assemble_full(
     ctx: Context,
     *,

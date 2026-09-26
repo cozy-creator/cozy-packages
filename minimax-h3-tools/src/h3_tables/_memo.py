@@ -1,0 +1,22 @@
+"""Reviewed helper and resource closure; composition callers are deliberately absent."""
+from cozy_runtime.author import MemoDistribution, MemoResource
+
+STRUCTURE = (
+    "h3_tables.source", "h3_tables.order", "h3_tables.model_config",
+    "h3_tables._table_layout", "h3_tables.kernel", "h3_tables.plans", "tensorfs.derived",
+    MemoResource("h3_tables", "assets/dit-full-specs.json"),
+    MemoResource("h3_tables", "assets/model-config.json"),
+    MemoResource("h3_tables", "assets/whole-order.json"),
+    MemoDistribution("tensorfs"), MemoDistribution("msgspec"),
+)
+ADALN = (
+    *STRUCTURE, "h3_tables.adaln_operations",
+    MemoResource("h3_tables", "assets/timestep-plan.fl2va.json"),
+    MemoResource("h3_tables", "assets/timestep-plan.ref2va.json"),
+    MemoDistribution("torch"), MemoDistribution("numpy"),
+)
+TURBO = (
+    *ADALN, "h3_tables.turbo",
+    MemoResource("h3_tables", "assets/timestep-plan.fl2va.turbo.json"),
+    MemoResource("h3_tables", "assets/timestep-plan.ref2va.turbo.json"),
+)
