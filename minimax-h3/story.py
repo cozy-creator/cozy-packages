@@ -12,6 +12,8 @@ import msgspec
 from cozy_runtime.author import AssetBound, AudioAsset, ImageAsset, InvalidRequest
 
 MAX_IMAGES = 9
+MAX_AUDIO = 3
+MAX_REFERENCES = 12
 _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,47}\Z")
 
 
@@ -40,7 +42,10 @@ class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
             media_types=("image/png", "image/jpeg", "image/webp"),
         ),
     ] = None
-    audio: Annotated[AudioAsset | None, AssetBound(max_bytes=256 << 20)] = None
+    audio: Annotated[
+        AudioAsset | None,
+        AssetBound(max_bytes=256 << 20, max_decoded_bytes=2 << 30),
+    ] = None
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
 
 
@@ -94,8 +99,12 @@ def image_prompt(reference: StoryReference) -> str:
 
 
 def validate_references(references: Sequence[StoryReference]) -> dict[str, StoryReference]:
-    if not 1 <= len(references) <= MAX_IMAGES:
-        raise InvalidRequest("declare between one and nine references", fields=["references"])
+    if not 1 <= len(references) <= MAX_REFERENCES:
+        raise InvalidRequest("declare between one and twelve references", fields=["references"])
+    if sum(reference.kind == "audio" for reference in references) > MAX_AUDIO:
+        raise InvalidRequest("declare at most three audio references", fields=["references"])
+    if sum(reference.kind != "audio" for reference in references) > MAX_IMAGES:
+        raise InvalidRequest("declare at most nine image or scene references", fields=["references"])
     by_name: dict[str, StoryReference] = {}
     for reference in references:
         if not _NAME.fullmatch(reference.name):
