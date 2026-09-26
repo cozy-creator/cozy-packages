@@ -90,7 +90,7 @@ from story import (  # noqa: E402
     StoryReference,
     reference_seed,
     select_references,
-    shot_prompt,
+    segment_prompt,
     validate_references,
 )
 
@@ -418,18 +418,18 @@ def drive(
         return {"ok": True, "child_request_id": f"{parent}-child-{index}"}
 
     wire: dict[str, Any] = {
-        "shots": [
+        "segments": [
             {
-                "prompt": f"Camera angle {index}: {{Rover}} moves across {{Bridge}}.",
-                "references": ["Rover", "Bridge"] if index % 2 == 0 else ["Bridge", "Rover"],
+                "summary": "{Rover} travels across {Bridge}.",
+                "detailed_description": f"Camera angle {index}: {{Rover}} moves across {{Bridge}}.",
+                "overall_soundscape": "A flowing woodland stream.",
+                "non_diegetic_music": "N/A",
                 "duration_s": duration_s,
                 **({"seed": 0} if index == 0 else {}),
             }
             for index in range(count)
         ],
         "style": "Photorealistic nature photography.",
-        "soundscape": "A flowing woodland stream. No dialogue.",
-        "music": "N/A",
         "references": [
             {
                 "name": "Rover",
@@ -448,13 +448,10 @@ def drive(
     }
     if continuous:
         wire["context_frames"] = context_frames
-        # Omitted selections default to all declared references, in declaration order.
-        for index in range(0, count, 2):
-            del wire["shots"][index]["references"]
     if prompt is not None:
         wire["style"] = prompt
     if bad == "unknown":
-        wire["shots"][-1]["references"] = ["Absent"]
+        wire["segments"][-1]["summary"] = "{Absent} arrives."
     elif bad == "duplicate":
         wire["references"][1]["name"] = "ROVER"
     elif bad == "empty":
@@ -464,7 +461,7 @@ def drive(
     elif bad == "seed-too-large":
         wire["references"][1]["seed"] = 9007199254740992
     elif bad == "unselected":
-        wire["shots"][-1]["prompt"] += " {Absent}"
+        wire["segments"][-1]["detailed_description"] += " {Absent}"
     elif bad == "too-many-references":
         wire["references"] = [
             {"name": f"Person{i}", "kind": "character", "description": "A person"} for i in range(10)
@@ -544,9 +541,7 @@ def drive(
     assert all(len(row["assets"]) == 2 for row in sent)
     fixed = [json.loads(answers[index]["result"])["image"]["digest"] for index in range(2)]
     for index, row in enumerate(sent):
-        assert [item["asset"] for item in row["assets"]] == (
-            fixed if index % 2 == 0 else fixed[::-1]
-        )
+        assert [item["asset"] for item in row["assets"]] == fixed
         assert (
             "<Subject 1>" in row["payload"]["prompt"]
             and "fully_preserved" in row["payload"]["prompt"]
@@ -596,7 +591,7 @@ def main() -> None:
     assert len(select_references(list(named), named, index=0)) == 9
     assert reference_seed(refs[0], "request") == reference_seed(refs[0], "request")
     assert reference_seed(refs[0], "request") != reference_seed(refs[1], "request")
-    prompt = shot_prompt("A gathering", "{Person8} waves", refs, index=0)
+    prompt = segment_prompt("A gathering", "{Person8} waves", refs, index=0, summary="A gathering.")
     assert "<Subject 9> waves" in prompt and "<Picture 9>" in prompt
     assert "first frame" not in prompt and "preceding shot" not in prompt
     assert set(ROUTES) == {"ref2va", "ref2va_turbo"}

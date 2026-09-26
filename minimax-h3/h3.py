@@ -99,16 +99,12 @@ from qwen_image_2 import ImageOutput as ReferenceImageOutput
 from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate_image as generate_reference
 from story import (
-    DialogueLine,
-    ScreenText,
+    StorySegment,
+    compile_segments,
     StoryReference,
-    dialogue_speakers,
     image_prompt,
     reference_seed,
     resolve_reference_images,
-    select_references,
-    shot_prompt,
-    validate_references,
 )
 
 app = App()
@@ -1169,25 +1165,10 @@ class SegmentOutput(msgspec.Struct):
     provenance: RenderProvenance
 
 
-class ContinuousShot(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: Prompt
-    seed: int | None = None
-    duration_s: DurationSeconds = 10
-    overall_soundscape: str | None = None
-    non_diegetic_music: str | None = None
-    references: Annotated[list[str], msgspec.Meta(max_length=9)] | None = None
-    dialogue: Annotated[list[DialogueLine], msgspec.Meta(max_length=16)] = msgspec.field(
-        default_factory=list
-    )
-    screen_text: Annotated[list[ScreenText], msgspec.Meta(max_length=16)] = msgspec.field(
-        default_factory=list
-    )
-
-
 class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
     """Fixed references and completed audio/video context for one continuous sequence."""
 
-    shots: Annotated[list[ContinuousShot], msgspec.Meta(min_length=1)]
+    segments: Annotated[list[StorySegment], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
     style: str = ""
     soundscape: str = ""
@@ -1218,7 +1199,7 @@ class LongFormOutput(msgspec.Struct):
     warnings: list[str]
 
 
-def shot_seed(shot: Shot | ContinuousShot, request_id: str, index: int) -> int:
+def shot_seed(shot: Shot | StorySegment, request_id: str, index: int) -> int:
     """Choose once per request/shot, without changing seeds when its attempt retries."""
     if shot.seed is not None:
         return shot.seed
@@ -1531,24 +1512,14 @@ app.entrypoint(internal=True)(motion_segment)
 app.entrypoint(internal=True)(motion_segment_turbo)
 
 
-class CutShot(Shot, kw_only=True):
-    references: Annotated[list[str], msgspec.Meta(min_length=1, max_length=9)]
-    overall_soundscape: str | None = None
-    non_diegetic_music: str | None = None
-    dialogue: Annotated[list[DialogueLine], msgspec.Meta(max_length=16)] = msgspec.field(
-        default_factory=list
-    )
-    screen_text: Annotated[list[ScreenText], msgspec.Meta(max_length=16)] = msgspec.field(
-        default_factory=list
-    )
+class CutSegment(StorySegment):
+    duration_s: DurationSeconds = MAX_DURATION_S
 
 
 class LongFormCutsInput(msgspec.Struct, forbid_unknown_fields=True):
-    shots: Annotated[list[CutShot], msgspec.Meta(min_length=1)]
+    segments: Annotated[list[CutSegment], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
     style: str = ""
-    soundscape: str = ""
-    music: str = ""
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
 
@@ -1603,36 +1574,8 @@ async def long_form_cuts(
     if payload.mode == "turbo" and payload.steps is not None:
         raise InvalidRequest("turbo fixes eight PDD evaluations; omit steps", fields=["steps"])
     steps = TURBO_STEPS if payload.mode == "turbo" else payload.steps or DEFAULT_STEPS
-    by_name = validate_references(payload.references)
-    selected_references = [
-        select_references(shot.references, by_name, index=index)
-        for index, shot in enumerate(payload.shots)
-    ]
-    speakers = dialogue_speakers(
-        [shot.prompt for shot in payload.shots],
-        [shot.dialogue for shot in payload.shots],
-        selected_references,
-        shared=[
-            payload.style,
-            payload.soundscape,
-            payload.music,
-            *(shot.overall_soundscape for shot in payload.shots if shot.overall_soundscape is not None),
-            *(shot.non_diegetic_music for shot in payload.shots if shot.non_diegetic_music is not None),
-            *(reference.description for reference in payload.references),
-        ],
-    )
-    prompts = [
-        shot_prompt(
-            payload.style, shot.prompt, selected, index=index,
-            soundscape=payload.soundscape if shot.overall_soundscape is None else shot.overall_soundscape,
-            music=payload.music if shot.non_diegetic_music is None else shot.non_diegetic_music,
-            dialogue=shot.dialogue, speakers=speakers, screen_text=shot.screen_text,
-        )
-        for index, (shot, selected) in enumerate(
-            zip(payload.shots, selected_references, strict=True)
-        )
-    ]
-    planned_frames = [frames_for(shot.duration_s) for shot in payload.shots]
+    prompts = compile_segments(payload.style, payload.segments, payload.references)
+    planned_frames = [frames_for(shot.duration_s) for shot in payload.segments]
     render_work = [frames * steps for frames in planned_frames]
     reference_steps = 40
     reference_work = sum(ref.image is None for ref in payload.references) * reference_steps
@@ -1647,9 +1590,9 @@ async def long_form_cuts(
     warnings: list[str] = []
     failed_index, failure_code, failure_detail = -1, "", ""
     with ScanAhead(decoder, ctx.raise_if_cancelled) as scanning:
-        for index, shot in enumerate(payload.shots):
+        for index, shot in enumerate(payload.segments):
             ctx.raise_if_cancelled()
-            selected = selected_references[index]
+            selected = payload.references
             prompt = prompts[index]
             seed = shot_seed(shot, ctx.request_id, index)
             assets = Assets[Mixed](
@@ -1672,7 +1615,7 @@ async def long_form_cuts(
                 )
             try:
                 with tel.scope(
-                    f"Shot {index + 1} of {len(payload.shots)}",
+                    f"Segment {index + 1} of {len(payload.segments)}",
                     overall_range=(
                         completed_work / total_work,
                         (completed_work + render_work[index]) / total_work,
@@ -1740,18 +1683,18 @@ async def long_form_cuts(
         overall_range=(completed_work / total_work, (completed_work + 1) / total_work),
     ):
         final_frame = out.save_image(decoder.value(frame), format="png")
-    complete = len(videos) == len(payload.shots)
+    complete = len(videos) == len(payload.segments)
     if not complete:
         warnings.append(
-            f"PARTIAL DELIVERY: {len(videos)} of {len(payload.shots)} shots completed; "
-            f"shot {failed_index + 1} failed ({failure_code})."
+            f"PARTIAL DELIVERY: {len(videos)} of {len(payload.segments)} segments completed; "
+            f"segment {failed_index + 1} failed ({failure_code})."
         )
     return LongFormOutput(
         assembled.video,
         final_frame,
         complete,
         len(videos),
-        len(payload.shots),
+        len(payload.segments),
         delivered_frames,
         FPS,
         failed_index,
@@ -1780,48 +1723,18 @@ async def long_form(
         if payload.mode == "turbo"
         else (DEFAULT_STEPS if payload.steps is None else payload.steps)
     )
-    by_name = validate_references(payload.references)
-    selected_references = [
-        select_references(
-            list(by_name) if shot.references is None else shot.references, by_name, index=index
-        )
-        for index, shot in enumerate(payload.shots)
-    ]
-    speakers = dialogue_speakers(
-        [shot.prompt for shot in payload.shots],
-        [shot.dialogue for shot in payload.shots],
-        selected_references,
-        shared=[
-            payload.style,
-            payload.soundscape,
-            payload.music,
-            *(shot.overall_soundscape for shot in payload.shots if shot.overall_soundscape is not None),
-            *(shot.non_diegetic_music for shot in payload.shots if shot.non_diegetic_music is not None),
-            *(reference.description for reference in payload.references),
-        ],
-    )
-    prompts = [
-        shot_prompt(
-            payload.style, shot.prompt, selected, index=index,
-            soundscape=payload.soundscape if shot.overall_soundscape is None else shot.overall_soundscape,
-            music=payload.music if shot.non_diegetic_music is None else shot.non_diegetic_music,
-            dialogue=shot.dialogue, speakers=speakers, screen_text=shot.screen_text,
-        )
-        for index, (shot, selected) in enumerate(
-            zip(payload.shots, selected_references, strict=True)
-        )
-    ]
+    prompts = compile_segments(payload.style, payload.segments, payload.references)
     # Motion context shares the native window with new frames. Shorten requested
     # segments to its whole-second budget instead of refusing a valid 5-15s request.
     durations = [
         min(shot.duration_s, (MAX_FRAMES - (payload.context_frames if index else 0)) // FPS)
-        for index, shot in enumerate(payload.shots)
+        for index, shot in enumerate(payload.segments)
     ]
     warnings: list[str] = []
-    for index, (shot, duration) in enumerate(zip(payload.shots, durations, strict=True)):
+    for index, (shot, duration) in enumerate(zip(payload.segments, durations, strict=True)):
         if duration != shot.duration_s:
             warning = (
-                f"Shot {index + 1}: shortened from {shot.duration_s}s to {duration}s "
+                f"Segment {index + 1}: shortened from {shot.duration_s}s to {duration}s "
                 f"to fit {payload.context_frames} motion-context frames."
             )
             warnings.append(warning)
@@ -1850,12 +1763,12 @@ async def long_form(
     expected: RenderProvenance | None = None
     failed_index, failure_code, failure_detail = -1, "", ""
     with ScanAhead(decoder, ctx.raise_if_cancelled) as scanning:
-        for index, shot in enumerate(payload.shots):
+        for index, shot in enumerate(payload.segments):
             ctx.raise_if_cancelled()
             seed = shot_seed(shot, ctx.request_id, index)
             try:
                 with tel.scope(
-                    f"Shot {index + 1} of {len(payload.shots)}",
+                    f"Segment {index + 1} of {len(payload.segments)}",
                     overall_range=(
                         completed_work / total_work,
                         (completed_work + render_work[index]) / total_work,
@@ -1864,7 +1777,7 @@ async def long_form(
                     assets = Assets[Mixed](
                         [
                             images[ref.name].with_label(f"Picture {slot}")
-                            for slot, ref in enumerate(selected_references[index], 1)
+                            for slot, ref in enumerate(payload.references, 1)
                         ]
                     )
                     child_payload = MotionInput(
@@ -1896,7 +1809,7 @@ async def long_form(
             completed_work += render_work[index]
         if not videos:
             raise OutputError(
-                f"shot 1 of {len(payload.shots)} failed ({failure_code}): {failure_detail}"
+                f"segment 1 of {len(payload.segments)} failed ({failure_code}): {failure_detail}"
             )
         ctx.raise_if_cancelled()
         delivered_frames = sum(plan.delivered_frames for plan in plans[: len(videos)])
@@ -1928,11 +1841,11 @@ async def long_form(
         overall_range=(completed_work / total_work, (completed_work + 1) / total_work),
     ):
         continuation_frame = out.save_image(decoder.value(frame), format="png")
-    complete = len(videos) == len(payload.shots)
+    complete = len(videos) == len(payload.segments)
     if not complete:
         warnings.append(
-            f"PARTIAL DELIVERY: {len(videos)} of {len(payload.shots)} shots completed; "
-            f"shot {failed_index + 1} failed ({failure_code})."
+            f"PARTIAL DELIVERY: {len(videos)} of {len(payload.segments)} segments completed; "
+            f"segment {failed_index + 1} failed ({failure_code})."
         )
     tel.log(
         "h3 long-form delivery",
@@ -1940,7 +1853,7 @@ async def long_form(
         steps=steps,
         complete=complete,
         delivered=len(videos),
-        requested=len(payload.shots),
+        requested=len(payload.segments),
         delivered_frames=delivered_frames,
         failed_index=failed_index,
     )
@@ -1949,7 +1862,7 @@ async def long_form(
         continuation_frame=continuation_frame,
         complete=complete,
         delivered=len(videos),
-        requested=len(payload.shots),
+        requested=len(payload.segments),
         delivered_frames=delivered_frames,
         fps=FPS,
         failed_index=failed_index,

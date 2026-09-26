@@ -1,7 +1,5 @@
 {
   "style": "Live-action, natural daylight and gentle tracking camera.",
-  "soundscape": "Leaves rustle in a light breeze. Footsteps sound on the garden path between spoken lines.",
-  "music": "N/A",
   "mode": "standard",
   "steps": 30,
   "references": [
@@ -21,17 +19,13 @@
       "description": "A quiet walled garden with a wooden gate, stone path and flowering shrubs."
     }
   ],
-  "shots": [
+  "segments": [
     {
       "duration_s": 10,
       "seed": 41001,
-      "references": [
-        "Mara",
-        "Guard",
-        "Garden"
+      "screen_text": [
+        "Please close the gate."
       ],
-      "prompt": "The camera follows {Mara} toward {Guard} at the gate in {Garden}. A sign reads {screen_text:1} {dialogue:2} {Guard} pauses and turns the handle. {dialogue:1} They step onto the path.",
-      "screen_text": ["Please close the gate."],
       "dialogue": [
         {
           "speaker": "Guard",
@@ -45,17 +39,15 @@
           "text": "Good morning. May I come in?",
           "delivery": "warmly, at a natural pace"
         }
-      ]
+      ],
+      "detailed_description": "The camera follows {Mara} toward {Guard} at the gate in {Garden}. A sign reads {screen_text:1} {dialogue:2} {Guard} pauses and turns the handle. {dialogue:1} They step onto the path.",
+      "summary": "{Mara} greets {Guard} at the garden gate.",
+      "overall_soundscape": "Leaves rustle in a light breeze. Footsteps sound on the garden path between spoken lines.",
+      "non_diegetic_music": "N/A"
     },
     {
       "duration_s": 10,
       "seed": 41002,
-      "references": [
-        "Guard",
-        "Garden",
-        "Mara"
-      ],
-      "prompt": "Continue tracking beside {Mara} and {Guard} along the path. {dialogue:1} {Mara} smiles, and they keep walking while the leaves rustle. {dialogue:2}",
       "dialogue": [
         {
           "speaker": "Guard",
@@ -68,7 +60,11 @@
           "text": "I remember this path.",
           "voiceover": true
         }
-      ]
+      ],
+      "detailed_description": "Continue tracking beside {Mara} and {Guard} along the path. {dialogue:1} {Mara} smiles, and they keep walking while the leaves rustle. {dialogue:2}",
+      "summary": "{Mara} and {Guard} walk along the garden path.",
+      "overall_soundscape": "Leaves rustle in a light breeze. Footsteps sound on the garden path between spoken lines.",
+      "non_diegetic_music": "N/A"
     }
   ]
 }
