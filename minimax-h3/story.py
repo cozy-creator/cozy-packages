@@ -36,8 +36,8 @@ def image_prompt(reference: StoryReference) -> str:
     if reference.kind == "character":
         return (
             f"{reference.prompt.strip()}\n"
-            "A single full-body character reference portrait, clear face and clothing, "
-            "neutral standing pose with visible hands and feet, on a plain white studio "
+            "A full-body subject reference with clear identifying features, a natural "
+            "neutral pose, and the entire subject visible against a plain white studio "
             "background. One subject, one view, no panels or labels."
         )
     return (
