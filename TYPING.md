@@ -24,3 +24,37 @@ Adding this configuration does not establish that the entire tree is green.
 Record the source commit, interpreter/checker versions, exact command and complete
 result before claiming qualification. Generated and attributed upstream code may
 have documented exclusions; first-party callers must consume their current stubs.
+
+## Baseline recorded 2026-09-26
+
+The full configured check is **not green**. With Python 3.12.12 / mypy 2.3.1,
+private Runtime 0.18.28 SDK6, TensorFS 0.3.54, the verified typed cozy-eval 0.7.2
+wheel, and cached Torch 2.13.0, it reports **75 errors in 12 files (107 checked)**.
+The five package source trees alone pass all **28 files**. Optional numerical
+import exceptions and existing source suppressions remain debt.
+
+The initial lightweight private-cohort check found 48 errors; repairing obsolete
+H3 provenance/broker/installation fixtures, typing coverage records, and rejecting
+an absent VAE diagnostic reduced that to 35 errors. Installing cached Torch
+without downloads exposed additional fixture/example failures; the richer result
+above is the current baseline. The five repaired files pass their focused check.
+Sibling module search paths now make that focused command resolve author sources.
+
+The unresolved client examples consume generated managed calls through imports
+that currently resolve to cozy-eval author implementations. The checker therefore
+sees injected services, model objects, and a synchronous quality implementation
+where clients require generated awaitable/model-artifact signatures. An obsolete
+LoRA scratch example also imports a removed Runtime internal module. These are
+recorded failures, not missing-import exceptions.
+
+Actual strict BasedPyright 1.40.1 LSP reported no diagnostics for H3 story and
+provenance, the H3-tools source and plan validators, or Qwen's author module.
+H3's main module reported 70 diagnostics, including five dynamic `Steps` type
+alias errors and unknown numerical types. Existing `call-arg` ignores still hide
+the decorator's managed-call typing gap: its ParamSpec removes Context but does
+not remove injected services or transform model arguments into artifacts. This
+needs a typed managed-call contract rather than more ignores or casts.
+
+Built H3-tools and Qwen wheels include their `py.typed` markers. No full CI,
+native execution, publication, global install, or candidate deployment ran.
+PR277 remains draft until the complete new gate is qualified.

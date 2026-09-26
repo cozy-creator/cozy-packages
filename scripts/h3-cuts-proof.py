@@ -93,7 +93,7 @@ from story import (  # noqa: E402
     validate_references,
 )
 
-MODEL, CODE, LORA = ("sha256:" + value * 64 for value in ("1", "2", "3"))
+MODEL, LORA = ("sha256:" + value * 64 for value in ("1", "3"))
 WIDTH, HEIGHT, RATE = 96, 64, 32000
 ROUTES: list[str] = []
 
@@ -151,7 +151,7 @@ async def renderer(
     stubbed = cast(Any, h3)
     original = h3._references_to_video, h3._render_keyframes, stubbed.provenance
     h3._references_to_video, h3._render_keyframes = cast(Any, refs), cast(Any, text)
-    stubbed.provenance = lambda model, adapter="": RenderProvenance(model, CODE, [], adapter)
+    stubbed.provenance = lambda model, adapter="": RenderProvenance(model, adapter)
     try:
         return h3._render_cut(
             ctx,
@@ -385,16 +385,14 @@ def drive(
     broker = _Broker(
         parent,
         {
-            ("", "h3", export): _CallType(
+            ("h3", export): _CallType(
                 "sha256:" + "5" * 64,
                 "h3",
                 export,
                 cast(type[msgspec.Struct], surface.payload_type),
                 h3.SegmentOutput,
             ),
-            (
-                REFERENCE_BINDING.interface_digest, "qwen_image_2", "generate_image"
-            ): REFERENCE_BINDING,
+            ("qwen_image_2", "generate_image"): REFERENCE_BINDING,
         },
         exchange,
     )

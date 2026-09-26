@@ -17,6 +17,8 @@ follow_imports = "silent"
 warn_unreachable = true
 disallow_any_generics = true
 implicit_reexport = false
+# Resolve sibling author modules in focused checks as well as the complete file set.
+mypy_path = ["anima", "sdxl", "minimax-h3", "minimax-h3-tools/src", "qwen-image-2", "scripts"]
 
 # Static checks install the typed Runtime distribution from PyPI. Heavy model libraries remain
 # absent to check the package-facing contracts without their large third-party stub trees.

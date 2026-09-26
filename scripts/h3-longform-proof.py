@@ -49,15 +49,11 @@ from cozy_runtime.models.minimax_h3.official import FPS, frames_for
 
 import assembly
 import h3
-from long_form_state import RenderProvenance, SoftwareVersion, compatible
+from long_form_state import RenderProvenance, compatible
 
 WIDTH, HEIGHT, RATE = 96, 64, 32000
 SHOT_INTERFACE = "sha256:" + "5c" * 32
-PROVENANCE = RenderProvenance(
-    "sha256:" + "11" * 32,
-    "sha256:" + "22" * 32,
-    [SoftwareVersion("synthetic-renderer", "1")],
-)
+PROVENANCE = RenderProvenance("sha256:" + "11" * 32)
 
 TURBO_PROVENANCE = msgspec.structs.replace(PROVENANCE, turbo_lora_manifest="sha256:" + "44" * 32)
 
@@ -247,7 +243,7 @@ def _drive(
     broker = _Broker(
         parent,
         {
-            ("", "h3", child_name): _CallType(
+            ("h3", child_name): _CallType(
                 SHOT_INTERFACE,
                 "h3",
                 child_name,
