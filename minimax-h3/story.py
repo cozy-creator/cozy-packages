@@ -52,6 +52,19 @@ class DialogueLine(msgspec.Struct, forbid_unknown_fields=True):
     voiceover: bool = False
 
 
+class StorySegment(msgspec.Struct, forbid_unknown_fields=True):
+    """One model invocation; camera-shot markers belong inside its description."""
+
+    summary: Annotated[str, msgspec.Meta(min_length=1, max_length=1024)]
+    detailed_description: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
+    overall_soundscape: Annotated[str, msgspec.Meta(max_length=1024)]
+    non_diegetic_music: Annotated[str, msgspec.Meta(max_length=1024)]
+    seed: int | None = None
+    duration_s: Annotated[int, msgspec.Meta(ge=5, le=15)] = 10
+    dialogue: Annotated[list[DialogueLine], msgspec.Meta(max_length=16)] = msgspec.field(default_factory=list)
+    screen_text: Annotated[list[ScreenText], msgspec.Meta(max_length=16)] = msgspec.field(default_factory=list)
+
+
 class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
     """A supplied image or an image generated from its shared visual description."""
 
@@ -144,12 +157,12 @@ def select_references(
     keys = [name.casefold() for name in names]
     if not 1 <= len(names) <= MAX_IMAGES or len(set(keys)) != len(names):
         raise InvalidRequest(
-            f"shot {index + 1} must select one to nine distinct reference names", fields=["shots"]
+            f"segment {index + 1} must select one to nine distinct reference names", fields=["segments"]
         )
     missing = [name for name in names if name.casefold() not in by_name]
     if missing:
         raise InvalidRequest(
-            f"shot {index + 1} selects unknown references: {', '.join(missing)}", fields=["shots"]
+            f"segment {index + 1} selects unknown references: {', '.join(missing)}", fields=["segments"]
         )
     return [by_name[key] for key in keys]
 
@@ -175,7 +188,7 @@ def dialogue_speakers(
         zip(descriptions, lines_by_shot, references_by_shot, strict=True)
     ):
         def refuse(detail: str) -> None:
-            raise InvalidRequest(f"shot {index + 1}: {detail}", fields=["shots", "dialogue"])
+            raise InvalidRequest(f"segment {index + 1}: {detail}", fields=["segments", "dialogue"])
 
         if structured and (
             "<d>" in description or "</d>" in description or _MANUAL_SPEAKER.search(description)
@@ -211,13 +224,13 @@ def dialogue_speakers(
     return speakers
 
 
-def shot_prompt(
+def segment_prompt(
     style: str,
     description: str,
     references: Sequence[StoryReference],
     *,
     index: int,
-    continuous: bool = False,
+    summary: str,
     soundscape: str = "",
     music: str = "",
     dialogue: Sequence[DialogueLine] = (),
@@ -234,8 +247,8 @@ def shot_prompt(
             name = match.group(1)
             if name.casefold() not in labels:
                 raise InvalidRequest(
-                    f"shot {index + 1} mentions {{{name}}} without selecting that reference",
-                    fields=["shots", "prompt"],
+                    f"segment {index + 1} mentions {{{name}}} without selecting that reference",
+                    fields=["segments", "detailed_description"],
                 )
             return labels[name.casefold()]
 
@@ -247,27 +260,28 @@ def shot_prompt(
         )
 
     if not description.strip():
-        raise InvalidRequest(f"shot {index + 1} has an empty prompt", fields=["shots"])
+        raise InvalidRequest(f"segment {index + 1} has an empty prompt", fields=["segments"])
     marker_text = _DIALOGUE_BODY.sub("", description)
     positions = [int(match.group(1)) for match in _SCREEN_TEXT_MARKER.finditer(marker_text)]
     if "{screen_text:" in _SCREEN_TEXT_MARKER.sub("", marker_text) or (
         sorted(positions) != list(range(1, len(screen_text) + 1))
     ):
         raise InvalidRequest(
-            f"shot {index + 1}: insert every screen_text item exactly once with {{screen_text:N}}",
-            fields=["shots", "screen_text"],
+            f"segment {index + 1}: insert every screen_text item exactly once with {{screen_text:N}}",
+            fields=["segments", "screen_text"],
         )
     if any(not text.strip() or len(text) > 1024 or "<" in text or ">" in text for text in screen_text):
         raise InvalidRequest(
-            f"shot {index + 1}: screen_text must contain 1–1024 characters of visible text without H3/XML tags",
-            fields=["shots", "screen_text"],
+            f"segment {index + 1}: screen_text must contain 1–1024 characters of visible text without H3/XML tags",
+            fields=["segments", "screen_text"],
         )
-    if any("<d>" in text or "</d>" in text for text in (soundscape, music)):
+    if any("<d>" in text or "</d>" in text for text in (summary, soundscape, music)):
         raise InvalidRequest(
-            "place dialogue in the shot description, not soundscape or music",
-            fields=["soundscape", "music"],
+            "place dialogue in detailed_description, not summary, soundscape or music",
+            fields=["segments"],
         )
     subjects: list[str] = []
+    retention: list[str] = []
     for slot, reference in enumerate(references, 1):
         label = labels[reference.name.casefold()]
         appearance = _unquote_narrative(reference.description.strip())
@@ -275,22 +289,19 @@ def shot_prompt(
             f"{label} is {reference.name}, the {reference.kind} shown in <Picture {slot}>."
             + (f" {appearance}" if appearance else "")
         )
-    if continuous and index > 0:
-        direction = (
-            "Continue the preceding action and camera motion seamlessly; preserve the same "
-            "environment and soundscape, with no cut or establishing view. "
+        retained = (
+            "the identity and defining visual features of the referenced character"
+            if reference.kind == "character"
+            else "the architecture, materials and defining features of the referenced environment"
         )
-    elif continuous:
-        direction = "Begin one continuous camera take. Establish the opening composition and action. "
-    else:
-        direction = "One continuous shot. Compose a new camera view and animate the subjects. "
+        retention.append(f"{label} (appears in [Shot 1]): fully_preserved - {retained}.")
     description = substitute(description)
     if not description.strip():
         raise InvalidRequest(
-            f"shot {index + 1} has no prompt after removing quotation delimiters", fields=["shots"]
+            f"segment {index + 1} has no prompt after removing quotation delimiters", fields=["segments"]
         )
     if dialogue and speakers is None:
-        raise InvalidRequest("structured dialogue needs the story speaker map", fields=["shots"])
+        raise InvalidRequest("structured dialogue needs the story speaker map", fields=["segments"])
 
     def literal(match: re.Match[str]) -> str:
         position = int(match.group(2)) - 1
@@ -309,46 +320,56 @@ def shot_prompt(
             if line.voiceover:
                 text += f" {labels[key]}'s lips remain completely closed."
             return text
-        raise InvalidRequest("structured dialogue needs the story speaker map", fields=["shots"])
+        raise InvalidRequest("structured dialogue needs the story speaker map", fields=["segments"])
 
     # One pass: literal speech/display text is never reinterpreted as another marker.
     description = "".join(
         part if part.startswith("<d>") else _STORY_MARKER.sub(literal, part)
         for part in _DIALOGUE_BODY.split(description)
     )
-    direction += (
-        "Vocal content follows the explicitly described lines and cues. Between them, "
-        "the described ambience and physical sounds continue. "
-    )
-    prompt = "\n\n".join(
-        (
-            "subject_definitions:\n" + "\n".join(subjects),
-            "summary:\n[reference generation] Generate the described shot using "
-            + ", ".join(labels.values())
-            + " as visual references for the defined subjects and environment.",
-            "detailed_description:\n"
-            + (substitute(style) + "\n" if style.strip() else "")
-            + "[Shot 1]\n"
-            + direction
-            + "\n"
-            + description,
-            "overall_soundscape:\n"
-            + substitute(
-                soundscape
-                or "Ambient and physical sounds accompany the visible action; "
-                "they continue between spoken lines."
-            ),
-            "non_diegetic_music:\n"
-            + substitute(
-                music
-                or "Background music is present only when explicitly specified."
-            ),
-        )
-    )
+    sections = [
+        "subject_definitions:\n" + "\n".join(subjects),
+        "summary:\n[reference generation] " + substitute(summary),
+        "retention_analysis:\n" + "\n".join(retention),
+        "detailed_description:\n"
+        + (substitute(style) + "\n" if style.strip() else "")
+        + ("" if description.startswith("[Shot 1]") else "[Shot 1]\n") + description,
+    ]
+    sections.append("overall_soundscape:\n" + substitute(soundscape))
+    sections.append("non_diegetic_music:\n" + substitute(music))
+    prompt = "\n\n".join(sections)
     if len(prompt) > 4096:
         raise InvalidRequest(
-            f"shot {index + 1}'s style, audio, reference descriptions and shot exceed 4096 "
+            f"segment {index + 1}'s style, audio, reference descriptions and shot exceed 4096 "
             "characters; shorten them before rendering",
-            fields=["shots", "style", "soundscape", "music", "references"],
+            fields=["segments", "style", "references"],
         )
     return prompt
+
+
+def compile_segments(
+    style: str, segments: Sequence[StorySegment], references: Sequence[StoryReference]
+) -> list[str]:
+    """Validate and compile against one fixed global reference table before any work."""
+    validate_references(references)
+    speakers = dialogue_speakers(
+        [segment.detailed_description for segment in segments],
+        [segment.dialogue for segment in segments],
+        [references] * len(segments),
+        shared=[
+            style,
+            *(reference.description for reference in references),
+            *(segment.summary for segment in segments),
+            *(segment.overall_soundscape for segment in segments),
+            *(segment.non_diegetic_music for segment in segments),
+        ],
+    )
+    return [
+        segment_prompt(
+            style, segment.detailed_description, references, index=index,
+            summary=segment.summary, soundscape=segment.overall_soundscape,
+            music=segment.non_diegetic_music, dialogue=segment.dialogue,
+            speakers=speakers, screen_text=segment.screen_text,
+        )
+        for index, segment in enumerate(segments)
+    ]
