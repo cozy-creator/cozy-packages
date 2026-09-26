@@ -1,0 +1,9 @@
+{
+  "server": "basedpyright-langserver",
+  "diagnosticMode": "openFilesOnly",
+  "typeCheckingMode": "strict",
+  "observed": true,
+  "diagnostics": {
+    "file:///home/fidika/cozy/.worktrees/packages/h3-existing-references-20260926/minimax-h3/story.py": []
+  }
+}
