@@ -13,7 +13,7 @@ from pathlib import Path
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("package", choices=("anima", "minimax-h3", "minimax-h3-tools", "sdxl"))
+    parser.add_argument("package", choices=("anima", "minimax-h3", "minimax-h3-tools", "sdxl", "qwen-image-2"))
     parser.add_argument("--tensorhub", type=Path, required=True, help="Tensorhub operator checkout")
     parser.add_argument(
         "--profile", action="append", required=True, help="supported worker profile"
@@ -36,7 +36,7 @@ def main() -> None:
         ["git", "rev-parse", "HEAD"], cwd=repository, text=True
     ).strip()
     archive = subprocess.check_output(
-        ["git", "archive", revision, "--", args.package], cwd=repository
+        ["git", "archive", revision, "--", args.package, "pyproject.toml"], cwd=repository
     )
     command = ["go", "run", "./cmd/check-package-runtime", "--purpose", args.purpose]
     for profile in args.profile:
@@ -50,6 +50,14 @@ def main() -> None:
         with tarfile.open(fileobj=io.BytesIO(archive)) as source:
             source.extractall(frozen, filter="data")
         project = frozen / args.package
+        # Check the exact committed package with its own resolved dependencies.
+        # The source/config cannot change underneath publication after this gate.
+        subprocess.run(
+            ["uv", "run", "--project", str(project), "--locked", "--with", "mypy>=1.13",
+             "mypy", "--config-file", str(frozen / "pyproject.toml"), str(project)],
+            cwd=frozen,
+            check=True,
+        )
         wheels = frozen / "dist"
         subprocess.run(
             ["uv", "build", "--project", str(project), "--wheel", "--out-dir", str(wheels)],
