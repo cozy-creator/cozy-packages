@@ -30,7 +30,8 @@
         "Guard",
         "Garden"
       ],
-      "prompt": "The camera follows {Mara} toward {Guard} at the gate in {Garden}. A sign reads \"Please close the gate.\" {dialogue:2} {Guard} pauses and turns the handle. {dialogue:1} They step onto the path.",
+      "prompt": "The camera follows {Mara} toward {Guard} at the gate in {Garden}. A sign reads {screen_text:1} {dialogue:2} {Guard} pauses and turns the handle. {dialogue:1} They step onto the path.",
+      "screen_text": ["Please close the gate."],
       "dialogue": [
         {
           "speaker": "Guard",

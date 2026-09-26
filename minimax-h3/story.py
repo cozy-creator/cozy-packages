@@ -17,6 +17,29 @@ _PLACEHOLDER = re.compile(r"\{([A-Za-z][A-Za-z0-9_-]*)\}")
 _DIALOGUE_MARKER = re.compile(r"\{dialogue:([1-9][0-9]*)\}")
 _MANUAL_SPEAKER = re.compile(r"\(S[1-9][0-9]*(?:,S[1-9][0-9]*)*\)")
 _DIALOGUE_BODY = re.compile(r"(<d>.*?</d>)", re.DOTALL)
+_SCREEN_TEXT_MARKER = re.compile(r"\{screen_text:([1-9][0-9]*)\}")
+_STORY_MARKER = re.compile(r"\{(dialogue|screen_text):([1-9][0-9]*)\}")
+ScreenText = Annotated[str, msgspec.Meta(min_length=1, max_length=1024)]
+
+
+def _unquote_narrative(text: str) -> str:
+    """Remove quotation delimiters, retaining apostrophes within words."""
+    parts = _DIALOGUE_BODY.split(text)
+    for part_index, part in enumerate(parts):
+        if part.startswith("<d>"):
+            continue
+        parts[part_index] = "".join(
+            char
+            for index, char in enumerate(part)
+            if char not in "\"'“”‘’«»"
+            or (
+                char in "'‘’"
+                and 0 < index < len(part) - 1
+                and part[index - 1].isalnum()
+                and part[index + 1].isalnum()
+            )
+        )
+    return "".join(parts)
 
 
 class DialogueLine(msgspec.Struct, forbid_unknown_fields=True):
@@ -199,6 +222,7 @@ def shot_prompt(
     music: str = "",
     dialogue: Sequence[DialogueLine] = (),
     speakers: dict[str, str] | None = None,
+    screen_text: Sequence[str] = (),
 ) -> str:
     labels = {
         reference.name.casefold(): f"<Subject {slot}>"
@@ -218,12 +242,26 @@ def shot_prompt(
         # Manual dialogue is already authored markup: never rewrite its spoken text.
         parts = _DIALOGUE_BODY.split(text.strip())
         return "".join(
-            part if part.startswith("<d>") else _PLACEHOLDER.sub(replace, part)
+            part if part.startswith("<d>") else _PLACEHOLDER.sub(replace, _unquote_narrative(part))
             for part in parts
         )
 
     if not description.strip():
         raise InvalidRequest(f"shot {index + 1} has an empty prompt", fields=["shots"])
+    marker_text = _DIALOGUE_BODY.sub("", description)
+    positions = [int(match.group(1)) for match in _SCREEN_TEXT_MARKER.finditer(marker_text)]
+    if "{screen_text:" in _SCREEN_TEXT_MARKER.sub("", marker_text) or (
+        sorted(positions) != list(range(1, len(screen_text) + 1))
+    ):
+        raise InvalidRequest(
+            f"shot {index + 1}: insert every screen_text item exactly once with {{screen_text:N}}",
+            fields=["shots", "screen_text"],
+        )
+    if any(not text.strip() or len(text) > 1024 or "<" in text or ">" in text for text in screen_text):
+        raise InvalidRequest(
+            f"shot {index + 1}: screen_text must contain 1–1024 characters of visible text without H3/XML tags",
+            fields=["shots", "screen_text"],
+        )
     if any("<d>" in text or "</d>" in text for text in (soundscape, music)):
         raise InvalidRequest(
             "place dialogue in the shot description, not soundscape or music",
@@ -233,9 +271,10 @@ def shot_prompt(
     retention: list[str] = []
     for slot, reference in enumerate(references, 1):
         label = labels[reference.name.casefold()]
+        appearance = _unquote_narrative(reference.description.strip())
         subjects.append(
             f"{label} is {reference.name}, the {reference.kind} shown in <Picture {slot}>."
-            + (f" {reference.description.strip()}" if reference.description.strip() else "")
+            + (f" {appearance}" if appearance else "")
         )
         preserved = (
             "identity, face, body proportions, hair and clothing; the portrait's white "
@@ -255,15 +294,23 @@ def shot_prompt(
     else:
         direction = "One continuous shot. Compose a new camera view and animate the subjects. "
     description = substitute(description)
-    if dialogue:
-        if speakers is None:
-            raise InvalidRequest("structured dialogue needs the story speaker map", fields=["shots"])
+    if not description.strip():
+        raise InvalidRequest(
+            f"shot {index + 1} has no prompt after removing quotation delimiters", fields=["shots"]
+        )
+    if dialogue and speakers is None:
+        raise InvalidRequest("structured dialogue needs the story speaker map", fields=["shots"])
 
-        def speak(match: re.Match[str]) -> str:
-            line = dialogue[int(match.group(1)) - 1]
+    def literal(match: re.Match[str]) -> str:
+        position = int(match.group(2)) - 1
+        if match.group(1) == "screen_text":
+            return f'"{screen_text[position]}"'
+        if speakers is not None:
+            line = dialogue[position]
             key = line.speaker.casefold()
             voice = "says in an off-screen voiceover" if line.voiceover else "says"
-            delivery = f", {line.delivery.strip()}," if line.delivery.strip() else ""
+            delivery = _unquote_narrative(line.delivery.strip())
+            delivery = f", {delivery}," if delivery else ""
             text = (
                 f"{labels[key]} ({speakers[key]}){delivery} {voice}: "
                 f"<d>[{line.language}] {line.text}</d>"
@@ -271,8 +318,13 @@ def shot_prompt(
             if line.voiceover:
                 text += f" {labels[key]}'s lips remain completely closed."
             return text
+        raise InvalidRequest("structured dialogue needs the story speaker map", fields=["shots"])
 
-        description = _DIALOGUE_MARKER.sub(speak, description)
+    # One pass: literal speech/display text is never reinterpreted as another marker.
+    description = "".join(
+        part if part.startswith("<d>") else _STORY_MARKER.sub(literal, part)
+        for part in _DIALOGUE_BODY.split(description)
+    )
     direction += (
         "Vocal content follows the explicitly described lines and cues. Between them, "
         "the described ambience and physical sounds continue. "
@@ -288,18 +340,18 @@ def shot_prompt(
             + (substitute(style) + "\n" if style.strip() else "")
             + "[Shot 1]\n"
             + direction
-            + "Follow this shot description:\n"
+            + "\n"
             + description,
             "overall_soundscape:\n"
             + substitute(
                 soundscape
-                or "Follow the ambience and physical sounds specified in the shot "
-                "description, synchronized with the visible action."
+                or "Ambient and physical sounds accompany the visible action; "
+                "they continue between spoken lines."
             ),
             "non_diegetic_music:\n"
             + substitute(
                 music
-                or "No background score unless explicitly requested in the shot description."
+                or "Background music is present only when explicitly specified."
             ),
         )
     )

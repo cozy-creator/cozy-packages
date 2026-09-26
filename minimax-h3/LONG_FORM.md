@@ -68,7 +68,8 @@ speaker IDs and the official form `{Lena} (S1) says, <d>[English] Your move.</d>
 The compiler emits all six official sections: `subject_definitions`, `summary`,
 `retention_analysis`, `detailed_description`, `overall_soundscape`, and
 `non_diegetic_music`. Style opens the detailed description before `[Shot 1]`.
-It preserves authored text; it does not run an LLM rewrite or infer speakers.
+It preserves explicit dialogue and display text. Quotation delimiters in scene
+directions are removed; it does not run an LLM rewrite or infer speakers.
 The compiler defines each character/environment separately and retains its visual
 identity; it does not preserve the still image's pose, white backdrop or viewpoint.
 
@@ -130,7 +131,7 @@ Inference is not memoized. A later-segment failure returns the completed portion
 ```
 
 Run with `cozy run paul/minimax-h3/long_form --input shots.json --rental=your-rental
---await --out ./video`. Each shot accepts `prompt`, optional `seed`, optional `duration_s`
+--await`. Each shot accepts `prompt`, optional `seed`, optional `duration_s`
 (default 10), and optional `references` (defaults to all declared names in declaration
 order). Explicit reference selections control per-shot picture slots. `mode` defaults to
 `turbo`; `standard` accepts 30, 40 or 50 `steps`. Turbo fixes eight PDD evaluations.
@@ -189,8 +190,38 @@ Words, whitespace, punctuation and language are never translated or rewritten. F
 the line with punctuation before any closing quotation mark; invalid lines, missing or
 repeated markers, unknown/unselected speakers, and scene references used as speakers
 refuse before any reference image is generated. Keep H3 tags out of structured `text`
-and `delivery`. Quotes in visual prose are not guessed to be speech: the garden sign
-in the example remains an on-screen sign.
+and `delivery`. Quotes in visual prose are removed rather than guessed to be speech.
+Use explicit `screen_text` for exact lettering, signs or captions, as in the garden example.
+
+### Quotation marks and text on screen
+
+The compiled H3 prompt uses quotation marks only inside explicit dialogue or for
+declared on-screen text. ASCII and curly single/double quotation delimiters and guillemets
+are removed from style, reference descriptions, shot directions, soundscape, music and
+delivery directions. Apostrophes within words such as `don't` and `keeper's` remain.
+JSON string delimiters are serialization syntax and are not sent as prompt characters.
+
+Each shot can declare up to 16 `screen_text` strings, each up to 1024 characters. Put
+each one-based marker exactly once at the place where that text is visible:
+
+```json
+{
+  "prompt": "A sign on the garden gate reads {screen_text:1}. {Mara} walks past it.",
+  "screen_text": ["Please close the gate."]
+}
+```
+
+The model receives `A sign on the garden gate reads "Please close the gate."`.
+The shot supplies the visible context; the compiler inserts the exact text in double
+quotes after cleaning narrative quotation marks. It never treats that text as dialogue
+or substitutes markers inside it. Empty text, H3/XML tags, and missing, repeated or
+unknown screen-text markers refuse before reference images are generated.
+
+Keep speech in `dialogue` or manual `<d>[English] ...</d>` blocks. Those words and their
+punctuation remain unchanged. Plain quoted speech in `prompt` is not an explicit speech
+channel. The compiler no longer injects `Follow this shot description:` or refers to a
+shot description in its audio defaults. This removes ambiguous prompt wording; it does
+not establish that generated speech is intelligible.
 
 Manual H3 dialogue remains supported with an empty `dialogue` list. A story must use
 either structured dialogue or manual `<d>`/`(S1)` markup, so automatic IDs cannot collide
@@ -207,7 +238,7 @@ This shot prompt needs no new `dialogue`, `style`, `soundscape` or `music` field
 inside an existing shot with selected character references named Mara and Guard:
 
 ```text
-The camera follows {Mara} toward {Guard} beside the garden gate. A sign reads "Please close the gate." {Mara} (S1), in a warm natural voice, says: <d>[English] Good morning. May I come in?</d> {Guard} pauses. {Guard} (S2), in a low calm voice, says: <d>[English] Good morning. The garden is open.</d> They walk along the path. Leaves rustle and footsteps continue between lines. No background music and no additional speech.
+The camera follows {Mara} toward {Guard} beside the garden gate. {Mara} (S1), in a warm natural voice, says: <d>[English] Good morning. May I come in?</d> {Guard} pauses. {Guard} (S2), in a low calm voice, says: <d>[English] Good morning. The garden is open.</d> They walk along the path. Leaves rustle and footsteps continue between lines. No background music and no additional speech.
 ```
 
 Keep the same speaker IDs in later shots. This example does not modify the active
