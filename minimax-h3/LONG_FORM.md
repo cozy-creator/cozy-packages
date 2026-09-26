@@ -124,14 +124,35 @@ quote detection, speech extraction, translation or punctuation repair is perform
 
 ## References and execution
 
-A reference has `name`, `kind` (`character` or `scene`), optional `description`, optional
-`image`, and optional `seed`. A supplied image skips generation. Without an image, a
+A reference has `name`, `kind` (`character`, `scene`, or `audio`), optional `description`,
+optional `image`, optional `audio`, optional `retention-analysis`, and optional `seed`.
+A supplied image skips generation. Without an image, a
 nonempty description is required and Qwen-Image-2.1 generates that reference once.
 Character generation adds its white-background portrait direction only to Qwen.
 H3's textual definitions are generated from `references`; optional per-reference
 `retention-analysis` customizes only that reference's generated retention line.
 
-One to nine references are supported. Asset names start with a letter and contain only
+Audio references use a typed audio attachment and skip Qwen image generation:
+
+```json
+{
+  "name": "ReinaVoice",
+  "kind": "audio",
+  "description": "A clear English female voice reference.",
+  "audio": "./audio/reina.wav",
+  "retention-analysis": "reference - the supplied audio signal guides the voice timbre and delivery."
+}
+```
+
+Use `--asset references.3.audio=/absolute/path/reina.wav` instead of the JSON filename
+when preferred. Audio references are bounded to 256 MiB encoded and 2 GiB decoded,
+2–15 seconds each, 15 seconds aggregate, and up to three audio references. Visual
+references remain capped at nine, with twelve total references. `<Picture N>` and
+`<Audio N>` numbering is independent and follows the shared reference order. Audio
+labels and supplied text are passed to H3; Cozy does not transcribe or rewrite them.
+
+One to twelve references are supported: at most nine visual references and three audio
+references. Asset names start with a letter and contain only
 letters, digits, `_` or `-`, and must be unique ignoring case. PNG/JPEG/WebP image fields
 use the normal verified asset path (64 MiB encoded, 256 MiB decoded). Relative filenames
 resolve beside the input JSON; absolute and `~/` filenames also work. URLs are not input
