@@ -26,6 +26,7 @@ from tensorfs.derived import (
     Tensor,
 )
 
+from ._memo import TURBO
 from .adaln_operations import (
     PLAIN,
     _asset,
@@ -332,7 +333,7 @@ def build_turbo_adapter(
     )
 
 
-@invocable(memoize=True)
+@invocable(memoize=True, memo_dependencies=TURBO)
 async def prepare_turbo(
     ctx: Context,
     *,

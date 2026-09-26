@@ -3,7 +3,7 @@ name = "minimax-h3-tools"
 version = "2.12.9"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime>=0.18.20",
+    "cozy-runtime>=0.18.30",
     "tensorfs>=0.3.48",
     "msgspec>=0.19",
     "numpy>=1.26",
