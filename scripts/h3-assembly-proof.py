@@ -61,9 +61,8 @@ async def scanned_assembly(
             assert sum(map(len, (*scan.audio_head, *scan.audio_tail))) <= (
                 audio.channels * (audio.sample_rate + math.ceil(audio.sample_rate / FPS)) * 4
             )
-        if len(payload.videos) == assembly.MAX_SHOTS:
-            # The shared assembler no longer imposes the continuous take's eight-shot
-            # bound; camera-cut callers may enqueue another bounded segment.
+        if len(payload.videos) == 8:
+            # Neither composition mode imposes an eight-shot count limit.
             with assembly.ScanAhead(decoder, ctx.raise_if_cancelled) as unbounded:
                 for video in payload.videos:
                     unbounded.add(video)
