@@ -152,7 +152,7 @@ async def renderer(
     stubbed = cast(Any, h3)
     original = h3._references_to_video, h3._render_keyframes, stubbed.provenance
     h3._references_to_video, h3._render_keyframes = cast(Any, refs), cast(Any, text)
-    stubbed.provenance = lambda model, adapter="": RenderProvenance(model, CODE, [], adapter)
+    stubbed.provenance = lambda model, adapter="": RenderProvenance(model, adapter)
     try:
         return h3._render_cut(
             ctx,
@@ -185,7 +185,7 @@ async def motion_renderer(
         assert images and kwargs["expected_context_provenance"] == CODE
         context, delivery = kwargs["context"], kwargs["delivery"]
         if context is not None:
-            assert len(context.frames) == payload.context_frames
+            assert context.frame_count == payload.context_frames
             assert context.provenance == CODE
         assert delivery.prefix_frames == (0 if context is None else payload.context_frames)
         tel.step_callback(payload.steps, stage="denoise", overall_range=(0.15, 0.85))(2)
@@ -197,14 +197,14 @@ async def motion_renderer(
         video = out.save_video(rgb, fps=FPS, audio=audio, sample_rate=RATE)
         frame = out.save_image(ImageFrame(WIDTH, HEIGHT, rgb[-1].tobytes()), format="png")
         tail = AVContext(
-            rgb[-56:].copy(),
-            torch.from_numpy(
-                audio[:, -((count * RATE // FPS) - ((count - 56) * RATE // FPS)) :].copy()
-            ),
-            RATE,
-            count - 56,
-            count,
-            CODE,
+            {
+                frames: (
+                    torch.zeros((1, 24, 5 * ((frames - 5) // 17) + 2, HEIGHT // 16, WIDTH // 16)),
+                    torch.zeros((2 * ((frames * 5 + 2) // 3), 32)),
+                )
+                for frames in (22, 39, 56)
+            },
+            HEIGHT, WIDTH, count, CODE,
         )
         kwargs["completed_state"](tail)
         return h3.H3VideoOutput(video, frame, [])
@@ -212,11 +212,11 @@ async def motion_renderer(
     stubbed = cast(Any, h3)
     original = h3._references_to_video, stubbed.provenance, stubbed.context_provenance
     h3._references_to_video = cast(Any, refs)
-    stubbed.provenance = lambda model, adapter="": RenderProvenance(model, CODE, [], adapter)
+    stubbed.provenance = lambda model, adapter="": RenderProvenance(model, adapter)
     stubbed.context_provenance = lambda _: CODE
     model = SimpleNamespace(
         checkpoint_ref=MODEL,
-        pipe=SimpleNamespace(export_completed_av_tail=lambda state, **_: state),
+        export_completed_av_tail=lambda state, **_: state,
     )
     try:
         return h3._render_motion(

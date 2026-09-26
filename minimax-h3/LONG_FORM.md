@@ -119,8 +119,8 @@ experiment setting, not a quality claim. Longer context may improve continuity, 
 requires matched-source visual and listening comparisons. Cuts or identity/audio drift
 remain possible; the API does not guarantee seamless video.
 
-The context compatibility fingerprint includes exact base/adapter manifests, native H3
-code and software versions. It excludes unrelated workflow source. Runtime's existing
+Context compatibility records the selected base model and adapter manifests. It does
+not inspect package source or SDK versions. Runtime's existing
 request and child records own recovery; this API does not accept an opening-frame-only
 resume or export its private AV context.
 

@@ -90,7 +90,7 @@ from cozy_runtime.models.minimax_h3.official import (
 )
 from msgspec.structs import replace
 
-from assembly import MAX_SHOTS, AssembleVideoRequest, ScanAhead, assemble, assemble_video
+from assembly import AssembleVideoRequest, ScanAhead, assemble, assemble_video
 from gates import MediaFacts, refuse_before_encode, report_after_encode
 from long_form_state import RenderProvenance, compatible, context_provenance, provenance
 from qwen_image_2 import AspectRatio as ReferenceAspectRatio
@@ -1169,7 +1169,7 @@ class ContinuousShot(msgspec.Struct, forbid_unknown_fields=True):
 class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
     """Fixed references and completed audio/video context for one continuous sequence."""
 
-    shots: Annotated[list[ContinuousShot], msgspec.Meta(min_length=1, max_length=MAX_SHOTS)]
+    shots: Annotated[list[ContinuousShot], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
     prompt: str = ""
     context_frames: Literal[22, 39, 56] = 22
