@@ -7,3 +7,5 @@ Local-only publication target: http://127.0.0.1:8819. Do not mutate the producti
 - SDXL2.3.17 and H3tools2.12.10: explicit memo dependency contracts, Runtime>=0.18.30, TensorFS>=0.3.55.
 
 Portable locks for packages without Hub dependencies will resolve the public Runtime0.18.31 release. Local H3 publication uses an owned source copy with the selected Hub index and exact local lock. The canonical production index stays authored in this repository; its Qwen0.2.0 lock cannot be resolved until that release is separately authorized and published on production. This is a separate production release gate, not a reason to block the requested local publication.
+
+Focused author-contract checks: H3/Qwen strict mypy exposed Runtime's stale string-only default-rung annotation. Runtime PR656 changes that to str|int; H3 declares its reusable lists with the same type. Against PR656 source, H3/Qwen and five changed SDXL/H3tools memo files typecheck cleanly. H3 static interface is byte-identical after the annotation. Final public release is now Runtime0.18.32;0.18.30/31 tags remain unpublished.
