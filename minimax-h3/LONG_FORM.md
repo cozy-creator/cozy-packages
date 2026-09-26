@@ -10,16 +10,22 @@ For example, authored `<Reina>` reaches the model as `<Reina>`.
 The overall input contains:
 
 - `style`: one shared overall-style string.
+- `overall_soundscape`: optional ambience/physical sound shared by every segment.
+- `non_diegetic_music`: optional audience-only score shared by every segment.
 - `references`: the ordered image inputs or descriptions used to generate them.
 - `segments`: the ordered generation requests.
 
 Each segment requires `detailed_description` and `duration_s`. `summary`,
 `overall_soundscape`, and `non_diegetic_music` are optional and default to blank.
+When an overall audio field and its segment field are both supplied, the overall text
+is prepended to the segment text in that section.
 `seed` is optional. There are no per-segment reference subsets or reordered image slots.
 
 ```json
 {
   "style": "Realistic live action with warm afternoon lighting.",
+  "overall_soundscape": "A quiet room tone continues throughout.",
+  "non_diegetic_music": "N/A",
   "references": [
     {"name": "Reina", "kind": "character", "description": "An adult woman wearing a green coat."},
     {"name": "Garden", "kind": "scene", "description": "A garden with a stone path and wooden gate.", "retention-analysis": "fully_preserved - the garden's gate and plants remain consistent."}

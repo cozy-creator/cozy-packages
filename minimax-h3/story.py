@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, Literal
 
 import msgspec
+from msgspec.structs import replace
 from cozy_runtime.author import AssetBound, ImageAsset, InvalidRequest
 
 MAX_IMAGES = 9
@@ -161,13 +162,26 @@ def compile_segments(
     style: str,
     segments: Sequence[StorySegment],
     references: Sequence[StoryReference],
+    *,
+    overall_soundscape: str = "",
+    non_diegetic_music: str = "",
 ) -> list[str]:
     """Generate shared reference sections once; preserve all authored segment text."""
     validate_references(references)
     subject_definitions, retention_analysis = reference_sections(references)
     return [
         segment_prompt(
-            style, segment, subject_definitions=subject_definitions,
+            style,
+            replace(
+                segment,
+                overall_soundscape="\n".join(
+                    value for value in (overall_soundscape, segment.overall_soundscape) if value
+                ),
+                non_diegetic_music="\n".join(
+                    value for value in (non_diegetic_music, segment.non_diegetic_music) if value
+                ),
+            ),
+            subject_definitions=subject_definitions,
             retention_analysis=retention_analysis, index=index,
         )
         for index, segment in enumerate(segments)
