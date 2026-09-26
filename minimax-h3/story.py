@@ -164,16 +164,18 @@ def segment_prompt(
                 f"segment {index + 1}: {field} must not be blank", fields=[field]
             )
     description = style + "\n" + segment.detailed_description if style else segment.detailed_description
-    prompt = "\n\n".join(
-        (
-            "subject_definitions:\n" + subject_definitions,
-            "summary:\n" + segment.summary,
-            "retention_analysis:\n" + retention_analysis,
-            "detailed_description:\n" + description,
-            "overall_soundscape:\n" + segment.overall_soundscape,
-            "non_diegetic_music:\n" + segment.non_diegetic_music,
-        )
-    )
+    sections = [
+        "subject_definitions:\n" + subject_definitions,
+        "retention_analysis:\n" + retention_analysis,
+        "detailed_description:\n" + description,
+    ]
+    if segment.summary.strip():
+        sections.insert(1, "summary:\n" + segment.summary)
+    if segment.overall_soundscape.strip() and segment.overall_soundscape.strip().upper() != "N/A":
+        sections.append("overall_soundscape:\n" + segment.overall_soundscape)
+    if segment.non_diegetic_music.strip() and segment.non_diegetic_music.strip().upper() != "N/A":
+        sections.append("non_diegetic_music:\n" + segment.non_diegetic_music)
+    prompt = "\n\n".join(sections)
     if len(prompt) > 4096:
         raise InvalidRequest(
             f"segment {index + 1}'s complete prompt exceeds 4096 characters",
@@ -193,17 +195,20 @@ def compile_segments(
     """Generate shared reference sections once; preserve all authored segment text."""
     validate_references(references)
     subject_definitions, retention_analysis = reference_sections(references)
+    def combine_audio(*values: str) -> str:
+        return "\n".join(
+            value.strip()
+            for value in values
+            if value.strip() and value.strip().upper() != "N/A"
+        )
+
     return [
         segment_prompt(
             style,
             replace(
                 segment,
-                overall_soundscape="\n".join(
-                    value for value in (overall_soundscape, segment.overall_soundscape) if value
-                ),
-                non_diegetic_music="\n".join(
-                    value for value in (non_diegetic_music, segment.non_diegetic_music) if value
-                ),
+                overall_soundscape=combine_audio(overall_soundscape, segment.overall_soundscape),
+                non_diegetic_music=combine_audio(non_diegetic_music, segment.non_diegetic_music),
             ),
             subject_definitions=subject_definitions,
             retention_analysis=retention_analysis, index=index,
