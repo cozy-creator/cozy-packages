@@ -89,7 +89,7 @@ from long_form_state import RenderProvenance  # noqa: E402
 from story import (  # noqa: E402
     StoryReference,
     reference_seed,
-    select_references,
+    StorySegment,
     segment_prompt,
     validate_references,
 )
@@ -420,8 +420,8 @@ def drive(
     wire: dict[str, Any] = {
         "segments": [
             {
-                "summary": "{Rover} travels across {Bridge}.",
-                "detailed_description": f"Camera angle {index}: {{Rover}} moves across {{Bridge}}.",
+                "summary": "[reference generation] <Rover> travels across <Bridge>.",
+                "detailed_description": "[Shot 1] <Rover> moves across <Bridge>.",
                 "overall_soundscape": "A flowing woodland stream.",
                 "non_diegetic_music": "N/A",
                 "duration_s": duration_s,
@@ -430,6 +430,8 @@ def drive(
             for index in range(count)
         ],
         "style": "Photorealistic nature photography.",
+        "subject_definitions": "<Rover> is the robot in <Picture 1>. <Bridge> is the location in <Picture 2>.",
+        "retention_analysis": "<Rover>: fully_preserved - appearance. <Bridge>: fully_preserved - environment.",
         "references": [
             {
                 "name": "Rover",
@@ -450,8 +452,8 @@ def drive(
         wire["context_frames"] = context_frames
     if prompt is not None:
         wire["style"] = prompt
-    if bad == "unknown":
-        wire["segments"][-1]["summary"] = "{Absent} arrives."
+    if bad == "empty-definitions":
+        wire["subject_definitions"] = " "
     elif bad == "duplicate":
         wire["references"][1]["name"] = "ROVER"
     elif bad == "empty":
@@ -460,8 +462,8 @@ def drive(
         wire["references"][1]["seed"] = -1
     elif bad == "seed-too-large":
         wire["references"][1]["seed"] = 9007199254740992
-    elif bad == "unselected":
-        wire["segments"][-1]["detailed_description"] += " {Absent}"
+    elif bad == "empty-description":
+        wire["segments"][-1]["detailed_description"] = " "
     elif bad == "too-many-references":
         wire["references"] = [
             {"name": f"Person{i}", "kind": "character", "description": "A person"} for i in range(10)
@@ -543,7 +545,7 @@ def drive(
     for index, row in enumerate(sent):
         assert [item["asset"] for item in row["assets"]] == fixed
         assert (
-            "<Subject 1>" in row["payload"]["prompt"]
+            "<Rover>" in row["payload"]["prompt"]
             and "fully_preserved" in row["payload"]["prompt"]
         )
     if continuous:
@@ -576,23 +578,26 @@ def main() -> None:
     )
     drive(root / "oversized-prompt", prompt="x" * 3500, refuse=True)
     for bad in (
-        "unknown",
+        "empty-definitions",
         "duplicate",
         "empty",
         "seed",
         "seed-too-large",
-        "unselected",
+        "empty-description",
         "legacy",
         "too-many-references",
     ):
         drive(root / bad, bad=bad, refuse=True)
     refs = [StoryReference(f"Person{i}", "character", "A person.") for i in range(9)]
     named = validate_references(refs)
-    assert len(select_references(list(named), named, index=0)) == 9
+    assert len(named) == 9
     assert reference_seed(refs[0], "request") == reference_seed(refs[0], "request")
     assert reference_seed(refs[0], "request") != reference_seed(refs[1], "request")
-    prompt = segment_prompt("A gathering", "{Person8} waves", refs, index=0, summary="A gathering.")
-    assert "<Subject 9> waves" in prompt and "<Picture 9>" in prompt
+    prompt = segment_prompt(
+        "A gathering", StorySegment("[reference generation] A gathering.", "[Shot 1] <Person8> waves.", "Room tone.", "N/A"),
+        index=0, subject_definitions="<Person8> is in <Picture 9>.", retention_analysis="<Person8>: fully_preserved - identity.",
+    )
+    assert "<Person8> waves" in prompt and "<Picture 9>" in prompt
     assert "first frame" not in prompt and "preceding shot" not in prompt
     assert set(ROUTES) == {"ref2va", "ref2va_turbo"}
     (root / "evidence.json").write_text(

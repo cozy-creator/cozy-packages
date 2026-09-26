@@ -41,7 +41,7 @@ def main() -> None:
         root / "frame-shortening", continuous=True, context_frames=56, duration_s=15
     )
     assert shortened["frames"] == (15 + 12 + 12) * 24
-    proof.drive(root / "unknown-ref", continuous=True, bad="unknown", refuse=True)
+    proof.drive(root / "empty-definitions", continuous=True, bad="empty-definitions", refuse=True)
     (root / "evidence.json").write_text(
         json.dumps(
             {

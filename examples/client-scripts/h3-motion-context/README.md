@@ -16,7 +16,7 @@ file contract is bounded to 64 MiB.
 Prepare an owned qualification directory from the exact candidate serving wheel:
 
 ```sh
-uv run --no-project python prepare.py /path/to/minimax_h3-1.18.0-py3-none-any.whl /owned/comparison/candidate
+uv run --no-project python prepare.py /path/to/minimax_h3-1.18.2-py3-none-any.whl /owned/comparison/candidate
 cp compare.py /owned/comparison/compare.py
 cozy run /owned/comparison/compare.py --rental=your-rental --await
 ```

@@ -6,7 +6,7 @@
 # ///
 """Run next to the prepared private candidate directory using cozy run compare.py."""
 
-from h3_motion_context import Comparison, ComparisonInput, StoryReference, compare
+from h3_motion_context import Comparison, ComparisonInput, StoryReference, StorySegment, compare
 
 
 async def main() -> Comparison:
@@ -17,7 +17,7 @@ async def main() -> Comparison:
                     name="courier",
                     kind="character",
                     seed=1701,
-                    prompt=(
+                    description=(
                         "An adult female courier with short dark hair, a mustard jacket, navy "
                         "trousers and brown boots."
                     ),
@@ -26,7 +26,7 @@ async def main() -> Comparison:
                     name="depot",
                     kind="scene",
                     seed=1702,
-                    prompt=(
+                    description=(
                         "A sunlit brick railway depot courtyard with a blue cargo cart and "
                         "cobblestones."
                     ),
@@ -36,13 +36,30 @@ async def main() -> Comparison:
                 "A continuous eye-level tracking shot, natural daylight. Footsteps and "
                 "soft outdoor wind, no music, no voices."
             ),
-            predecessor=(
-                "{courier} walks steadily across {depot} toward the blue cargo cart. "
-                "The camera tracks smoothly beside her."
+            subject_definitions=(
+                "<courier> is the courier in <Picture 1>. <depot> is the courtyard in <Picture 2>."
             ),
-            continuation=(
-                "{courier} keeps walking across {depot}, reaches the blue cargo cart "
-                "and rests one hand on its handle. The camera keeps tracking smoothly."
+            retention_analysis=(
+                "<courier>: fully_preserved - identity and clothing. "
+                "<depot>: fully_preserved - architecture and cart."
+            ),
+            predecessor=StorySegment(
+                summary="[reference generation] <courier> approaches the cart in <depot>.",
+                detailed_description=(
+                    "[Shot 1] <courier> walks steadily across <depot> toward the blue cargo cart. "
+                    "The camera tracks smoothly beside her."
+                ),
+                overall_soundscape="Footsteps and soft outdoor wind.",
+                non_diegetic_music="N/A",
+            ),
+            continuation=StorySegment(
+                summary="[reference generation] <courier> reaches the cart in <depot>.",
+                detailed_description=(
+                    "[Shot 1] <courier> keeps walking across <depot>, reaches the blue cargo cart "
+                    "and rests one hand on its handle. The camera keeps tracking smoothly."
+                ),
+                overall_soundscape="Footsteps and soft outdoor wind.",
+                non_diegetic_music="N/A",
             ),
             seed=41001,
         )

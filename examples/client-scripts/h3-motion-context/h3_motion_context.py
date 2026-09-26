@@ -30,7 +30,7 @@ from h3 import (
     motion_segment_turbo,
 )
 from story import StoryReference as StoryReference
-from story import shot_prompt, validate_references
+from story import StorySegment, compile_segments
 
 
 class Comparison(msgspec.Struct):
@@ -41,8 +41,10 @@ class Comparison(msgspec.Struct):
 
 class ComparisonInput(msgspec.Struct, forbid_unknown_fields=True):
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
-    predecessor: str
-    continuation: str
+    predecessor: StorySegment
+    continuation: StorySegment
+    subject_definitions: str
+    retention_analysis: str
     shared: str
     seed: int = 41001
 
@@ -59,11 +61,11 @@ async def compare(
     """One shared predecessor, three independently generated continuations, three MP4s."""
     references = payload.references
     seed = payload.seed
-    validate_references(references)
-    prompts = [
-        shot_prompt(payload.shared, text, references, index=index, continuous=True)
-        for index, text in enumerate((payload.predecessor, payload.continuation))
-    ]
+    prompts = compile_segments(
+        payload.shared, [payload.predecessor, payload.continuation], references,
+        subject_definitions=payload.subject_definitions,
+        retention_analysis=payload.retention_analysis,
+    )
     plans = [plan_continuation(240, context_frames=n) for n in (0, 22, 39, 56)]
     images = await _create_references(ctx, references, tel)
     assets = Assets[Mixed](
