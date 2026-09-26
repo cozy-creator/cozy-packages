@@ -3,6 +3,12 @@
 Use `long_form_cuts` for a story with new camera setups between shots. Use `long_form`
 for deliberate continuation of one camera take.
 
+Each item in the existing JSON `shots` list is one generated **segment** (one model
+invocation). H3's `[Shot N]` markers describe camera shots within that segment.
+Every segment's compiled prompt starts at `[Shot 1]`, including the ninth segment;
+the segment ordinal is never substituted into that marker. Add `[Shot 2]` and later
+cut timestamps inside the authored prompt only when the segment itself contains cuts.
+
 ## Stories with camera cuts
 
 Both workflows use supplied reference images or generate missing images with Qwen-Image-2.1
@@ -190,9 +196,8 @@ shot changes reference order and hence its local `<Subject N>` labels.
 cozy run paul/minimax-h3/long_form --input examples/dialogue-garden.json --rental=your-rental --await
 ```
 
-This is the proposed source contract, not an instruction to replace a running local
-candidate. Public release installation remains held until its dependencies are published.
-Generated media uses the normal package output folder.
+Per-segment audio overrides require package 1.18.2 or later. Generated media uses
+the normal package output folder. Package installation does not start a generation.
 
 Words, whitespace, punctuation and language are never translated or rewritten. Finish
 the line with punctuation before any closing quotation mark; invalid lines, missing or
