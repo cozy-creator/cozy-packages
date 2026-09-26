@@ -98,7 +98,9 @@ from qwen_image_2 import ImageOutput as ReferenceImageOutput
 from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate_image as generate_reference
 from story import (
+    DialogueLine,
     StoryReference,
+    dialogue_speakers,
     image_prompt,
     reference_seed,
     resolve_reference_images,
@@ -1165,6 +1167,9 @@ class ContinuousShot(msgspec.Struct, forbid_unknown_fields=True):
     seed: int | None = None
     duration_s: DurationSeconds = 10
     references: Annotated[list[str], msgspec.Meta(max_length=9)] | None = None
+    dialogue: Annotated[list[DialogueLine], msgspec.Meta(max_length=16)] = msgspec.field(
+        default_factory=list
+    )
 
 
 class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -1516,6 +1521,9 @@ app.entrypoint(internal=True)(motion_segment_turbo)
 
 class CutShot(Shot, kw_only=True):
     references: Annotated[list[str], msgspec.Meta(min_length=1, max_length=9)]
+    dialogue: Annotated[list[DialogueLine], msgspec.Meta(max_length=16)] = msgspec.field(
+        default_factory=list
+    )
 
 
 class LongFormCutsInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -1583,10 +1591,18 @@ async def long_form_cuts(
         select_references(shot.references, by_name, index=index)
         for index, shot in enumerate(payload.shots)
     ]
+    speakers = dialogue_speakers(
+        [shot.prompt for shot in payload.shots],
+        [shot.dialogue for shot in payload.shots],
+        selected_references,
+        shared=[payload.style, payload.soundscape, payload.music,
+                *(reference.description for reference in payload.references)],
+    )
     prompts = [
         shot_prompt(
             payload.style, shot.prompt, selected, index=index,
             soundscape=payload.soundscape, music=payload.music,
+            dialogue=shot.dialogue, speakers=speakers,
         )
         for index, (shot, selected) in enumerate(
             zip(payload.shots, selected_references, strict=True)
@@ -1746,10 +1762,18 @@ async def long_form(
         )
         for index, shot in enumerate(payload.shots)
     ]
+    speakers = dialogue_speakers(
+        [shot.prompt for shot in payload.shots],
+        [shot.dialogue for shot in payload.shots],
+        selected_references,
+        shared=[payload.style, payload.soundscape, payload.music,
+                *(reference.description for reference in payload.references)],
+    )
     prompts = [
         shot_prompt(
             payload.style, shot.prompt, selected, index=index, continuous=True,
             soundscape=payload.soundscape, music=payload.music,
+            dialogue=shot.dialogue, speakers=speakers,
         )
         for index, (shot, selected) in enumerate(
             zip(payload.shots, selected_references, strict=True)
