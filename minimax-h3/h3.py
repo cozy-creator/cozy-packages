@@ -129,7 +129,6 @@ ReferenceAssets = Annotated[
 
 
 def _label_references(references: Sequence[StoryReference]) -> list[tuple[StoryReference, str]]:
-    """Assign independent Picture and Audio labels in fixed authored reference order."""
     pictures = audios = 0
     labeled: list[tuple[StoryReference, str]] = []
     for reference in references:
@@ -1184,7 +1183,7 @@ class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
     """Fixed references and completed audio/video context for one continuous sequence."""
 
     segments: Annotated[list[StorySegment], msgspec.Meta(min_length=1)]
-    references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
+    references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=MAX_REFERENCES)]
     style: str = ""
     overall_soundscape: str = ""
     non_diegetic_music: str = ""
@@ -1327,11 +1326,7 @@ app.entrypoint(internal=True)(segment_turbo)
 
 CutAssets = Annotated[
     Assets[Mixed],
-    AssetLimits(
-        images=MAX_IMAGE_REFERENCES,
-        audio=MAX_AUDIO_REFERENCES,
-        total=MAX_REFERENCES,
-    ),
+    AssetLimits(images=MAX_IMAGE_REFERENCES, audio=MAX_AUDIO_REFERENCES, total=MAX_REFERENCES),
     ImagePreparation(max_edge=8192, max_pixels=16_777_216),
     msgspec.Meta(min_length=1),
 ]
@@ -1537,7 +1532,7 @@ class CutSegment(StorySegment):
 
 class LongFormCutsInput(msgspec.Struct, forbid_unknown_fields=True):
     segments: Annotated[list[CutSegment], msgspec.Meta(min_length=1)]
-    references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
+    references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=MAX_REFERENCES)]
     style: str = ""
     overall_soundscape: str = ""
     non_diegetic_music: str = ""
