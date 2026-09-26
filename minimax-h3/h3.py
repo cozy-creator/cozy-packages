@@ -23,6 +23,7 @@ from cozy_runtime.author import (
     AssetBound,
     AssetLimits,
     Assets,
+    AudioAsset,
     ChildCallError,
     Context,
     DecodedAudio,
@@ -125,6 +126,20 @@ ReferenceAssets = Annotated[
     ImagePreparation(max_edge=8192, max_pixels=16_777_216),
     msgspec.Meta(min_length=1),
 ]
+
+
+def _label_references(references: Sequence[StoryReference]) -> list[tuple[StoryReference, str]]:
+    """Assign independent Picture and Audio labels in fixed authored reference order."""
+    pictures = audios = 0
+    labeled: list[tuple[StoryReference, str]] = []
+    for reference in references:
+        if reference.kind == "audio":
+            audios += 1
+            labeled.append((reference, f"Audio {audios}"))
+        else:
+            pictures += 1
+            labeled.append((reference, f"Picture {pictures}"))
+    return labeled
 KeyframeAssets = Annotated[Assets[Image], AssetLimits(images=2)]
 DEFAULT_REFERENCE_IMAGE_SHORT_EDGE = 1024
 _SHORT_EDGE_LADDER = (2048, 1536, 1024, 768, 512, 256)
@@ -1312,7 +1327,11 @@ app.entrypoint(internal=True)(segment_turbo)
 
 CutAssets = Annotated[
     Assets[Mixed],
-    AssetLimits(images=MAX_IMAGE_REFERENCES, total=MAX_IMAGE_REFERENCES),
+    AssetLimits(
+        images=MAX_IMAGE_REFERENCES,
+        audio=MAX_AUDIO_REFERENCES,
+        total=MAX_REFERENCES,
+    ),
     ImagePreparation(max_edge=8192, max_pixels=16_777_216),
     msgspec.Meta(min_length=1),
 ]
@@ -1530,7 +1549,7 @@ async def _create_references(
     ctx: Context,
     references: list[StoryReference],
     tel: Telemetry,
-) -> dict[str, ImageAsset]:
+) -> dict[str, ImageAsset | AudioAsset]:
     reference_steps = 40
     # Managed dependencies install an asynchronous flat caller for the source
     # entrypoint, whose own annotations describe its injected implementation.
@@ -1558,7 +1577,8 @@ async def _create_references(
             "h3 fixed reference",
             subject=reference.name,
             reference_kind=reference.kind,
-            source="attached" if reference.image is not None else "generated",
+            source=("audio" if reference.kind == "audio" else
+                    ("attached" if reference.image is not None else "generated")),
             digest=images[reference.name].digest,
         )
     return images
@@ -1603,8 +1623,8 @@ async def long_form_cuts(
             seed = shot_seed(shot, ctx.request_id, index)
             assets = Assets[Mixed](
                 [
-                    images[ref.name].with_label(f"Picture {slot}")
-                    for slot, ref in enumerate(selected, 1)
+                    images[ref.name].with_label(label)
+                    for ref, label in _label_references(selected)
                 ]
             )
             tel.log(
@@ -1786,8 +1806,8 @@ async def long_form(
                 ):
                     assets = Assets[Mixed](
                         [
-                            images[ref.name].with_label(f"Picture {slot}")
-                            for slot, ref in enumerate(payload.references, 1)
+                            images[ref.name].with_label(label)
+                            for ref, label in _label_references(payload.references)
                         ]
                     )
                     child_payload = MotionInput(

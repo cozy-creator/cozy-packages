@@ -9,33 +9,29 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, Literal
 
 import msgspec
-from msgspec.structs import replace
-from cozy_runtime.author import AssetBound, ImageAsset, InvalidRequest
+from cozy_runtime.author import AssetBound, AudioAsset, ImageAsset, InvalidRequest
 
 MAX_IMAGES = 9
 _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,47}\Z")
 
 
-class StorySegment(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
+class StorySegment(msgspec.Struct, forbid_unknown_fields=True):
     """One invocation with ordinary H3 text, including any camera-shot markers."""
 
-    summary: Annotated[str, msgspec.Meta(max_length=1024)] = ""
+    summary: Annotated[str, msgspec.Meta(min_length=1, max_length=1024)]
     detailed_description: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
-    overall_soundscape: Annotated[str, msgspec.Meta(max_length=1024)] = ""
-    non_diegetic_music: Annotated[str, msgspec.Meta(max_length=1024)] = ""
+    overall_soundscape: Annotated[str, msgspec.Meta(max_length=1024)]
+    non_diegetic_music: Annotated[str, msgspec.Meta(max_length=1024)]
     seed: int | None = None
-    duration_s: Annotated[int, msgspec.Meta(ge=5, le=15)]
+    duration_s: Annotated[int, msgspec.Meta(ge=5, le=15)] = 10
 
 
 class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
     """A supplied image or an image generated from its shared visual description."""
 
     name: Annotated[str, msgspec.Meta(min_length=1, max_length=48)]
-    kind: Literal["character", "scene"]
+    kind: Literal["character", "scene", "audio"]
     description: Annotated[str, msgspec.Meta(max_length=1024)] = ""
-    retention_analysis: Annotated[str | None, msgspec.Meta(max_length=1024)] = msgspec.field(
-        default=None, name="retention-analysis"
-    )
     image: Annotated[
         ImageAsset | None,
         AssetBound(
@@ -44,6 +40,7 @@ class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
             media_types=("image/png", "image/jpeg", "image/webp"),
         ),
     ] = None
+    audio: Annotated[AudioAsset | None, AssetBound(max_bytes=256 << 20)] = None
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
 
 
@@ -57,10 +54,14 @@ def reference_seed(reference: StoryReference, request_id: str) -> int:
 async def resolve_reference_images(
     references: Sequence[StoryReference],
     generate: Callable[[StoryReference], Awaitable[ImageAsset]],
-) -> dict[str, ImageAsset]:
+) -> dict[str, ImageAsset | AudioAsset]:
     """Reuse granted handles and generate only missing images, draining failed siblings."""
-    images = {ref.name: ref.image for ref in references if ref.image is not None}
-    pending = [ref for ref in references if ref.image is None]
+    images: dict[str, ImageAsset | AudioAsset] = {
+        ref.name: (ref.audio if ref.kind == "audio" else ref.image)
+        for ref in references
+        if ref.audio is not None or ref.image is not None
+    }
+    pending = [ref for ref in references if ref.kind != "audio" and ref.image is None]
 
     async def one(reference: StoryReference) -> ImageAsset:
         return await generate(reference)
@@ -107,14 +108,19 @@ def validate_references(references: Sequence[StoryReference]) -> dict[str, Story
             raise InvalidRequest(
                 f"duplicate reference name: {reference.name}", fields=["references"]
             )
-        if reference.image is None and not reference.description.strip():
+        if reference.kind == "audio" and (reference.audio is None or reference.image is not None):
             raise InvalidRequest(
-                f"reference {reference.name} needs an image or a nonempty description",
+                f"audio reference {reference.name} requires audio and forbids image",
                 fields=["references"],
             )
-        if reference.retention_analysis is not None and not reference.retention_analysis.strip():
+        if reference.kind != "audio" and reference.audio is not None:
             raise InvalidRequest(
-                f"reference {reference.name} has blank retention-analysis; omit it for the default",
+                f"{reference.kind} reference {reference.name} cannot carry audio",
+                fields=["references"],
+            )
+        if reference.kind != "audio" and reference.image is None and not reference.description.strip():
+            raise InvalidRequest(
+                f"reference {reference.name} needs an image or a nonempty description",
                 fields=["references"],
             )
         by_name[key] = reference
@@ -133,6 +139,7 @@ def segment_prompt(
     for field, value in (
         ("subject_definitions", subject_definitions),
         ("retention_analysis", retention_analysis),
+        ("summary", segment.summary),
         ("detailed_description", segment.detailed_description),
     ):
         if not value.strip():
@@ -163,48 +170,15 @@ def compile_segments(
     segments: Sequence[StorySegment],
     references: Sequence[StoryReference],
     *,
-    overall_soundscape: str = "",
-    non_diegetic_music: str = "",
+    subject_definitions: str,
+    retention_analysis: str,
 ) -> list[str]:
-    """Generate shared reference sections once; preserve all authored segment text."""
+    """Validate before generation, with fixed assets and shared authored definitions."""
     validate_references(references)
-    subject_definitions, retention_analysis = reference_sections(references)
     return [
         segment_prompt(
-            style,
-            replace(
-                segment,
-                overall_soundscape="\n".join(
-                    value for value in (overall_soundscape, segment.overall_soundscape) if value
-                ),
-                non_diegetic_music="\n".join(
-                    value for value in (non_diegetic_music, segment.non_diegetic_music) if value
-                ),
-            ),
-            subject_definitions=subject_definitions,
+            style, segment, subject_definitions=subject_definitions,
             retention_analysis=retention_analysis, index=index,
         )
         for index, segment in enumerate(segments)
     ]
-
-
-def reference_sections(references: Sequence[StoryReference]) -> tuple[str, str]:
-    """Use the same ordered image slots and literal names as the shared assets."""
-    definitions, retention = [], []
-    for slot, reference in enumerate(references, 1):
-        label = f"<{reference.name}>"
-        definitions.append(
-            f"{label} is the {reference.kind} shown in <Picture {slot}>."
-            + (f" {reference.description}" if reference.description else "")
-        )
-        preserved = (
-            "the identity and defining visual features of the referenced character"
-            if reference.kind == "character"
-            else "the architecture, materials and defining features of the referenced environment"
-        )
-        analysis = (
-            f"fully_preserved - {preserved}."
-            if reference.retention_analysis is None else reference.retention_analysis
-        )
-        retention.append(f"{label}: {analysis}")
-    return "\n".join(definitions), "\n".join(retention)
