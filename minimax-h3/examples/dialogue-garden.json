@@ -23,48 +23,20 @@
     {
       "duration_s": 10,
       "seed": 41001,
-      "screen_text": [
-        "Please close the gate."
-      ],
-      "dialogue": [
-        {
-          "speaker": "Guard",
-          "language": "English",
-          "text": "Good morning. The garden is open.",
-          "delivery": "in a calm, natural voice"
-        },
-        {
-          "speaker": "Mara",
-          "language": "English",
-          "text": "Good morning. May I come in?",
-          "delivery": "warmly, at a natural pace"
-        }
-      ],
-      "detailed_description": "The camera follows {Mara} toward {Guard} at the gate in {Garden}. A sign reads {screen_text:1} {dialogue:2} {Guard} pauses and turns the handle. {dialogue:1} They step onto the path.",
-      "summary": "{Mara} greets {Guard} at the garden gate.",
+      "detailed_description": "[Shot 1]\nThe camera follows <Mara> toward <Guard> at the gate in <Garden>. A sign reads \"Please close the gate.\" <Mara> (S1), warmly, at a natural pace, says: <d>[English] Good morning. May I come in?</d> <Guard> pauses and turns the handle. <Guard> (S2), in a calm, natural voice, says: <d>[English] Good morning. The garden is open.</d> They step onto the path.",
+      "summary": "[reference generation] <Mara> greets <Guard> at the garden gate.",
       "overall_soundscape": "Leaves rustle in a light breeze. Footsteps sound on the garden path between spoken lines.",
       "non_diegetic_music": "N/A"
     },
     {
       "duration_s": 10,
       "seed": 41002,
-      "dialogue": [
-        {
-          "speaker": "Guard",
-          "language": "English",
-          "text": "The roses are just ahead."
-        },
-        {
-          "speaker": "Mara",
-          "language": "English",
-          "text": "I remember this path.",
-          "voiceover": true
-        }
-      ],
-      "detailed_description": "Continue tracking beside {Mara} and {Guard} along the path. {dialogue:1} {Mara} smiles, and they keep walking while the leaves rustle. {dialogue:2}",
-      "summary": "{Mara} and {Guard} walk along the garden path.",
+      "detailed_description": "[Shot 1]\nContinue tracking beside <Mara> and <Guard> along the path. <Guard> (S2) says: <d>[English] The roses are just ahead.</d> <Mara> smiles, and they keep walking while the leaves rustle. <Mara> (S1) says in an off-screen voiceover: <d>[English] I remember this path.</d> <Mara> keeps her lips closed.",
+      "summary": "[reference generation] <Mara> and <Guard> walk along the garden path.",
       "overall_soundscape": "Leaves rustle in a light breeze. Footsteps sound on the garden path between spoken lines.",
       "non_diegetic_music": "N/A"
     }
-  ]
+  ],
+  "subject_definitions": "<Mara> is the character in <Picture 1>. An adult woman wearing a green coat, with a warm mid-range speaking voice.\n<Guard> is the character in <Picture 2>. An adult garden keeper wearing a navy jacket, with a low, calm speaking voice.\n<Garden> is the scene in <Picture 3>. A quiet walled garden with a wooden gate, stone path and flowering shrubs.",
+  "retention_analysis": "<Mara>: fully_preserved - its defining visual features.\n<Guard>: fully_preserved - its defining visual features.\n<Garden>: fully_preserved - its defining visual features."
 }

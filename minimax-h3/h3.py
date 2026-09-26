@@ -1170,6 +1170,8 @@ class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
 
     segments: Annotated[list[StorySegment], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
+    subject_definitions: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
+    retention_analysis: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
     style: str = ""
     context_frames: Literal[22, 39, 56] = 22
     mode: Literal["turbo", "standard"] = "turbo"
@@ -1517,6 +1519,8 @@ class CutSegment(StorySegment):
 class LongFormCutsInput(msgspec.Struct, forbid_unknown_fields=True):
     segments: Annotated[list[CutSegment], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
+    subject_definitions: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
+    retention_analysis: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
     style: str = ""
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
@@ -1572,7 +1576,11 @@ async def long_form_cuts(
     if payload.mode == "turbo" and payload.steps is not None:
         raise InvalidRequest("turbo fixes eight PDD evaluations; omit steps", fields=["steps"])
     steps = TURBO_STEPS if payload.mode == "turbo" else payload.steps or DEFAULT_STEPS
-    prompts = compile_segments(payload.style, payload.segments, payload.references)
+    prompts = compile_segments(
+        payload.style, payload.segments, payload.references,
+        subject_definitions=payload.subject_definitions,
+        retention_analysis=payload.retention_analysis,
+    )
     planned_frames = [frames_for(shot.duration_s) for shot in payload.segments]
     render_work = [frames * steps for frames in planned_frames]
     reference_steps = 40
@@ -1721,7 +1729,11 @@ async def long_form(
         if payload.mode == "turbo"
         else (DEFAULT_STEPS if payload.steps is None else payload.steps)
     )
-    prompts = compile_segments(payload.style, payload.segments, payload.references)
+    prompts = compile_segments(
+        payload.style, payload.segments, payload.references,
+        subject_definitions=payload.subject_definitions,
+        retention_analysis=payload.retention_analysis,
+    )
     # Motion context shares the native window with new frames. Shorten requested
     # segments to its whole-second budget instead of refusing a valid 5-15s request.
     durations = [

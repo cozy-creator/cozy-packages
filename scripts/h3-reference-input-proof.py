@@ -13,7 +13,7 @@ from story import (  # noqa: E402
     StoryReference,
     image_prompt,
     resolve_reference_images,
-    select_references,
+    StorySegment,
     segment_prompt,
     validate_references,
 )
@@ -35,12 +35,18 @@ async def main() -> None:
     mixed = await resolve_reference_images([hero, depot], generate)
     assert mixed["Hero"] is supplied and mixed["Depot"] is generated
     assert calls == ["Depot"]
-    selected = select_references(["HERO", "depot"], validate_references([hero, depot]), index=0)
-    text = segment_prompt(
-        "Photorealistic.", "{hErO} walks through {DEPOT}.", selected,
-        index=0, summary="{Hero} walks through {Depot}.", soundscape="Rain and footsteps.", music="N/A",
+    validate_references([hero, depot])
+    segment = StorySegment(
+        summary="[reference generation] <Hero> walks through <Depot>.",
+        detailed_description="[Shot 1]\n<Hero> walks through <Depot>.",
+        overall_soundscape="Rain and footsteps.", non_diegetic_music="N/A",
     )
-    assert hero.description in text and "<Subject 1> walks through <Subject 2>" in text
+    text = segment_prompt(
+        "Photorealistic.", segment, index=0,
+        subject_definitions=f"<Hero> is in <Picture 1>. {hero.description}\n<Depot> is in <Picture 2>.",
+        retention_analysis="<Hero>: fully_preserved - identity.\n<Depot>: fully_preserved - environment.",
+    )
+    assert hero.description in text and "<Hero> walks through <Depot>" in text
     sections = (
         "subject_definitions", "summary", "retention_analysis", "detailed_description",
         "overall_soundscape", "non_diegetic_music",
@@ -56,13 +62,6 @@ async def main() -> None:
             pass
         else:
             raise AssertionError("invalid reference accepted")
-    try:
-        select_references(["Hero", "HERO"], validate_references([hero]), index=0)
-    except InvalidRequest:
-        pass
-    else:
-        raise AssertionError("duplicate selection accepted")
-
     entered, cancelled = asyncio.Event(), asyncio.Event()
 
     async def failing(reference: StoryReference) -> ImageAsset:
