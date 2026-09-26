@@ -5,7 +5,7 @@ for continuous joins, chooses segment audio or one exclusive master track, and
 commits one deterministic MP4 through Runtime's streaming sink.
 
 It is H3's own module rather than a separate project (h3a-024): assembly is the second half
-of `long_form` (which retains its own eight-shot bound), and it adds no dependency the package
+of `long_form`, and it adds no dependency the package
 does not already carry — `cozy-runtime[media]` is already H3's decode and encode surface. As
 a separate package it carried its own Runtime pin, nobody restamped it, and it rotted out of
 reach at `cozy-runtime>=0.2.13` while the daemon moved to 0.10.0.
@@ -48,10 +48,6 @@ from cozy_runtime.author import (
     VideoAsset,
     invocable,
 )
-
-# `long_form` retains this deliberate eight-shot bound. Camera-cut composition uses the
-# same streaming assembler without an artificial segment-count limit.
-MAX_SHOTS = 8
 
 MAX_INPUT_BYTES = 256 << 20
 MAX_EVENT_BYTES = 32 << 20

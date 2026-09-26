@@ -68,63 +68,62 @@ not guarantee visual quality or identity; real inference remains a separate qual
 
 ## Continuous takes
 
-`long_form` renders 1–8 shots in sequence and assembles them on the rental. Each shot
-starts from the previous shot's final frame. Shared subject and sound descriptions
-are repeated in every prompt.
+`long_form` renders 1–8 sequential segments using the same generated character and
+scene references throughout. Each continuation also receives a completed audio/video
+tail from its predecessor. The tail is decoded media, never a mid-denoising checkpoint.
 
-The delivered files are the final assembled MP4 and final continuation PNG. Intermediate
-shot clips and frames remain internal to the serving calls; no prefix directory is
-produced or downloaded.
-
-Four 15-second shots produce 1,445 frames at 24 fps (60.208 seconds); eight produce
-2,889 frames (120.375 seconds). One repeated frame is removed at each join. This
-is shot-to-shot continuation: appearance and sound can still drift between shots.
-
-Save a request such as this as `shots.json`:
+Only the assembled MP4 and final PNG are delivered. Reference images, per-segment clips,
+and bounded private context assets remain under Runtime's ordinary child-result custody.
+Inference is not memoized. A later-segment failure returns the completed portion with
+`complete=false`; first-segment failure and cancellation remain terminal.
 
 ```json
 {
-  "shots": [
-    {"prompt": "A red rover travels beside a woodland stream."},
-    {"prompt": "The rover approaches a small wooden bridge."},
-    {"prompt": "The rover crosses the bridge, with water below."},
-    {"prompt": "The rover follows the stream into a clearing."}
+  "references": [
+    {"name": "rover", "kind": "character", "prompt": "A small red rover with four black wheels."},
+    {"name": "stream", "kind": "scene", "prompt": "A woodland stream beside a small wooden bridge."}
   ],
-  "subject_definitions": "A small red autonomous rover, with four black wheels.",
-  "overall_soundscape": "Flowing water, light wind and quiet wheel noise. No voices.",
-  "non_diegetic_music": "N/A"
+  "prompt": "A continuous tracking shot. Flowing water, light wind and quiet wheels. No music or voices.",
+  "context_frames": 22,
+  "shots": [
+    {"prompt": "{rover} travels beside {stream}."},
+    {"prompt": "{rover} approaches the bridge beside {stream}."},
+    {"prompt": "{rover} crosses the bridge at {stream}."},
+    {"prompt": "{rover} follows {stream} into a clearing."},
+    {"prompt": "{rover} slows beside {stream}."}
+  ]
 }
 ```
 
-Run it on an existing rental:
+Run with `cozy run paul/minimax-h3/long_form --input shots.json --rental=your-rental
+--await --out ./video`. Each shot accepts `prompt`, optional `seed`, optional `duration_s`
+(default 10), and optional `references` (defaults to all declared names in declaration
+order). Explicit reference selections control per-shot picture slots. `mode` defaults to
+`turbo`; `standard` accepts 30, 40 or 50 `steps`. Turbo fixes eight PDD evaluations.
 
-```sh
-cozy run paul/minimax-h3/long_form --input shots.json --rental=your-rental --await --out ./video
-```
+`duration_s` is new delivered time at 24 fps. Context and native alignment padding consume
+additional sampled frames and are excluded from the delivered clip. The first 10-second
+segment samples 243 frames and delivers 240. Subsequent 10-second segments sample:
 
-`complete`, `delivered`, and `requested` report whether all requested shots finished.
-Each shot's seed is optional; an omitted or null seed derives from the request and shot
-index and stays stable when that request retries. Explicit zero is a valid seed.
+| Context frames | Context seconds | Sampled frames | Delivered frames |
+| --- | --- | --- | --- |
+| 22 | 0.917 | 277 | 240 |
+| 39 | 1.625 | 294 | 240 |
+| 56 | 2.333 | 311 | 240 |
 
-A later-shot failure returns the assembled completed portion and its final frame with
-`complete=false` and failure details. Failure on the first shot fails the request;
-cancellation remains cancellation.
+Five default segments deliver exactly 1,200 frames (50 seconds), without replay-frame
+removal or visual crossfade. Every prompt and frame plan is validated before Qwen runs.
+The native generation limit is 362 frames: 13 new seconds plus 56 context frames cannot
+fit and is rejected; 13 seconds plus 39 context frames fits. The default 22 is an
+experiment setting, not a quality claim. Longer context may improve continuity, but this
+requires matched-source visual and listening comparisons. Cuts or identity/audio drift
+remain possible; the API does not guarantee seamless video.
 
-To generate a new sequence from the delivered endpoint, put only the new shots in
-`next-shots.json` and attach the final frame:
+Context compatibility records the selected base model and adapter manifests. It does
+not inspect package source or SDK versions. Runtime's existing
+request and child records own recovery; this API does not accept an opening-frame-only
+resume or export its private AV context.
 
-```sh
-cozy run paul/minimax-h3/long_form --input next-shots.json --rental=your-rental \
-  --asset opening_frame=/path/to/continuation.png --await --out ./next-video
-```
-
-The new request renders its own shots and returns its own assembled video. Runtime's
-existing request and child records own execution recovery; the package does not export
-intermediate state as an output or memoize model inference.
-
-Progress identifies the current shot and child phase. Overall progress weights planned
-frame × step work, assembly frames, and saving the final image. It is not an elapsed-time
-estimate. A partial delivery remains below 100% of the requested work.
-
-The assembled video has a 256 MiB encoded-byte limit. Runtime decodes bounded media
-events during assembly instead of holding the entire decoded video in memory.
+Progress weights sampled frames × steps, reference generation, assembly frames and the
+final image save. The assembled MP4 has a 256 MiB encoded-byte limit; assembly decodes
+bounded media events rather than the complete film at once.

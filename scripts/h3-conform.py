@@ -169,7 +169,6 @@ from h3_tables.source import TARGET_COMPONENT, official_full_specs  # noqa: E402
 from h3_tables.turbo import collapse_head_bank, pdd_head_plan, pdd_time_grid  # noqa: E402
 
 import h3 as package  # noqa: E402
-from assembly import MAX_SHOTS  # noqa: E402
 from gates import MediaFacts, refuse_before_encode, report_after_encode  # noqa: E402
 from h3_order import construction_order, encode_order  # noqa: E402
 
@@ -3468,13 +3467,13 @@ def arm_interface() -> None:
         ],
     )
     check(
-        "a shot list is bounded by what the assembler accepts",
+        "a shot list requires at least one shot without a count cap",
         next(
             field["constraints"]
             for field in jobs["long_form"]["request"]["fields"]
             if field["name"] == "shots"
         ),
-        {"max_length": MAX_SHOTS, "min_length": 1},
+        {"min_length": 1},
     )
     check(
         "a long-form shot defaults to the longest served cell, not the cheapest",

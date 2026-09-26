@@ -207,23 +207,6 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
     ("scripts/h3-turbo-store-proof.py", "cozy_runtime.author._model"): (
         "Bind native source manifests for the overlay integration proof. "
     ),
-    ("scripts/h3-longform-proof.py", "cozy_runtime.author._calls"): (
-        "the long-form driver builds the real child broker so the chain is proven through "
-        "Runtime's own call exchange rather than a fake. Retire when a public child-call "
-        "harness can construct a broker. "
-    ),
-    ("scripts/h3-longform-proof.py", "cozy_runtime.author._assets"): (
-        "the same driver grants the previous shot's bytes to the next child the way the worker "
-        "does. Retire with the same public child-call harness. "
-    ),
-    ("scripts/h3-longform-proof.py", "cozy_runtime.author._services"): (
-        "Observe real progress frames and settle the final image through Runtime's codec "
-        "boundary. Retire when a public settled-output fixture exists. "
-    ),
-    ("scripts/h3-longform-proof.py", "cozy_runtime.author._codec"): (
-        "The host fixture encodes the child's registered frames through Runtime's exact "
-        "post-phase codec before returning byte grants. Retire with a public child harness. "
-    ),
     ("scripts/h3-cuts-proof.py", "cozy_runtime.internal"): (
         "Compile the committed Qwen interface into Runtime's actual managed caller; "
         "retire with a public generated-caller fixture."
@@ -677,10 +660,15 @@ def fence_h3_media_boundary() -> Fence:
                 and (
                     ast.unparse(node.value).startswith("_ASSETS /")
                     or rel(path) == "minimax-h3/long_form_state.py"
+                    or (
+                        rel(path) == "minimax-h3/h3.py"
+                        and ast.unparse(node.value) == "payload.context"
+                    )
                 )
             ):
-                # Package assets are code; prefix state copies opaque verified bytes into
-                # a native Tree and reads its JSON manifest. Neither decodes request media.
+                # Code assets and the bounded private AV-context FileAsset are opaque
+                # Runtime-owned bytes. Native H3 validates/decodes the context envelope;
+                # authored reference media still goes through Runtime media decoding.
                 continue
             if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs:
                 bad.append(
