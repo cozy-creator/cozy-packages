@@ -99,6 +99,7 @@ from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate_image as generate_reference
 from story import (
     DialogueLine,
+    ScreenText,
     StoryReference,
     dialogue_speakers,
     image_prompt,
@@ -1170,6 +1171,9 @@ class ContinuousShot(msgspec.Struct, forbid_unknown_fields=True):
     dialogue: Annotated[list[DialogueLine], msgspec.Meta(max_length=16)] = msgspec.field(
         default_factory=list
     )
+    screen_text: Annotated[list[ScreenText], msgspec.Meta(max_length=16)] = msgspec.field(
+        default_factory=list
+    )
 
 
 class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -1524,6 +1528,9 @@ class CutShot(Shot, kw_only=True):
     dialogue: Annotated[list[DialogueLine], msgspec.Meta(max_length=16)] = msgspec.field(
         default_factory=list
     )
+    screen_text: Annotated[list[ScreenText], msgspec.Meta(max_length=16)] = msgspec.field(
+        default_factory=list
+    )
 
 
 class LongFormCutsInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -1606,7 +1613,7 @@ async def long_form_cuts(
         shot_prompt(
             payload.style, shot.prompt, selected, index=index,
             soundscape=payload.soundscape, music=payload.music,
-            dialogue=shot.dialogue, speakers=speakers,
+            dialogue=shot.dialogue, speakers=speakers, screen_text=shot.screen_text,
         )
         for index, (shot, selected) in enumerate(
             zip(payload.shots, selected_references, strict=True)
@@ -1781,7 +1788,7 @@ async def long_form(
         shot_prompt(
             payload.style, shot.prompt, selected, index=index, continuous=True,
             soundscape=payload.soundscape, music=payload.music,
-            dialogue=shot.dialogue, speakers=speakers,
+            dialogue=shot.dialogue, speakers=speakers, screen_text=shot.screen_text,
         )
         for index, (shot, selected) in enumerate(
             zip(payload.shots, selected_references, strict=True)
