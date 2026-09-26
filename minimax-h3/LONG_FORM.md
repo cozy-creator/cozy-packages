@@ -86,7 +86,9 @@ non_diegetic_music:
 The parenthesized lines above explain placement; they are not inserted into the model
 prompt. Supplied field values, including tag names, quotes, punctuation and internal
 whitespace, are preserved. If style is empty, only the segment description is used.
-Blank audio values remain blank. Headers are separated by one blank line. Definitions,
+Blank summary/audio values are omitted. `N/A` audio values are omitted from the model
+prompt entirely, so the text encoder does not spend tokens encoding an empty instruction.
+Headers are separated by one blank line. Definitions,
 retention text, style and ordered reference assets are shared identically across segments.
 
 The package does not invent `[reference generation]`, `<d>`, `(S1)`, or `[Shot 1]` tags.
