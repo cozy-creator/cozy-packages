@@ -1,0 +1,73 @@
+{
+  "style": "Live-action, natural daylight and gentle tracking camera.",
+  "soundscape": "Leaves rustle in a light breeze. Footsteps sound on the garden path between spoken lines.",
+  "music": "N/A",
+  "mode": "standard",
+  "steps": 30,
+  "references": [
+    {
+      "name": "Mara",
+      "kind": "character",
+      "description": "An adult woman wearing a green coat, with a warm mid-range speaking voice."
+    },
+    {
+      "name": "Guard",
+      "kind": "character",
+      "description": "An adult garden keeper wearing a navy jacket, with a low, calm speaking voice."
+    },
+    {
+      "name": "Garden",
+      "kind": "scene",
+      "description": "A quiet walled garden with a wooden gate, stone path and flowering shrubs."
+    }
+  ],
+  "shots": [
+    {
+      "duration_s": 10,
+      "seed": 41001,
+      "references": [
+        "Mara",
+        "Guard",
+        "Garden"
+      ],
+      "prompt": "The camera follows {Mara} toward {Guard} at the gate in {Garden}. A sign reads \"Please close the gate.\" {dialogue:2} {Guard} pauses and turns the handle. {dialogue:1} They step onto the path.",
+      "dialogue": [
+        {
+          "speaker": "Guard",
+          "language": "English",
+          "text": "Good morning. The garden is open.",
+          "delivery": "in a calm, natural voice"
+        },
+        {
+          "speaker": "Mara",
+          "language": "English",
+          "text": "Good morning. May I come in?",
+          "delivery": "warmly, at a natural pace"
+        }
+      ]
+    },
+    {
+      "duration_s": 10,
+      "seed": 41002,
+      "references": [
+        "Guard",
+        "Garden",
+        "Mara"
+      ],
+      "prompt": "Continue tracking beside {Mara} and {Guard} along the path. {dialogue:1} {Mara} smiles, and they keep walking while the leaves rustle. {dialogue:2}",
+      "dialogue": [
+        {
+          "speaker": "Guard",
+          "language": "English",
+          "text": "The roses are just ahead."
+        },
+        {
+          "speaker": "Mara",
+          "language": "English",
+          "text": "I remember this path.",
+          "voiceover": true
+        }
+      ]
+    }
+  ]
+}

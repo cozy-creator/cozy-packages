@@ -33,7 +33,7 @@ conditioning, and no first/last-frame anchor. Every generated frame is retained 
 ```sh
 cozy package install paul/qwen-image-2
 cozy package install paul/minimax-h3
-cozy run paul/minimax-h3/long_form_cuts --input story.json --rental=your-rental --await --out ./film
+cozy run paul/minimax-h3/long_form_cuts --input story.json --rental=your-rental --await
 ```
 
 The two model packages run on the selected machine. Installing a package alone does
@@ -161,3 +161,58 @@ resume or export its private AV context.
 Progress weights sampled frames × steps, reference generation, assembly frames and the
 final image save. The assembled MP4 has a 256 MiB encoded-byte limit; assembly decodes
 bounded media events rather than the complete film at once.
+
+
+## Exact dialogue at an action point
+
+Both `long_form` and `long_form_cuts` accept an optional `dialogue` list on each shot.
+Each line names a selected **character** reference, an explicit language label, and
+exact spoken text. Optional `delivery` stays outside the dialogue tags; `voiceover`
+adds the official off-screen direction and a lips-closed instruction. Put each line's
+one-based `{dialogue:N}` marker exactly once in the shot prompt where it should occur.
+Marker position expresses narrative order, not a guaranteed timestamp.
+
+[The complete two-shot garden example](examples/dialogue-garden.json) uses Mara and
+a garden keeper. Its first prompt places `{dialogue:2}` before `{dialogue:1}`: Mara
+therefore receives `(S1)` and Guard `(S2)`. Those IDs remain stable when the second
+shot changes reference order and hence its local `<Subject N>` labels.
+
+```sh
+cozy run paul/minimax-h3/long_form --input examples/dialogue-garden.json --rental=your-rental --await
+```
+
+This is the proposed source contract, not an instruction to replace a running local
+candidate. Public release installation remains held until its dependencies are published.
+Generated media uses the normal package output folder.
+
+Words, whitespace, punctuation and language are never translated or rewritten. Finish
+the line with punctuation before any closing quotation mark; invalid lines, missing or
+repeated markers, unknown/unselected speakers, and scene references used as speakers
+refuse before any reference image is generated. Keep H3 tags out of structured `text`
+and `delivery`. Quotes in visual prose are not guessed to be speech: the garden sign
+in the example remains an on-screen sign.
+
+Manual H3 dialogue remains supported with an empty `dialogue` list. A story must use
+either structured dialogue or manual `<d>`/`(S1)` markup, so automatic IDs cannot collide
+with hand-authored IDs. Manual `<d>` bodies are preserved, including literal braces.
+Keep dialogue in the detailed shot description, not `soundscape` or `music`; the latter
+sections describe ambience and audience-only score. The default direction follows
+explicitly described vocal cues and keeps ambience and physical sounds between lines.
+An empty dialogue list does **not** mean total silence. Only explicit soundscape `N/A`
+requests total silence; music `N/A` requests no score.
+
+### Raw markup for the currently installed older prompt API
+
+This shot prompt needs no new `dialogue`, `style`, `soundscape` or `music` fields. Use it
+inside an existing shot with selected character references named Mara and Guard:
+
+```text
+The camera follows {Mara} toward {Guard} beside the garden gate. A sign reads "Please close the gate." {Mara} (S1), in a warm natural voice, says: <d>[English] Good morning. May I come in?</d> {Guard} pauses. {Guard} (S2), in a low calm voice, says: <d>[English] Good morning. The garden is open.</d> They walk along the path. Leaves rustle and footsteps continue between lines. No background music and no additional speech.
+```
+
+Keep the same speaker IDs in later shots. This example does not modify the active
+candidate or an existing request. Formatting matches the official
+[base guide](https://raw.githubusercontent.com/MiniMax-AI/MiniMax-H3/main/skills/h3-prompt-writing/references/base-en.txt)
+and [reference guide](https://raw.githubusercontent.com/MiniMax-AI/MiniMax-H3/main/skills/h3-prompt-writing/references/ref-en.txt).
+It corrects an authoring mismatch; intelligible delivery and exact transcript fidelity
+still require a real video/audio assessment. No prompt-only cure is claimed.

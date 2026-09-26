@@ -14,6 +14,19 @@ from cozy_runtime.author import AssetBound, ImageAsset, InvalidRequest
 MAX_IMAGES = 9
 _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,47}\Z")
 _PLACEHOLDER = re.compile(r"\{([A-Za-z][A-Za-z0-9_-]*)\}")
+_DIALOGUE_MARKER = re.compile(r"\{dialogue:([1-9][0-9]*)\}")
+_MANUAL_SPEAKER = re.compile(r"\(S[1-9][0-9]*(?:,S[1-9][0-9]*)*\)")
+_DIALOGUE_BODY = re.compile(r"(<d>.*?</d>)", re.DOTALL)
+
+
+class DialogueLine(msgspec.Struct, forbid_unknown_fields=True):
+    """Exact speech inserted at its one-based {dialogue:N} marker."""
+
+    speaker: Annotated[str, msgspec.Meta(min_length=1, max_length=48)]
+    text: Annotated[str, msgspec.Meta(min_length=1, max_length=1024)]
+    language: Annotated[str, msgspec.Meta(min_length=1, max_length=48)]
+    delivery: Annotated[str, msgspec.Meta(max_length=256)] = ""
+    voiceover: bool = False
 
 
 class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
@@ -118,6 +131,63 @@ def select_references(
     return [by_name[key] for key in keys]
 
 
+def dialogue_speakers(
+    descriptions: Sequence[str],
+    lines_by_shot: Sequence[Sequence[DialogueLine]],
+    references_by_shot: Sequence[Sequence[StoryReference]],
+    *,
+    shared: Sequence[str] = (),
+) -> dict[str, str]:
+    """Validate before image generation; number speakers by actual marker chronology."""
+    structured = any(lines_by_shot)
+    speakers: dict[str, str] = {}
+    if structured and any(
+        "<d>" in text or "</d>" in text or _MANUAL_SPEAKER.search(text) for text in shared
+    ):
+        raise InvalidRequest(
+            "structured dialogue cannot mix with manual H3 dialogue/speaker tags in shared fields",
+            fields=["style", "soundscape", "music", "references"],
+        )
+    for index, (description, lines, references) in enumerate(
+        zip(descriptions, lines_by_shot, references_by_shot, strict=True)
+    ):
+        def refuse(detail: str) -> None:
+            raise InvalidRequest(f"shot {index + 1}: {detail}", fields=["shots", "dialogue"])
+
+        if structured and (
+            "<d>" in description or "</d>" in description or _MANUAL_SPEAKER.search(description)
+        ):
+            refuse("use either structured dialogue or manual H3 dialogue/speaker tags across the story")
+        marker_text = _DIALOGUE_BODY.sub("", description)
+        markers = list(_DIALOGUE_MARKER.finditer(marker_text))
+        if "{dialogue:" in _DIALOGUE_MARKER.sub("", marker_text):
+            refuse("dialogue markers must be {dialogue:1}, {dialogue:2}, and so on")
+        positions = [int(marker.group(1)) for marker in markers]
+        if sorted(positions) != list(range(1, len(lines) + 1)):
+            refuse("insert every dialogue line exactly once with its one-based {dialogue:N} marker")
+        selected = {reference.name.casefold(): reference for reference in references}
+        for position in positions:
+            line = lines[position - 1]
+            key = line.speaker.casefold()
+            reference = selected.get(key)
+            if reference is None or reference.kind != "character":
+                refuse(f"dialogue speaker {line.speaker!r} must be a selected character reference")
+            if re.fullmatch(r"[A-Za-z][A-Za-z -]{0,47}", line.language) is None:
+                refuse("dialogue language must be a plain label such as English or Mandarin Chinese")
+            if not line.text.strip() or any(token in line.text for token in ("<", ">")):
+                refuse("dialogue text must contain spoken words only, without H3/XML tags")
+            ending = line.text.rstrip().rstrip('\"\'”’»」』')
+            if not ending or ending[-1] not in ".!?。！？…":
+                refuse("finish dialogue text with punctuation; supplied words and punctuation are never rewritten")
+            if any(token in line.delivery for token in ("<", ">", "{", "}")) or (
+                _MANUAL_SPEAKER.search(line.delivery)
+            ):
+                refuse("delivery must be plain direction outside the spoken text")
+            if key not in speakers:
+                speakers[key] = f"S{len(speakers) + 1}"
+    return speakers
+
+
 def shot_prompt(
     style: str,
     description: str,
@@ -127,6 +197,8 @@ def shot_prompt(
     continuous: bool = False,
     soundscape: str = "",
     music: str = "",
+    dialogue: Sequence[DialogueLine] = (),
+    speakers: dict[str, str] | None = None,
 ) -> str:
     labels = {
         reference.name.casefold(): f"<Subject {slot}>"
@@ -143,10 +215,20 @@ def shot_prompt(
                 )
             return labels[name.casefold()]
 
-        return _PLACEHOLDER.sub(replace, text.strip())
+        # Manual dialogue is already authored markup: never rewrite its spoken text.
+        parts = _DIALOGUE_BODY.split(text.strip())
+        return "".join(
+            part if part.startswith("<d>") else _PLACEHOLDER.sub(replace, part)
+            for part in parts
+        )
 
     if not description.strip():
         raise InvalidRequest(f"shot {index + 1} has an empty prompt", fields=["shots"])
+    if any("<d>" in text or "</d>" in text for text in (soundscape, music)):
+        raise InvalidRequest(
+            "place dialogue in the shot description, not soundscape or music",
+            fields=["soundscape", "music"],
+        )
     subjects: list[str] = []
     retention: list[str] = []
     for slot, reference in enumerate(references, 1):
@@ -172,6 +254,29 @@ def shot_prompt(
         direction = "Begin one continuous camera take. Establish the opening composition and action. "
     else:
         direction = "One continuous shot. Compose a new camera view and animate the subjects. "
+    description = substitute(description)
+    if dialogue:
+        if speakers is None:
+            raise InvalidRequest("structured dialogue needs the story speaker map", fields=["shots"])
+
+        def speak(match: re.Match[str]) -> str:
+            line = dialogue[int(match.group(1)) - 1]
+            key = line.speaker.casefold()
+            voice = "says in an off-screen voiceover" if line.voiceover else "says"
+            delivery = f", {line.delivery.strip()}," if line.delivery.strip() else ""
+            text = (
+                f"{labels[key]} ({speakers[key]}){delivery} {voice}: "
+                f"<d>[{line.language}] {line.text}</d>"
+            )
+            if line.voiceover:
+                text += f" {labels[key]}'s lips remain completely closed."
+            return text
+
+        description = _DIALOGUE_MARKER.sub(speak, description)
+    direction += (
+        "Vocal content follows the explicitly described lines and cues. Between them, "
+        "the described ambience and physical sounds continue. "
+    )
     prompt = "\n\n".join(
         (
             "subject_definitions:\n" + "\n".join(subjects),
@@ -184,7 +289,7 @@ def shot_prompt(
             + "[Shot 1]\n"
             + direction
             + "Follow this shot description:\n"
-            + substitute(description),
+            + description,
             "overall_soundscape:\n"
             + substitute(
                 soundscape
