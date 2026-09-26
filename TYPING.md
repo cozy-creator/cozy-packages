@@ -58,3 +58,23 @@ needs a typed managed-call contract rather than more ignores or casts.
 Built H3-tools and Qwen wheels include their `py.typed` markers. No full CI,
 native execution, publication, global install, or candidate deployment ran.
 PR277 remains draft until the complete new gate is qualified.
+
+## Follow-up source repairs
+
+The current branch incorporates the supplied-reference H3 interface and removes
+the retired scratch experiment that imported Runtime's deleted private LoRA module.
+Historical run artifacts are untouched. Focused checks now pass the H3 conformance,
+VAE precision and compile-oracle files (three files), plus the LoRA merge, kernel
+quality, first-step and attention-oracle examples (four files).
+
+These checks use existing Torch types. A short explicit list of upstream Torch
+APIs without typed signatures is exempt from `no-untyped-call`; this does not
+disable checks of first-party functions or hide missing first-party imports.
+The deliberately invalid LoRA operand in a negative test has a local `arg-type`
+exception. Ordinary variable reuse, model dimensions, optional tensor lifetime,
+and compiler reporting are repaired rather than suppressed.
+
+The complete gate remains unqualified: generated managed-call signatures still
+need to distinguish injected services/model objects from client arguments, and
+the older monolithic interface assertions need reconciliation with current H3.
+No full local CI, GPU execution, or installation change ran for these repairs.

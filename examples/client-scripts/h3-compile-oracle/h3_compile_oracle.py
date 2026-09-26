@@ -304,9 +304,7 @@ def execute(
     error = None
     try:
         if payload.warmup_steps:
-            warmup = RunState(
-                msgspec.structs.replace(payload, profile=False), payload.warmup_steps
-            )
+            warmup = RunState(msgspec.structs.replace(payload, profile=False), payload.warmup_steps)
             try:
                 if warmup.generate(invoke) is not None:
                     raise RuntimeError("warmup reached decoding instead of stopping in denoising")
@@ -348,7 +346,7 @@ def execute(
         "graphs_before": state.graphs_before,
         "graphs_after": len(compiler.graphs) if compiler else 0,
         "graphs": compiler.graphs if compiler else [],
-        "compile_times": compile_times(),
+        "compile_times": compile_times(repr="str"),
         "compiler_counters": {str(key): dict(value) for key, value in counters.items()},
         "versions": {
             name: importlib.metadata.version(name)

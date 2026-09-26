@@ -70,23 +70,8 @@ LoRA update's norm. Per-row numerical diagnostics are part of prototype preparat
 time. These are one-layer measurements, not full-model quality or cached-serving
 qualification.
 
-## Exact scratch comparison
+## Historical scratch comparison
 
-`prepare_h3_lora_scratch_probe.py WHEEL ARITHMETIC_FILE RUNTIME_REPO DESTINATION`
-stages a separate `local/h3-lora-scratch-probe/probe`. It extracts the exact old
-and candidate methods from immutable Runtime commits and checks the installed old
-method's source digest before comparing. The candidate executes with the original
-Runtime module globals, preserving its hook-class and refusal checks.
-
-The first8209 actual input rows exercise two full4096-row tiles plus17 tail rows.
-Both methods receive clones of one identical encoded-base output. The comparison
-uses the real factor stack and an explicit synthetic second negative-strength term
-with the same verified factors. Three warmups precede twelve interleaved timing
-pairs. Both cases compare uint8 views and must be byte-identical; source/factor hashes and a1GiB scratch
-bound are checked. Timings include output cloning and do not establish full-video
-speed. The request stops after one denoising step and never updates the worker.
-
-Historical run764 used `torch.equal` on floating outputs. Its original `byte_equal`
-field therefore means exact numerical equality, which does not distinguish signed
-zero. Preserve that report and its captured source; the updated byte-view check
-applies to future probes. Full-video/media hash parity is a separate observation.
+The one-off scratch probe depended on the removed private Runtime LoRA hooks and
+has been retired. Its captured code and measurements remain in the historical
+run artifacts. It is not a supported client-script example for current Runtime.
