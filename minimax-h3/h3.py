@@ -1171,8 +1171,6 @@ class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
     segments: Annotated[list[StorySegment], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
     style: str = ""
-    soundscape: str = ""
-    music: str = ""
     context_frames: Literal[22, 39, 56] = 22
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
