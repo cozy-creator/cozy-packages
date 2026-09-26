@@ -10,9 +10,11 @@ from typing import Annotated, Literal
 
 import msgspec
 from msgspec.structs import replace
-from cozy_runtime.author import AssetBound, ImageAsset, InvalidRequest
+from cozy_runtime.author import AssetBound, AudioAsset, ImageAsset, InvalidRequest
 
 MAX_IMAGES = 9
+MAX_AUDIO = 3
+MAX_REFERENCES = 12
 _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,47}\Z")
 
 
@@ -31,7 +33,7 @@ class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
     """A supplied image or an image generated from its shared visual description."""
 
     name: Annotated[str, msgspec.Meta(min_length=1, max_length=48)]
-    kind: Literal["character", "scene"]
+    kind: Literal["character", "scene", "audio"]
     description: Annotated[str, msgspec.Meta(max_length=1024)] = ""
     retention_analysis: Annotated[str | None, msgspec.Meta(max_length=1024)] = msgspec.field(
         default=None, name="retention-analysis"
@@ -43,6 +45,10 @@ class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
             max_decoded_bytes=256 << 20,
             media_types=("image/png", "image/jpeg", "image/webp"),
         ),
+    ] = None
+    audio: Annotated[
+        AudioAsset | None,
+        AssetBound(max_bytes=256 << 20, max_decoded_bytes=2 << 30),
     ] = None
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
 
@@ -57,10 +63,14 @@ def reference_seed(reference: StoryReference, request_id: str) -> int:
 async def resolve_reference_images(
     references: Sequence[StoryReference],
     generate: Callable[[StoryReference], Awaitable[ImageAsset]],
-) -> dict[str, ImageAsset]:
+) -> dict[str, ImageAsset | AudioAsset]:
     """Reuse granted handles and generate only missing images, draining failed siblings."""
-    images = {ref.name: ref.image for ref in references if ref.image is not None}
-    pending = [ref for ref in references if ref.image is None]
+    images: dict[str, ImageAsset | AudioAsset] = {
+        ref.name: (ref.audio if ref.kind == "audio" else ref.image)
+        for ref in references
+        if ref.audio is not None or ref.image is not None
+    }
+    pending = [ref for ref in references if ref.kind != "audio" and ref.image is None]
 
     async def one(reference: StoryReference) -> ImageAsset:
         return await generate(reference)
@@ -93,8 +103,12 @@ def image_prompt(reference: StoryReference) -> str:
 
 
 def validate_references(references: Sequence[StoryReference]) -> dict[str, StoryReference]:
-    if not 1 <= len(references) <= MAX_IMAGES:
-        raise InvalidRequest("declare between one and nine references", fields=["references"])
+    if not 1 <= len(references) <= MAX_REFERENCES:
+        raise InvalidRequest("declare between one and twelve references", fields=["references"])
+    if sum(reference.kind == "audio" for reference in references) > MAX_AUDIO:
+        raise InvalidRequest("declare at most three audio references", fields=["references"])
+    if sum(reference.kind != "audio" for reference in references) > MAX_IMAGES:
+        raise InvalidRequest("declare at most nine image or scene references", fields=["references"])
     by_name: dict[str, StoryReference] = {}
     for reference in references:
         if not _NAME.fullmatch(reference.name):
@@ -107,7 +121,17 @@ def validate_references(references: Sequence[StoryReference]) -> dict[str, Story
             raise InvalidRequest(
                 f"duplicate reference name: {reference.name}", fields=["references"]
             )
-        if reference.image is None and not reference.description.strip():
+        if reference.kind == "audio" and (reference.audio is None or reference.image is not None):
+            raise InvalidRequest(
+                f"audio reference {reference.name} requires audio and forbids image",
+                fields=["references"],
+            )
+        if reference.kind != "audio" and reference.audio is not None:
+            raise InvalidRequest(
+                f"{reference.kind} reference {reference.name} cannot carry audio",
+                fields=["references"],
+            )
+        if reference.kind != "audio" and reference.image is None and not reference.description.strip():
             raise InvalidRequest(
                 f"reference {reference.name} needs an image or a nonempty description",
                 fields=["references"],
@@ -191,15 +215,24 @@ def compile_segments(
 def reference_sections(references: Sequence[StoryReference]) -> tuple[str, str]:
     """Use the same ordered image slots and literal names as the shared assets."""
     definitions, retention = [], []
-    for slot, reference in enumerate(references, 1):
+    pictures = audios = 0
+    for reference in references:
+        if reference.kind == "audio":
+            audios += 1
+            label_kind = f"Audio {audios}"
+        else:
+            pictures += 1
+            label_kind = f"Picture {pictures}"
         label = f"<{reference.name}>"
         definitions.append(
-            f"{label} is the {reference.kind} shown in <Picture {slot}>."
+            f"{label} is the {reference.kind} shown in <{label_kind}>."
             + (f" {reference.description}" if reference.description else "")
         )
         preserved = (
             "the identity and defining visual features of the referenced character"
             if reference.kind == "character"
+            else "the referenced audio signal and its supplied timing"
+            if reference.kind == "audio"
             else "the architecture, materials and defining features of the referenced environment"
         )
         analysis = (
