@@ -268,7 +268,6 @@ def shot_prompt(
             fields=["soundscape", "music"],
         )
     subjects: list[str] = []
-    retention: list[str] = []
     for slot, reference in enumerate(references, 1):
         label = labels[reference.name.casefold()]
         appearance = _unquote_narrative(reference.description.strip())
@@ -276,14 +275,6 @@ def shot_prompt(
             f"{label} is {reference.name}, the {reference.kind} shown in <Picture {slot}>."
             + (f" {appearance}" if appearance else "")
         )
-        preserved = (
-            "identity, face, body proportions, hair and clothing; the portrait's white "
-            "background and pose are not part of this subject"
-            if reference.kind == "character"
-            else "the environment's architecture, materials and defining features; "
-            "its photographed viewpoint and framing are not part of this subject"
-        )
-        retention.append(f"{label} (appears in [Shot 1]): fully_preserved - {preserved}.")
     if continuous and index > 0:
         direction = (
             "Continue the preceding action and camera motion seamlessly; preserve the same "
@@ -335,7 +326,6 @@ def shot_prompt(
             "summary:\n[reference generation] Generate the described shot using "
             + ", ".join(labels.values())
             + " as visual references for the defined subjects and environment.",
-            "retention_analysis:\n" + "\n".join(retention),
             "detailed_description:\n"
             + (substitute(style) + "\n" if style.strip() else "")
             + "[Shot 1]\n"

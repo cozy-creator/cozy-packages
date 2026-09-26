@@ -65,9 +65,9 @@ When omitted, audio sections defer to explicit shot instructions rather than inv
 speech or a score. Keep synchronized dialogue inside the shot prompt, using stable
 speaker IDs and the official form `{Lena} (S1) says, <d>[English] Your move.</d>`.
 
-The compiler emits all six official sections: `subject_definitions`, `summary`,
-`retention_analysis`, `detailed_description`, `overall_soundscape`, and
-`non_diegetic_music`. Style opens the detailed description before `[Shot 1]`.
+The compiler emits `subject_definitions`, `summary`, `detailed_description`,
+`overall_soundscape`, and `non_diegetic_music`. Generated `retention_analysis` and
+`fully_preserved` prose are omitted. Style opens the detailed description before `[Shot 1]`.
 It preserves explicit dialogue and display text. Quotation delimiters in scene
 directions are removed; it does not run an LLM rewrite or infer speakers.
 The compiler defines each character/environment separately and retains its visual
