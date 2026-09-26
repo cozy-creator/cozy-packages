@@ -96,16 +96,12 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     background: Background = "normal"
     reference_images: Annotated[
-        list[
-            Annotated[
-                ImageAsset,
-                AssetBound(
-                    max_bytes=32 << 20,
-                    max_decoded_bytes=20 << 20,
-                    media_types=("image/png", "image/jpeg", "image/webp"),
-                ),
-            ]
-        ],
+        list[ImageAsset],
+        AssetBound(
+            max_bytes=32 << 20,
+            max_decoded_bytes=20 << 20,
+            media_types=("image/png", "image/jpeg", "image/webp"),
+        ),
         msgspec.Meta(max_length=10),
     ] = msgspec.field(default_factory=list)
 
