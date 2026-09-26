@@ -43,8 +43,6 @@ class ComparisonInput(msgspec.Struct, forbid_unknown_fields=True):
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
     predecessor: StorySegment
     continuation: StorySegment
-    subject_definitions: str
-    retention_analysis: str
     shared: str
     seed: int = 41001
 
@@ -63,8 +61,6 @@ async def compare(
     seed = payload.seed
     prompts = compile_segments(
         payload.shared, [payload.predecessor, payload.continuation], references,
-        subject_definitions=payload.subject_definitions,
-        retention_analysis=payload.retention_analysis,
     )
     plans = [plan_continuation(240, context_frames=n) for n in (0, 22, 39, 56)]
     images = await _create_references(ctx, references, tel)

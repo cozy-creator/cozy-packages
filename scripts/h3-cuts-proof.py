@@ -430,8 +430,6 @@ def drive(
             for index in range(count)
         ],
         "style": "Photorealistic nature photography.",
-        "subject_definitions": "<Rover> is the robot in <Picture 1>. <Bridge> is the location in <Picture 2>.",
-        "retention_analysis": "<Rover>: fully_preserved - appearance. <Bridge>: fully_preserved - environment.",
         "references": [
             {
                 "name": "Rover",
@@ -452,8 +450,8 @@ def drive(
         wire["context_frames"] = context_frames
     if prompt is not None:
         wire["style"] = prompt
-    if bad == "empty-definitions":
-        wire["subject_definitions"] = " "
+    if bad == "empty-references":
+        wire["references"] = []
     elif bad == "duplicate":
         wire["references"][1]["name"] = "ROVER"
     elif bad == "empty":
@@ -578,7 +576,7 @@ def main() -> None:
     )
     drive(root / "oversized-prompt", prompt="x" * 3500, refuse=True)
     for bad in (
-        "empty-definitions",
+        "empty-references",
         "duplicate",
         "empty",
         "seed",
@@ -594,7 +592,11 @@ def main() -> None:
     assert reference_seed(refs[0], "request") == reference_seed(refs[0], "request")
     assert reference_seed(refs[0], "request") != reference_seed(refs[1], "request")
     prompt = segment_prompt(
-        "A gathering", StorySegment("[reference generation] A gathering.", "[Shot 1] <Person8> waves.", "Room tone.", "N/A"),
+        "A gathering", StorySegment(
+            summary="[reference generation] A gathering.",
+            detailed_description="[Shot 1] <Person8> waves.",
+            overall_soundscape="Room tone.", non_diegetic_music="N/A", duration_s=10,
+        ),
         index=0, subject_definitions="<Person8> is in <Picture 9>.", retention_analysis="<Person8>: fully_preserved - identity.",
     )
     assert "<Person8> waves" in prompt and "<Picture 9>" in prompt

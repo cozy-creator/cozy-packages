@@ -36,13 +36,6 @@ async def main() -> Comparison:
                 "A continuous eye-level tracking shot, natural daylight. Footsteps and "
                 "soft outdoor wind, no music, no voices."
             ),
-            subject_definitions=(
-                "<courier> is the courier in <Picture 1>. <depot> is the courtyard in <Picture 2>."
-            ),
-            retention_analysis=(
-                "<courier>: fully_preserved - identity and clothing. "
-                "<depot>: fully_preserved - architecture and cart."
-            ),
             predecessor=StorySegment(
                 summary="[reference generation] <courier> approaches the cart in <depot>.",
                 detailed_description=(

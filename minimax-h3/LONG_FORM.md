@@ -9,24 +9,20 @@ For example, authored `<Reina>` reaches the model as `<Reina>`.
 
 The overall input contains:
 
-- `subject_definitions`: shared authored text defining reference labels.
-- `retention_analysis`: shared authored text describing retained reference roles.
 - `style`: one shared overall-style string.
 - `references`: the ordered image inputs or descriptions used to generate them.
 - `segments`: the ordered generation requests.
 
-Each segment requires four text fields: `summary`, `detailed_description`,
-`overall_soundscape`, and `non_diegetic_music`. Optional `duration_s` and `seed` control
-generation. There are no per-segment reference subsets or reordered image slots.
+Each segment requires `detailed_description` and `duration_s`. `summary`,
+`overall_soundscape`, and `non_diegetic_music` are optional and default to blank.
+`seed` is optional. There are no per-segment reference subsets or reordered image slots.
 
 ```json
 {
-  "subject_definitions": "<Reina> is the woman in <Picture 1>, wearing a green coat. <Garden> is the garden in <Picture 2>.",
-  "retention_analysis": "<Reina>: fully_preserved - identity and appearance. <Garden>: fully_preserved - its defining architecture and plants.",
   "style": "Realistic live action with warm afternoon lighting.",
   "references": [
     {"name": "Reina", "kind": "character", "description": "An adult woman wearing a green coat."},
-    {"name": "Garden", "kind": "scene", "description": "A garden with a stone path and wooden gate."}
+    {"name": "Garden", "kind": "scene", "description": "A garden with a stone path and wooden gate.", "retention-analysis": "fully_preserved - the garden's gate and plants remain consistent."}
   ],
   "segments": [
     {
@@ -40,6 +36,11 @@ generation. There are no per-segment reference subsets or reordered image slots.
 }
 ```
 
+The package generates `subject_definitions` and `retention_analysis` from the ordered
+references. Each reference can optionally provide `retention-analysis`; when absent,
+the package uses its default role template. These generated sections are identical in
+every segment prompt and are not user-level top-level fields.
+
 The official [MiniMax reference guide](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md)
 uses `<Subject N>` labels. Friendly labels such as `<Reina>` are an authoring experiment,
 passed through literally; their generation quality is not established here. To use the
@@ -47,8 +48,8 @@ recommended labels, change the literal names consistently in definitions, retent
 summaries and descriptions. Cozy performs no conversion in either direction.
 
 `references` configures image assets independently of the authored prompt text. Image
-order determines `<Picture 1>`, `<Picture 2>`, etc. The writer must connect the intended
-labels to the correct pictures in `subject_definitions`. A reference's `name` identifies
+order determines `<Picture 1>`, `<Picture 2>`, etc. The package connects each literal
+reference name to its generated subject definition. A reference's `name` identifies
 its asset/configuration and seed; it is not a prompt placeholder.
 
 ## Exact model-facing assembly
@@ -121,7 +122,8 @@ A reference has `name`, `kind` (`character` or `scene`), optional `description`,
 `image`, and optional `seed`. A supplied image skips generation. Without an image, a
 nonempty description is required and Qwen-Image-2.1 generates that reference once.
 Character generation adds its white-background portrait direction only to Qwen.
-H3's textual definitions come exclusively from the authored `subject_definitions` field.
+H3's textual definitions are generated from `references`; optional per-reference
+`retention-analysis` customizes only that reference's generated retention line.
 
 One to nine references are supported. Asset names start with a letter and contain only
 letters, digits, `_` or `-`, and must be unique ignoring case. PNG/JPEG/WebP image fields
@@ -135,7 +137,7 @@ cozy run paul/minimax-h3/long_form --input story.json --rental=your-rental --awa
 ```
 
 `long_form` continues completed audio/video context; `long_form_cuts` renders independent
-segments. Both use this 1.18.2 input contract. Old `shots`, per-item `prompt`, structured
+segments. Both use this 1.18.3 input contract. Old `shots`, per-item `prompt`, structured
 `dialogue`/`screen_text` markers and shared audio fields are not this contract.
 
 Continuous segments default to 10 seconds, independent cut segments to 15; authored
