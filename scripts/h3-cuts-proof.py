@@ -11,6 +11,7 @@ import io
 import json
 import sys
 import time
+import wave
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
@@ -61,11 +62,12 @@ async def reference_renderer(
     steps: int,
     seed: int,
     background: Literal["normal", "white"],
+    reference_images: list[ImageAsset],
     out: Outputs,
     tel: Telemetry,
 ) -> ReferenceOutput:
     ctx.raise_if_cancelled()
-    assert aspect_ratio == "1:1" and megapixels == 1 and steps == 40
+    assert aspect_ratio == "1:1" and megapixels == 1 and steps == 40 and not reference_images
     tel.step_callback(steps, stage="denoise", overall_range=(0.1, 0.9))(2)
     rgb = bytes((seed % 251, 128, 255)) * WIDTH * HEIGHT
     image = out.save_image(ImageFrame(WIDTH, HEIGHT, rgb), format="png")
@@ -103,6 +105,21 @@ def sha(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
+def present(assets: Any, prompt: str) -> Any:
+    """Run the package's actual image and audio reference conversion and label checks."""
+    kinds = [assets.info(index).kind for index in range(len(assets))]
+    converted = h3.assets_to_h3_refs(
+        assets,
+        pipe=cast(
+            Any,
+            SimpleNamespace(image_reference=lambda item: item, audio_reference=lambda item: item),
+        ),
+    )
+    for kind, label in (("image", "Picture"), ("audio", "Audio")):
+        assert all(f"<{label} {n + 1}>" in prompt for n in range(kinds.count(kind))), kinds
+    return converted
+
+
 @invocable
 async def renderer(
     ctx: Context,
@@ -137,11 +154,8 @@ async def renderer(
         assert task == ("ref2va_turbo" if turbo else "ref2va")
         assert images and "first" not in kwargs and "last" not in kwargs
         # Execute actual image presentation sizing and native-reference conversion.
-        converted, sizing = h3.assets_to_h3_refs(
-            images, pipe=cast(Any, SimpleNamespace(image_reference=lambda image: image))
-        )
-        assert len(converted) <= 9 and sizing.total <= MAX_CONDITIONER_VISION_TOKENS
-        assert all(f"<Picture {index + 1}>" in request.prompt for index in range(len(images)))
+        converted, sizing = present(images, request.prompt)
+        assert len(converted) <= 12 and sizing.total <= MAX_CONDITIONER_VISION_TOKENS
         return render(task, request.seed, request.duration_s, kwargs.get("capture"))
 
     def text(_ctx: Any, task: str, *_: Any, **kwargs: Any) -> Any:
@@ -183,6 +197,7 @@ async def motion_renderer(
         assert task == ("ref2va_turbo" if turbo else "ref2va")
         ROUTES.append(task)
         assert images and kwargs["expected_context_provenance"] == CODE
+        present(images, request.prompt)
         context, delivery = kwargs["context"], kwargs["delivery"]
         if context is not None:
             assert context.frame_count == payload.context_frames
@@ -252,6 +267,8 @@ def drive(
     reference_failure: bool = False,
     reference_cancel: bool = False,
     continuous: bool = False,
+    audio: bool = False,
+    refuse_code: str = "",
     context_frames: int = 39,
     duration_s: int = 5,
 ) -> dict[str, Any]:
@@ -260,8 +277,10 @@ def drive(
     export = ("motion_segment" if continuous else "cut_segment") + ("_turbo" if turbo else "")
     surface = next(item for item in describe(h3.app) if item.name == export)
     calls: list[dict[str, Any]] = []
+    prefetches: list[dict[str, Any]] = []
     events: list[Any] = []
     source: dict[str, Path] = {}
+    media: dict[str, str] = {}
     answers: dict[int, dict[str, Any]] = {}
     pending: dict[int, dict[str, Any]] = {}
     cancelled = False
@@ -274,7 +293,11 @@ def drive(
             input_id=path,
             local=local,
             digest=digest,
-            media_type="application/octet-stream" if path == "payload.context" else "image/png",
+            media_type=(
+                "application/octet-stream"
+                if path == "payload.context"
+                else media.get(digest, "image/png")
+            ),
             length=local.stat().st_size,
             file_state=file_state(local),
             order=order,
@@ -282,6 +305,9 @@ def drive(
 
     def exchange(kind: str, value: dict[str, Any]) -> dict[str, Any]:
         nonlocal cancelled
+        if kind == "model_prefetch":
+            prefetches.append(value)
+            return {"ok": True}
         index = int(value["call_index"])
         if kind in ("child_cancel", "child_forget"):
             if kind == "child_cancel":
@@ -367,7 +393,8 @@ def drive(
                     raw = encode_frame(frame.codec, frame.facts, frame.raw.read_bytes())
                 digest = sha(raw)
                 local = root / (digest[7:] + (".png" if item.kind == "image" else ".mp4"))
-                local.write_bytes(raw)
+                if not local.exists():  # content-addressed; a rewrite would change a granted file
+                    local.write_bytes(raw)
                 source[digest] = local
                 outputs.append(
                     {
@@ -468,6 +495,31 @@ def drive(
         ]
     elif bad == "legacy":
         wire["history_frames"] = 0
+    parent_assets: dict[str, GrantedInput] = {}
+    voice = ""
+    if audio:
+        # Three seconds of mono speech-band tone: a supplied voice needs no Qwen image.
+        path = root / "voice.wav"
+        with wave.open(str(path), "wb") as out:
+            out.setnchannels(1)
+            out.setsampwidth(2)
+            out.setframerate(RATE)
+            tone = np.sin(np.arange(3 * RATE) * (2 * np.pi * 220 / RATE)) * 8000
+            out.writeframes(tone.astype("<i2").tobytes())
+        voice = sha(path.read_bytes())
+        source[voice], media[voice] = path, "audio/wav"
+        reference = {
+            "name": "RoverVoice",
+            "kind": "audio",
+            "description": "It is the voice-timbre reference for <Rover> (S1).",
+            "retention-analysis": "reference - its timbre guides <Rover>'s speech.",
+            "audio": voice,
+        }
+        wire["references"] = (
+            [reference] if bad == "audio-only" else [*wire["references"], reference]
+        )
+        slot = len(wire["references"]) - 1
+        parent_assets[f"references.{slot}.audio"] = grant(f"references.{slot}.audio", voice, slot)
     broker = _Broker(
         parent,
         {
@@ -492,6 +544,7 @@ def drive(
             calls=broker,
             cancel=lambda: cancelled,
             progress=events.append,
+            assets=parent_assets,
         ),
     )
     if reference_cancel:
@@ -503,7 +556,10 @@ def drive(
         assert len(calls) == 2 and 0 in canceled_children
         return {}
     if refuse:
-        assert result is None and outcome.terminal != "succeeded" and not calls, outcome
+        # Refused before any reference image, model preparation or render child.
+        assert result is None and outcome.terminal != "succeeded", outcome
+        assert not calls and not prefetches, (calls, prefetches)
+        assert not refuse_code or outcome.code == refuse_code, outcome
         return {}
     if cancel >= 0:
         assert result is None and outcome.terminal == "canceled", outcome
@@ -538,10 +594,15 @@ def drive(
     sent = [json.loads(call["payload"]) for call in calls[2:]]
     assert all("[Shot 1]" in row["payload"]["prompt"] for row in sent)
     assert sent[0]["payload"]["seed"] == 0
-    assert all(len(row["assets"]) == 2 for row in sent)
+    assert len(prefetches) == 1
     fixed = [json.loads(answers[index]["result"])["image"]["digest"] for index in range(2)]
+    fixed += [voice] if audio else []
     for index, row in enumerate(sent):
         assert [item["asset"] for item in row["assets"]] == fixed
+        if audio:
+            prompt = row["payload"]["prompt"]
+            assert "<Audio 1> is the supplied audio reference for <RoverVoice>." in prompt
+            assert "<Audio 1>: reference - its timbre guides <Rover>'s speech." in prompt
         assert (
             "<Rover>" in row["payload"]["prompt"]
             and "fully_preserved" in row["payload"]["prompt"]
@@ -574,7 +635,12 @@ def main() -> None:
     assert (
         repeated["calls"][1]["payload"]["seed"] == results["fixed"]["calls"][1]["payload"]["seed"]
     )
-    drive(root / "oversized-prompt", prompt="x" * 3500, refuse=True)
+    drive(root / "oversized-prompt", prompt="x" * 4000, refuse=True)
+    audio = drive(root / "audio", audio=True)
+    assert all(len(row["assets"]) == 3 for row in audio["calls"])
+    drive(
+        root / "audio-only", audio=True, bad="audio-only", refuse=True, refuse_code="reference_policy"
+    )
     for bad in (
         "empty-references",
         "duplicate",
@@ -617,6 +683,8 @@ def main() -> None:
                 "cuts_preserve_all_frames": True,
                 "reference_slots_and_tokens_bounded": True,
                 "grouped_appearance_roles": True,
+                "supplied_audio_reference_skips_qwen": True,
+                "audio_only_refused_before_model_preparation": True,
             },
             indent=2,
         )

@@ -36,12 +36,21 @@ def main() -> None:
     proof.drive(root / "first-fails", continuous=True, fail=0)
     proof.drive(root / "reference-fails", continuous=True, reference_failure=True)
     proof.drive(root / "reference-cancels", continuous=True, reference_cancel=True)
-    proof.drive(root / "prompt-preflight", continuous=True, prompt="x" * 3500, refuse=True)
+    proof.drive(root / "prompt-preflight", continuous=True, prompt="x" * 4000, refuse=True)
     shortened = proof.drive(
         root / "frame-shortening", continuous=True, context_frames=56, duration_s=15
     )
     assert shortened["frames"] == (15 + 12 + 12) * 24
     proof.drive(root / "empty-references", continuous=True, bad="empty-references", refuse=True)
+    proof.drive(root / "audio", continuous=True, audio=True)
+    proof.drive(
+        root / "audio-only",
+        continuous=True,
+        audio=True,
+        bad="audio-only",
+        refuse=True,
+        refuse_code="reference_policy",
+    )
     (root / "evidence.json").write_text(
         json.dumps(
             {
