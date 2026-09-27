@@ -1,15 +1,19 @@
 name: ci
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [master]
   workflow_dispatch:
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  # Decides which heavy environments a PR needs. Master and dispatch run everything.
+  # Decides which heavy environments a PR or master push needs, from its changed files.
+  # Dispatch (gh workflow run ci.yaml -R cozy-creator/packages --ref <branch>) runs everything.
   changes:
+    # Draft PRs are checkpoints; CI runs once the PR is ready for review.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -21,15 +25,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           every='["anima","sdxl","minimax-h3-tools","qwen-image-2"]'
-          if [ -z "$PR" ]; then
+          everything() {
             printf 'code=true\nh3=true\npackages=%s\n' "$every" >> "$GITHUB_OUTPUT"
             exit 0
+          }
+          if [ -n "$PR" ]; then
+            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" \
+              --jq '.[] | .filename, (.previous_filename // empty)')
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [ -n "$BEFORE" ] && [ "${BEFORE//0/}" != "" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" > "$RUNNER_TEMP/compare.json"
+            # The compare API lists at most 300 files; a larger push runs everything.
+            [ "$(jq '.files | length' "$RUNNER_TEMP/compare.json")" -lt 300 ] || everything
+            files=$(jq -r '.files[] | .filename, (.previous_filename // empty)' "$RUNNER_TEMP/compare.json")
+          else
+            everything
           fi
-          files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" \
-            --jq '.[] | .filename, (.previous_filename // empty)')
           code=false h3=false all=false
           declare -A pick=()
           while IFS= read -r f; do
@@ -80,9 +94,11 @@ jobs:
       - name: Fences
         run: uv run --no-project python scripts/fence.py
 
+      # Gate on bug classes only; auto-fixable style stays local (`ruff check --fix`).
       - name: Lint
         run: >-
-          uv run --no-project ruff check anima/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ qwen-image-2/ examples/
+          uv run --no-project ruff check --select E9,F,B --ignore F401
+          anima/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ qwen-image-2/ examples/
 
       - name: Types
         run: uv run --no-project mypy
