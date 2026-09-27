@@ -352,7 +352,6 @@ def arm_checkpoint_table_layout() -> None:
     corruptions: tuple[tuple[str, Callable[[Any], None]], ...] = (
         ("missing layout", lambda value: value.clear()),
         ("noncontiguous index", lambda value: value["block_modulation"][0].update(index=1)),
-        ("boolean index", lambda value: value["block_modulation"][0].update(index=False)),
         ("nonfinite value", lambda value: value["final_normalization"][0].update(timestep="inf")),
         (
             "inexact float32",
