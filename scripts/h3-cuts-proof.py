@@ -40,6 +40,7 @@ from cozy_runtime.author._calls import _Broker, _CallType
 from cozy_runtime.author._codec import encode_frame
 from cozy_runtime.author._services import ProgressFrame
 from cozy_runtime.internal import interface_wheel, package_interface, static_interface
+from cozy_runtime.internal.worker import machine_byte_results
 from cozy_runtime.models.minimax_h3.continuation import AVContext
 from cozy_runtime.models.minimax_h3.official import FPS, MAX_CONDITIONER_VISION_TOKENS, frames_for
 
@@ -642,8 +643,6 @@ def drive(
 
 def admissible_results() -> None:
     """Runtime grants native result outputs by fixed field path at child admission."""
-    from cozy_runtime.internal.worker import machine_byte_results
-
     built = static_interface.build(ROOT / "minimax-h3")
     interface = json.loads(package_interface.canonical_bytes(built))
     for entry in [*interface["entrypoints"], *interface["jobs"]]:

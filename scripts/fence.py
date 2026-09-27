@@ -220,6 +220,10 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "Compile the committed Qwen interface into Runtime's actual managed caller; "
         "retire with a public generated-caller fixture."
     ),
+    ("scripts/h3-cuts-proof.py", "cozy_runtime.internal.worker"): (
+        "Grant every H3 result through Runtime's own child-admission path "
+        "(`machine_byte_results.paths`); retire with a public result-admission check."
+    ),
     ("scripts/h3-cuts-proof.py", "cozy_runtime.author._calls"): (
         "Qualify cuts through Runtime's real broker; retire with a public child-call harness."
     ),
