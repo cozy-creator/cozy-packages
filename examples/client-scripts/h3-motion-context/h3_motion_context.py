@@ -69,7 +69,9 @@ async def compare(
     )
     started = time.monotonic()
     first = await motion_segment_turbo(  # type: ignore[call-arg]
-        payload=MotionInput(prompt=prompts[0], seed=seed, duration_s=10, steps=8),
+        payload=MotionInput(
+            prompt=prompts[0], seed=seed, duration_s=10, steps=8, next_context_frames=(22, 39, 56)
+        ),
         assets=assets,
     )
     tel.log(

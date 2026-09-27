@@ -221,7 +221,10 @@ async def motion_renderer(
             },
             HEIGHT, WIDTH, count, CODE,
         )
-        kwargs["completed_state"](tail)
+        if payload.next_context_frames:
+            kwargs["completed"](tail, rgb)
+        else:
+            assert kwargs["completed"] is None
         return h3.H3VideoOutput(video, frame, [])
 
     stubbed = cast(Any, h3)
@@ -423,14 +426,16 @@ def drive(
             return item
 
         answer = project(result.result)
+        # Only a shot with a successor exports context: the last one would pay for nothing.
+        successor = continuous and not is_reference and shot_index + 1 < count
+        if continuous and not is_reference:
+            assert wire["payload"].get("next_context_frames", []) == (
+                [context_frames] if successor else []
+            )
         assert {item["output_id"] for item in outputs} == (
             {"image"}
             if is_reference
-            else (
-                {"video", "continuation_frame", "context"}
-                if continuous
-                else {"video", "continuation_frame"}
-            )
+            else {"video", "continuation_frame"} | ({"context"} if successor else set())
         )
         answers[index] = {
             "ok": True,
