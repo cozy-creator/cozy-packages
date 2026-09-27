@@ -51,8 +51,10 @@ cozy run examples/client-scripts/sdxl_prepare.py --rental-only --await
 ```
 
 Its ordinary `async def main(ctx)` downloads one Civitai checkpoint, converts it
-through TensorFS, normalizes its SDXL components, and calls Runtime's shared
-`quantize()` with the SDXL package's deterministic plan. It returns a retained
+through TensorFS, runs the SDXL package's `prepare` function (the served f16 lane), and
+calls Runtime's shared `quantize()` with the SDXL package's deterministic plan. The same
+steps are ordinary package functions: `cozy run <org>/sdxl/prepare <converted checkpoint>
+<org/model> --rental=NAME`, then `cozy run <org>/sdxl/quantize <fp16 lane> <org/model>`. It returns a retained
 checkpoint. The constants are in the file; there is no request/result class or
 published workflow package. Use `--rental=<name>` to select an existing machine.
 The small example declares compatibility bounds and leaves numerical library

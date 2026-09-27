@@ -120,13 +120,13 @@ class Recorder:
 
     def tables(
         self, task: str, _ctx: Any, _source: Any, active: dict[str, Any], _tel: Any, _range: Any
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
         event = "tables:" + task
         self.events.append(event)
         assert not self.committed.keys() & active.keys()
         if self.fail_at == event:
             raise Interrupted(event)
-        return 1, 1
+        return 1, 1, 0
 
     def quantize(self, transaction: Transaction, *_: Any, **kwargs: Any) -> QuantizationStats:
         event = "quantize:" + transaction.slot
@@ -191,7 +191,7 @@ def invoke(recorder: Recorder, fail_at: str = "") -> Any:
         module.write_cast = recorder.cast
         module.torch.cuda.is_available = lambda: True
         source = H3FullTransformer.for_test()
-        return module.lanes(recorder, job.LaneRequest(), source, source, Telemetry())
+        return job._produce_lanes(recorder, Telemetry(), source, tuple(lanes.LANES))
     finally:
         job._write_tables = original_tables
         module.quantize_component_into = original_quantize
@@ -220,35 +220,28 @@ def main() -> None:
         recorder.events.clear()
         result = invoke(recorder)
         assert tuple(recorder.committed) == slots
-        assert result.replayed_outputs == len(retained)
+        assert list(result) == list(slots)
         # Every lane treats the video VAE, because the producer normalises it rather than
         # each lane authoring it; only the encoding lanes also treat the two DiTs.
-        assert {(row.output_slot, row.component) for row in result.weight_fidelity_this_run} == {
-            (slot, "video_vae") for slot in set(slots) - set(retained)
-        } | {
+        casts = {event.split(":")[1] for event in recorder.events if event.startswith("cast:")}
+        assert casts == set(slots) - set(retained), casts
+        encoded = {
+            tuple(event.split(":")[1:])
+            for event in recorder.events
+            if event.startswith("quantize:")
+        }
+        assert encoded == {
             (slot, component)
             for slot in set(slots[2:]) - set(retained)
             for component in ("fl2va_dit", "ref2va_dit")
-        }
-        for row in result.weight_fidelity_this_run:
-            if row.component == "video_vae":
-                # A cast records its own round trip and never an encoding's saturation.
-                assert row.stats.cast_keys == 3
-                assert row.stats.cast_worst_relative_frobenius == 0.0
-                assert row.stats.encoded_keys == 0
-                assert row.stats.saturated_elements == 0
-            else:
-                assert row.stats.saturated_elements == 2
-                assert row.stats.worst_relative_frobenius == 0.03125
+        }, encoded
         assert not any(event == "commit:" + slot for slot in retained for event in recorder.events)
         for slot in retained:
             assert not any(event.startswith("quantize:" + slot) for event in recorder.events)
 
         recorder.events.clear()
         result = invoke(recorder)
-        assert result.replayed_outputs == 4
-        assert result.weight_fidelity_this_run == []
-        assert result.source_bytes_read_this_run == result.quantized_keys_this_run == 0
+        assert list(result) == list(slots)
         assert recorder.events == []
     print(
         f"H3 stage commits PASS lanes={len(slots)} table/FP8/MXFP8 interruption, "

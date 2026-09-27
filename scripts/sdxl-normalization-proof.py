@@ -115,6 +115,103 @@ def source(
     return "sha256:" + receipt["manifest"]["sha256"], receipt["manifest"]["length"], values
 
 
+def _bf16(values: np.ndarray[Any, Any]) -> bytes:
+    """Round-to-nearest-even f32 -> bf16 bits, independent of the code under test."""
+    bits = values.astype("<f4").view("<u4").astype(np.uint64)
+    return ((bits + 0x7FFF + ((bits >> 16) & 1)) >> 16).astype("<u2").tobytes()
+
+
+def wider_sources(root: Path, plan: norm.NormalizationPlan) -> None:
+    """bf16/f32 Civitai checkpoints, with and without optional position IDs, become f16."""
+    rng = np.random.default_rng(20260927)
+    for width in ("bf16", "f32"):
+        store = tensorfs.Store.init(root / f"wide-{width}")
+        values: dict[tuple[str, str], np.ndarray[Any, Any]] = {}
+        rows: dict[str, dict[str, Any]] = {}
+        order = []
+        payloads = {}
+        sources = {c: dict(r) for c, r in plan.source.items()}
+        del sources["text_encoder"]["text_model.embeddings.position_ids"]
+        sources["text_encoder_2"]["transformer.text_model.embeddings.position_ids"] = (
+            norm.SourceTensor(width, (1, 4))
+        )
+        for component, tensors in sources.items():
+            additions = {}
+            for key, spec in tensors.items():
+                if key.endswith("position_ids"):
+                    exact = np.arange(4, dtype="<f4").reshape(spec.shape)
+                else:
+                    exact = rng.standard_normal(spec.shape).astype("<f4")
+                raw = _bf16(exact) if width == "bf16" else exact.tobytes()
+                if width == "bf16":
+                    exact = (
+                        np.frombuffer(raw, dtype="<u2").astype("<u4") << 16
+                    ).view("<f4").reshape(spec.shape)
+                values[component, key] = exact
+                payloads[component, key] = raw
+                additions[key] = {
+                    "logical_dtype": width,
+                    "shape": list(spec.shape),
+                    "encoding": plan.plain,
+                    "parts": {"value": {"dtype": width, "shape": list(spec.shape)}},
+                }
+                order.append((component, key))
+            rows[component] = {"drop": [], "add": additions}
+        identity = tensorfs.object_id(width.encode())
+        writer = store.begin_derived(
+            identity, 1, {}, rows, {}, order, 1 << 16, work_fingerprint=tensorfs.object_id(b"w")
+        )
+        for (component, key), raw in payloads.items():
+            writer.add_part(component, key, "value", io.BytesIO(raw))
+        receipt = writer.commit()
+        store.derived_adopt(identity, "wide-source")
+        manifest, length = "sha256:" + receipt["manifest"]["sha256"], receipt["manifest"]["length"]
+        artifact = ModelArtifact("source", "model", ObjectRef(manifest, length), "sha256:" + "11" * 32)
+        with NativeExecution(
+            store, root, f"wide-{width}", {"source": artifact}, {"model": norm.MAX_NEW_BYTES}
+        ) as owner:
+            result = norm._normalize(
+                _derive_model(QuantizationSource, manifest),
+                owner.context(),
+                fake_telemetry(fake_attempt(width)),
+                plan,
+            )
+        header = store.manifest(result.manifest.digest)["header"]
+        assert header is not None
+        produced = tensorfs.parse_header(header)
+        assert [(c, k) for c, r in produced["components"].items() for k in r] == [
+            (route.component, route.key) for route in plan.targets
+        ]
+        probe_id = tensorfs.object_id(b"wide readback" + width.encode())
+        probe = store.begin_derived(
+            probe_id,
+            1,
+            {"result": (result.manifest.digest, result.manifest.length)},
+            {
+                c: {"source": "result", "source_component": c, "drop": [], "add": {}}
+                for c in produced["components"]
+            },
+            {},
+            [(route.component, route.key) for route in plan.targets],
+            0,
+            work_fingerprint=tensorfs.object_id(b"wide readback"),
+        )
+        for route in plan.targets:
+            source = values[route.component, route.source_key].reshape(-1)
+            if route.kind == "read":
+                source = source[route.offset : route.offset + math.prod(route.shape)]
+            elif route.kind == "transpose":
+                source = source.reshape(2, 3).T.reshape(-1)
+            expected = source.astype("<f2").tobytes()
+            actual = bytearray(len(expected))
+            probe.source_read_into("result", route.component, route.key, "value", 0, actual)
+            assert actual == expected, (width, route.key)
+        probe.fence()
+        store.derived_abandon(probe_id)
+    overflow = norm._to_f16(bytearray(np.array([1.0, 1e6], dtype="<f4").tobytes()), "f32", "x")
+    raise AssertionError(f"f16 overflow was accepted: {overflow}")
+
+
 def child(root: Path, mode: str) -> None:
     data = json.loads((root / "input.json").read_text())
     store = tensorfs.Store.open(root / "store")
@@ -129,10 +226,13 @@ def child(root: Path, mode: str) -> None:
     original = norm._bytes
 
     def observe(
-        transaction: DerivedTransaction, route: norm.TensorRoute, spec: norm.SourceTensor
+        transaction: DerivedTransaction,
+        route: norm.TensorRoute,
+        spec: norm.SourceTensor,
+        dtype: str,
     ) -> bytes:
         reads.append(route.component + "/" + route.key)
-        value = original(transaction, route, spec)
+        value = original(transaction, route, spec, dtype)
         assert isinstance(value, bytes)
         return value
 
@@ -226,7 +326,9 @@ def full_metadata_receipt_limits() -> None:
         store = tensorfs.Store.init(Path(temporary) / "store")
         for component in norm._COMPONENTS:
             plan = norm._component_plan(norm.PLAN, component)
-            targets = norm._targets(plan)
+            targets = norm._targets(
+                plan, {(c, k): spec.dtype for c, rows in plan.source.items() for k, spec in rows.items()}
+            )
             declaration = store.derived_declaration(
                 *Derivation(
                     {"source": Source("sha256:" + "0" * 64, 164)},
@@ -286,12 +388,12 @@ def main() -> None:
     assert routes_for(norm.PLAN) == norm.PLAN.targets
     assert len(norm.PLAN.targets) == 2641
     assert norm.PLAN.plain == next(d for alias, d in tensorfs.seed_digests() if alias == "plain/1")
-    for dtype in (np.dtype("<f2"), np.dtype("<i8")):
+    for name, dtype in (("f16", np.dtype("<f2")), ("i64", np.dtype("<i8")), ("f32", np.dtype("<f4"))):
         valid_positions = np.arange(77, dtype=dtype)
-        norm._validate_position_ids(valid_positions.tobytes(), dtype, 77)
+        norm._validate_position_ids(valid_positions.tobytes(), name, 77)
         for bad_positions in (valid_positions[::-1], np.full(77, -1, dtype=dtype)):
             try:
-                norm._validate_position_ids(bad_positions.tobytes(), dtype, 77)
+                norm._validate_position_ids(bad_positions.tobytes(), name, 77)
             except UnsupportedInput:
                 pass
             else:
@@ -300,7 +402,7 @@ def main() -> None:
         bad_positions = np.arange(77, dtype="<f2")
         bad_positions[1] = value
         try:
-            norm._validate_position_ids(bad_positions.tobytes(), np.dtype("<f2"), 77)
+            norm._validate_position_ids(bad_positions.tobytes(), "f16", 77)
         except UnsupportedInput:
             pass
         else:
@@ -319,6 +421,10 @@ def main() -> None:
         resumed = json.loads((root / "resume.json").read_text())
         replayed = json.loads((root / "replay.json").read_text())
         assert resumed["manifest"] == replayed["manifest"]
+        try:
+            wider_sources(root, plan)
+        except UnsupportedInput as error:
+            assert error.code == "sdxl_f16_overflow", error
         component_equivalence(root, store, plan, manifest, length, resumed["manifest"])
         assert len(resumed["transformed_roles"]) == 4
         assert "vae/attention" not in resumed["transformed_roles"]
@@ -435,6 +541,9 @@ def main() -> None:
                 "split_transpose_reshape_bits_exact": True,
                 "unreviewed_sources_refused": True,
                 "changed_position_ids_refused": True,
+                "bf16_and_f32_sources_round_to_f16": True,
+                "optional_position_ids_either_way": True,
+                "f16_overflow_refused": True,
             }
         )
     )

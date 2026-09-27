@@ -18,9 +18,10 @@ from cozy_runtime.internal.memo_implementation import describe
 from sdxl.normalization import normalize_component,assemble_normalized
 from h3_tables.operations import assemble_full
 from h3_tables.adaln_operations import select_adaln_weights,compute_adaln_tables,apply_adaln,retable_adaln
-from h3_tables.turbo import prepare_turbo
+from h3_tables.turbo import turbo_lora
+from h3_tables.job import fp8_pruned,retable
 functions=(normalize_component,assemble_normalized,assemble_full,select_adaln_weights,
-           compute_adaln_tables,apply_adaln,retable_adaln,prepare_turbo)
+           compute_adaln_tables,apply_adaln,retable_adaln,turbo_lora,fp8_pruned,retable)
 print(json.dumps({fn.__name__:describe(_export(fn).implementation) for fn in functions}))
 '''
 
@@ -28,7 +29,7 @@ print(json.dumps({fn.__name__:describe(_export(fn).implementation) for fn in fun
 def identities(root: Path) -> dict[str, str]:
     rows = json.loads(subprocess.check_output(
         [sys.executable, '-I', '-B', '-c', PROBE, str(root), json.dumps(sys.path)], text=True))
-    assert len(rows) == 8 and all(row.get('operation_identity') for row in rows.values()), rows
+    assert len(rows) == 10 and all(row.get('operation_identity') for row in rows.values()), rows
     return {name: row['operation_identity'] for name, row in rows.items()}
 
 
@@ -82,14 +83,15 @@ def qualify(root: Path) -> dict[str, object]:
     assert 'math.log(' in text
     helper.write_text(text.replace('math.log(', 'math.log(2.0 * ', 1))
     after_kernel = identities(root)
-    for name in ('compute_adaln_tables', 'prepare_turbo'):
+    for name in ('compute_adaln_tables', 'turbo_lora', 'fp8_pruned', 'retable'):
         assert after_kernel[name] != after_sdxl[name]
     plan = root / 'h3_tables/assets/timestep-plan.fl2va.json'
     data = json.loads(plan.read_text())
     data['video_shift'] = '0x1.0000000000000p+3'
     plan.write_text(json.dumps(data))
     after_plan = identities(root)
-    for name in ('select_adaln_weights', 'compute_adaln_tables', 'apply_adaln', 'retable_adaln'):
+    for name in ('select_adaln_weights', 'compute_adaln_tables', 'apply_adaln', 'retable_adaln',
+                 'fp8_pruned', 'retable'):
         assert after_plan[name] != after_kernel[name]
     assert after_plan['normalize_component'] == after_sdxl['normalize_component']
     changed_native_version(root, "tensorfs")

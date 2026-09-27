@@ -22,12 +22,14 @@ from cozy_runtime.author import (
     ImageFrame,
     Loader,
     Model,
+    ModelArtifact,
     ModelDefault,
     Outputs,
     Shape,
     Telemetry,
     UnsupportedInput,
     WeightsOutput,
+    invocable,
     uses_components,
 )
 from diffusers import (
@@ -528,41 +530,45 @@ _LANE_BYTES = 16 << 30
 Lane = Literal["fp8", "mxfp8"]
 
 
-class QuantizeInput(msgspec.Struct, forbid_unknown_fields=True):
-    lanes: Annotated[tuple[Lane, ...], msgspec.Meta(min_length=1)] = ("fp8", "mxfp8")
-    max_relative_frobenius: float | None = None
+def _quantize(
+    ctx: Context, tel: Telemetry, source: AnimaModel, lane: Lane, max_relative_frobenius: float | None
+) -> ModelArtifact:
+    return derive.quantize_artifact(
+        source,
+        derive.plan(("transformer",), _LANE_ENCODINGS[lane], max_relative_frobenius=max_relative_frobenius),
+        ctx=ctx, tel=tel, output=lane,
+    )
 
 
-class QuantizedLanes(msgspec.Struct):
-    """Each requested lane's full `derive.QuantizeResult`; an unrequested lane is null."""
-
-    fp8: derive.QuantizeResult | None = None
-    mxfp8: derive.QuantizeResult | None = None
-
-
-@app.job(
-    name="quantize",
-    weights=tuple(WeightsOutput(lane, max_new_bytes=_LANE_BYTES) for lane in _LANE_ENCODINGS),
-)
-def quantize(
+# One function per lane: Runtime requires a receipt for EVERY declared weights output. The
+# quantizer checkpoints every encoded tensor, so a re-issued run adopts completed tensors.
+# Runtime 0.18.20 (this package's lock) reads only memoize= statically; the fallback
+# operation identity is the installed release, which still admits partial-work adoption.
+@invocable(memoize=True)
+async def fp8(
     ctx: Context,
-    payload: QuantizeInput,
+    *,
     source: AnimaModel,
+    max_relative_frobenius: float | None = None,
     tel: Telemetry,
-) -> QuantizedLanes:
-    """Derive the requested row-wise DiT lanes from one reviewed BF16 source."""
-    if len(set(payload.lanes)) != len(payload.lanes):
-        raise UnsupportedInput("quantize lanes must be unique", code="quantization_lanes")
-    results = {
-        lane: derive.quantize(
-            source,
-            derive.plan(
-                ("transformer",),
-                _LANE_ENCODINGS[lane],
-                max_relative_frobenius=payload.max_relative_frobenius,
-            ),
-            ctx=ctx, tel=tel, output=lane,
-        )
-        for lane in payload.lanes
-    }
-    return QuantizedLanes(fp8=results.get("fp8"), mxfp8=results.get("mxfp8"))
+) -> ModelArtifact:
+    """Row-wise FP8 DiT weights from one BF16/F16 source; everything else inherits."""
+    return _quantize(ctx, tel, source, "fp8", max_relative_frobenius)
+
+
+# Runtime 0.18.20 (this package's lock) reads only memoize= statically; the fallback
+# operation identity is the installed release, which still admits partial-work adoption.
+@invocable(memoize=True)
+async def mxfp8(
+    ctx: Context,
+    *,
+    source: AnimaModel,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """MXFP8 DiT weights from one BF16/F16 source; everything else inherits."""
+    return _quantize(ctx, tel, source, "mxfp8", max_relative_frobenius)
+
+
+app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),))
+app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),))

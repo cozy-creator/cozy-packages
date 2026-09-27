@@ -58,14 +58,16 @@ from cozy_runtime.author import (
     ImageAsset,
     ImageFrame,
     Loader,
+    MemoDistribution,
     Model,
+    ModelArtifact,
     ModelDefault,
     OutputError,
     Outputs,
     Shape,
     Telemetry,
-    UnsupportedInput,
     WeightsOutput,
+    invocable,
     uses_components,
 )
 from diffusers import AutoencoderKL, EulerDiscreteScheduler, UNet2DConditionModel
@@ -640,48 +642,68 @@ _LANE_BYTES = 16 << 30
 Lane = Literal["fp8", "mxfp8"]
 
 
-class QuantizeInput(msgspec.Struct, forbid_unknown_fields=True):
-    lanes: Annotated[tuple[Lane, ...], msgspec.Meta(min_length=1)] = ("fp8", "mxfp8")
-    max_relative_frobenius: float | None = None
+def _quantize(
+    ctx: Context, tel: Telemetry, source: SdxlModel, lane: Lane, max_relative_frobenius: float | None
+) -> ModelArtifact:
+    return derive.quantize_artifact(
+        source,
+        derive.plan(("unet",), _LANE_ENCODINGS[lane], max_relative_frobenius=max_relative_frobenius),
+        ctx=ctx, tel=tel, output=lane,
+    )
 
 
-class QuantizedLanes(msgspec.Struct):
-    """Each requested lane's full `derive.QuantizeResult`; an unrequested lane is null."""
-
-    fp8: derive.QuantizeResult | None = None
-    mxfp8: derive.QuantizeResult | None = None
-
-
-@app.job(
-    name="quantize",
-    weights=tuple(WeightsOutput(lane, max_new_bytes=_LANE_BYTES) for lane in _LANE_ENCODINGS),
+# One function per lane: Runtime requires a receipt for EVERY declared weights output. The
+# quantizer checkpoints every encoded tensor, so a re-issued run adopts completed tensors.
+@invocable(
+    memoize=True,
+    memo_version="sdxl-quantize/1",
+    memo_dependencies=(
+        "cozy_runtime.derive.facade",
+        "cozy_runtime.derive.quantization",
+        "cozy_runtime.derive.microscale",
+        "cozy_runtime.derive.safetensors_io",
+        "tensorfs.derived",
+        MemoDistribution("tensorfs"),
+        MemoDistribution("numpy"),
+    ),
 )
-def quantize(
+async def fp8(
     ctx: Context,
-    payload: QuantizeInput,
+    *,
     source: SdxlModel,
+    max_relative_frobenius: float | None = None,
     tel: Telemetry,
-) -> QuantizedLanes:
-    """Derive the requested row-wise UNet lanes from one reviewed BF16 source.
+) -> ModelArtifact:
+    """Row-wise FP8 UNet weights from one BF16/F16 source; everything else inherits."""
+    return _quantize(ctx, tel, source, "fp8", max_relative_frobenius)
 
-    Outputs stay declared for the full supported set — the descriptor is static — and an
-    unrequested lane is simply never opened; the sink permits unwritten declared outputs.
-    """
-    if len(set(payload.lanes)) != len(payload.lanes):
-        raise UnsupportedInput("quantize lanes must be unique", code="quantization_lanes")
-    results = {
-        lane: derive.quantize(
-            source,
-            derive.plan(
-                ("unet",),
-                _LANE_ENCODINGS[lane],
-                max_relative_frobenius=payload.max_relative_frobenius,
-            ),
-            ctx=ctx, tel=tel, output=lane,
-        )
-        for lane in payload.lanes
-    }
-    return QuantizedLanes(fp8=results.get("fp8"), mxfp8=results.get("mxfp8"))
+
+@invocable(
+    memoize=True,
+    memo_version="sdxl-quantize/1",
+    memo_dependencies=(
+        "cozy_runtime.derive.facade",
+        "cozy_runtime.derive.quantization",
+        "cozy_runtime.derive.microscale",
+        "cozy_runtime.derive.safetensors_io",
+        "tensorfs.derived",
+        MemoDistribution("tensorfs"),
+        MemoDistribution("numpy"),
+    ),
+)
+async def mxfp8(
+    ctx: Context,
+    *,
+    source: SdxlModel,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """MXFP8 UNet weights from one BF16/F16 source; everything else inherits."""
+    return _quantize(ctx, tel, source, "mxfp8", max_relative_frobenius)
+
+
+app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),))
+app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),))
 
 
 # Normalization is a managed source operation; quantization policy is plain composition.
@@ -695,3 +717,4 @@ app.job(
     normalization.assemble_normalized, name="assemble-normalized",
     weights=(WeightsOutput("model", max_new_bytes=0),),
 )
+app.job(normalization.prepare, name="prepare", weights=(WeightsOutput("fp16", max_new_bytes=8 << 30),))

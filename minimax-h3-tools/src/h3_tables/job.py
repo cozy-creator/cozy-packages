@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import math
+import os
+import threading
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import replace
 from importlib.resources import files
-from typing import Annotated, Any, Literal, get_args
+from typing import Any, Literal, cast, get_args
 
 import msgspec
 import torch
@@ -19,10 +22,12 @@ from cozy_runtime.author import (
     UnsupportedInput,
     WeightsOutput,
     canonical_json,
+    invocable,
 )
 from cozy_runtime.derive.quantization import (
     MAX_OUTPUT_BYTES,
     ArtifactQuantizationRequest,
+    QuantizationStats,
     prepare_quantization,
     quantize_component_into,
 )
@@ -39,11 +44,13 @@ from tensorfs.derived import (
 
 from . import adaln_operations as _adaln_operations
 from . import lanes as _lanes
+from ._memo import LANES as LANES_MEMO
 from .kernel import H3Topology, removed_keys, source_shapes, table_bytes, table_shapes
 from .kernel import precompute_tables as compute_tables
 from .lanes import (
     COMPONENT_MAX_NEW_BYTES,
     LANES,
+    NORMALISED_COMPONENTS,
     Lane,
     Selection,
     lane_max_new_bytes,
@@ -168,23 +175,6 @@ class ProductionRequest(msgspec.Struct, forbid_unknown_fields=True):
     pass
 
 
-class LaneRequest(msgspec.Struct, forbid_unknown_fields=True):
-    """Which reviewed lanes this attempt produces. The recipes are code, not request.
-
-    ``max_relative_frobenius`` is the caller's tier-1 threshold over the worst per-tensor
-    round trip of any treatment in any requested lane; each encoding's and each carrier's
-    own representational bound is enforced underneath it regardless.
-    """
-
-    lanes: Annotated[tuple[LaneName, ...], msgspec.Meta(min_length=1)] = (
-        "bf16-full",
-        "bf16-pruned",
-        "fp8-pruned",
-        "mxfp8-pruned",
-    )
-    max_relative_frobenius: float | None = None
-
-
 class TreatmentStats(msgspec.Struct):
     """What one treatment of one component recorded on this attempt.
 
@@ -202,46 +192,16 @@ class TreatmentStats(msgspec.Struct):
     new_bytes_written: int = 0
 
 
-class WeightFidelity(msgspec.Struct):
-    output_slot: str
-    component: str
-    treatment: str
-    stats: TreatmentStats
-
-
-class LaneReceipt(msgspec.Struct):
-    lane: str
-    modulation: str
-    treated_components: list[str]
-    tensorfs_receipt_digest: str
-    weights_transaction_id: str
-    replayed: bool
-
-
-class LanesResult(msgspec.Struct):
-    lanes: list[LaneReceipt]
-    replayed_outputs: int
-    source_bytes_read_this_run: int
-    quantized_keys_this_run: int
-    cast_keys_this_run: int
-    weight_fidelity_this_run: list[WeightFidelity]
-
-
 class AssemblyResult(msgspec.Struct):
     artifact_transaction_id: str
     tensorfs_receipt_digest: str
     replayed: bool
 
 
-class RetableResult(msgspec.Struct):
-    source_checkpoint: str
+class RetableResult(msgspec.Struct, frozen=True):
     steps: list[int]
-    tensorfs_receipt_digest: str
-    table_bank_receipt_digest: str
-    replayed: bool
-    table_tensors: int
-    table_bytes_this_run: int
-    source_bytes_read_this_run: int
+    adaln_pruned: ModelArtifact
+    tables: ModelArtifact
 
 
 def _read_source(
@@ -422,7 +382,8 @@ def _write_tables(
     tel: Telemetry,
     overall_range: tuple[float, float],
     source: str = "dits",
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
+    """Compute one task's tables into every transaction; (read, written, reused) counts."""
     sections = parse_production_config(_asset("model-config.json"))
     plan = _production_plan(task)
     topology = H3Topology.from_config(sections[SOURCE_SECTION[task]])
@@ -447,7 +408,7 @@ def _write_tables(
                 transaction.add_part(component, name, "value", raw)
                 transaction.checkpoint()
 
-    return _compute_table_parts(
+    read, written = _compute_table_parts(
         task,
         plan,
         topology,
@@ -460,14 +421,16 @@ def _write_tables(
         overall_range,
         completed=shared_completed,
     )
+    return read, written, len(shared_completed & table_shapes(topology, plan).keys())
 
 
-def _requested(payload: LaneRequest) -> tuple[str, ...]:
+def _requested(requested: tuple[LaneName, ...]) -> tuple[str, ...]:
     """The requested lanes in catalogue order, so commit order never depends on argv."""
-    selected = set(payload.lanes)
-    if len(selected) != len(payload.lanes):
-        raise UnsupportedInput("requested lanes must be unique", code="h3_lanes_repeated")
-    return tuple(name for name in LANES if name in selected)
+    if not requested or len(set(requested)) != len(requested):
+        raise UnsupportedInput(
+            f"lanes must name each of {sorted(LANES)} at most once", code="h3_lanes_repeated"
+        )
+    return tuple(name for name in LANES if name in requested)
 
 
 def _settles_first(lane: Lane, selections: Mapping[str, Selection]) -> bool:
@@ -507,7 +470,7 @@ def _treat(
     one pass over each of its two disjoint key sets.
     """
     component = selection.component
-    cast = write_cast(
+    casted = write_cast(
         transaction,
         ctx,
         tel,
@@ -517,62 +480,84 @@ def _treat(
         target_component=component,
     )
     stats = TreatmentStats(
-        cast_keys=cast.converted_keys,
-        cast_worst_relative_frobenius=cast.worst_relative_frobenius,
-        reused_keys=cast.reused_keys,
-        source_bytes_read=cast.source_bytes_read,
-        new_bytes_written=cast.new_bytes_written,
+        cast_keys=casted.converted_keys,
+        cast_worst_relative_frobenius=casted.worst_relative_frobenius,
+        reused_keys=casted.reused_keys,
+        source_bytes_read=casted.source_bytes_read,
+        new_bytes_written=casted.new_bytes_written,
     )
     if selection.plan is None or selection.treatment.encode is None:
         return stats
-    encoded = quantize_component_into(
-        transaction,
-        ctx,
-        request,
-        tel,
-        encoding=selection.treatment.encode,
-        plan=selection.plan,
-        component=selection.plan_component,
-        source=source,
-        source_component=component,
-        target_component=component,
-    )
+    plan, encoding = selection.plan, selection.treatment.encode
+    tensors = [tensor for tensor in plan.tensors if tensor.component == selection.plan_component]
+    count = max(1, min(len(tensors), len(os.sched_getaffinity(0))))
+    shared = cast(Telemetry, _SharedTelemetry(tel, len(tensors)))
+
+    def encode(shard: list[Any]) -> QuantizationStats:
+        return quantize_component_into(
+            transaction,
+            ctx,
+            request,
+            shared,
+            encoding=encoding,
+            plan=msgspec.structs.replace(plan, tensors=shard),
+            component=selection.plan_component,
+            source=source,
+            source_component=component,
+            target_component=component,
+        )
+
+    # Tensors encode independently: numpy releases the GIL, the handle serializes reads and
+    # writes, and the declared order fixes the output, so shards only change the wall time.
+    with ThreadPoolExecutor(count) as pool:
+        shards = list(pool.map(encode, [tensors[index::count] for index in range(count)]))
+    worsts = [shard.worst_relative_frobenius for shard in shards]
     return msgspec.structs.replace(
         stats,
-        encoded_keys=encoded.encoded_keys,
-        saturated_elements=encoded.saturated_elements,
-        worst_relative_frobenius=encoded.worst_relative_frobenius,
-        reused_keys=stats.reused_keys + encoded.reused_keys,
-        source_bytes_read=stats.source_bytes_read + encoded.source_bytes_read,
-        new_bytes_written=stats.new_bytes_written + encoded.new_bytes_written,
+        encoded_keys=sum(shard.encoded_keys for shard in shards),
+        saturated_elements=sum(shard.saturated_elements for shard in shards),
+        worst_relative_frobenius=None if None in worsts else max(cast(list[float], worsts)),
+        reused_keys=stats.reused_keys + sum(shard.reused_keys for shard in shards),
+        source_bytes_read=stats.source_bytes_read + sum(s.source_bytes_read for s in shards),
+        new_bytes_written=stats.new_bytes_written + sum(s.new_bytes_written for s in shards),
     )
 
 
-@app.job(
-    name="lanes",
-    weights=LANE_OUTPUTS,
-    # Default [bindings] for these slots arrive once the minimax-h3 model repo
-    # exists on the hub (H3 ingest, se-022/th-109 residue); until then no slot
-    # facts derive at publish (cr-077) and these slots bind per-invocation like
-    # this package's other jobs.
-)
-def lanes(
-    ctx: Context,
-    payload: LaneRequest,
-    dits: H3FullTransformer,
-    shared: H3FullTransformer,
-    tel: Telemetry,
-) -> LanesResult:
-    """Produce the requested reviewed lanes from one pinned BF16 source, in one attempt.
+class _SharedTelemetry:
+    """Shard threads report through one lock as a single monotone per-stage tensor count."""
 
-    Every lane is a row of ``lanes.LANES``: a modulation plus, per component, what this
-    producer does to it. A component no lane names is inherited by reference, so the
-    conditioner and both VAEs stay byte-shared across every lane that leaves them alone.
-    Outputs stay declared for the whole catalogue — the descriptor is static — and an
-    unrequested lane is simply never opened.
+    def __init__(self, tel: Telemetry, total: int) -> None:
+        self._tel, self._total, self._done = tel, total, 0
+        self._lock = threading.Lock()
+
+    def progress(self, _fraction: float, *, stage: str, **_: Any) -> None:
+        with self._lock:
+            self._done += 1
+            self._tel.progress(self._done / self._total, stage=stage)
+
+    def log(self, message: str, **fields: Any) -> None:
+        with self._lock:
+            self._tel.log(message, **fields)
+
+
+def _produce_lanes(
+    ctx: Context,
+    tel: Telemetry,
+    source: H3FullTransformer,
+    lanes: tuple[LaneName, ...],
+    max_relative_frobenius: float | None = None,
+) -> dict[str, ModelArtifact]:
+    """Convert one full-precision H3 checkpoint into the named reviewed lanes.
+
+    ``source`` is any checkpoint carrying the five H3 components at full precision: the
+    converted upstream release or a ``bf16-full`` lane. Each lane is a row of
+    ``lanes.LANES`` and commits to its own output slot, named after the lane. A component
+    no lane treats is inherited by reference, so the conditioner and both VAEs stay
+    byte-shared across lanes. A fresh identical request adopts every completed table and
+    quantized tensor of a retained stopped attempt (a paused run) on the same worker.
     """
-    requested = _requested(payload)
-    sources = {"dits": dits, "shared": shared}
+    requested = _requested(lanes)
+    sources = {"dits": source, "shared": source}
     granted = _structures(ctx, sources)
     full_targets = _select_full_targets(ctx, sources, granted)
     sections = parse_production_config(_asset("model-config.json"))
@@ -593,6 +578,8 @@ def lanes(
                     granted[full_targets[component].source],
                 ),
                 dit_plan=dit_plan,
+                # A bf16-full input already carries the normalised video VAE.
+                allow_inert=component in NORMALISED_COMPONENTS,
             )
             for component, treatment in lane_treatments(LANES[name]).items()
         }
@@ -610,20 +597,42 @@ def lanes(
         "adaln-pruned": current.rows,
     }
     receipts: dict[str, dict[str, Any]] = {}
-    fidelity: list[WeightFidelity] = []
-    source_bytes = 0
-    quant_request = ArtifactQuantizationRequest(
-        max_relative_frobenius=payload.max_relative_frobenius
-    )
+    source_bytes = new_bytes = reused = computed = 0
+    quant_request = ArtifactQuantizationRequest(max_relative_frobenius=max_relative_frobenius)
+
+    def treat(name: str, transaction: DerivedTransaction) -> None:
+        nonlocal source_bytes, new_bytes, reused, computed
+        for component, selection in selections[name].items():
+            stats = _treat(
+                transaction,
+                ctx,
+                tel,
+                quant_request,
+                selection=selection,
+                source=full_targets[component].source,
+            )
+            source_bytes += stats.source_bytes_read
+            new_bytes += stats.new_bytes_written
+            reused += stats.reused_keys
+            computed += stats.encoded_keys + stats.cast_keys
+            tel.log(
+                "weight fidelity",
+                level="info",
+                output_slot=name,
+                component=component,
+                treatment=selection.treatment.describe(),
+                encoded_keys=stats.encoded_keys,
+                reused_keys=stats.reused_keys,
+                worst_relative_frobenius=stats.worst_relative_frobenius,
+                cast_worst_relative_frobenius=stats.cast_worst_relative_frobenius,
+            )
 
     with ExitStack() as stack:
         transactions = {
             name: stack.enter_context(
                 ctx.output(name).open(
                     Derivation(
-                        sources={
-                            name: info.source for name, info in _structures(ctx, sources).items()
-                        },
+                        sources={alias: info.source for alias, info in granted.items()},
                         targets=_lane_targets(
                             LANES[name], sections, tables, full_targets, selections[name]
                         ),
@@ -634,31 +643,17 @@ def lanes(
             )
             for name in requested
         }
-        replayed = {name for name, tx in transactions.items() if tx.receipt is not None}
         active = {
             name: transaction
             for name, transaction in transactions.items()
             if transaction.receipt is None
         }
         # A lane needing neither a table pass nor an encoding settles first, so its
-        # retention never depends on a later lane's. Its casts run here rather than in the
-        # loop below, because the point is to be finished BEFORE the expensive passes.
+        # retention never depends on a later lane's.
         for name in [n for n in active if _settles_first(LANES[n], selections[n])]:
             transaction = active.pop(name)
             with tel.stage(name, overall_range=(0.0, 0.0)):
-                for component, selection in selections[name].items():
-                    stats = _treat(
-                        transaction,
-                        ctx,
-                        tel,
-                        quant_request,
-                        selection=selection,
-                        source=full_targets[component].source,
-                    )
-                    source_bytes += stats.source_bytes_read
-                    fidelity.append(
-                        WeightFidelity(name, component, selection.treatment.describe(), stats)
-                    )
+                treat(name, transaction)
             transaction.add_config("model", configs[LANES[name].modulation])
             receipts[name] = transaction.commit()
 
@@ -667,54 +662,34 @@ def lanes(
             for name, transaction in active.items()
             if LANES[name].modulation == "adaln-pruned"
         }
-        computed = 0.35 if pruned else 0.0
+        table_share = 0.35 if pruned else 0.0
         if pruned:
             if not torch.cuda.is_available():
-                raise ValueError("H3 AdaLN timestep-table precompute requires a CUDA worker")
+                raise UnsupportedInput(
+                    "H3 AdaLN timestep tables need a CUDA worker; run on a GPU rental",
+                    code="h3_tables_need_cuda",
+                )
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.set_float32_matmul_precision("highest")
             source_transaction = next(iter(pruned.values()))
             for task, overall_range in zip(
-                SOURCE_SECTION, _bands(len(SOURCE_SECTION), 0.0, computed), strict=True
+                SOURCE_SECTION, _bands(len(SOURCE_SECTION), 0.0, table_share), strict=True
             ):
                 with tel.stage(f"timestep-table-{task}", overall_range=overall_range):
-                    source_bytes += _write_tables(
+                    read, written, kept = _write_tables(
                         task, ctx, source_transaction, pruned, tel, overall_range
-                    )[0]
+                    )
+                    source_bytes += read
+                    new_bytes += written
+                    reused += kept
+                    computed += len(tables[task]) - kept
 
         for name, overall_range in zip(
-            list(active), _bands(len(active), computed, 1.0), strict=True
+            list(active), _bands(len(active), table_share, 1.0), strict=True
         ):
             transaction = active[name]
             with tel.stage(name, overall_range=overall_range):
-                for component, selection in selections[name].items():
-                    stats = _treat(
-                        transaction,
-                        ctx,
-                        tel,
-                        quant_request,
-                        selection=selection,
-                        source=full_targets[component].source,
-                    )
-                    source_bytes += stats.source_bytes_read
-                    fidelity.append(
-                        WeightFidelity(name, component, selection.treatment.describe(), stats)
-                    )
-                    tel.log(
-                        "weight fidelity",
-                        level="info",
-                        output_slot=name,
-                        component=component,
-                        treatment=selection.treatment.describe(),
-                        # Runtime observations are capped at eight fields. Keep the
-                        # complete fidelity record in the typed result; the live log
-                        # carries only the bounded counters an operator needs.
-                        cast_keys=stats.cast_keys,
-                        encoded_keys=stats.encoded_keys,
-                        reused_keys=stats.reused_keys,
-                        source_bytes_read=stats.source_bytes_read,
-                        new_bytes_written=stats.new_bytes_written,
-                    )
+                treat(name, transaction)
                 # Keep a finished checkpoint replayable if a later lane fails.
                 transaction.add_config("model", configs[LANES[name].modulation])
                 receipts[name] = transaction.commit()
@@ -723,33 +698,87 @@ def lanes(
             if name not in receipts:
                 receipts[name] = transaction.commit()
 
-    for receipt in receipts.values():
-        ctx.adopt_model(receipt)
-    measured = [row.stats for row in fidelity]
     tel.metric("h3.source_bytes", float(source_bytes), unit="bytes")
-    tel.metric(
-        "h3.new_bytes",
-        float(sum(stat.new_bytes_written for stat in measured)),
-        unit="bytes",
-    )
-    return LanesResult(
-        lanes=[
-            LaneReceipt(
-                lane=name,
-                modulation=LANES[name].modulation,
-                treated_components=sorted(lane_treatments(LANES[name])),
-                tensorfs_receipt_digest=canonical_json.digest(receipts[name]),
-                weights_transaction_id=receipts[name]["transaction_id"],
-                replayed=name in replayed,
-            )
-            for name in requested
-        ],
-        replayed_outputs=len(replayed),
-        source_bytes_read_this_run=source_bytes,
-        quantized_keys_this_run=sum(stat.encoded_keys for stat in measured),
-        cast_keys_this_run=sum(stat.cast_keys for stat in measured),
-        weight_fidelity_this_run=fidelity,
-    )
+    tel.metric("h3.new_bytes", float(new_bytes), unit="bytes")
+    tel.metric("h3.reused_tensors", float(reused))
+    tel.metric("h3.computed_tensors", float(computed))
+    return {name: ctx.adopt_model(receipts[name]) for name in requested}
+
+
+# One function per lane: Runtime requires a receipt for EVERY declared weights output, so a
+# function declares exactly the lane it always produces.
+@invocable(memoize=True, memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
+async def bf16_full(ctx: Context, *, source: H3FullTransformer, tel: Telemetry) -> ModelArtifact:
+    """The reviewed full-precision lane: source-only rows dropped, video VAE normalised."""
+    return _produce_lanes(ctx, tel, source, ("bf16-full",))["bf16-full"]
+
+
+@invocable(memoize=True, memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
+async def bf16_pruned(ctx: Context, *, source: H3FullTransformer, tel: Telemetry) -> ModelArtifact:
+    """AdaLN-pruned BF16: 106 modulation rows per DiT replaced by timestep tables."""
+    return _produce_lanes(ctx, tel, source, ("bf16-pruned",))["bf16-pruned"]
+
+
+@invocable(memoize=True, memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
+async def fp8_pruned(
+    ctx: Context,
+    *,
+    source: H3FullTransformer,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """AdaLN-pruned with both DiTs row-wise FP8: the lane every serving rung selects."""
+    lane = _produce_lanes(ctx, tel, source, ("fp8-pruned",), max_relative_frobenius)
+    return lane["fp8-pruned"]
+
+
+@invocable(memoize=True, memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
+async def mxfp8_pruned(
+    ctx: Context,
+    *,
+    source: H3FullTransformer,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """AdaLN-pruned MXFP8 (grandfathered; executes natively only on sm120)."""
+    lane = _produce_lanes(ctx, tel, source, ("mxfp8-pruned",), max_relative_frobenius)
+    return lane["mxfp8-pruned"]
+
+
+app.job(
+    bf16_full,
+    name="bf16-full",
+    weights=(WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES + MAX_VIDEO_VAE_BYTES),),
+)
+app.job(
+    bf16_pruned,
+    name="bf16-pruned",
+    weights=(WeightsOutput("bf16-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),),
+)
+app.job(
+    fp8_pruned,
+    name="fp8-pruned",
+    weights=(WeightsOutput("fp8-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),),
+)
+app.job(
+    mxfp8_pruned,
+    name="mxfp8-pruned",
+    weights=(
+        WeightsOutput("mxfp8-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
+    ),
+)
+
+
+def _check_lane_jobs() -> None:
+    """Each lane's function declares exactly the catalogue's output for that lane."""
+    declared = {output.name: output for output in LANE_OUTPUTS}
+    for name in LANES:
+        registered = app.get(name).weights_outputs
+        if registered != (declared[name],):
+            raise ValueError(f"lane function {name!r} declares {registered}, not {declared[name]}")
+
+
+_check_lane_jobs()
 
 
 def _retable_targets(
@@ -814,18 +843,12 @@ def _retable_targets(
     return bank, retabled
 
 
-@app.job(
-    name="retable",
-    weights=(
-        WeightsOutput("adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES),
-        WeightsOutput("tables", max_new_bytes=MAX_PRUNED_BYTES),
-    ),
-)
-def retable(
+@invocable(memoize=True, memo_version="h3-retable/1", memo_dependencies=LANES_MEMO)
+async def retable(
     ctx: Context,
-    payload: ProductionRequest,
-    full: H3FullTransformer,
+    *,
     pruned: H3FullTransformer,
+    full: H3FullTransformer,
     tel: Telemetry,
 ) -> RetableResult:
     """Recompute one AdaLN-pruned checkpoint's tables for the current plans.
@@ -835,7 +858,6 @@ def retable(
     schedules costs table bytes, never a requantization. The same rows also commit as a
     two-DiT table bank, the transaction the modulation reads are scoped to.
     """
-    del payload
     sections = parse_production_config(_asset("model-config.json"))
     plans = {task: _production_plan(task) for task in SOURCE_SECTION}
     pruned_config = dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
@@ -877,7 +899,6 @@ def retable(
             )
         )
         transactions = {"adaln-pruned": retabled, "tables": bank}
-        replayed = {name for name, tx in transactions.items() if tx.receipt is not None}
         active = {name: t for name, t in transactions.items() if t.receipt is None}
         if active:
             if bank.receipt is not None:
@@ -886,12 +907,15 @@ def retable(
                     "rerun under a new request identity"
                 )
             if not torch.cuda.is_available():
-                raise ValueError("H3 timestep-table precompute requires a CUDA worker")
+                raise UnsupportedInput(
+                    "H3 AdaLN timestep tables need a CUDA worker; run on a GPU rental",
+                    code="h3_tables_need_cuda",
+                )
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.set_float32_matmul_precision("highest")
             for task, overall_range in (("fl2va", (0.0, 0.5)), ("ref2va", (0.5, 1.0))):
                 with tel.stage(f"timestep-table-{task}", overall_range=overall_range):
-                    read, emitted = _write_tables(
+                    read, emitted, _ = _write_tables(
                         task, ctx, bank, active, tel, overall_range, source="full"
                     )
                 source_bytes += read
@@ -904,18 +928,22 @@ def retable(
             if name not in receipts:
                 receipts[name] = transaction.commit()
     tel.metric("h3.source_bytes", float(source_bytes), unit="bytes")
-    for receipt in receipts.values():
-        ctx.adopt_model(receipt)
+    tel.metric("h3.new_bytes", float(written), unit="bytes")
     return RetableResult(
-        pruned.checkpoint_ref,
         list(plans["fl2va"].steps),
-        canonical_json.digest(receipts["adaln-pruned"]),
-        canonical_json.digest(receipts["tables"]),
-        "adaln-pruned" in replayed,
-        sum(len(rows) for rows in tables.values()),
-        written,
-        source_bytes,
+        ctx.adopt_model(receipts["adaln-pruned"]),
+        ctx.adopt_model(receipts["tables"]),
     )
+
+
+app.job(
+    retable,
+    name="retable",
+    weights=(
+        WeightsOutput("adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES),
+        WeightsOutput("tables", max_new_bytes=MAX_PRUNED_BYTES),
+    ),
+)
 
 
 # Native output bounds include newly written construction and provenance configs.
@@ -1067,6 +1095,6 @@ def restamp(
     return ctx.adopt_model(receipt)
 
 
-from .turbo import prepare_turbo  # noqa: E402
+from .turbo import turbo_lora  # noqa: E402
 
-app.job(prepare_turbo, name="prepare-turbo", weights=(WeightsOutput("model", 1 << 29),))
+app.job(turbo_lora, name="turbo-lora", weights=(WeightsOutput("pdd8", 1 << 29),))

@@ -1,26 +1,46 @@
-# tensorhub/minimax-h3-tools
+# minimax-h3-tools
 
-This is the official H3 producer package. Its stable callable reference is
-`tensorhub/minimax-h3-tools@v2/lanes`.
+The H3 producer package. Every conversion is an ordinary package function with one primary
+model input and a destination repository, run on the rental that holds the source:
 
-Publisher ownership is not project metadata. Creator derives it from the current authenticated
-Tensorhub account; the official reference above assumes the `tensorhub` account.
+```sh
+cozy run <org>/minimax-h3-tools/<function> <input model ref> <org/model> --rental=NAME
+```
 
-The ordinary `lanes` job consumes two reviewed TensorFS source profiles from the same
-pinned MiniMaxAI/MiniMax-H3 provider download:
+Each declared output becomes a checkpoint named by its slot; publish lanes with
+`cozy model publish <org/model> --release R --lane <slot>=<checkpoint>`. On the rental that
+ingested or already fetched the input, its objects are in the pod Store and nothing moves.
 
-- `dits` → `hf/minimax-h3/native-dual-bf16/1`: the native FL2VA and Ref2VA
-  transformers, converted together by `h3.native/1`;
-- `shared` → `hf/minimax-h3/shared-bf16/1`: the text conditioner, video VAE, and audio
-  VAE under `diffusers.identity/1`.
+| Function | Input (first positional) | Output | Notes |
+|---|---|---|---|
+| `bf16-full` | a full-precision H3 checkpoint: the converted `MiniMaxAI/MiniMax-H3` release or a `bf16-full` lane | `bf16-full` | source-only rows dropped, video VAE decode operands f16 |
+| `bf16-pruned` | same | `bf16-pruned` | AdaLN tables replace the 106 modulation rows per DiT; CUDA |
+| `fp8-pruned` | same | `fp8-pruned` | tables + both DiTs `fp8-rowwise/1`; CUDA; every serving rung |
+| `mxfp8-pruned` | same | `mxfp8-pruned` | grandfathered; native only on sm120 |
+| `turbo-lora` | the converted `alibaba-pai/MiniMax-H3-Acc-LoRAs` release (one fl2va and one ref2va component) | `pdd8` | `model.base=<full-precision H3>`; reads its modulation weights and heads only |
+| `retable` | an AdaLN-pruned lane | `adaln-pruned`, `tables` | `model.full=<full-precision H3>`; recomputes tables only |
+| `restamp` | an old frame-stamped AdaLN lane | `restamped` | config-only migration |
 
-Both slots can also bind the same complete `bf16-full` checkpoint. The job reads
-each distinct granted checkpoint's structure once and drops only source-only rows
-still present. The existing full checkpoint has already removed those rows; its
-retained BF16 tensors feed the same table and quantization computations. Required
-modulation and quantized replacement tensors remain mandatory, and TensorFS still
-checks the complete destination order. This does not accept a pruned or quantized
-checkpoint as a substitute for the full BF16 source.
+Runtime requires a receipt for every declared weights output, so each lane is its own
+function.
+
+```sh
+cozy run fidika/minimax-h3-tools/fp8-pruned fidika/minimax-h3@1.0.0/bf16-full fidika/minimax-h3 \
+  --rental=NAME --await
+cozy run fidika/minimax-h3-tools/turbo-lora fidika/minimax-h3-acc-loras@1.0.0/original \
+  fidika/minimax-h3-turbo-lora model.base=fidika/minimax-h3@1.0.0/bf16-full --rental=NAME --await
+```
+
+The lane functions, `turbo-lora` and `retable` are memoized operations. Tables, heads and quantized
+tensors checkpoint as they complete; a request re-issued with the same inputs on the same
+worker adopts a retained stopped run's completed work (`cozy run pause <run>` retains it) and
+computes only the remainder. Quantized tensors encode on every available CPU. The metrics
+`h3.reused_tensors`/`h3.computed_tensors` (`h3.turbo.*` for the LoRA) report the split.
+
+The lane functions read the granted checkpoint's structure once and drop only source-only
+rows still present (the native `rope.inv_freq` buffer and the text model's layers 50–63,
+final norm and head), so the converted upstream release and `bf16-full` produce the same
+lanes. It does not accept a pruned or quantized checkpoint as a substitute for the full source.
 
 Pruned checkpoint configs describe the ordered AdaLN rows as `cozy_h3.table_keys`:
 each final-normalization row names an exact float32 timestep, and each block-modulation
@@ -151,24 +171,14 @@ and AdaLN table production do not claim quantizer measurements. Activation fidel
 matched output distance and output quality require separate inference/evaluation evidence.
 
 
-`h3_tables.turbo.prepare_turbo` adds the PDD-8 overlays to one existing AdaLN-pruned
-model. It is a memoized Python operation and the `prepare-turbo` job. Pass `source`
-(the BF16, FP8 or MXFP8 body being served), `full` (its original full-precision H3
-model), and `fl2va_adapter` / `ref2va_adapter` (the two native single-component PDD
-artifacts). The released PDD inputs are `MiniMax-H3-FL2VA-Acc-8Step.safetensors` and
-`MiniMax-H3-Ref2VA-Acc-8Step.safetensors` from `alibaba-pai/MiniMax-H3-Acc-LoRAs`,
-revision `335001fb9e5455d68a0caa18ec2e319072150328`.
+`turbo-lora` builds the PDD-8 overlays from the released
+`MiniMax-H3-FL2VA-Acc-8Step.safetensors` and `MiniMax-H3-Ref2VA-Acc-8Step.safetensors`
+(`alibaba-pai/MiniMax-H3-Acc-LoRAs`, revision `335001fb9e5455d68a0caa18ec2e319072150328`)
+and the base model's original modulation weights. The adapter checkpoint must hold exactly two
+components whose names contain `fl2va` and `ref2va`. `build_turbo_adapter` composes the same
+producer from two single-component adapter checkpoints in a client script.
 
-```python
-from h3_tables.turbo import prepare_turbo
-
-model = await prepare_turbo(
-    source=body, full=full, fl2va_adapter=fl2va_pdd, ref2va_adapter=ref2va_pdd,
-)
-```
-
-The single output retains every base tensor and its construction config, and adds
-`fl2va_turbo` and `ref2va_turbo` components. Their six inference LoRA families inherit
+The output holds only the `fl2va_turbo` and `ref2va_turbo` components. Their six inference LoRA families inherit
 source objects. Only adapted AdaLN tables and eight collapsed output heads are
 written. The consumed AdaLN factors are absent from the output. One native transaction
 checkpoints each completed tensor, so cancellation resumes unfinished work and a

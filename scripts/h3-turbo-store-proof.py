@@ -32,8 +32,15 @@ from cozy_runtime.author._model import _derive_model
 from h3_tables.adaln_operations import PLAIN
 from h3_tables.kernel import H3Topology, adapter_shapes, source_shapes
 from h3_tables.plans import Task
-from h3_tables.source import H3FullTransformer
-from h3_tables.turbo import RANK, TASKS, _produce, overlay_shapes, turbo_plan
+from h3_tables.source import H3FullTransformer, inspection
+from h3_tables.turbo import (
+    RANK,
+    TASKS,
+    _produce,
+    adapter_components,
+    overlay_shapes,
+    turbo_plan,
+)
 
 from native_execution_fixture import NativeExecution
 
@@ -69,18 +76,20 @@ CONFIGS = {f"{task}_dit": CONFIG for task in TASKS}
 async def mini_turbo(
     ctx: Context,
     *,
-    full: H3FullTransformer,
-    fl2va_adapter: H3FullTransformer,
-    ref2va_adapter: H3FullTransformer,
+    adapters: H3FullTransformer,
+    base: H3FullTransformer,
     tel: Telemetry,
 ) -> ModelArtifact:
+    """`turbo_lora` over a toy topology: one PDD checkpoint holding both adapters."""
+    names = adapter_components(inspection(ctx, adapters))
     return _produce(
         ctx,
         tel,
-        full=full,
-        adapters={"fl2va": fl2va_adapter, "ref2va": ref2va_adapter},
+        sources={"full": base, "adapters": adapters},
+        adapters={task: ("adapters", component) for task, component in names.items()},
         configs=CONFIGS,
         topologies=dict.fromkeys(TASKS, TOPOLOGY),
+        output="pdd8",
     )
 
 
@@ -166,7 +175,7 @@ def reference_check(
             model, upstream.DEFAULT_PDD_CONFIG["lora_targets"].split(","), RANK, float(RANK)
         )
         upstream.attach_parallel_decoder(model, 32)
-        incompatible = model.load_state_dict(adapters[task]["adapter"], strict=False)
+        incompatible = model.load_state_dict(adapters[task], strict=False)
         assert not incompatible.unexpected_keys
         plan = turbo_plan(task)
         serving_plan = canonical_timestep_plan("fl2va_turbo" if task == "fl2va" else "ref2va_turbo")
@@ -232,24 +241,24 @@ def main() -> None:
         }
         shapes.update({key: shape for key, (_, shape) in adapter_shapes(TOPOLOGY, RANK).items()})
         adapters[task] = {
-            "adapter": {
-                key: (torch.randn(shape) * 0.03).bfloat16() for key, shape in shapes.items()
-            }
+            key: (torch.randn(shape) * 0.03).bfloat16() for key, shape in shapes.items()
         }
     app = App()
-    app.job(mini_turbo, weights=(WeightsOutput("model", 1 << 24),))
+    app.job(mini_turbo, weights=(WeightsOutput("pdd8", 1 << 24),))
     describe(app)
     with tempfile.TemporaryDirectory(prefix="h3-turbo-native-") as area:
         root = Path(area)
         store = tensorfs.Store.init(root / "store")
         sources = {
-            "full": mint(store, "full", full_values),
-            **{f"{task}_adapter": mint(store, task, adapters[task]) for task in TASKS},
+            "adapters": mint(
+                store, "adapters", {f"{task}_adapter": adapters[task] for task in TASKS}
+            ),
+            "base": mint(store, "full", full_values),
         }
 
         def run(name: str, epoch: int, cancel: bool = False) -> Any:
             with NativeExecution(
-                store, root, name, sources, {"model": 1 << 24}, epoch=epoch
+                store, root, name, sources, {"pdd8": 1 << 24}, epoch=epoch
             ) as execution:
                 return attempt(
                     app.get("mini_turbo"),
@@ -269,12 +278,24 @@ def main() -> None:
                     ),
                 )
 
+        def metrics(record: Any) -> dict[str, float]:
+            return {row["name"]: row["value"] for row in record.ring.rows() if row["kind"] == "metric"}
+
         stopped, outcome, _ = run("resume", 1, True)
         assert stopped is None and outcome.terminal == "canceled", outcome
-        result, outcome, _ = run("resume", 2)
+        result, outcome, record = run("resume", 2)
         assert outcome.terminal == "succeeded" and result is not None, outcome
-        clean, outcome, _ = run("clean", 1)
+        resumed = metrics(record)
+        clean, outcome, record = run("clean", 1)
         assert outcome.terminal == "succeeded" and clean is not None, outcome
+        total = metrics(record)["h3.turbo.computed_tensors"]
+        # The resumed attempt recomputed only what the stopped one had not checkpointed.
+        assert resumed["h3.turbo.reused_tensors"] >= 1, resumed
+        assert resumed["h3.turbo.reused_tensors"] + resumed["h3.turbo.computed_tensors"] == total
+        print(
+            f"resume reused {resumed['h3.turbo.reused_tensors']:.0f} and computed "
+            f"{resumed['h3.turbo.computed_tensors']:.0f} of {total:.0f} produced tensors"
+        )
         assert result.result.manifest == clean.result.manifest
         replay, outcome, _ = run("resume", 3)
         assert outcome.terminal == "succeeded" and replay.result == result.result, outcome
@@ -286,7 +307,7 @@ def main() -> None:
             "ref2va_turbo",
         }
         for task in TASKS:
-            original = header(store, sources[f"{task}_adapter"])["components"]["adapter"]
+            original = header(store, sources["adapters"])["components"][f"{task}_adapter"]
             overlay = actual["components"][f"{task}_turbo"]
             assert set(overlay) == set(overlay_shapes(CONFIG, turbo_plan(task)))
             for key, tensor in overlay.items():

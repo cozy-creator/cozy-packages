@@ -16,7 +16,7 @@ from cozy_runtime.author import ModelArtifact, ScriptContext
 from cozy_runtime.author.sources import convert_cozytensors, download_civitai
 from cozy_runtime.derive.operations import quantize
 
-from sdxl.normalization import normalize
+from sdxl.normalization import prepare
 from sdxl.operations import quantization_plan
 
 SOURCE_VERSION = 128078
@@ -27,7 +27,8 @@ ENCODING = "fp8-rowwise/1"
 async def main(ctx: ScriptContext) -> ModelArtifact:
     source = await download_civitai(SOURCE_VERSION, file=SOURCE_FILE)
     converted = await convert_cozytensors(source, profile="civitai/sdxl/single-file/1")
-    reference = await normalize(source=converted)
+    prepare_call = cast(Callable[..., Awaitable[ModelArtifact]], prepare)
+    reference = await prepare_call(source=converted)
     ctx.log(f"Normalized SDXL reference: {reference.manifest.digest}")
     # Managed invocation binds artifacts and supplies the worker's native services.
     quantize_call = cast(Callable[..., Awaitable[ModelArtifact]], quantize)

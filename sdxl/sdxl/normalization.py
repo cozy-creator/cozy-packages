@@ -33,7 +33,6 @@ from tensorfs.derived import (
 )
 
 MAX_NEW_BYTES = 1 << 30
-MAX_PART_BYTES = 16 << 20
 
 Component = Literal["text_encoder", "text_encoder_2", "unet", "vae"]
 _COMPONENTS: tuple[Component, ...] = ("text_encoder", "text_encoder_2", "unet", "vae")
@@ -65,7 +64,29 @@ PLAN = msgspec.json.decode(
 )
 
 
-def _validate(source: SourceInspection, plan: NormalizationPlan) -> None:
+#: Constructor-derived CLIP position IDs. Civitai checkpoints carry either, both or neither;
+#: the constructor rebuilds them, so they are validated when present and never emitted.
+OPTIONAL_BUFFERS = frozenset(
+    {
+        ("text_encoder", "text_model.embeddings.position_ids"),
+        ("text_encoder_2", "transformer.text_model.embeddings.position_ids"),
+    }
+)
+#: Source float widths a checkpoint may store; the normalized lane is always f16.
+FLOATS = frozenset({"f16", "bf16", "f32"})
+_NUMPY = {"f16": "<f2", "f32": "<f4", "i64": "<i8"}
+_WIDTH = {"f16": 2, "bf16": 2, "f32": 4, "i64": 8}
+MAX_CONVERTED_BYTES = 512 << 20
+READ_CHUNK = 32 << 20
+POSITIONS = 77
+
+
+def _validate(source: SourceInspection, plan: NormalizationPlan) -> dict[tuple[str, str], Tensor]:
+    """Check the reviewed SDXL key set and geometry; return each source tensor's dtype.
+
+    A tensor may be stored at f16, bf16 or f32 (f16 grafts unchanged; wider or bf16 rows are
+    rounded to f16). Only the optional position-ID buffers may be absent or extra.
+    """
     observed = {
         (component, key): tensor
         for component, rows in source.components.items()
@@ -76,64 +97,110 @@ def _validate(source: SourceInspection, plan: NormalizationPlan) -> None:
         for component, rows in plan.source.items()
         for key, spec in rows.items()
     }
-    if source.configs or set(observed) != set(expected):
-        raise UnsupportedInput("normalization requires the reviewed raw SDXL component key sets")
-    for key, spec in expected.items():
-        tensor = observed[key]
+    missing = sorted(set(expected) - set(observed) - OPTIONAL_BUFFERS)
+    extra = sorted(set(observed) - set(expected) - OPTIONAL_BUFFERS)
+    if source.configs or missing or extra or set(source.components) != set(plan.source):
+        raise UnsupportedInput(
+            "not the reviewed SDXL single-file layout: "
+            f"missing={[f'{c}.{k}' for c, k in missing[:4]]} "
+            f"unexpected={[f'{c}.{k}' for c, k in extra[:4]]} "
+            f"components={sorted(source.components)} configs={sorted(source.configs)}",
+            code="sdxl_source_layout",
+        )
+    for name, tensor in observed.items():
         value = tensor.parts.get("value")
+        spec = expected.get(name)
+        buffer = name in OPTIONAL_BUFFERS
+        admitted = FLOATS | ({"i64"} if buffer else set())
         if (
-            tensor.logical_dtype != spec.dtype
-            or tensor.shape != spec.shape
+            tensor.logical_dtype not in admitted
+            or (spec is not None and tensor.shape != spec.shape)
             or tensor.encoding != plan.plain
             or len(tensor.parts) != 1
             or value is None
-            or value.dtype != spec.dtype
-            or tuple(value.shape) != spec.shape
+            or value.dtype != tensor.logical_dtype
+            or tuple(value.shape) != tuple(tensor.shape)
         ):
-            raise UnsupportedInput(f"normalization source geometry or encoding differs at {key}")
+            raise UnsupportedInput(
+                f"SDXL source tensor {name[0]}.{name[1]} is {tensor.logical_dtype} "
+                f"{tuple(tensor.shape)}; expected a plain f16/bf16/f32 value"
+                + ("" if spec is None else f" of shape {spec.shape}"),
+                code="sdxl_source_layout",
+            )
+        if buffer and (not 0 < math.prod(tensor.shape) <= POSITIONS or len(tensor.shape) > 2):
+            raise UnsupportedInput(f"unexpected SDXL position-ID geometry at {name[0]}.{name[1]}")
+    return observed
 
 
-def _bytes(transaction: DerivedTransaction, route: TensorRoute, spec: SourceTensor) -> bytes:
-    size = math.prod(route.shape) * 2
-    if spec.dtype != "f16" or not 0 < size <= MAX_PART_BYTES:
-        raise UnsupportedInput("SDXL normalization role exceeds the reviewed fp16 byte bound")
-    if route.kind == "read":
-        raw = bytearray(size)
+def _read(
+    transaction: DerivedTransaction, component: str, key: str, offset: int, raw: bytearray
+) -> None:
+    view = memoryview(raw)
+    for start in range(0, len(raw), READ_CHUNK):
         transaction.source_read_into(
-            "source", route.component, route.source_key, "value", route.offset * 2, memoryview(raw)
+            "source", component, key, "value", offset + start, view[start : start + READ_CHUNK]
         )
-        return bytes(raw)
-    source_size = math.prod(spec.shape) * 2
-    if (
-        route.kind != "transpose"
-        or len(spec.shape) != 2
-        or source_size > MAX_PART_BYTES
-        or route.shape != spec.shape[::-1]
-        or route.offset
-    ):
-        raise UnsupportedInput("SDXL normalization has an unsupported transpose")
-    raw = bytearray(source_size)
-    transaction.source_read_into(
-        "source", route.component, route.source_key, "value", 0, memoryview(raw)
-    )
-    # uint16 preserves every bit, including signed zero and NaN payloads: this is a
-    # permutation, never float arithmetic or an independently implemented quantizer.
-    return np.frombuffer(raw, dtype="<u2").reshape(spec.shape).T.copy().tobytes()
 
 
-def _validate_position_ids(raw: bytes, dtype: np.dtype[Any], count: int) -> None:
-    values = np.frombuffer(raw, dtype=dtype)
-    # Exact comparison also rejects fractions, infinities and NaNs. The reviewed
-    # single-file checkpoint stores this integer sequence losslessly as F16.
+def _to_f16(raw: bytearray, dtype: str, where: str) -> np.ndarray[Any, np.dtype[np.float16]]:
+    """Round a bf16/f32 row to f16 (round to nearest even); refuse any overflow."""
+    if dtype == "bf16":
+        wide = (np.frombuffer(raw, dtype="<u2").astype("<u4") << 16).view("<f4")
+    else:
+        wide = np.frombuffer(raw, dtype="<f4")
+    with np.errstate(over="ignore"):
+        narrow = wide.astype("<f2")
+    if not np.array_equal(np.isfinite(wide), np.isfinite(narrow)):
+        raise UnsupportedInput(
+            f"SDXL tensor {where} exceeds the f16 range", code="sdxl_f16_overflow"
+        )
+    return narrow
+
+
+def _bytes(
+    transaction: DerivedTransaction, route: TensorRoute, spec: SourceTensor, dtype: str
+) -> bytes:
+    """One normalized f16 value: an f16 source is permuted bit-exactly, others are rounded."""
+    where = f"{route.component}.{route.source_key}"
+    if route.kind == "transpose":
+        if len(spec.shape) != 2 or route.shape != spec.shape[::-1] or route.offset:
+            raise UnsupportedInput("SDXL normalization has an unsupported transpose")
+        count = math.prod(spec.shape)
+    elif route.kind in {"read", "graft"}:
+        count = math.prod(route.shape)
+    else:
+        raise UnsupportedInput(f"unknown SDXL normalization route {route.kind}")
+    size = count * _WIDTH[dtype]
+    if dtype not in FLOATS or not 0 < size <= MAX_CONVERTED_BYTES:
+        raise UnsupportedInput(f"SDXL tensor {where} exceeds the reviewed byte bound")
+    raw = bytearray(size)
+    offset = 0 if route.kind == "transpose" else route.offset * _WIDTH[dtype]
+    _read(transaction, route.component, route.source_key, offset, raw)
+    values = np.frombuffer(raw, dtype="<u2") if dtype == "f16" else _to_f16(raw, dtype, where)
+    if route.kind == "transpose":
+        # uint16 preserves every f16 bit, including signed zero and NaN payloads: this is
+        # a permutation, never float arithmetic.
+        return values.view("<u2").reshape(spec.shape).T.copy().tobytes()
+    return values.tobytes()
+
+
+def _validate_position_ids(raw: bytes, dtype: str, count: int) -> None:
+    if dtype == "bf16":
+        values = (np.frombuffer(raw, dtype="<u2").astype("<u4") << 16).view("<f4")
+    else:
+        values = np.frombuffer(raw, dtype=_NUMPY[dtype])
+    # Exact comparison also rejects fractions, infinities and NaNs: the stock sequence is
+    # stored losslessly at every admitted width.
     if not np.array_equal(values, np.arange(count, dtype="<i8")):
         raise UnsupportedInput("SDXL source changed the constructor's position IDs")
 
 
-def _targets(plan: NormalizationPlan) -> dict[str, Target]:
+def _targets(plan: NormalizationPlan, dtypes: Mapping[tuple[str, str], str]) -> dict[str, Target]:
+    """f16 grafts inherit source objects; every other route is written as f16 bytes."""
     targets: dict[str, dict[str, Tensor]] = {}
     for route in plan.targets:
         graft = None
-        if route.kind == "graft":
+        if route.kind == "graft" and dtypes[route.component, route.source_key] == "f16":
             graft = PartSource("source", route.component, route.source_key, "value")
         targets.setdefault(route.component, {})[route.key] = Tensor(
             "f16",
@@ -148,7 +215,12 @@ def _targets(plan: NormalizationPlan) -> dict[str, Target]:
         if any(
             part.source is not None for tensor in rows.values() for part in tensor.parts.values()
         )
-        else Target(source="source", source_component=name, drop=tuple(plan.source[name]), add=rows)
+        else Target(
+            source="source",
+            source_component=name,
+            drop=tuple(sorted(key for component, key in dtypes if component == name)),
+            add=rows,
+        )
         for name, rows in targets.items()
     }
 
@@ -158,52 +230,51 @@ def _normalize(
     ctx: Context,
     tel: Telemetry,
     plan: NormalizationPlan,
+    output: str = "model",
 ) -> ModelArtifact:
     source_capability = ctx.tensorfs_source(source)
-    _validate(source_capability.inspect(), plan)
+    tensors = _validate(source_capability.inspect(), plan)
+    dtypes = {name: tensor.logical_dtype for name, tensor in tensors.items()}
     configs = {name: canonical_json.encode(value) for name, value in plan.configs.items()}
     definition = Derivation(
         sources={"source": source_capability},
-        targets=_targets(plan),
+        targets=_targets(plan, dtypes),
         configs={name: Config("add") for name in configs},
         order=tuple((row.component, row.key) for row in plan.targets),
     )
-    with derive(ctx.output("model"), definition) as transaction:
+    components = {route.component for route in plan.targets}
+    with derive(ctx.output(output), definition) as transaction:
         if transaction.receipt is not None:
             receipt = transaction.receipt
             assert receipt is not None
             return ctx.adopt_model(receipt)
         # The stock CLIP position IDs are reconstructed by the constructor. A checkpoint
         # that changed their values is outside this mapping even if its shapes still match.
-        position = (
-            plan.source.get("text_encoder", {}).get("text_model.embeddings.position_ids")
-            if any(route.component == "text_encoder" for route in plan.targets)
-            else None
-        )
-        if position is not None:
-            count = math.prod(position.shape)
-            if position.dtype not in {"f16", "i64"} or not 0 < count <= 77:
-                raise UnsupportedInput("unexpected SDXL position-ID geometry")
-            dtype = np.dtype("<f2" if position.dtype == "f16" else "<i8")
-            raw = bytearray(count * dtype.itemsize)
-            transaction.source_read_into(
-                "source",
-                "text_encoder",
-                "text_model.embeddings.position_ids",
-                "value",
-                0,
-                memoryview(raw),
-            )
-            _validate_position_ids(bytes(raw), dtype, count)
+        for component, key in sorted(OPTIONAL_BUFFERS):
+            buffer = tensors.get((component, key))
+            if component not in components or buffer is None:
+                continue
+            count = math.prod(buffer.shape)
+            raw = bytearray(count * _WIDTH[buffer.logical_dtype])
+            transaction.source_read_into("source", component, key, "value", 0, memoryview(raw))
+            _validate_position_ids(bytes(raw), buffer.logical_dtype, count)
         completed = set(transaction.completed_parts())
+        reused = written = 0
         for index, route in enumerate(plan.targets):
             ctx.raise_if_cancelled()
-            if route.kind == "graft" or (route.component, route.key, "value") in completed:
+            dtype = dtypes[route.component, route.source_key]
+            if route.kind == "graft" and dtype == "f16":
                 continue
-            value = _bytes(transaction, route, plan.source[route.component][route.source_key])
+            if (route.component, route.key, "value") in completed:
+                reused += 1
+                continue
+            value = _bytes(transaction, route, plan.source[route.component][route.source_key], dtype)
             transaction.add_part(route.component, route.key, "value", value)
             transaction.checkpoint()
+            written += 1
             tel.progress((index + 1) / len(plan.targets), stage="normalize-sdxl")
+        tel.metric("sdxl.reused_tensors", float(reused))
+        tel.metric("sdxl.computed_tensors", float(written))
         completed_configs = set(transaction.completed_configs())
         for name, data in configs.items():
             if name not in completed_configs:
@@ -283,9 +354,13 @@ _NORMALIZATION_MEMO = (
 )
 
 
+_NORMALIZE_HELPERS = (
+    _normalize, _validate, _read, _to_f16, _bytes, _validate_position_ids, _targets,
+)
+
+
 @invocable(memoize=True, memo_dependencies=(
-    *_NORMALIZATION_MEMO, _component_plan, _normalize, _validate, _bytes,
-    _validate_position_ids, _targets,
+    *_NORMALIZATION_MEMO, *_NORMALIZE_HELPERS, _component_plan,
 ))
 async def normalize_component(
     ctx: Context,
@@ -315,6 +390,21 @@ async def assemble_normalized(
         ctx,
         PLAN,
     )
+
+
+@invocable(
+    memoize=True,
+    memo_version="sdxl-prepare/1",
+    memo_dependencies=(*_NORMALIZATION_MEMO, *_NORMALIZE_HELPERS),
+)
+async def prepare(ctx: Context, *, source: QuantizationSource, tel: Telemetry) -> ModelArtifact:
+    """Convert one Civitai SDXL single-file checkpoint into the served f16 Diffusers lane.
+
+    ``source`` is the checkpoint converted with ``civitai/sdxl/single-file/1``, at f16, bf16
+    or f32. f16 rows keep their exact source objects; other widths round to f16. Every
+    written tensor checkpoints, so an interrupted run resumes where it stopped.
+    """
+    return _normalize(source, ctx, tel, PLAN, output="fp16")
 
 
 async def normalize(*, source: ModelArtifact) -> ModelArtifact:
