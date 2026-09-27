@@ -211,21 +211,29 @@ async def motion_renderer(
         audio = np.zeros((2, count * RATE // FPS), np.float32)
         video = out.save_video(rgb, fps=FPS, audio=audio, sample_rate=RATE)
         frame = out.save_image(ImageFrame(WIDTH, HEIGHT, rgb[-1].tobytes()), format="png")
-        tail = AVContext(
-            {
-                frames: (
-                    torch.zeros((1, 24, 5 * ((frames - 5) // 17) + 2, HEIGHT // 16, WIDTH // 16)),
-                    torch.zeros((2 * ((frames * 5 + 2) // 3), 32)),
-                )
-                for frames in (22, 39, 56)
-            },
-            HEIGHT, WIDTH, count, CODE,
-        )
         if payload.next_context_frames:
+            tail = AVContext(
+                {
+                    frames: (
+                        torch.zeros(
+                            (1, 24, 5 * ((frames - 5) // 17) + 2, HEIGHT // 16, WIDTH // 16)
+                        ),
+                        torch.zeros((2 * ((frames * 5 + 2) // 3), 32)),
+                    )
+                    for frames in payload.next_context_frames
+                },
+                HEIGHT, WIDTH, count, CODE, max(payload.next_context_frames),
+            )
             kwargs["completed"](tail, rgb)
         else:
             assert kwargs["completed"] is None
         return h3.H3VideoOutput(video, frame, [])
+
+    def export(state: Any, *, frames: Any, windows: Any, provenance: str) -> Any:
+        # The delivered frames as landed, and only the windows the successor selects.
+        assert len(frames) == payload.duration_s * FPS and provenance == CODE
+        assert tuple(windows) == payload.next_context_frames == tuple(state.windows)
+        return state
 
     stubbed = cast(Any, h3)
     original = h3._references_to_video, stubbed.provenance, stubbed.context_provenance
@@ -234,7 +242,7 @@ async def motion_renderer(
     stubbed.context_provenance = lambda _: CODE
     model = SimpleNamespace(
         checkpoint_ref=MODEL,
-        export_completed_av_tail=lambda state, **_: state,
+        export_completed_av_tail=export,
     )
     try:
         return h3._render_motion(

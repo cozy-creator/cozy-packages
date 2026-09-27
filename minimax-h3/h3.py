@@ -1429,8 +1429,13 @@ def _render_motion(
     _reference_policy(assets)
     saved_context: list[FileAsset] = []
 
-    def save_completed_context(state: Any, _pixels: Any) -> None:
-        tail = model.export_completed_av_tail(state, provenance=native_provenance)
+    def save_completed_context(state: Any, pixels: Any) -> None:
+        tail = model.export_completed_av_tail(
+            state,
+            frames=pixels,
+            windows=payload.next_context_frames,
+            provenance=native_provenance,
+        )
         saved_context.append(
             out.save_bytes(encode_context(tail), media_type="application/octet-stream")
         )
