@@ -8,12 +8,10 @@ The callable still parses its real assets and builds its real output declaration
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import nullcontext
 from typing import Any
 
 import torch
-from cozy_runtime.author._calls import _export
 from cozy_runtime.derive.quantization import (
     QuantizationStats,
     prepare_quantization,
@@ -193,12 +191,7 @@ def invoke(recorder: Recorder, fail_at: str = "") -> Any:
         module.write_cast = recorder.cast
         module.torch.cuda.is_available = lambda: True
         source = H3FullTransformer.for_test()
-        implementation = _export(job.lanes).implementation
-        return asyncio.run(
-            implementation(
-                recorder, source=source, lanes=None, max_relative_frobenius=None, tel=Telemetry()
-            )
-        )
+        return job._produce_lanes(recorder, Telemetry(), source, tuple(lanes.LANES))
     finally:
         job._write_tables = original_tables
         module.quantize_component_into = original_quantize
@@ -227,7 +220,7 @@ def main() -> None:
         recorder.events.clear()
         result = invoke(recorder)
         assert tuple(recorder.committed) == slots
-        assert [row.lane for row in result.lanes] == list(slots)
+        assert list(result) == list(slots)
         # Every lane treats the video VAE, because the producer normalises it rather than
         # each lane authoring it; only the encoding lanes also treat the two DiTs.
         casts = {event.split(":")[1] for event in recorder.events if event.startswith("cast:")}
@@ -248,7 +241,7 @@ def main() -> None:
 
         recorder.events.clear()
         result = invoke(recorder)
-        assert [row.lane for row in result.lanes] == list(slots)
+        assert list(result) == list(slots)
         assert recorder.events == []
     print(
         f"H3 stage commits PASS lanes={len(slots)} table/FP8/MXFP8 interruption, "

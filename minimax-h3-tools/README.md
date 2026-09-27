@@ -11,27 +11,33 @@ Each declared output becomes a checkpoint named by its slot; publish lanes with
 `cozy model publish <org/model> --release R --lane <slot>=<checkpoint>`. On the rental that
 ingested or already fetched the input, its objects are in the pod Store and nothing moves.
 
-| Function | Input (first positional) | Outputs | Notes |
+| Function | Input (first positional) | Output | Notes |
 |---|---|---|---|
-| `lanes` | a full-precision H3 checkpoint: the converted `MiniMaxAI/MiniMax-H3` release or a `bf16-full` lane | `bf16-full`, `bf16-pruned`, `fp8-pruned`, `mxfp8-pruned` | `lanes:='["fp8-pruned"]'` selects outputs (default all); pruned lanes need a CUDA rental |
-| `turbo-lora` | the converted `alibaba-pai/MiniMax-H3-Acc-LoRAs` release (one fl2va and one ref2va component) | `pdd8` | `model.base=<full-precision H3>`; needs its modulation weights and heads only |
+| `bf16-full` | a full-precision H3 checkpoint: the converted `MiniMaxAI/MiniMax-H3` release or a `bf16-full` lane | `bf16-full` | source-only rows dropped, video VAE decode operands f16 |
+| `bf16-pruned` | same | `bf16-pruned` | AdaLN tables replace the 106 modulation rows per DiT; CUDA |
+| `fp8-pruned` | same | `fp8-pruned` | tables + both DiTs `fp8-rowwise/1`; CUDA; every serving rung |
+| `mxfp8-pruned` | same | `mxfp8-pruned` | grandfathered; native only on sm120 |
+| `turbo-lora` | the converted `alibaba-pai/MiniMax-H3-Acc-LoRAs` release (one fl2va and one ref2va component) | `pdd8` | `model.base=<full-precision H3>`; reads its modulation weights and heads only |
 | `retable` | an AdaLN-pruned lane | `adaln-pruned`, `tables` | `model.full=<full-precision H3>`; recomputes tables only |
 | `restamp` | an old frame-stamped AdaLN lane | `restamped` | config-only migration |
 
+Runtime requires a receipt for every declared weights output, so each lane is its own
+function.
+
 ```sh
-cozy run fidika/minimax-h3-tools/lanes fidika/minimax-h3@1.0.0/bf16-full fidika/minimax-h3 \
-  lanes:='["bf16-pruned","fp8-pruned"]' --rental=NAME --await
+cozy run fidika/minimax-h3-tools/fp8-pruned fidika/minimax-h3@1.0.0/bf16-full fidika/minimax-h3 \
+  --rental=NAME --await
 cozy run fidika/minimax-h3-tools/turbo-lora fidika/minimax-h3-acc-loras@1.0.0/original \
   fidika/minimax-h3-turbo-lora model.base=fidika/minimax-h3@1.0.0/bf16-full --rental=NAME --await
 ```
 
-`lanes`, `turbo-lora` and `retable` are memoized operations. Tables, heads and quantized
+The lane functions, `turbo-lora` and `retable` are memoized operations. Tables, heads and quantized
 tensors checkpoint as they complete; a request re-issued with the same inputs on the same
 worker adopts a retained stopped run's completed work (`cozy run pause <run>` retains it) and
 computes only the remainder. Quantized tensors encode on every available CPU. The metrics
 `h3.reused_tensors`/`h3.computed_tensors` (`h3.turbo.*` for the LoRA) report the split.
 
-`lanes` reads each distinct granted checkpoint's structure once and drops only source-only
+The lane functions read the granted checkpoint's structure once and drop only source-only
 rows still present (the native `rope.inv_freq` buffer and the text model's layers 50–63,
 final norm and head), so the converted upstream release and `bf16-full` produce the same
 lanes. It does not accept a pruned or quantized checkpoint as a substitute for the full source.

@@ -175,9 +175,6 @@ class ProductionRequest(msgspec.Struct, forbid_unknown_fields=True):
     pass
 
 
-ALL_LANES: tuple[LaneName, ...] = ("bf16-full", "bf16-pruned", "fp8-pruned", "mxfp8-pruned")
-
-
 class TreatmentStats(msgspec.Struct):
     """What one treatment of one component recorded on this attempt.
 
@@ -193,19 +190,6 @@ class TreatmentStats(msgspec.Struct):
     reused_keys: int = 0
     source_bytes_read: int = 0
     new_bytes_written: int = 0
-
-
-class LaneArtifact(msgspec.Struct, frozen=True):
-    lane: str
-    modulation: str
-    treated_components: list[str]
-    model: ModelArtifact
-
-
-class H3Lanes(msgspec.Struct, frozen=True):
-    """The committed lanes. Per-attempt measurements are telemetry, never memoized."""
-
-    lanes: list[LaneArtifact]
 
 
 class AssemblyResult(msgspec.Struct):
@@ -556,26 +540,23 @@ class _SharedTelemetry:
             self._tel.log(message, **fields)
 
 
-@invocable(memoize=True, memo_version="h3-lanes/1", memo_dependencies=LANES_MEMO)
-async def lanes(
+def _produce_lanes(
     ctx: Context,
-    *,
-    source: H3FullTransformer,
-    lanes: tuple[LaneName, ...] | None = None,
-    max_relative_frobenius: float | None = None,
     tel: Telemetry,
-) -> H3Lanes:
-    """Convert one full-precision H3 checkpoint into the requested reviewed lanes.
+    source: H3FullTransformer,
+    lanes: tuple[LaneName, ...],
+    max_relative_frobenius: float | None = None,
+) -> dict[str, ModelArtifact]:
+    """Convert one full-precision H3 checkpoint into the named reviewed lanes.
 
     ``source`` is any checkpoint carrying the five H3 components at full precision: the
-    converted upstream release or a ``bf16-full`` lane. ``lanes`` selects outputs (default
-    all). Each lane is a row of
+    converted upstream release or a ``bf16-full`` lane. Each lane is a row of
     ``lanes.LANES`` and commits to its own output slot, named after the lane. A component
     no lane treats is inherited by reference, so the conditioner and both VAEs stay
     byte-shared across lanes. A fresh identical request adopts every completed table and
     quantized tensor of a retained stopped attempt (a paused run) on the same worker.
     """
-    requested = _requested(ALL_LANES if lanes is None else lanes)
+    requested = _requested(lanes)
     sources = {"dits": source, "shared": source}
     granted = _structures(ctx, sources)
     full_targets = _select_full_targets(ctx, sources, granted)
@@ -721,20 +702,83 @@ async def lanes(
     tel.metric("h3.new_bytes", float(new_bytes), unit="bytes")
     tel.metric("h3.reused_tensors", float(reused))
     tel.metric("h3.computed_tensors", float(computed))
-    return H3Lanes(
-        [
-            LaneArtifact(
-                lane=name,
-                modulation=LANES[name].modulation,
-                treated_components=sorted(lane_treatments(LANES[name])),
-                model=ctx.adopt_model(receipts[name]),
-            )
-            for name in requested
-        ]
-    )
+    return {name: ctx.adopt_model(receipts[name]) for name in requested}
 
 
-app.job(lanes, name="lanes", weights=LANE_OUTPUTS)
+# One function per lane: Runtime requires a receipt for EVERY declared weights output, so a
+# function declares exactly the lane it always produces.
+@invocable(memoize=True, memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
+async def bf16_full(ctx: Context, *, source: H3FullTransformer, tel: Telemetry) -> ModelArtifact:
+    """The reviewed full-precision lane: source-only rows dropped, video VAE normalised."""
+    return _produce_lanes(ctx, tel, source, ("bf16-full",))["bf16-full"]
+
+
+@invocable(memoize=True, memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
+async def bf16_pruned(ctx: Context, *, source: H3FullTransformer, tel: Telemetry) -> ModelArtifact:
+    """AdaLN-pruned BF16: 106 modulation rows per DiT replaced by timestep tables."""
+    return _produce_lanes(ctx, tel, source, ("bf16-pruned",))["bf16-pruned"]
+
+
+@invocable(memoize=True, memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
+async def fp8_pruned(
+    ctx: Context,
+    *,
+    source: H3FullTransformer,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """AdaLN-pruned with both DiTs row-wise FP8: the lane every serving rung selects."""
+    lane = _produce_lanes(ctx, tel, source, ("fp8-pruned",), max_relative_frobenius)
+    return lane["fp8-pruned"]
+
+
+@invocable(memoize=True, memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
+async def mxfp8_pruned(
+    ctx: Context,
+    *,
+    source: H3FullTransformer,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """AdaLN-pruned MXFP8 (grandfathered; executes natively only on sm120)."""
+    lane = _produce_lanes(ctx, tel, source, ("mxfp8-pruned",), max_relative_frobenius)
+    return lane["mxfp8-pruned"]
+
+
+app.job(
+    bf16_full,
+    name="bf16-full",
+    weights=(WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES + MAX_VIDEO_VAE_BYTES),),
+)
+app.job(
+    bf16_pruned,
+    name="bf16-pruned",
+    weights=(WeightsOutput("bf16-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),),
+)
+app.job(
+    fp8_pruned,
+    name="fp8-pruned",
+    weights=(WeightsOutput("fp8-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),),
+)
+app.job(
+    mxfp8_pruned,
+    name="mxfp8-pruned",
+    weights=(
+        WeightsOutput("mxfp8-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
+    ),
+)
+
+
+def _check_lane_jobs() -> None:
+    """Each lane's function declares exactly the catalogue's output for that lane."""
+    declared = {output.name: output for output in LANE_OUTPUTS}
+    for name in LANES:
+        registered = app.get(name).weights_outputs
+        if registered != (declared[name],):
+            raise ValueError(f"lane function {name!r} declares {registered}, not {declared[name]}")
+
+
+_check_lane_jobs()
 
 
 def _retable_targets(

@@ -19,9 +19,9 @@ from sdxl.normalization import normalize_component,assemble_normalized
 from h3_tables.operations import assemble_full
 from h3_tables.adaln_operations import select_adaln_weights,compute_adaln_tables,apply_adaln,retable_adaln
 from h3_tables.turbo import turbo_lora
-from h3_tables.job import lanes,retable
+from h3_tables.job import fp8_pruned,retable
 functions=(normalize_component,assemble_normalized,assemble_full,select_adaln_weights,
-           compute_adaln_tables,apply_adaln,retable_adaln,turbo_lora,lanes,retable)
+           compute_adaln_tables,apply_adaln,retable_adaln,turbo_lora,fp8_pruned,retable)
 print(json.dumps({fn.__name__:describe(_export(fn).implementation) for fn in functions}))
 '''
 
@@ -83,7 +83,7 @@ def qualify(root: Path) -> dict[str, object]:
     assert 'math.log(' in text
     helper.write_text(text.replace('math.log(', 'math.log(2.0 * ', 1))
     after_kernel = identities(root)
-    for name in ('compute_adaln_tables', 'turbo_lora', 'lanes', 'retable'):
+    for name in ('compute_adaln_tables', 'turbo_lora', 'fp8_pruned', 'retable'):
         assert after_kernel[name] != after_sdxl[name]
     plan = root / 'h3_tables/assets/timestep-plan.fl2va.json'
     data = json.loads(plan.read_text())
@@ -91,7 +91,7 @@ def qualify(root: Path) -> dict[str, object]:
     plan.write_text(json.dumps(data))
     after_plan = identities(root)
     for name in ('select_adaln_weights', 'compute_adaln_tables', 'apply_adaln', 'retable_adaln',
-                 'lanes', 'retable'):
+                 'fp8_pruned', 'retable'):
         assert after_plan[name] != after_kernel[name]
     assert after_plan['normalize_component'] == after_sdxl['normalize_component']
     changed_native_version(root, "tensorfs")
