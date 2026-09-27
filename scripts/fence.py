@@ -175,6 +175,13 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "Read the actual active context in real CPU DiT hooks to verify scope lifetime "
         "and exception restoration. No package serving code reads this private context."
     ),
+    ("scripts/h3-conform.py", "cozy_runtime.author._demand"): (
+        "Normalize H3's real request types into the demand features staged admission keys "
+        "measured peaks on (Runtime #756/#764). Retire with a public normalization API."
+    ),
+    ("scripts/h3-conform.py", "cozy_runtime.author._assets"): (
+        "Decode asset occurrences for that normalization, as the wire decoder does."
+    ),
     ("scripts/h3-assembly-proof.py", "cozy_runtime.author._assets"): (
         "Bind native codec fixtures and their file-state guards to the author invocation. "
         "Retire when a public native asset fixture supports changed-input controls. "
@@ -387,7 +394,7 @@ def fence_driver_arm() -> Fence:
         bad.append("the recorded exception does not admit the driver it names")
     if not surface_violations("scripts/torch_family.py", recorded, driver=True):
         bad.append("a recorded exception admits a driver it does not name")
-    if not surface_violations("scripts/h3-conform.py", ARM_PRIVATE[0], driver=True):
+    if not surface_violations("scripts/h3-conform.py", ARM_PRIVATE[1], driver=True):
         bad.append("a recorded exception admits a private module it does not name")
     return bad, (
         f"{len(ARM_PRIVATE)} private spellings fire the boundary, {len(ARM_PUBLIC)} public "
