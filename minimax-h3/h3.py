@@ -1381,7 +1381,9 @@ class MotionInput(msgspec.Struct, forbid_unknown_fields=True):
 
 
 class MotionOutput(SegmentOutput):
-    context: MotionContextAsset | None
+    # A fixed output slot: Runtime grants result outputs by field path, never inside a union.
+    # A shot with no successor returns it empty instead of exporting any window.
+    context: MotionContextAsset
 
 
 def _render_motion(
@@ -1441,7 +1443,9 @@ def _render_motion(
         shot.continuation_frame,
         list(shot.warnings),
         observed,
-        saved_context[0] if saved_context else None,
+        saved_context[0]
+        if saved_context
+        else out.save_bytes(b"", media_type="application/octet-stream"),
     )
 
 

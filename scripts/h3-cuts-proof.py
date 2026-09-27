@@ -434,8 +434,12 @@ def drive(
         assert {item["output_id"] for item in outputs} == (
             {"image"}
             if is_reference
-            else {"video", "continuation_frame"} | ({"context"} if successor else set())
+            else {"video", "continuation_frame"} | ({"context"} if continuous else set())
         )
+        if continuous and not is_reference:
+            # Every shot fills the fixed slot; only a shot with a successor pays for windows.
+            context = next(item for item in outputs if item["output_id"] == "context")
+            assert (context["length"] > 0) == successor, context
         answers[index] = {
             "ok": True,
             "state": "succeeded",
@@ -619,9 +623,20 @@ def drive(
     return {"frames": result.result.delivered_frames, "calls": sent, "events": len(events)}
 
 
+def admissible_results() -> None:
+    """Runtime grants native result outputs by fixed field path at child admission."""
+    from cozy_runtime.internal.worker import machine_byte_results
+
+    built = static_interface.build(ROOT / "minimax-h3")
+    interface = json.loads(package_interface.canonical_bytes(built))
+    for entry in [*interface["entrypoints"], *interface["jobs"]]:
+        list(machine_byte_results.paths(entry["result"]))
+
+
 def main() -> None:
     root = Path(sys.argv[1]).resolve()
     root.mkdir(parents=True)
+    admissible_results()
     results = {
         "fixed": drive(root / "fixed"),
         "standard": drive(root / "standard", turbo=False, count=2),
