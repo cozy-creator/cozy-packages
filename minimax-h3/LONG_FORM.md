@@ -140,11 +140,17 @@ Audio references use a typed audio attachment and skip Qwen image generation:
 {
   "name": "ReinaVoice",
   "kind": "audio",
-  "description": "A clear English female voice reference.",
+  "description": "It is the voice-timbre reference for <Reina> (S1), containing a spoken English vocal layer.",
   "audio": "./audio/reina.wav",
-  "retention-analysis": "reference - the supplied audio signal guides the voice timbre and delivery."
+  "retention-analysis": "reference - its vocal timbre guides the dialogue delivery of <Reina> without copying the original signal."
 }
 ```
+
+The generated definition is `<Audio 1> is the supplied audio reference for <ReinaVoice>.`
+followed by the description, so the description names the speaker it voices. In the segment,
+write for example `Using the voice timbre referenced from <Audio 1>, <Reina> (S1) says: ...`.
+An audio reference needs at least one character or scene reference in the same request;
+audio-only reference sets are refused before any reference or model work starts.
 
 Use `--asset references.3.audio=/absolute/path/reina.wav` instead of the JSON filename
 when preferred. Audio references are bounded to 256 MiB encoded and 2 GiB decoded,

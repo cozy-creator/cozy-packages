@@ -11,10 +11,8 @@ from typing import Annotated, Literal
 import msgspec
 from msgspec.structs import replace
 from cozy_runtime.author import AssetBound, AudioAsset, ImageAsset, InvalidRequest
+from cozy_runtime.models.minimax_h3.official import validate_reference_policy
 
-MAX_IMAGES = 9
-MAX_AUDIO = 3
-MAX_REFERENCES = 12
 _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,47}\Z")
 
 
@@ -103,12 +101,13 @@ def image_prompt(reference: StoryReference) -> str:
 
 
 def validate_references(references: Sequence[StoryReference]) -> dict[str, StoryReference]:
-    if not 1 <= len(references) <= MAX_REFERENCES:
-        raise InvalidRequest("declare between one and twelve references", fields=["references"])
-    if sum(reference.kind == "audio" for reference in references) > MAX_AUDIO:
-        raise InvalidRequest("declare at most three audio references", fields=["references"])
-    if sum(reference.kind != "audio" for reference in references) > MAX_IMAGES:
-        raise InvalidRequest("declare at most nine image or scene references", fields=["references"])
+    # The render children enforce this same policy after model preparation; refuse here first.
+    try:
+        validate_reference_policy(
+            ["audio" if ref.kind == "audio" else "image" for ref in references]
+        )
+    except ValueError as exc:
+        raise InvalidRequest(str(exc), code="reference_policy", fields=["references"]) from exc
     by_name: dict[str, StoryReference] = {}
     for reference in references:
         if not _NAME.fullmatch(reference.name):
