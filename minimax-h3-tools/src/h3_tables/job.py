@@ -297,6 +297,7 @@ def _assembly_result(receipt: Mapping[str, Any], replayed: bool) -> AssemblyResu
 
 @app.job(
     weights=(WeightsOutput("model", max_new_bytes=64 << 10),),
+    accelerator=False,
 )
 def assemble_full(
     ctx: Context,
@@ -943,6 +944,7 @@ app.job(
         WeightsOutput("adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES),
         WeightsOutput("tables", max_new_bytes=MAX_PRUNED_BYTES),
     ),
+    accelerator=True,
 )
 
 
@@ -951,6 +953,7 @@ app.job(
     _adaln_operations.select_adaln_weights,
     name="select-adaln-weights",
     weights=(WeightsOutput("model", 1 << 20),),
+    accelerator=False,
 )
 app.job(
     _adaln_operations.compute_adaln_tables,
@@ -965,18 +968,21 @@ app.job(
         WeightsOutput("fl2va-weights", 1 << 20),
         WeightsOutput("ref2va-weights", 1 << 20),
     ),
+    accelerator=False,
 )
 
 app.job(
     assemble_full_artifact,
     name="assemble-full-artifact",
     weights=(WeightsOutput("model", 1 << 20),),
+    accelerator=False,
 )
 
 app.job(
     _adaln_operations.retable_adaln,
     name="retable-adaln",
     weights=(WeightsOutput("model", 1 << 20),),
+    accelerator=False,
 )
 
 
@@ -1057,7 +1063,9 @@ def _check_emitted_config(document: bytes, modulation: str, source: SourceInspec
                     )
 
 
-@app.job(name="restamp", weights=(WeightsOutput("restamped", max_new_bytes=128 << 10),))
+@app.job(
+    name="restamp", weights=(WeightsOutput("restamped", max_new_bytes=128 << 10),), accelerator=False
+)
 def restamp(
     ctx: Context,
     payload: ProductionRequest,
