@@ -528,52 +528,47 @@ _LANE_ENCODINGS: dict[str, str] = {"fp8": "fp8-rowwise/1", "mxfp8": "mxfp8/1"}
 _LANE_BYTES = 16 << 30
 
 Lane = Literal["fp8", "mxfp8"]
-_LANE_ORDER: tuple[Lane, ...] = ("fp8", "mxfp8")
 
 
-class QuantizedLanes(msgspec.Struct, frozen=True):
-    """Each requested lane's committed artifact; an unrequested lane is null."""
+def _quantize(
+    ctx: Context, tel: Telemetry, source: AnimaModel, lane: Lane, max_relative_frobenius: float | None
+) -> ModelArtifact:
+    return derive.quantize_artifact(
+        source,
+        derive.plan(("transformer",), _LANE_ENCODINGS[lane], max_relative_frobenius=max_relative_frobenius),
+        ctx=ctx, tel=tel, output=lane,
+    )
 
-    fp8: ModelArtifact | None = None
-    mxfp8: ModelArtifact | None = None
+
+# One function per lane: Runtime requires a receipt for EVERY declared weights output. The
+# quantizer checkpoints every encoded tensor, so a re-issued run adopts completed tensors.
+# Runtime 0.18.20 (this package's lock) reads only memoize= statically; the fallback
+# operation identity is the installed release, which still admits partial-work adoption.
+@invocable(memoize=True)
+async def fp8(
+    ctx: Context,
+    *,
+    source: AnimaModel,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """Row-wise FP8 DiT weights from one BF16/F16 source; everything else inherits."""
+    return _quantize(ctx, tel, source, "fp8", max_relative_frobenius)
 
 
 # Runtime 0.18.20 (this package's lock) reads only memoize= statically; the fallback
 # operation identity is the installed release, which still admits partial-work adoption.
 @invocable(memoize=True)
-async def quantize(
+async def mxfp8(
     ctx: Context,
     *,
     source: AnimaModel,
-    lanes: tuple[Lane, ...] | None = None,
     max_relative_frobenius: float | None = None,
     tel: Telemetry,
-) -> QuantizedLanes:
-    """Derive the requested row-wise DiT lanes (default both) from one BF16 source.
-
-    Each lane commits to its own output slot; the quantizer checkpoints every encoded
-    tensor, so an interrupted run re-issued with the same inputs adopts completed tensors.
-    """
-    requested = _LANE_ORDER if lanes is None else lanes
-    if not requested or len(set(requested)) != len(requested):
-        raise UnsupportedInput("quantize lanes must be unique", code="quantization_lanes")
-    results = {
-        lane: derive.quantize_artifact(
-            source,
-            derive.plan(
-                ("transformer",),
-                _LANE_ENCODINGS[lane],
-                max_relative_frobenius=max_relative_frobenius,
-            ),
-            ctx=ctx, tel=tel, output=lane,
-        )
-        for lane in requested
-    }
-    return QuantizedLanes(fp8=results.get("fp8"), mxfp8=results.get("mxfp8"))
+) -> ModelArtifact:
+    """MXFP8 DiT weights from one BF16/F16 source; everything else inherits."""
+    return _quantize(ctx, tel, source, "mxfp8", max_relative_frobenius)
 
 
-app.job(
-    quantize,
-    name="quantize",
-    weights=tuple(WeightsOutput(lane, max_new_bytes=_LANE_BYTES) for lane in _LANE_ENCODINGS),
-)
+app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),))
+app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),))
