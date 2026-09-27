@@ -22,12 +22,14 @@ from cozy_runtime.author import (
     ImageFrame,
     Loader,
     Model,
+    ModelArtifact,
     ModelDefault,
     Outputs,
     Shape,
     Telemetry,
     UnsupportedInput,
     WeightsOutput,
+    invocable,
     uses_components,
 )
 from diffusers import (
@@ -526,43 +528,52 @@ _LANE_ENCODINGS: dict[str, str] = {"fp8": "fp8-rowwise/1", "mxfp8": "mxfp8/1"}
 _LANE_BYTES = 16 << 30
 
 Lane = Literal["fp8", "mxfp8"]
+_LANE_ORDER: tuple[Lane, ...] = ("fp8", "mxfp8")
 
 
-class QuantizeInput(msgspec.Struct, forbid_unknown_fields=True):
-    lanes: Annotated[tuple[Lane, ...], msgspec.Meta(min_length=1)] = ("fp8", "mxfp8")
-    max_relative_frobenius: float | None = None
+class QuantizedLanes(msgspec.Struct, frozen=True):
+    """Each requested lane's committed artifact; an unrequested lane is null."""
+
+    fp8: ModelArtifact | None = None
+    mxfp8: ModelArtifact | None = None
 
 
-class QuantizedLanes(msgspec.Struct):
-    """Each requested lane's full `derive.QuantizeResult`; an unrequested lane is null."""
-
-    fp8: derive.QuantizeResult | None = None
-    mxfp8: derive.QuantizeResult | None = None
-
-
-@app.job(
-    name="quantize",
-    weights=tuple(WeightsOutput(lane, max_new_bytes=_LANE_BYTES) for lane in _LANE_ENCODINGS),
-)
-def quantize(
+# Runtime 0.18.20 (this package's lock) reads only memoize= statically; the fallback
+# operation identity is the installed release, which still admits partial-work adoption.
+@invocable(memoize=True)
+async def quantize(
     ctx: Context,
-    payload: QuantizeInput,
+    *,
     source: AnimaModel,
+    lanes: tuple[Lane, ...] | None = None,
+    max_relative_frobenius: float | None = None,
     tel: Telemetry,
 ) -> QuantizedLanes:
-    """Derive the requested row-wise DiT lanes from one reviewed BF16 source."""
-    if len(set(payload.lanes)) != len(payload.lanes):
+    """Derive the requested row-wise DiT lanes (default both) from one BF16 source.
+
+    Each lane commits to its own output slot; the quantizer checkpoints every encoded
+    tensor, so an interrupted run re-issued with the same inputs adopts completed tensors.
+    """
+    requested = _LANE_ORDER if lanes is None else lanes
+    if not requested or len(set(requested)) != len(requested):
         raise UnsupportedInput("quantize lanes must be unique", code="quantization_lanes")
     results = {
-        lane: derive.quantize(
+        lane: derive.quantize_artifact(
             source,
             derive.plan(
                 ("transformer",),
                 _LANE_ENCODINGS[lane],
-                max_relative_frobenius=payload.max_relative_frobenius,
+                max_relative_frobenius=max_relative_frobenius,
             ),
             ctx=ctx, tel=tel, output=lane,
         )
-        for lane in payload.lanes
+        for lane in requested
     }
     return QuantizedLanes(fp8=results.get("fp8"), mxfp8=results.get("mxfp8"))
+
+
+app.job(
+    quantize,
+    name="quantize",
+    weights=tuple(WeightsOutput(lane, max_new_bytes=_LANE_BYTES) for lane in _LANE_ENCODINGS),
+)
