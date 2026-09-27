@@ -997,7 +997,8 @@ def _anima_progress_ladder() -> list[str]:
 
 
 def fence_interface_format() -> Fence:
-    """Every interface is exactly an interface/1 document with the four root fields."""
+    """Every interface is an interface/1 document with at least the four root fields; a newer
+    Runtime may describe more."""
     expected = {"application", "entrypoints", "format", "jobs"}
     bad: list[str] = []
     for project in projects():
@@ -1007,8 +1008,8 @@ def fence_interface_format() -> Fence:
         except (OSError, json.JSONDecodeError) as exc:
             bad.append(f"{rel(path)}: unreadable: {exc}")
             continue
-        if set(document) != expected or document.get("format") != "cozy.package.interface/1":
-            bad.append(f"{rel(path)}: root fields/format are not exact interface/1")
+        if not expected <= set(document) or document.get("format") != "cozy.package.interface/1":
+            bad.append(f"{rel(path)}: missing interface/1 root fields or format")
     return bad, f"{len(projects())} interface/1 files carry the four root fields"
 
 
