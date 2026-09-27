@@ -50,6 +50,7 @@ from .kernel import precompute_tables as compute_tables
 from .lanes import (
     COMPONENT_MAX_NEW_BYTES,
     LANES,
+    NORMALISED_COMPONENTS,
     Lane,
     Selection,
     lane_max_new_bytes,
@@ -596,6 +597,8 @@ async def lanes(
                     granted[full_targets[component].source],
                 ),
                 dit_plan=dit_plan,
+                # A bf16-full input already carries the normalised video VAE.
+                allow_inert=component in NORMALISED_COMPONENTS,
             )
             for component, treatment in lane_treatments(LANES[name]).items()
         }
