@@ -223,6 +223,9 @@ def child(root: Path, mode: str) -> None:
         if mode == "interrupt":
             os._exit(73)  # No Python cleanup; the native checkpoint is already durable.
 
+    # A checkpoint after every part, so the interruption lands mid-run.
+    norm.CHECKPOINT_BYTES = 1
+
     original = norm._bytes
 
     def observe(
@@ -287,6 +290,7 @@ def component_equivalence(
         )
 
     parts: dict[str, tuple[str, int]] = {}
+    checkpoints: dict[str, int] = {}
     model = _derive_model(QuantizationSource, manifest)
     for component in norm._COMPONENTS:
         with execution(
@@ -299,6 +303,10 @@ def component_equivalence(
                 norm._component_plan(plan, component),
             )
             parts[component] = (result.manifest.digest, result.manifest.length)
+            checkpoints[component] = sum(f.HasField("weights_checkpoint") for f in owner.frames)
+    # The default cadence checkpoints a small component once, at its end, however many parts
+    # it wrote (text_encoder_2 writes four); one that wrote nothing has nothing to save.
+    assert checkpoints == {"text_encoder": 0, "text_encoder_2": 1, "unet": 1, "vae": 1}, checkpoints
     models = {key: _derive_model(QuantizationSource, digest) for key, (digest, _) in parts.items()}
     with execution("component-assembly", parts, 0) as owner:
         result = norm._assemble_normalized(models, owner.context(), plan)
