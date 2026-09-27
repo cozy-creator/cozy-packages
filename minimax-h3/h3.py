@@ -459,7 +459,7 @@ def _finish(
     tel: Telemetry,
     cancel: Any,
     checks: NumericalChecks | None = None,
-    capture: Callable[[Any], None] | None = None,
+    completed: Callable[[Any, Any], None] | None = None,
     delivered_frames: int | None = None,
     sampled_frames: int | None = None,
 ) -> H3VideoOutput:
@@ -514,10 +514,12 @@ def _finish(
 
     cancel()
     frame_bytes = bytes(pixels[-1].numpy())
-    with tel.stage("encode_outputs", overall_range=(0.99, 1.00)):
+    with tel.stage("encode_outputs", overall_range=(0.99, 1.00 if completed is None else 0.995)):
         continuation = out.save_image(ImageFrame(width, height, frame_bytes), format="png")
-        if capture is not None:
-            capture(pixels)
+    if completed is not None:
+        # A continuation's successor context, from the delivered RGB8 frames as landed.
+        with tel.stage("export_context", overall_range=(0.995, 1.00)):
+            completed(state, pixels)
 
     tel.log(
         "h3 output geometry",
@@ -923,7 +925,6 @@ def _render_keyframes(
     first: Image | None,
     last: Image | None,
     turbo_lora: H3TurboLoRA | None = None,
-    capture: Callable[[Any], None] | None = None,
 ) -> H3VideoOutput:
     """Shared FL2VA rendering for direct requests and chained asset handoffs."""
     ctx.raise_if_cancelled()
@@ -966,7 +967,6 @@ def _render_keyframes(
         tel=tel,
         cancel=ctx.raise_if_cancelled,
         checks=checks,
-        capture=capture,
     )
 
 
@@ -981,11 +981,10 @@ def _references_to_video(
     *,
     steps: int,
     turbo_lora: H3TurboLoRA | None = None,
-    capture: Callable[[Any], None] | None = None,
     context: AVContext | None = None,
     delivery: ContinuationPlan | None = None,
     expected_context_provenance: str | None = None,
-    completed_state: Callable[[Any], None] | None = None,
+    completed: Callable[[Any, Any], None] | None = None,
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
@@ -1040,7 +1039,7 @@ def _references_to_video(
             cancel=ctx.raise_if_cancelled,
             checks=checks,
         )
-    result = _finish(
+    return _finish(
         model,
         task,
         state,
@@ -1050,14 +1049,10 @@ def _references_to_video(
         tel=tel,
         cancel=ctx.raise_if_cancelled,
         checks=checks,
-        capture=capture,
+        completed=completed,
         delivered_frames=None if delivery is None else delivery.delivered_frames,
         sampled_frames=None if delivery is None else delivery.sample_frames,
     )
-
-    if completed_state is not None:
-        completed_state(state)
-    return result
 
 
 # --- long-form composition -------------------------------------------------------------
@@ -1401,10 +1396,12 @@ class MotionInput(msgspec.Struct, forbid_unknown_fields=True):
     context_frames: Literal[22, 39, 56] = 22
     expected_provenance: RenderProvenance | None = None
     context: MotionContextAsset | None = None
+    # Windows a successor may select from this shot's context; empty exports none.
+    next_context_frames: tuple[Literal[22, 39, 56], ...] = ()
 
 
 class MotionOutput(SegmentOutput):
-    context: MotionContextAsset
+    context: MotionContextAsset | None
 
 
 def _render_motion(
@@ -1432,7 +1429,7 @@ def _render_motion(
     _reference_policy(assets)
     saved_context: list[FileAsset] = []
 
-    def save_completed_context(state: Any) -> None:
+    def save_completed_context(state: Any, _pixels: Any) -> None:
         tail = model.export_completed_av_tail(state, provenance=native_provenance)
         saved_context.append(
             out.save_bytes(encode_context(tail), media_type="application/octet-stream")
@@ -1457,10 +1454,14 @@ def _render_motion(
         context=context,
         delivery=delivery,
         expected_context_provenance=native_provenance,
-        completed_state=save_completed_context,
+        completed=save_completed_context if payload.next_context_frames else None,
     )
     return MotionOutput(
-        shot.video, shot.continuation_frame, list(shot.warnings), observed, saved_context[0]
+        shot.video,
+        shot.continuation_frame,
+        list(shot.warnings),
+        observed,
+        saved_context[0] if saved_context else None,
     )
 
 
@@ -1791,6 +1792,9 @@ async def long_form(
                         expected_provenance=expected,
                         context=context,
                         context_frames=payload.context_frames,
+                        next_context_frames=(
+                            (payload.context_frames,) if index + 1 < len(payload.segments) else ()
+                        ),
                     )
                     if payload.mode == "turbo":
                         call = motion_segment_turbo(payload=child_payload, assets=assets)  # type: ignore[call-arg]
