@@ -163,8 +163,8 @@ Steps = Annotated[
 ]
 # Length is the request's largest cost lever: the DiT attends over ONE packed sequence whose
 # rows scale with the frame count, and attention is quadratic in it. Every whole second in
-# the envelope is served, and the SHORTEST is the default — a caller that says nothing pays
-# the cheapest clip, not the longest (se-047).
+# the envelope is served, and every generation call must name its length (owner ruling
+# 2026-09-27): there is no default a caller could pay for without choosing it.
 # Declared, because the wire IS the declaration: `describe` reads this file and runs none of
 # it (#713). `assert_duration_envelope` refuses unless the official 17n+5 snap and the frame
 # envelope serve exactly these whole seconds, so the pair below cannot drift from the
@@ -174,7 +174,6 @@ Steps = Annotated[
 MIN_DURATION_S = 5
 MAX_DURATION_S = 15
 assert_duration_envelope((MIN_DURATION_S, MAX_DURATION_S))
-DEFAULT_DURATION_S = MIN_DURATION_S
 # Frames size the DiT's sequence and every scope's scratch, so they are the request's demand
 # axis: staged admission reuses a scope's measured peak only for the same frame count.
 DurationSeconds = Annotated[
@@ -183,40 +182,41 @@ DurationSeconds = Annotated[
         ge=MIN_DURATION_S,
         le=MAX_DURATION_S,
         description=(
-            "Clip length in whole seconds, snapped up to the video VAE's own 17n+5 frame "
-            "grid; shorter is quadratically faster."
+            "Required. Clip length in whole seconds, 5 to 15 (15 is the full-length "
+            "ceiling), snapped up to the video VAE's own 17n+5 frame grid; shorter is "
+            "quadratically faster."
         ),
     ),
     Shape(frames={s: frames_for(s) for s in range(MIN_DURATION_S, MAX_DURATION_S + 1)}),
 ]
 
 
-class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
+class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
     prompt: Prompt
     seed: int | None = None
     steps: Steps = DEFAULT_STEPS
-    duration_s: DurationSeconds = DEFAULT_DURATION_S
+    duration_s: DurationSeconds
 
 
-class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True):
+class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
     prompt: Prompt
     seed: int | None = None
     steps: Steps = DEFAULT_STEPS
-    duration_s: DurationSeconds = DEFAULT_DURATION_S
+    duration_s: DurationSeconds
 
 
 # The turbo functions carry no `steps`: PDD-8 fixes eight transformer evaluations, so the
 # parameter is unrepresentable on the wire rather than refused at runtime.
-class FirstLastFrameToVideoTurboInput(msgspec.Struct, forbid_unknown_fields=True):
+class FirstLastFrameToVideoTurboInput(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
     prompt: Prompt
     seed: int | None = None
-    duration_s: DurationSeconds = DEFAULT_DURATION_S
+    duration_s: DurationSeconds
 
 
-class ReferenceMediaToVideoTurboInput(msgspec.Struct, forbid_unknown_fields=True):
+class ReferenceMediaToVideoTurboInput(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
     prompt: Prompt
     seed: int | None = None
-    duration_s: DurationSeconds = DEFAULT_DURATION_S
+    duration_s: DurationSeconds
 
 
 class H3VideoOutput(msgspec.Struct):
@@ -1066,26 +1066,6 @@ _KEYFRAME_MAX_BYTES = 64 * _MIB
 _KEYFRAME_MAX_DECODED_BYTES = 3 * 16_777_216
 
 
-class Shot(msgspec.Struct, forbid_unknown_fields=True):
-    """One segment's authored identity.
-
-    An omitted seed is chosen per request and shot, then passed to its internal child.
-    Explicit seeds preserve reproducibility; retrying a request keeps its automatic seeds.
-
-    A shot defaults to the LONGEST served cell, not the package default, and it follows
-    `MAX_DURATION_S` rather than naming a number — whatever the envelope serves is what a
-    long-form shot takes. The two defaults answer different questions: se-047 makes a single
-    clip default to the cheapest length so a caller who says nothing is not billed for the
-    longest one, while a long-form piece has already committed to the spend and pays per
-    SEAM. The longest cell halves the seam count against 5 s for ~1.8x the money, and
-    conditioning rows are a fixed per-segment cost, so they amortise ~2.8x better across it.
-    """
-
-    prompt: Prompt
-    seed: int | None = None
-    duration_s: DurationSeconds = MAX_DURATION_S
-
-
 class SegmentInput(msgspec.Struct, forbid_unknown_fields=True):
     """One shot, as an ordinary request.
 
@@ -1186,7 +1166,7 @@ class LongFormOutput(msgspec.Struct):
     warnings: list[str]
 
 
-def shot_seed(shot: Shot | StorySegment, request_id: str, index: int) -> int:
+def shot_seed(shot: StorySegment, request_id: str, index: int) -> int:
     """Choose once per request/shot, without changing seeds when its attempt retries."""
     if shot.seed is not None:
         return shot.seed
@@ -1305,11 +1285,11 @@ CutAssets = Annotated[
 ]
 
 
-class CutInput(ReferenceMediaToVideoInput):
+class CutInput(ReferenceMediaToVideoInput, kw_only=True):
     expected_provenance: RenderProvenance | None = None
 
 
-class CutTurboInput(ReferenceMediaToVideoTurboInput):
+class CutTurboInput(ReferenceMediaToVideoTurboInput, kw_only=True):
     expected_provenance: RenderProvenance | None = None
 
 
@@ -1624,21 +1604,21 @@ async def long_form_cuts(
                     if payload.mode == "turbo":
                         result = await cut_segment_turbo(  # type: ignore[call-arg]
                             payload=CutTurboInput(
-                                prompt,
-                                seed,
-                                shot.duration_s,
-                                expected,
+                                prompt=prompt,
+                                seed=seed,
+                                duration_s=shot.duration_s,
+                                expected_provenance=expected,
                             ),
                             assets=assets,
                         )
                     else:
                         result = await cut_segment(  # type: ignore[call-arg]
                             payload=CutInput(
-                                prompt,
-                                seed,
-                                steps,
-                                shot.duration_s,
-                                expected,
+                                prompt=prompt,
+                                seed=seed,
+                                steps=steps,
+                                duration_s=shot.duration_s,
+                                expected_provenance=expected,
                             ),
                             assets=assets,
                         )

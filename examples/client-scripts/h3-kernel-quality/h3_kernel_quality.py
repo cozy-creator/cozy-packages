@@ -39,8 +39,8 @@ _LOCK = threading.Lock()
 
 class Input(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
+    duration_s: Literal[5, 15]
     seed: int = 7101
-    duration_s: Literal[5, 15] = 5
     backend: Literal["fa3_bf16", "fa3_tile128_fp8", "sage2_sm90"] = "fa3_bf16"
 
 

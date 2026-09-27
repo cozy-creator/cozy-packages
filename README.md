@@ -247,7 +247,7 @@ Reference-image fidelity is an optional per-occurrence hint:
 
 ```sh
 cozy run paul/minimax-h3/ref2va \
-  'prompt=<your H3 prompt>' \
+  'prompt=<your H3 prompt>' duration_s=5 \
   --asset="woman=~/Pictures/woman.png" --asset-fidelity=woman=high \
   --asset="scene=~/Pictures/scene.png" --asset-fidelity=scene=low \
   --rental-only --await
@@ -294,21 +294,20 @@ grid `MiniMaxH3Scheduler.set_timesteps(steps + 1)` per modality (video shift 12,
 the terminal zero is a grid point with no evaluation, so `steps` evaluations run and the progress
 callback counts exactly them.
 
-`duration_s` is the clip length in whole seconds, **5 to 14, defaulting to 5** — the shortest, not
-the longest, because length is the larger lever of the two: the DiT attends over ONE packed
-sequence whose rows scale with the frame count, and attention is quadratic in it. The video VAE
-encodes `17n + 5` frames per clip, so a request's seconds snap UP to the next such count (never
-down) and the served set is exactly the whole seconds whose snapped length stays inside the
-pipeline's own 5.0-15.0 s envelope:
+`duration_s` is the clip length in whole seconds, **5 to 15, and required** (15 is the full-length
+ceiling): a call without it fails validation. Length is the larger cost lever of the two: the DiT
+attends over ONE packed sequence whose rows scale with the frame count, and attention is quadratic
+in it. The video VAE encodes `17n + 5` frames per clip, so a request's seconds snap UP to the next
+such count (never down). The served set is 5 to 15 whole seconds; 15 snaps to 362 frames
+(15.083 s), which the package admits under a scoped frame ceiling:
 
-| `duration_s` | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 |
-|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| frames | 124 | 158 | 175 | 192 | 226 | 243 | 277 | 294 | 328 | 345 |
-| delivered s | 5.167 | 6.583 | 7.292 | 8.000 | 9.417 | 10.125 | 11.542 | 12.250 | 13.667 | 14.375 |
-| denoise rows at 1344x768 | 37,710 | 47,902 | 53,000 | 58,096 | 68,290 | 73,386 | 83,580 | 88,676 | 98,870 | 103,966 |
+| `duration_s` | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| frames | 124 | 158 | 175 | 192 | 226 | 243 | 277 | 294 | 328 | 345 | 362 |
+| delivered s | 5.167 | 6.583 | 7.292 | 8.000 | 9.417 | 10.125 | 11.542 | 12.250 | 13.667 | 14.375 | 15.083 |
+| denoise rows at 1344x768 | 37,710 | 47,902 | 53,000 | 58,096 | 68,290 | 73,386 | 83,580 | 88,676 | 98,870 | 103,966 | 109,062 |
 
-4 s would snap to 107 frames (4.458 s, under the floor) and 15 s to 362 (15.083 s, over the
-ceiling), so both refuse typed at decode. A timestep plan holds one row per (timestep, modality)
+4 and 16 s refuse typed at decode. A timestep plan holds one row per (timestep, modality)
 and no row depends on the frame count, so every length runs on the same AdaLN-pruned tables and no
 lane is re-tabled for one. Every attempt logs its length and resulting packed-sequence rows in the
 `h3 output geometry` row. Task-selector, graph-selector, and AdaLN-mode request fields are absent.

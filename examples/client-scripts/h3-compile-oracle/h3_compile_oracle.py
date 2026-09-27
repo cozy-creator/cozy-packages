@@ -37,8 +37,8 @@ _ACTIVE: ContextVar[RunState | None] = ContextVar("h3_compile_oracle", default=N
 
 class Input(msgspec.Struct, forbid_unknown_fields=True):
     prompt: str
+    duration_s: int
     seed: int = 7101
-    duration_s: int = 15
     mode: Literal["eager", "blocks", "dit"] = "eager"
     autotune: bool = False
     cold: bool = False

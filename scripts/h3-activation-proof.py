@@ -235,7 +235,7 @@ def main() -> None:
     assert all(torch.equal(restored[key], value) for key, value in full.latents.items())
     output = fake_outputs()
     reference_image = output.save_image(ImageFrame(2, 2, b"\xff\x00\x00" * 4), format="png")
-    request = h3.ReferenceMediaToVideoInput(prompt="fixed trace", seed=42)
+    request = h3.ReferenceMediaToVideoInput(prompt="fixed trace", seed=42, duration_s=5)
     assets = Assets[Mixed](
         [
             reference_image.with_fidelity("low"),
