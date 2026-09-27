@@ -8,7 +8,6 @@ are qualified by the separate binding/resume/numerical drivers, not by this proo
 from __future__ import annotations
 
 import argparse
-import hashlib
 import io
 import json
 import subprocess
@@ -189,8 +188,8 @@ def main() -> None:
         interface,
         distribution="minimax-h3-tools",
         version=str(metadata["Version"]),
-        implementation_digest="sha256:" + hashlib.sha256(implementation).hexdigest(),
         implementation_wheel=implementation,
+        implementation_filename=args.implementation_wheel.name,
     )
     with tempfile.TemporaryDirectory(prefix="h3-adaln-overlay-") as area:
         root = Path(area)

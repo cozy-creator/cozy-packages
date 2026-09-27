@@ -806,19 +806,21 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
     return float(bad / int(value.numel()))
 
 
-_DEFAULT_MODEL_LADDER = [
+_DEFAULT_MODEL_LADDER: list[dict[str, str | int]] = [
     {"gpu": "H100", "gpus": 2, "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
     {"gpu": "H100", "gpus": 4, "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
     {"gpu": "H200", "gpus": 1, "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
     {"gpu": "B200", "gpus": 1, "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
+    {"gpu": "RTX PRO 6000", "gpus": 1, "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
     {"gpu": "5090", "gpus": 1, "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
 ]
 
-_DEFAULT_TURBO_LORA_LADDER = [
+_DEFAULT_TURBO_LORA_LADDER: list[dict[str, str | int]] = [
     {"gpu": "H100", "gpus": 2, "lane": "paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
     {"gpu": "H100", "gpus": 4, "lane": "paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
     {"gpu": "H200", "gpus": 1, "lane": "paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
     {"gpu": "B200", "gpus": 1, "lane": "paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
+    {"gpu": "RTX PRO 6000", "gpus": 1, "lane": "paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
     {"gpu": "5090", "gpus": 1, "lane": "paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
 ]
 
@@ -835,7 +837,9 @@ def fl2va(
     return _keyframes_to_video(ctx, "fl2va", payload, assets, model, out, tel, steps=payload.steps)
 
 
-@app.entrypoint
+@app.entrypoint(
+    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER}
+)
 def fl2va_turbo(
     ctx: Context,
     payload: FirstLastFrameToVideoTurboInput,
@@ -875,7 +879,10 @@ def ref2va(
     )
 
 
-@app.entrypoint(preflight=preflight_reference_media_turbo)
+@app.entrypoint(
+    preflight=preflight_reference_media_turbo,
+    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
+)
 def ref2va_turbo(
     ctx: Context,
     payload: ReferenceMediaToVideoTurboInput,
@@ -1599,7 +1606,7 @@ async def long_form_cuts(
     planned_frames = [frames_for(shot.duration_s) for shot in payload.segments]
     render_work = [frames * steps for frames in planned_frames]
     reference_steps = 40
-    reference_work = sum(ref.image is None for ref in payload.references) * reference_steps
+    reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * reference_steps
     total_work = sum(render_work) + sum(planned_frames) + 1 + reference_work
     completed_work = 0
     prefetch(cut_segment_turbo if payload.mode == "turbo" else cut_segment)
@@ -1777,7 +1784,7 @@ async def long_form(
     ]
     render_work = [plan.sample_frames * steps for plan in plans]
     requested_frames = sum(plan.delivered_frames for plan in plans)
-    reference_work = sum(ref.image is None for ref in payload.references) * 40
+    reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * 40
     total_work = sum(render_work) + requested_frames + 1 + reference_work
     prefetch(motion_segment_turbo if payload.mode == "turbo" else motion_segment)
     images = await _create_references(ctx, payload.references, tel)
