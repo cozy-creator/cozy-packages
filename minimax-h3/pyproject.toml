@@ -42,17 +42,10 @@ only-include = [
     "timestep-plans",
 ]
 
-[tool.cozy]
-organization = "paul"
-
 [tool.uv]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 
-# The application dependency belongs to this qualification Hub, never PyPI.
+# qwen-image-2 is this account's own package on the target Tensorhub, never PyPI. Creator
+# writes the `tensorhub` index for the command's Hub and account; lock with `cozy package lock`.
 [tool.uv.sources]
-qwen-image-2 = { index = "tensorhub-paul" }
-
-[[tool.uv.index]]
-name = "tensorhub-paul"
-url = "https://tensorhub.com/v1/index/paul/simple/"
-explicit = true
+qwen-image-2 = { index = "tensorhub" }

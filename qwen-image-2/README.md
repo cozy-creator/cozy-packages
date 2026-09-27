@@ -91,26 +91,22 @@ is not established by the request-contract checks.
 
 ## Python dependency
 
-This is an ordinary Python distribution (`qwen-image-2`) published on the Hub
-organization's Python package index. In a Cozy package, declare the dependency
-and pin it to the Hub index in the **consumer's** `pyproject.toml`:
+This is an ordinary Python distribution (`qwen-image-2`) published on the
+publishing account's Tensorhub package index. A package published by the same
+account names that index in its `pyproject.toml` and never spells its URL:
 
 ```toml
 [project]
 dependencies = ["qwen-image-2>=0.2.0"]
 
 [tool.uv.sources]
-qwen-image-2 = { index = "tensorhub-paul" }
-
-[[tool.uv.index]]
-name = "tensorhub-paul"
-url = "https://tensorhub.com/v1/index/paul/simple/"
-explicit = true
+qwen-image-2 = { index = "tensorhub" }
 ```
 
-Use the Hub URL reachable from that consumer. This source mapping tells uv to
-resolve this distribution only from that index; it is consumer configuration,
-not transitive wheel metadata. Import its generated managed caller:
+Creator writes the `tensorhub` index (`<hub>/v1/index/<account>/simple/`, explicit)
+for the command's Hub and account, so lock with `cozy package lock`, not raw
+`uv lock`. uv resolves this distribution only from that index. Import its generated
+managed caller:
 
 ```python
 from qwen_image_2 import AspectRatio, Megapixels, generate_image
@@ -122,7 +118,9 @@ image = await generate_image(
 )
 ```
 
-The Hub package is `paul/qwen-image-2`; its callable is `generate_image`. The
-existing default model selection remains `paul/reference-image@0.1.0/original`.
+The Hub package is `<account>/qwen-image-2`, e.g. `paul/qwen-image-2` on the local
+Hub and `fidika/qwen-image-2` on tensorhub.com; its callable is `generate_image`. The
+default model is the org-relative `reference-image@0.1.0/original`: the publishing
+account's `reference-image` model.
 Installing the wheel alone does not turn GPU execution into an in-process call;
 Cozy supplies the managed caller when composing package functions.

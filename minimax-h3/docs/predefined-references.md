@@ -38,21 +38,12 @@ Reference: https://github.com/MiniMax-AI/MiniMax-H3/blob/main/skills/h3-prompt-w
 
 ## Qualification and dependencies
 
-The consumer declares `qwen-image-2>=0.1.0` and explicitly maps it to the
-`tensorhub-paul` index at `https://tensorhub.com/v1/index/paul/simple/`.
-There is no PyPI or local-checkout fallback. A selected development Hub must be
-applied consistently to index resolution, lock verification and publication;
-changing the package namespace or weakening wheel hashes is not an override.
-This qualification lock honestly records the local Hub at `127.0.0.1:8819`.
-For local qualification, resolve in an owned project copy with only the named
-index's URL changed to the local Hub, retaining `explicit = true`. Run ordinary
-`uv lock` in that copy, review the resulting lock, then retain it with the canonical
-source project. Do not use `uv lock --index name=url`: uv treats that replacement
-as an ordinary index and drops its explicit-only scope. A locked export may use
-the selected-Hub override because it cannot change the already-reviewed resolution.
-
-It is not a production-index lock. Select the matching Hub for local publication;
-regenerate and review the lock against production when that package exists there.
+H3 declares `qwen-image-2>=0.2.0` from the `tensorhub` index: the publishing
+account's own package on the target Hub, with no PyPI or local-checkout fallback.
+Creator writes that index for the command's Hub and account. `cozy package lock`
+pins the version, and each publication rebinds the lock to its target account's
+index without changing any version. Publish the locked qwen-image-2 release to a
+target Hub before publishing H3 there.
 
 H3 1.17.0 requires Runtime 0.18.24 or newer for the qualified managed-call,
 media-decoder and recovery cohort. Creator captures the dependency's immutable

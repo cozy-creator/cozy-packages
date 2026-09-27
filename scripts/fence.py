@@ -44,9 +44,11 @@ than as a convention someone remembers:
                           the retired source filenames and canonical namespace are absent.
 13. private-h3-shapes    H3 config, plan, and probe files are identified by their package
                           member and strict shape, not another globally versioned schema tag.
-14. publication-metadata every publishable package declares its catalog organization and its
-                          distribution name carries no redundant `-package` suffix; its wheel
-                          exposes exactly one `cozy.application` entry matching package.toml.
+14. publication-metadata no publishable package names an account: the publishing account
+                          owns the release, and same-account packages resolve from the
+                          `tensorhub` index Creator writes. Its distribution name carries no
+                          redundant `-package` suffix; its wheel exposes exactly one
+                          `cozy.application` entry matching package.toml.
 15. native-publication-wheels
                           every reachable non-base dependency that Creator cannot mirror as an
                           exact `py3-none-any` registry wheel is one explicit local wheel whose
@@ -1033,13 +1035,18 @@ def fence_publication_metadata() -> Fence:
             continue
         tool = document.get("tool")
         cozy = tool.get("cozy") if isinstance(tool, dict) else None
-        organization = cozy.get("organization") if isinstance(cozy, dict) else None
-        if (
-            not isinstance(organization, str)
-            or not organization
-            or organization != organization.strip()
-        ):
-            bad.append(f"{rel(path)}: [tool.cozy].organization is not one non-empty string")
+        if isinstance(cozy, dict) and "organization" in cozy:
+            bad.append(f"{rel(path)}: [tool.cozy].organization is retired; the publisher owns it")
+        uv = tool.get("uv") if isinstance(tool, dict) else None
+        indexes = uv.get("index", []) if isinstance(uv, dict) else []
+        for index in indexes if isinstance(indexes, list) else []:
+            if isinstance(index, dict) and (
+                index.get("name") == "tensorhub" or "/v1/index/" in str(index.get("url"))
+            ):
+                bad.append(
+                    f"{rel(path)}: a Tensorhub index is written by Creator for the target Hub "
+                    'and account; name it with `{ index = "tensorhub" }`'
+                )
         project_table = document.get("project")
         name = project_table.get("name") if isinstance(project_table, dict) else None
         if not isinstance(name, str) or not name or name.endswith("-package"):
@@ -1058,7 +1065,7 @@ def fence_publication_metadata() -> Fence:
                 f'{rel(path)}: [project.entry-points."cozy.application"] must expose '
                 f"exactly the package.toml application {expected!r}"
             )
-    return bad, f"{len(projects())} packages declare one catalog and installed identity"
+    return bad, f"{len(projects())} packages name no account and declare one installed identity"
 
 
 def compatible_dependency(text: str) -> bool:

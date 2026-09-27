@@ -30,6 +30,28 @@ After the read-only preflight passes, rerun the same command without
 CLI. The Tensorhub operator checkout supplies the read-only image check; its
 normal configuration flags select the environment being released to.
 
+## One source, every Hub and account
+
+Package source names no account. A package publishes into the namespace of the
+account that runs `cozy package publish` on the command's Tensorhub: `paul` on
+the local `127.0.0.1:8819` Hub, `fidika` on tensorhub.com. Default lanes for the
+publisher's own models omit the org (`minimax-h3@1.0.0-rc.2/fp8-pruned`); Creator
+writes the account into the published interface. Same-account package dependencies
+name the `tensorhub` index (`qwen-image-2 = { index = "tensorhub" }`).
+
+Commit locks bound to production. After changing dependencies, and after publishing a
+same-account dependency's new release, run as `fidika`:
+
+```sh
+cozy package lock --tensorhub https://tensorhub.com [--upgrade-package qwen-image-2]
+```
+
+`scripts/bind-account-index.sh` writes the same index for the CI lock checks. Each
+publication rebinds the committed lock to its target: `cozy package publish` to the
+local Hub as `paul` relocks a private copy against `paul`'s index there and refuses
+(`account_index_lock_drift`) unless every locked version exists unchanged. Publish
+dependencies before dependents on each Hub: qwen-image-2 before minimax-h3.
+
 Prefer lower bounds for package dependencies, such as `pydantic-core>=2.46.4`.
 If a compatibility ceiling is needed, bound the major version (`>=2.46.4,<3`) or
 at most the minor version (`>=2.46.4,<2.47`). Major/minor wildcards and equivalent
