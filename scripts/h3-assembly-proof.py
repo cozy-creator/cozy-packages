@@ -44,7 +44,8 @@ async def scanned_assembly(
     out: Outputs,
     tel: Telemetry,
 ) -> assembly.AssembleVideoResponse:
-    with assembly.ScanAhead(decoder, ctx.raise_if_cancelled) as scanning:
+    pictures = payload.transition == "continuous"  # a cut's pictures are copied, not scanned
+    with assembly.ScanAhead(decoder, ctx.raise_if_cancelled, pictures=pictures) as scanning:
         for video in payload.videos:
             scanning.add(video)
         scans = scanning.finish(payload.videos)
@@ -63,7 +64,9 @@ async def scanned_assembly(
             )
         if len(payload.videos) == 8:
             # Neither composition mode imposes an eight-shot count limit.
-            with assembly.ScanAhead(decoder, ctx.raise_if_cancelled) as unbounded:
+            with assembly.ScanAhead(
+                decoder, ctx.raise_if_cancelled, pictures=pictures
+            ) as unbounded:
                 for video in payload.videos:
                     unbounded.add(video)
                 unbounded.add(payload.videos[0])
@@ -180,8 +183,9 @@ def execute(
     master: str | None = None,
     changed: bool = False,
     scanned: bool = False,
+    transition: str = "continuous",
 ) -> tuple[Any, Any, Path]:
-    label = f"{count}-{'changed' if changed else master or 'segments'}"
+    label = f"{count}-{'changed' if changed else master or 'segments'}-{transition}"
     work = root / (label + ("-scanned" if scanned else ""))
     work.mkdir()
     assets: dict[str, GrantedInput] = {}
@@ -226,7 +230,7 @@ def execute(
     app.job(handler, emits_media=True)
     result, outcome, _ = attempt(
         app.get(handler.__name__),
-        {"payload": {"videos": videos, "master_audio": master_digest}},
+        {"payload": {"videos": videos, "master_audio": master_digest, "transition": transition}},
         Invocation(label, work, time.monotonic() + 180, assets=assets),
     )
     return result, outcome, work
@@ -281,6 +285,30 @@ def main() -> None:
             }
         )
         print(json.dumps(evidence[-1]), flush=True)
+    for count in (1, 2, 8):
+        # Cuts copy every shot's H.264 packets; only the soundtrack is encoded.
+        result, outcome, work = execute(root, files, count, transition="cut")
+        assert outcome.terminal == "succeeded", outcome
+        response = result.result
+        scanned_result, scanned_outcome, _ = execute(
+            root, files, count, scanned=True, transition="cut"
+        )
+        assert scanned_outcome.terminal == "succeeded", scanned_outcome
+        assert scanned_result.result.video.read_bytes() == response.video.read_bytes()
+        assert response.output_frames == count * FRAMES and response.replay_frames_removed == 0
+        assert response.submitted_audio_samples == round(count * FRAMES * RATE / FPS)
+        assert abs(response.av_endpoint_delta_samples) <= response.audio_codec_frame_samples
+        path = work / "joined.mp4"
+        path.write_bytes(response.video.read_bytes())
+        with av.open(str(path)) as container:
+            joined = [bytes(p) for p in container.demux(container.streams.video[0]) if p.size]
+        sources = []
+        for index in range(count):
+            with av.open(str(files[f"{index % 2}.mp4"])) as container:
+                video = container.streams.video[0]
+                sources += [bytes(p) for p in container.demux(video) if p.size]
+        assert joined == sources, "a cut re-encoded its pictures"
+        print(json.dumps({"cut_shots": count, "frames": response.output_frames}), flush=True)
     result, outcome, _ = execute(root, files, 2, master="master.flac")
     assert outcome.terminal == "succeeded", outcome
     assert result.result.audio_mode == "master"
@@ -294,6 +322,7 @@ def main() -> None:
             {
                 "codec_native_arms": evidence,
                 "gain_fast_path_matches_original_bytes": True,
+                "cuts_copy_packets": True,
                 "master_exact": True,
                 "master_mismatch_refused": True,
                 "changed_input_refused": True,

@@ -2,7 +2,8 @@
 
 This is not an editor. It accepts a streamed list of completed shots, removes replay frames only
 for continuous joins, chooses segment audio or one exclusive master track, and
-commits one deterministic MP4 through Runtime's streaming sink.
+commits one deterministic MP4 through Runtime's streaming sink. Cuts with segment audio
+copy the shots' H.264 packets unchanged and encode only the joined soundtrack.
 
 It is H3's own module rather than a separate project (h3a-024): assembly is the second half
 of `long_form`, and it adds no dependency the package
@@ -24,11 +25,11 @@ from array import array
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from threading import Event
 from types import TracebackType
-from typing import Annotated, Literal, Protocol
+from typing import Annotated, Literal
 
 import msgspec
 from cozy_runtime.author import (
@@ -43,7 +44,9 @@ from cozy_runtime.author import (
     DecodedVideoFrame,
     InvalidRequest,
     MediaDecoder,
+    OutputError,
     Outputs,
+    SavedVideo,
     Telemetry,
     VideoAsset,
     invocable,
@@ -55,6 +58,7 @@ LEVEL_WINDOW_SECONDS = Fraction(1, 2)
 GAIN_RIDE_SECONDS = Fraction(2, 1)
 MAX_GAIN_DB = 9.0
 PEAK_CEILING = 0.999
+FRAME_RATE = Fraction(24)
 
 
 class AssembleVideoRequest(msgspec.Struct, forbid_unknown_fields=True):
@@ -81,7 +85,6 @@ class SegmentReceipt(msgspec.Struct):
     source_frames: int
     selected_frames: int
     replay_frame_digest: str | None
-    selected_rgb_digest: str
     segment_soundtrack_samples: int
     selected_audio_samples: int
     selected_audio_source_start_sample: int
@@ -119,8 +122,6 @@ class AssembleVideoResponse(msgspec.Struct):
     height: int
     frame_rate_numerator: int
     frame_rate_denominator: int
-    source_time_base_numerator: int
-    source_time_base_denominator: int
     pixel_aspect_ratio_numerator: int
     pixel_aspect_ratio_denominator: int
     color_primaries: int
@@ -165,12 +166,6 @@ class _AudioSelection:
     padded: int
 
 
-class _Hash(Protocol):
-    def update(self, data: bytes, /) -> None: ...
-
-    def hexdigest(self) -> str: ...
-
-
 def _nearest(value: Fraction) -> int:
     return (2 * value.numerator + value.denominator) // (2 * value.denominator)
 
@@ -193,7 +188,11 @@ def _rms(channels: tuple[bytes, ...], *, start: int = 0, samples: int | None = N
     return math.sqrt(total / count) if count else 0.0
 
 
-def _scan_video(decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], None]) -> _Scan:
+def _scan_video(
+    decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], None], *, pictures: bool = True
+) -> _Scan:
+    """Clocks and bounded audio windows; without `pictures` only the soundtrack is decoded
+    (a packet copy's Runtime join checks the frame clock itself)."""
     header: DecodedMediaHeader | None = None
     frames = 0
     audio_samples = 0
@@ -204,11 +203,11 @@ def _scan_video(decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], No
     head_peak_samples = 0
     first_frame_digest = ""
     head_limit = 0
-    with decoder.stream_video(asset) as stream:
+    with decoder.stream_video(asset) if pictures else decoder.stream_audio(asset) as stream:
         for event in stream:
             check()
             if isinstance(event, DecodedMediaHeader):
-                if event.video is None or event.video.nominal_frame_rate is None:
+                if pictures and (event.video is None or event.video.nominal_frame_rate is None):
                     raise InvalidRequest(
                         "video has no fixed nominal frame rate", code="invalid_request"
                     )
@@ -217,8 +216,12 @@ def _scan_video(decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], No
                     window = _nearest(LEVEL_WINDOW_SECONDS * event.audio.sample_rate)
                     ride_samples = _nearest(GAIN_RIDE_SECONDS * event.audio.sample_rate)
                     # Retain one extra frame so later-shot RMS can begin after the replay trim.
-                    trim = _nearest(
-                        Fraction(event.audio.sample_rate, 1) / event.video.nominal_frame_rate
+                    trim = (
+                        _nearest(
+                            Fraction(event.audio.sample_rate, 1) / event.video.nominal_frame_rate
+                        )
+                        if event.video is not None and event.video.nominal_frame_rate
+                        else 0
                     )
                     head_peak_samples = ride_samples + trim
                     head_limit = window + trim
@@ -263,7 +266,7 @@ def _scan_video(decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], No
                 if len(head[channel]) < head_limit * 4:
                     head[channel] += raw[: head_limit * 4 - len(head[channel])]
                 tail[channel].extend(values_by_channel[channel])
-    if header is None or header.video is None or frames == 0:
+    if header is None or (pictures and (header.video is None or frames == 0)):
         raise InvalidRequest("video decoded no usable stream", code="invalid_request")
     return _Scan(
         asset=asset,
@@ -286,9 +289,12 @@ class ScanAhead:
     byte-grant checks. Leaving the scope always joins the worker before attempt cleanup.
     """
 
-    def __init__(self, decoder: MediaDecoder, check: Callable[[], None]) -> None:
+    def __init__(
+        self, decoder: MediaDecoder, check: Callable[[], None], *, pictures: bool = True
+    ) -> None:
         self._decoder = decoder
         self._check = check
+        self.pictures = pictures
         self._stopped = Event()
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3-scan")
         self._pending: list[Future[_Scan]] = []
@@ -317,7 +323,9 @@ class ScanAhead:
             if pending.done():
                 pending.result()
         self._pending.append(
-            self._pool.submit(_scan_video, self._decoder, asset, self._check_active)
+            self._pool.submit(
+                _scan_video, self._decoder, asset, self._check_active, pictures=self.pictures
+            )
         )
 
     def finish(self, videos: Sequence[VideoAsset]) -> list[_Scan]:
@@ -396,20 +404,17 @@ def _same_audio(left: DecodedAudioFormat, right: DecodedAudioFormat) -> bool:
 
 def _segment_selections(
     scans: list[_Scan],
-    video: DecodedVideoFormat,
+    rate: Fraction,
     audio: DecodedAudioFormat,
     tolerance: int,
     *,
     trim_replay: bool = True,
 ) -> list[_AudioSelection]:
-    assert video.nominal_frame_rate is not None
     selections: list[_AudioSelection] = []
     output_frames = 0
     output_audio = 0
     for index, scan in enumerate(scans):
-        expected_source = _nearest(
-            Fraction(scan.frames * audio.sample_rate, 1) / video.nominal_frame_rate
-        )
+        expected_source = _nearest(Fraction(scan.frames * audio.sample_rate, 1) / rate)
         drift = scan.audio_samples - expected_source
         if abs(drift) > tolerance:
             raise InvalidRequest(
@@ -423,14 +428,11 @@ def _segment_selections(
                 code="invalid_request",
             )
         cumulative = _nearest(
-            Fraction((output_frames + selected_frames) * audio.sample_rate, 1)
-            / video.nominal_frame_rate
+            Fraction((output_frames + selected_frames) * audio.sample_rate, 1) / rate
         )
         selected = cumulative - output_audio
         source_start = (
-            _nearest(Fraction(audio.sample_rate, 1) / video.nominal_frame_rate)
-            if trim_replay and index
-            else 0
+            _nearest(Fraction(audio.sample_rate, 1) / rate) if trim_replay and index else 0
         )
         from_source = max(0, min(selected, scan.audio_samples - source_start))
         selections.append(
@@ -546,6 +548,16 @@ def _slice_pcm(event: DecodedAudioChunk, start: int, stop: int) -> tuple[bytes, 
     return tuple(channel[start * 4 : stop * 4] for channel in event.pcm_f32le)
 
 
+def _output_audio(audio: DecodedAudioFormat) -> DecodedAudioFormat:
+    return DecodedAudioFormat(
+        channels=audio.channels,
+        sample_rate=audio.sample_rate,
+        channel_layout=audio.channel_layout,
+        channel_names=audio.channel_names,
+        time_base=Fraction(1, audio.sample_rate),
+    )
+
+
 def _output_header(video: DecodedVideoFormat, audio: DecodedAudioFormat) -> DecodedMediaHeader:
     assert video.nominal_frame_rate is not None
     return DecodedMediaHeader(
@@ -560,14 +572,69 @@ def _output_header(video: DecodedVideoFormat, audio: DecodedAudioFormat) -> Deco
             color_matrix=video.color_matrix,
             color_range=video.color_range,
         ),
-        audio=DecodedAudioFormat(
+        audio=_output_audio(audio),
+    )
+
+
+class _SegmentAudio:
+    """One segment's selected soundtrack on the output sample clock: trim, pad, seam gain."""
+
+    def __init__(
+        self,
+        audio: DecodedAudioFormat,
+        selection: _AudioSelection,
+        gains: _Gains,
+        global_gain: float,
+        start: int,
+    ) -> None:
+        self.audio, self.selection, self.gains = audio, selection, gains
+        self.global_gain = global_gain
+        self.pts = start
+        self.source = 0
+        self.emitted = 0
+
+    def take(self, event: DecodedAudioChunk) -> DecodedAudioChunk | None:
+        chunk_start = self.source
+        self.source += event.sample_count
+        selection = self.selection
+        take_start = max(selection.source_start, chunk_start)
+        take_end = min(selection.source_start + selection.from_source, self.source)
+        if take_start >= take_end:
+            return None
+        pcm = _gain_pcm(
+            _slice_pcm(event, take_start - chunk_start, take_end - chunk_start),
+            start=self.emitted,
+            total=selection.selected,
+            rate=self.audio.sample_rate,
+            gains=self.gains,
+            global_gain=self.global_gain,
+        )
+        self.emitted += take_end - take_start
+        return self._chunk(pcm, take_end - take_start)
+
+    def finish(self, scan: _Scan) -> DecodedAudioChunk | None:
+        """Refuse a soundtrack that changed since its scan; then the clock's padding."""
+        if self.source != scan.audio_samples or self.emitted != self.selection.from_source:
+            raise InvalidRequest("media changed between scan and assembly", code="invalid_request")
+        padded = self.selection.padded
+        if not padded:
+            return None
+        return self._chunk(tuple(bytes(padded * 4) for _ in range(self.audio.channels)), padded)
+
+    def _chunk(self, pcm: tuple[bytes, ...], count: int) -> DecodedAudioChunk:
+        audio = self.audio
+        chunk = DecodedAudioChunk(
             channels=audio.channels,
+            sample_count=count,
             sample_rate=audio.sample_rate,
             channel_layout=audio.channel_layout,
             channel_names=audio.channel_names,
+            pcm_f32le=pcm,
+            pts=self.pts,
             time_base=Fraction(1, audio.sample_rate),
-        ),
-    )
+        )
+        self.pts += count
+        return chunk
 
 
 def _segment_events(
@@ -575,13 +642,13 @@ def _segment_events(
     scans: list[_Scan],
     selections: list[_AudioSelection],
     gains: list[_Gains],
-    rgb_hashes: list[_Hash],
     *,
     global_gain: float,
     check: Callable[[], None],
     on_frame: Callable[[int], None],
     trim_replay: bool = True,
 ) -> Iterator[DecodedMediaEvent]:
+    """Decoded frames and the selected soundtrack, for the encoder (replay-trimmed joins)."""
     video = scans[0].header.video
     audio = scans[0].header.audio
     assert video is not None and video.nominal_frame_rate is not None and audio is not None
@@ -589,8 +656,7 @@ def _segment_events(
     output_frame = 0
     output_audio = 0
     for index, (scan, selection) in enumerate(zip(scans, selections, strict=True)):
-        source_audio = 0
-        emitted_audio = 0
+        segment = _SegmentAudio(audio, selection, gains[index], global_gain, output_audio)
         seen_frames = 0
         with decoder.stream_video(scan.asset) as stream:
             for event in stream:
@@ -601,7 +667,6 @@ def _segment_events(
                     if trim_replay and index and seen_frames == 0:
                         seen_frames += 1
                         continue
-                    rgb_hashes[index].update(event.rgb)
                     yield DecodedVideoFrame(
                         width=event.width,
                         height=event.height,
@@ -619,54 +684,39 @@ def _segment_events(
                     output_frame += 1
                     seen_frames += 1
                     continue
-                chunk_start = source_audio
-                chunk_end = source_audio + event.sample_count
-                source_audio = chunk_end
-                take_start = max(selection.source_start, chunk_start)
-                take_end = min(selection.source_start + selection.from_source, chunk_end)
-                if take_start >= take_end:
-                    continue
-                local_start = take_start - chunk_start
-                local_end = take_end - chunk_start
-                pcm = _slice_pcm(event, local_start, local_end)
-                pcm = _gain_pcm(
-                    pcm,
-                    start=emitted_audio,
-                    total=selection.selected,
-                    rate=audio.sample_rate,
-                    gains=gains[index],
-                    global_gain=global_gain,
-                )
-                count = take_end - take_start
-                yield DecodedAudioChunk(
-                    channels=audio.channels,
-                    sample_count=count,
-                    sample_rate=audio.sample_rate,
-                    channel_layout=audio.channel_layout,
-                    channel_names=audio.channel_names,
-                    pcm_f32le=pcm,
-                    pts=output_audio,
-                    time_base=Fraction(1, audio.sample_rate),
-                )
-                output_audio += count
-                emitted_audio += count
-        if seen_frames != scan.frames or source_audio != scan.audio_samples:
+                if (chunk := segment.take(event)) is not None:
+                    yield chunk
+        if seen_frames != scan.frames:
             raise InvalidRequest("media changed between scan and assembly", code="invalid_request")
-        if emitted_audio != selection.from_source:
-            raise InvalidRequest("media changed between scan and assembly", code="invalid_request")
-        if selection.padded:
-            silence = tuple(bytes(selection.padded * 4) for _ in range(audio.channels))
-            yield DecodedAudioChunk(
-                channels=audio.channels,
-                sample_count=selection.padded,
-                sample_rate=audio.sample_rate,
-                channel_layout=audio.channel_layout,
-                channel_names=audio.channel_names,
-                pcm_f32le=silence,
-                pts=output_audio,
-                time_base=Fraction(1, audio.sample_rate),
-            )
-            output_audio += selection.padded
+        if (padding := segment.finish(scan)) is not None:
+            yield padding
+        output_audio = segment.pts
+
+
+def _soundtrack(
+    decoder: MediaDecoder,
+    scans: list[_Scan],
+    selections: list[_AudioSelection],
+    gains: list[_Gains],
+    *,
+    global_gain: float,
+    check: Callable[[], None],
+) -> Iterator[DecodedMediaEvent]:
+    """Only the selected soundtrack, read without decoding a picture, for a packet copy."""
+    audio = scans[0].header.audio
+    assert audio is not None
+    yield DecodedMediaHeader(video=None, audio=_output_audio(audio))
+    output_audio = 0
+    for scan, selection, gain in zip(scans, selections, gains, strict=True):
+        segment = _SegmentAudio(audio, selection, gain, global_gain, output_audio)
+        with decoder.stream_audio(scan.asset) as stream:
+            for event in stream:
+                check()
+                if isinstance(event, DecodedAudioChunk) and (chunk := segment.take(event)):
+                    yield chunk
+        if (padding := segment.finish(scan)) is not None:
+            yield padding
+        output_audio = segment.pts
 
 
 def _master_events(
@@ -674,7 +724,6 @@ def _master_events(
     scans: list[_Scan],
     master: AudioAsset,
     master_scan: _AudioScan,
-    rgb_hashes: list[_Hash],
     *,
     target_audio: int,
     padding: int,
@@ -723,7 +772,6 @@ def _master_events(
                             )
                             output_audio += count
                         next_audio = next(audio_iter, None)
-                    rgb_hashes[index].update(event.rgb)
                     yield DecodedVideoFrame(
                         width=event.width,
                         height=event.height,
@@ -806,55 +854,95 @@ def assemble(
     check: Callable[[], None],
     scanned: ScanAhead | None = None,
 ) -> AssembleVideoResponse:
-    """Run inside the current admitted attempt; the result owns its output handle."""
+    """Run inside the current admitted attempt; the result owns its output handle.
+
+    Cuts under segment audio copy the shots' H.264 packets and encode only the soundtrack;
+    a replay-trimmed join, a master track or unjoinable tracks decode and encode.
+    """
     if not payload.videos:
         raise InvalidRequest("assembly needs at least one video", code="invalid_request")
     tolerance = out.video_audio_frame_samples
+    trim_replay = payload.transition == "continuous"
+    copy = not trim_replay and payload.master_audio is None
+    pictures = scanned.pictures if scanned is not None else not copy
+    if not (pictures or copy):
+        raise InvalidRequest("this join needs scans of its pictures", code="invalid_request")
     scan_step = tel.step_callback(len(payload.videos), stage="scan", overall_range=(0.00, 0.10))
     scans = scanned.finish(payload.videos) if scanned is not None else []
     if scanned is None:
         for index, item in enumerate(payload.videos):
-            scans.append(_scan_video(decoder, item, check))
+            scans.append(_scan_video(decoder, item, check, pictures=pictures))
             scan_step(index)
     else:
         scan_step(len(scans) - 1)
-    video_format = scans[0].header.video
-    assert video_format is not None and video_format.nominal_frame_rate is not None
-    if video_format.nominal_frame_rate != 24:
+    master_samples = audio_trimmed = audio_padded = 0
+    gains = [_Gains() for _ in scans]
+    global_gain = 1.0
+    selections: list[_AudioSelection] = []
+    saved: SavedVideo | None = None
+    audio_mode: Literal["segments", "master"] = "segments"
+    master_audio_digest = None
+    audio_format = scans[0].header.audio
+    if payload.master_audio is None and (
+        audio_format is None
+        or any(
+            scan.header.audio is None or not _same_audio(audio_format, scan.header.audio)
+            for scan in scans
+        )
+    ):
         raise InvalidRequest(
-            f"video frame rate is {video_format.nominal_frame_rate}, expected 24",
+            "segment-audio assembly requires one common soundtrack on every video",
             code="invalid_request",
         )
-    if any(
-        scan.header.video is None or not _same_video(video_format, scan.header.video)
-        for scan in scans
-    ):
-        raise InvalidRequest("video formats differ between segments", code="invalid_request")
+    if copy:
+        assert audio_format is not None
+        joined = audio_format
 
-    trim_replay = payload.transition == "continuous"
+        def soundtrack(frames: Sequence[int]) -> Iterator[DecodedMediaEvent]:
+            nonlocal global_gain
+            # Runtime proved these frame counts on the packets' own clock.
+            scans[:] = [replace(scan, frames=n) for scan, n in zip(scans, frames, strict=True)]
+            selections[:] = _segment_selections(
+                scans, FRAME_RATE, joined, tolerance, trim_replay=False
+            )
+            global_gain = _global_gain(scans, selections, gains, joined)
+            return _soundtrack(
+                decoder, scans, selections, gains, global_gain=global_gain, check=check
+            )
+
+        try:
+            with tel.stage("join", overall_range=(0.10, 1.00)):
+                saved = out.save_video_concat(payload.videos, soundtrack)
+        except OutputError as refused:
+            if refused.code != "video_copy_incompatible":
+                raise
+            tel.log("assembly re-encodes unjoinable tracks", reason=str(refused)[:256])
+            if not pictures:
+                scans = [_scan_video(decoder, item, check) for item in payload.videos]
+    video_format = scans[0].header.video
+    if saved is None:
+        assert video_format is not None and video_format.nominal_frame_rate is not None
+        if video_format.nominal_frame_rate != FRAME_RATE:
+            raise InvalidRequest(
+                f"video frame rate is {video_format.nominal_frame_rate}, expected 24",
+                code="invalid_request",
+            )
+        if any(
+            scan.header.video is None or not _same_video(video_format, scan.header.video)
+            for scan in scans
+        ):
+            raise InvalidRequest("video formats differ between segments", code="invalid_request")
     source_frames = sum(scan.frames for scan in scans)
     replay_frames = len(scans) - 1 if trim_replay else 0
     output_frames = source_frames - replay_frames
-    rgb_hashes: list[_Hash] = [hashlib.sha256() for _ in scans]
-    master_samples = 0
-    if payload.master_audio is None:
-        audio_format = scans[0].header.audio
-        if audio_format is None or any(
-            scan.header.audio is None or not _same_audio(audio_format, scan.header.audio)
-            for scan in scans
-        ):
-            raise InvalidRequest(
-                "segment-audio assembly requires one common soundtrack on every video",
-                code="invalid_request",
-            )
+    on_frame = tel.step_callback(output_frames, stage="assemble", overall_range=(0.10, 1.00))
+    if saved is None and payload.master_audio is None:
+        assert audio_format is not None
         selections = _segment_selections(
-            scans, video_format, audio_format, tolerance, trim_replay=trim_replay
+            scans, FRAME_RATE, audio_format, tolerance, trim_replay=trim_replay
         )
-        gains = (
-            _seam_gains(scans, selections, audio_format)
-            if trim_replay
-            else [_Gains() for _ in scans]
-        )
+        if trim_replay:
+            gains = _seam_gains(scans, selections, audio_format)
         global_gain = _global_gain(scans, selections, gains, audio_format)
         saved = out.save_video_stream(
             _segment_events(
@@ -862,24 +950,17 @@ def assemble(
                 scans,
                 selections,
                 gains,
-                rgb_hashes,
                 global_gain=global_gain,
                 trim_replay=trim_replay,
                 check=check,
-                on_frame=tel.step_callback(
-                    output_frames, stage="assemble", overall_range=(0.10, 1.00)
-                ),
+                on_frame=on_frame,
             )
         )
-        audio_mode: Literal["segments", "master"] = "segments"
-        master_audio_digest = None
-        audio_trimmed = sum(selection.trimmed for selection in selections)
-        audio_padded = sum(selection.padded for selection in selections)
-    else:
+    elif saved is None:
+        assert payload.master_audio is not None
         master_scan = _scan_audio(decoder, payload.master_audio, check)
         target_audio = _nearest(
-            Fraction(output_frames * master_scan.header.sample_rate, 1)
-            / video_format.nominal_frame_rate
+            Fraction(output_frames * master_scan.header.sample_rate, 1) / FRAME_RATE
         )
         master_drift = master_scan.samples - target_audio
         if abs(master_drift) > tolerance:
@@ -887,48 +968,40 @@ def assemble(
                 f"master audio differs from the final frame clock by {master_drift} samples",
                 code="invalid_request",
             )
-        gains = [_Gains() for _ in scans]
-        global_gain = 1.0
-        audio_trimmed = max(0, master_drift)
-        audio_padded = max(0, -master_drift)
         saved = out.save_video_stream(
             _master_events(
                 decoder,
                 scans,
                 payload.master_audio,
                 master_scan,
-                rgb_hashes,
                 target_audio=target_audio,
-                padding=audio_padded,
+                padding=max(0, -master_drift),
                 trim_replay=trim_replay,
                 check=check,
-                on_frame=tel.step_callback(
-                    output_frames, stage="assemble", overall_range=(0.10, 1.00)
-                ),
+                on_frame=on_frame,
             )
         )
         audio_mode = "master"
         master_audio_digest = payload.master_audio.digest
         audio_format = master_scan.header
         master_samples = master_scan.samples
-        selections = []
+        audio_trimmed, audio_padded = max(0, master_drift), max(0, -master_drift)
+    if selections:
+        audio_trimmed = sum(selection.trimmed for selection in selections)
+        audio_padded = sum(selection.padded for selection in selections)
+    assert saved is not None and audio_format is not None
 
-    target_audio = _nearest(
-        Fraction(output_frames * audio_format.sample_rate, 1) / video_format.nominal_frame_rate
-    )
+    target_audio = _nearest(Fraction(output_frames * audio_format.sample_rate, 1) / FRAME_RATE)
     audio_facts = saved.audio
     if audio_facts is None:
         raise InvalidRequest("encoded output has no soundtrack", code="output_integrity")
+    # Geometry and colour are Runtime's own probe check; the clock is this module's.
+    if saved.frame_rate != FRAME_RATE:
+        raise InvalidRequest(
+            f"video frame rate is {saved.frame_rate}, expected 24", code="invalid_request"
+        )
     if (
-        saved.width != video_format.width
-        or saved.height != video_format.height
-        or saved.frame_count != output_frames
-        or saved.frame_rate != video_format.nominal_frame_rate
-        or saved.pixel_aspect_ratio != video_format.pixel_aspect_ratio
-        or saved.color_primaries != video_format.color_primaries
-        or saved.color_transfer != video_format.color_transfer
-        or saved.color_matrix != video_format.color_matrix
-        or saved.color_range != video_format.color_range
+        saved.frame_count != output_frames
         or audio_facts.channels != audio_format.channels
         or audio_facts.sample_rate != audio_format.sample_rate
         or audio_facts.codec_frame_samples != tolerance
@@ -946,8 +1019,7 @@ def assemble(
         selected_frames = scan.frames - int(trim_replay and index > 0)
         cumulative_frames += selected_frames
         cumulative_audio = _nearest(
-            Fraction(cumulative_frames * audio_format.sample_rate, 1)
-            / video_format.nominal_frame_rate
+            Fraction(cumulative_frames * audio_format.sample_rate, 1) / FRAME_RATE
         )
         segment_audio = cumulative_audio - prior_audio
         selection = selections[index] if selections else None
@@ -970,7 +1042,6 @@ def assemble(
                 source_frames=scan.frames,
                 selected_frames=selected_frames,
                 replay_frame_digest=scan.first_frame_digest if trim_replay and index else None,
-                selected_rgb_digest="sha256:" + rgb_hashes[index].hexdigest(),
                 segment_soundtrack_samples=scan.audio_samples,
                 selected_audio_samples=segment_audio,
                 selected_audio_source_start_sample=source_start,
@@ -1009,8 +1080,6 @@ def assemble(
         height=saved.height,
         frame_rate_numerator=saved.frame_rate.numerator,
         frame_rate_denominator=saved.frame_rate.denominator,
-        source_time_base_numerator=video_format.time_base.numerator,
-        source_time_base_denominator=video_format.time_base.denominator,
         pixel_aspect_ratio_numerator=saved.pixel_aspect_ratio.numerator,
         pixel_aspect_ratio_denominator=saved.pixel_aspect_ratio.denominator,
         color_primaries=saved.color_primaries,
