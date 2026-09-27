@@ -230,7 +230,6 @@ def _normalize(
     ctx: Context,
     tel: Telemetry,
     plan: NormalizationPlan,
-    output: str = "model",
 ) -> ModelArtifact:
     source_capability = ctx.tensorfs_source(source)
     tensors = _validate(source_capability.inspect(), plan)
@@ -243,7 +242,7 @@ def _normalize(
         order=tuple((row.component, row.key) for row in plan.targets),
     )
     components = {route.component for route in plan.targets}
-    with derive(ctx.output(output), definition) as transaction:
+    with derive(ctx.output("model"), definition) as transaction:
         if transaction.receipt is not None:
             receipt = transaction.receipt
             assert receipt is not None
@@ -392,23 +391,13 @@ async def assemble_normalized(
     )
 
 
-@invocable(
-    memoize=True,
-    memo_version="sdxl-prepare/1",
-    memo_dependencies=(*_NORMALIZATION_MEMO, *_NORMALIZE_HELPERS),
-)
-async def prepare(ctx: Context, *, source: QuantizationSource, tel: Telemetry) -> ModelArtifact:
-    """Convert one Civitai SDXL single-file checkpoint into the served f16 Diffusers lane.
-
-    ``source`` is the checkpoint converted with ``civitai/sdxl/single-file/1``, at f16, bf16
-    or f32. f16 rows keep their exact source objects; other widths round to f16. Every
-    written tensor checkpoints, so an interrupted run resumes where it stopped.
-    """
-    return _normalize(source, ctx, tel, PLAN, output="fp16")
-
-
 async def normalize(*, source: ModelArtifact) -> ModelArtifact:
-    """Compose reusable normalized components in the caller without nested jobs."""
+    """Convert one Civitai SDXL single-file checkpoint into the served f16 Diffusers model.
+
+    ``source`` is converted with ``civitai/sdxl/single-file/1`` at f16, bf16 or f32. Four
+    component normalizations and one assembly keep every native declaration under the
+    1 MiB protocol bound; the whole-model declaration alone exceeds it.
+    """
     component_call = cast(Callable[..., Awaitable[ModelArtifact]], normalize_component)
     assembly_call = cast(Callable[..., Awaitable[ModelArtifact]], assemble_normalized)
     components = {

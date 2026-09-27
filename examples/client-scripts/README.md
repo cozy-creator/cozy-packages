@@ -44,22 +44,18 @@ or newer on both client and worker. These commands describe the workflow; they d
 not establish GPU execution or image-quality qualification.
 
 
-`sdxl_prepare.py` is the small starting example:
+`sdxl_prepare.py` converts any Civitai SDXL checkpoint into its served lanes (`fp16`, plus
+the `fp8`/`mxfp8` package functions) and uploads them; `h3_lanes.py` does the same for every
+H3 lane and the PDD-8 turbo LoRA. Set their constants (scripts take no scalar arguments), then:
 
 ```sh
-cozy run examples/client-scripts/sdxl_prepare.py --rental-only --await
+cozy run examples/client-scripts/sdxl_prepare.py --rental=NAME --allow-publish org/model --await
 ```
 
-Its ordinary `async def main(ctx)` downloads one Civitai checkpoint, converts it
-through TensorFS, runs the SDXL package's `prepare` function (the served f16 lane), and
-calls Runtime's shared `quantize()` with the SDXL package's deterministic plan. The same
-steps are ordinary package functions: `cozy run <org>/sdxl/prepare <converted checkpoint>
-<org/model> --rental=NAME`, then `cozy run <org>/sdxl/quantize <fp16 lane> <org/model>`. It returns a retained
-checkpoint. The constants are in the file; there is no request/result class or
-published workflow package. Use `--rental=<name>` to select an existing machine.
-The small example declares compatibility bounds and leaves numerical library
-requirements to SDXL; its lock records the captured versions. The assessment
-examples below pin a specific numerical cohort for reproducible comparisons.
+Their downloads and conversions repeat `cozy model upload` of the same pinned sources, so on
+the ingest rental they are memo hits. They are the upload path until Runtime-owned jobs accept
+a `cozy run <fn> <in> <org/model>` destination. SDXL normalization is four component functions
+plus an assembly because a whole-model native declaration exceeds the 1 MiB protocol bound.
 
 Edit the script and run it again. Each invocation starts at `main()`, while the
 library operations look up compatible completed results and validate that their

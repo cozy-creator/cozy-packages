@@ -22,7 +22,8 @@ ingested or already fetched the input, its objects are in the pod Store and noth
 | `restamp` | an old frame-stamped AdaLN lane | `restamped` | config-only migration |
 
 Runtime requires a receipt for every declared weights output, so each lane is its own
-function.
+function. Until Runtime-owned jobs accept a destination, `examples/client-scripts/h3_lanes.py`
+runs these functions on the ingest rental and uploads every lane and `pdd8`.
 
 ```sh
 cozy run fidika/minimax-h3-tools/fp8-pruned fidika/minimax-h3@1.0.0/bf16-full fidika/minimax-h3 \

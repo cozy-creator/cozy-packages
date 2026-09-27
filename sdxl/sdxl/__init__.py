@@ -717,4 +717,3 @@ app.job(
     normalization.assemble_normalized, name="assemble-normalized",
     weights=(WeightsOutput("model", max_new_bytes=0),),
 )
-app.job(normalization.prepare, name="prepare", weights=(WeightsOutput("fp16", max_new_bytes=8 << 30),))
