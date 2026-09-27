@@ -43,7 +43,6 @@ class NativeExecution:
         spec = {
             "format": "cozy.worker.v1.InvocationSpec/1",
             "deadline_unix_ms": 9_000_000_000_000,
-            "environment_digest": "sha256:" + "11" * 32,
             "payload_digest": "sha256:" + "12" * 32,
             "job": {
                 "build_id": "13" * 32,
