@@ -246,16 +246,12 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "public native invocation harness owns this fixture seam. "
     ),
     ("scripts/h3-adaln-interface-proof.py", "cozy_runtime.author._calls"): (
-        "Native/broker qualification driver exercises the real Runtime boundary; retire when a "
-        "public native invocation harness owns this fixture seam. "
+        "Drive the installed helper's sibling calls through Runtime's real broker; retire with a "
+        "public child-call harness. "
     ),
-    ("scripts/h3-adaln-interface-proof.py", "cozy_runtime.internal"): (
-        "Native/broker qualification driver exercises the real Runtime boundary; retire when a "
-        "public native invocation harness owns this fixture seam. "
-    ),
-    ("scripts/h3-adaln-interface-proof.py", "cozy_runtime.internal.discovery"): (
-        "Native/broker qualification driver exercises the real Runtime boundary; retire when a "
-        "public native invocation harness owns this fixture seam. "
+    ("scripts/tokenizer-assets-proof.py", "cozy_runtime.internal"): (
+        "Construct package tokenizers under Runtime's real admission write fence; retire when "
+        "the public fakes install that fence. "
     ),
     ("scripts/h3-repair-proof.py", "cozy_runtime.author._model"): (
         "the repair integration driver constructs the same exact-checkpoint job source record "
@@ -687,6 +683,7 @@ def fence_h3_official_hardcut() -> Fence:
 
     forbidden_defs = {"generate", "reference_to_video", "generate_long"}
     forbidden_import_roots = {"comfy", "comfy_kitchen", "diffsynth", "h3_arch"}
+    package = set(h3_modules())
     for path in h3_owned_modules():
         if "trust_remote_code" in _strip_docs(path.read_text()):
             bad.append(
@@ -696,7 +693,8 @@ def fence_h3_official_hardcut() -> Fence:
         for module, line in imports(tree):
             if module.split(".")[0] in forbidden_import_roots:
                 bad.append(f"{rel(path)}:{line}: imports community implementation {module!r}")
-        for node in ast.walk(tree):
+        # Actions are module-level package functions; a proof's local helper is not one.
+        for node in tree.body if path in package else ():
             if (
                 isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
                 and node.name in forbidden_defs

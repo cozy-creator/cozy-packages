@@ -597,7 +597,7 @@ def drive(
     assert len(prefetches) == 1
     fixed = [json.loads(answers[index]["result"])["image"]["digest"] for index in range(2)]
     fixed += [voice] if audio else []
-    for index, row in enumerate(sent):
+    for row in sent:
         assert [item["asset"] for item in row["assets"]] == fixed
         if audio:
             prompt = row["payload"]["prompt"]

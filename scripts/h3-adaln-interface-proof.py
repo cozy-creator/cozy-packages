@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the ordinary H3 helper through its caller overlay and admitted broker.
+"""Run the installed H3 AdaLN helper through Runtime's call broker.
 
 Child replies are fixed routing controls. Native table computation and model quality
 are qualified by the separate binding/resume/numerical drivers, not by this proof.
@@ -7,15 +7,9 @@ are qualified by the separate binding/resume/numerical drivers, not by this proo
 
 from __future__ import annotations
 
-import argparse
-import io
 import json
-import subprocess
-import sys
 import tempfile
 import time
-import zipfile
-from email.parser import BytesParser
 from pathlib import Path
 from typing import Any, cast
 
@@ -31,18 +25,6 @@ from cozy_runtime.author import (
     describe,
 )
 from cozy_runtime.author._calls import _Broker, _CallType
-from cozy_runtime.internal import (
-    installed_interfaces,
-    interface_wheel,
-    package_environment,
-    package_interface,
-)
-from cozy_runtime.internal.discovery import Discovered
-
-# The isolated child resolves the actual caller wheel before importing the model tools.
-if "--overlay-root" in sys.argv:
-    sys.path.insert(0, sys.argv[sys.argv.index("--overlay-root") + 1])
-
 from h3_tables import job
 from h3_tables.adaln_operations import Selection
 from h3_tables.operations import precompute_adaln
@@ -67,13 +49,13 @@ def artifact(name: str, digit: str) -> ModelArtifact:
     )
 
 
-def run_overlay(root: Path) -> None:
-    assert Path(job.__file__).is_relative_to(root)
+def run(root: Path) -> None:
+    assert "site-packages" in Path(job.__file__).parts, job.__file__
     assert precompute_adaln.__module__ == "h3_tables.operations"
     surfaces = describe(job.app)
     assert "precompute-adaln" not in {surface.name for surface in surfaces}
     bindings = {
-        ("", surface.fn.__module__, surface.fn.__name__): _CallType(
+        (surface.fn.__module__, surface.fn.__name__): _CallType(
             "sha256:" + "f" * 64,
             surface.fn.__module__,
             surface.fn.__name__,
@@ -152,7 +134,7 @@ def run_overlay(root: Path) -> None:
     print(
         json.dumps(
             {
-                "helper_from_overlay": True,
+                "helper_from_installed_wheel": True,
                 "precompute_job_registered": False,
                 "managed_sibling_calls": 5,
                 "per_task_projection_inputs": True,
@@ -163,54 +145,8 @@ def run_overlay(root: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--implementation-wheel", type=Path)
-    mode.add_argument("--overlay-root", type=Path)
-    args = parser.parse_args()
-    if args.overlay_root is not None:
-        run_overlay(args.overlay_root)
-        return
-    surfaces = describe(job.app)
-    assert "precompute-adaln" not in {surface.name for surface in surfaces}
-    discovered = Discovered(
-        job.app, "h3_tables.job:app", Path(job.__file__).parents[2], job, surfaces, {}
-    )
-    interface = package_interface.canonical_bytes(package_interface.build(discovered))
-    implementation = args.implementation_wheel.read_bytes()
-    with zipfile.ZipFile(io.BytesIO(implementation)) as source:
-        metadata = BytesParser().parsebytes(
-            source.read(
-                next(name for name in source.namelist() if name.endswith(".dist-info/METADATA"))
-            )
-        )
-    _, wheel = interface_wheel.build(
-        interface,
-        distribution="minimax-h3-tools",
-        version=str(metadata["Version"]),
-        implementation_wheel=implementation,
-        implementation_filename=args.implementation_wheel.name,
-    )
-    with tempfile.TemporaryDirectory(prefix="h3-adaln-overlay-") as area:
-        root = Path(area)
-        with zipfile.ZipFile(io.BytesIO(wheel)) as archive:
-            archive.extractall(root)
-            preserved = archive.read(f"minimax_h3_tools-{metadata['Version']}.dist-info/METADATA")
-            assert b"Requires-Dist: torch" in preserved
-            assert archive.read("h3_tables/assets/timestep-plan.fl2va.json")
-        exports = installed_interfaces.read(
-            package_environment.InstalledEnvironment(
-                root, root, Path(sys.executable), b"", "", "sha256:" + "a" * 64, True
-            )
-        )
-        assert "precompute_adaln" not in {row["export"] for row in exports}
-        assert {"select_adaln_weights", "compute_adaln_tables", "apply_adaln", "retable_adaln"} <= {
-            row["export"] for row in exports
-        }
-        subprocess.run(
-            [sys.executable, "-I", str(Path(__file__).resolve()), "--overlay-root", str(root)],
-            check=True,
-        )
+    with tempfile.TemporaryDirectory(prefix="h3-adaln-helper-") as area:
+        run(Path(area))
 
 
 if __name__ == "__main__":

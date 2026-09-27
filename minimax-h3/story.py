@@ -63,11 +63,11 @@ async def resolve_reference_images(
     generate: Callable[[StoryReference], Awaitable[ImageAsset]],
 ) -> dict[str, ImageAsset | AudioAsset]:
     """Reuse granted handles and generate only missing images, draining failed siblings."""
-    images: dict[str, ImageAsset | AudioAsset] = {
-        ref.name: (ref.audio if ref.kind == "audio" else ref.image)
-        for ref in references
-        if ref.audio is not None or ref.image is not None
-    }
+    images: dict[str, ImageAsset | AudioAsset] = {}
+    for ref in references:
+        supplied = ref.audio if ref.kind == "audio" else ref.image
+        if supplied is not None:
+            images[ref.name] = supplied
     pending = [ref for ref in references if ref.kind != "audio" and ref.image is None]
 
     async def one(reference: StoryReference) -> ImageAsset:
