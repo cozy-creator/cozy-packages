@@ -296,6 +296,8 @@ def drive(
     cancelled = False
     completed_references: set[int] = set()
     canceled_children: set[int] = set()
+    settled: set[int] = set()
+    releases: list[int] = []
 
     def grant(path: str, digest: str, order: int = 0) -> GrantedInput:
         local = source[digest]
@@ -318,6 +320,11 @@ def drive(
         if kind == "model_prefetch":
             prefetches.append(value)
             return {"ok": True}
+        if kind == "gpu_release":
+            # Only after every child's result is in: assembly needs no GPU.
+            assert not pending and set(answers) <= settled, (sorted(answers), sorted(settled))
+            releases.append(len(calls))
+            return {"ok": True}
         index = int(value["call_index"])
         if kind in ("child_cancel", "child_forget"):
             if kind == "child_cancel":
@@ -339,6 +346,7 @@ def drive(
                     completed_references.add(index)
             if index in pending:
                 return {"ok": True, "state": "running", "progress": pending.pop(index)}
+            settled.add(index)
             return answers[index]
         assert kind == "child_call"
         calls.append(value)
@@ -584,6 +592,7 @@ def drive(
         assert result is None and outcome.terminal != "succeeded", outcome
         return {}
     assert result is not None and outcome.terminal == "succeeded", outcome
+    assert releases == [len(calls)], releases
     delivered = count if fail < 0 else fail
     assert result.result.delivered == delivered and result.result.complete == (fail < 0)
     assert len(result.outputs) == 2 and {item["kind"] for item in result.outputs} == {
