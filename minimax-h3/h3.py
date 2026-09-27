@@ -69,6 +69,7 @@ from cozy_runtime.models.minimax_h3.model import (
 from cozy_runtime.models.minimax_h3.model import (
     H3TurboLoRA as H3TurboLoRA,
 )
+from cozy_runtime.models.minimax_h3.model import condition_references
 from cozy_runtime.models.minimax_h3.official import (
     FPS,
     MAX_AUDIO_REFERENCES,
@@ -1023,10 +1024,9 @@ def _references_to_video(
                     width=width,
                     height=height,
                 )
-    with tel.stage("condition_text", overall_range=(0.03, 0.08)):
-        model.condition_text(task, state, checks=checks)
-    with tel.stage("condition_media", overall_range=(0.08, 0.15)):
-        model.condition_ref2va_media(task, state, checks=checks)
+    # Text and references at once where the text encoder lives on another rank.
+    with tel.stage("condition", overall_range=(0.03, 0.15)):
+        condition_references(model, task, state, checks=checks)
     if turbo_lora is None:
         sample = model.sample_ref2va
     else:
