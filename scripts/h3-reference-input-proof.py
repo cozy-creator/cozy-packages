@@ -9,7 +9,7 @@ from pathlib import Path
 from cozy_runtime.author import ImageAsset, InvalidRequest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
-from story import (  # noqa: E402
+from story import (
     StoryReference,
     image_prompt,
     resolve_reference_images,

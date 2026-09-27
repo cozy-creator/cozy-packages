@@ -12,7 +12,6 @@
 # fp8_pruned = 8388608
 # mxfp8_pruned = 8388608
 # ///
-# ruff: noqa: E501
 """One-off stage two: inherit stage one's VAE into the three existing pruned lanes.
 
 Supply model.updated_bf16=paul/minimax-h3#<stage-one-checkpoint> explicitly.

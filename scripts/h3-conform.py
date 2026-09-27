@@ -1592,7 +1592,7 @@ def arm_text_conditioner() -> None:
     cast(dict[str, Any], rotary_source["vision_config"]).update(hidden_size=72, num_heads=1)
     rotary_model = build_text_conditioner(rotary_source)
     expected_text = Qwen3VLTextRotaryEmbedding(rotary_model.config.text_config)
-    expected_vision = Qwen3VLVisionRotaryEmbedding(36)
+    expected_vision = Qwen3VLVisionRotaryEmbedding(rotary_model.config.vision_config)
     for kind, actual_rotary, expected_rotary in (
         ("text", rotary_model.model.language_model.rotary_emb, expected_text),
         ("vision", rotary_model.model.visual.rotary_pos_emb, expected_vision),
@@ -1627,15 +1627,19 @@ def arm_text_conditioner() -> None:
             torch.equal(actual, expected),
             True,
         )
-    vision_positions = torch.tensor([[0, 0], [31, 31], [68, 90]])
-    check(
-        "vision angles match upstream at reference image positions",
-        torch.equal(
-            rotary_model.model.visual.rotary_pos_emb(vision_positions),
-            expected_vision(vision_positions),
-        ),
-        True,
-    )
+    vision_positions = torch.tensor([[0, 31, 68], [0, 31, 90]])
+    vision_input = torch.zeros(1, 3, 72, dtype=torch.bfloat16)
+    for name, actual, expected in zip(
+        ("cos", "sin"),
+        rotary_model.model.visual.rotary_pos_emb(vision_input, vision_positions),
+        expected_vision(vision_input, vision_positions),
+        strict=True,
+    ):
+        check(
+            f"vision {name} matches upstream at reference image positions",
+            torch.equal(actual, expected),
+            True,
+        )
 
     imported = {
         (
@@ -3233,12 +3237,21 @@ def arm_interface() -> None:
             "segment_turbo",
             "cut_segment",
             "cut_segment_turbo",
+            "motion_segment",
+            "motion_segment_turbo",
         },
     )
     check(
         "only chained renderers are internal",
         {name for name, entry in entries.items() if entry.get("internal", False)},
-        {"segment", "segment_turbo", "cut_segment", "cut_segment_turbo"},
+        {
+            "segment",
+            "segment_turbo",
+            "cut_segment",
+            "cut_segment_turbo",
+            "motion_segment",
+            "motion_segment_turbo",
+        },
     )
     check(
         "public serving functions exclude chain implementation details",
@@ -3399,29 +3412,27 @@ def arm_interface() -> None:
             "result/provenance/turbo_lora_manifest",
         ],
     )
-    shot_fields = next(
-        field for field in jobs["long_form"]["request"]["fields"] if field["name"] == "shots"
+    segment_fields = next(
+        field for field in jobs["long_form"]["request"]["fields"] if field["name"] == "segments"
     )["type"]["list"]["fields"]
     check(
-        "long-form shot seed is optional in the published interface",
-        next(field for field in shot_fields if field["name"] == "seed"),
+        "long-form segment seed is optional in the published interface",
+        next(field for field in segment_fields if field["name"] == "seed"),
         {"name": "seed", "type": {"union": ["int", "null"]}, "wire": "optional"},
     )
     unseeded = msgspec.json.decode(
-        b'{"shots":[{"prompt":"x"},{"prompt":"y","seed":null}]}',
+        b'{"segments":[{"detailed_description":"x","duration_s":5},'
+        b'{"detailed_description":"y","duration_s":5,"seed":null}],'
+        b'"references":[{"name":"Hero","kind":"character"}]}',
         type=package.LongFormInput,
     )
     check(
-        "omitted and null shot seeds are automatic",
-        [s.seed for s in unseeded.shots],
+        "omitted and null segment seeds are automatic",
+        [s.seed for s in unseeded.segments],
         [None, None],
     )
-    check("long-form defaults to turbo", package.LongFormInput(shots=[]).mode, "turbo")
-    check(
-        "long-form has no contradictory standard step default",
-        package.LongFormInput(shots=[]).steps,
-        None,
-    )
+    check("long-form defaults to turbo", unseeded.mode, "turbo")
+    check("long-form has no contradictory standard step default", unseeded.steps, None)
     check(
         "turbo child has the independently bound base and adapter",
         [slot["class"] for slot in entries["segment_turbo"]["models"]],
@@ -3440,13 +3451,14 @@ def arm_interface() -> None:
         "long_form request fields",
         [field["name"] for field in jobs["long_form"]["request"]["fields"]],
         [
-            "shots",
-            "subject_definitions",
+            "segments",
+            "references",
+            "style",
             "overall_soundscape",
             "non_diegetic_music",
+            "context_frames",
             "mode",
             "steps",
-            "opening_frame",
         ],
     )
     check(
@@ -3467,11 +3479,11 @@ def arm_interface() -> None:
         ],
     )
     check(
-        "a shot list requires at least one shot without a count cap",
+        "a segment list requires at least one segment without a count cap",
         next(
             field["constraints"]
             for field in jobs["long_form"]["request"]["fields"]
-            if field["name"] == "shots"
+            if field["name"] == "segments"
         ),
         {"min_length": 1},
     )

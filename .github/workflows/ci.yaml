@@ -175,10 +175,13 @@ jobs:
       - name: Reference fidelity survives conditioning
         run: CUDA_VISIBLE_DEVICES='' minimax-h3/.venv/bin/python scripts/h3-reference-fidelity-proof.py
 
-      # Static describe must agree with the committed interface. This same locked
-      # environment separately proves that the model's execution imports resolve.
+      # The committed interface must not omit or contradict what the tree describes;
+      # ordering, formatting and Runtime-added keys are ignored.
       - name: Package interface is current
-        run: test "$(minimax-h3/.venv/bin/cozy-runtime --json --dir minimax-h3 describe)" = "$(cat minimax-h3/metadata/package-interface.json)"
+        run: >-
+          minimax-h3/.venv/bin/cozy-runtime --json --dir minimax-h3 describe |
+          minimax-h3/.venv/bin/python scripts/interface_current.py
+          minimax-h3/metadata/package-interface.json
 
       - name: The package builds and imports from its wheel
         run: |
@@ -233,10 +236,13 @@ jobs:
       - name: The locked stack imports
         run: ${{ matrix.package }}/.venv/bin/python scripts/package_import.py ${{ matrix.package }}
 
-      # Static describe must agree with the committed interface. This same locked
-      # environment separately proves that the model's execution imports resolve.
+      # The committed interface must not omit or contradict what the tree describes;
+      # ordering, formatting and Runtime-added keys are ignored.
       - name: Package interface is current
-        run: test "$(${{ matrix.package }}/.venv/bin/cozy-runtime --json --dir ${{ matrix.package }} describe)" = "$(cat ${{ matrix.package }}/metadata/package-interface.json)"
+        run: >-
+          ${{ matrix.package }}/.venv/bin/cozy-runtime --json --dir ${{ matrix.package }} describe |
+          ${{ matrix.package }}/.venv/bin/python scripts/interface_current.py
+          ${{ matrix.package }}/metadata/package-interface.json
       # The progress meter is only observable by RUNNING the seam: se-026's denoise hook was
       # installed on a deepcopy of the block tree, so every static check stayed green while
       # the meter sat frozen for the whole render. These arms execute Diffusers' own loop.
@@ -280,8 +286,6 @@ jobs:
           uv pip install --python ${{ matrix.package }}/.venv/bin/python --no-deps dist/packages/${{ matrix.package }}/*.whl
           ${{ matrix.package }}/.venv/bin/python -P scripts/package_import.py ${{ matrix.package }} --installed
 
-      - name: H3 caller overlay preserves its installed helper and sibling interfaces
+      - name: The installed H3 AdaLN helper drives its sibling calls
         if: matrix.package == 'minimax-h3-tools'
-        run: >-
-          minimax-h3-tools/.venv/bin/python -P scripts/h3-adaln-interface-proof.py
-          --implementation-wheel dist/packages/minimax-h3-tools/minimax_h3_tools-*.whl
+        run: minimax-h3-tools/.venv/bin/python -P scripts/h3-adaln-interface-proof.py

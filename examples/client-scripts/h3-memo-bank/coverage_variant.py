@@ -4,7 +4,7 @@ import json
 from importlib.resources import files
 from pathlib import Path
 
-from cozy_runtime import canonical_json
+from cozy_runtime.author import canonical_json
 from h3_tables.plans import parse_plan
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -15,7 +15,9 @@ document = json.loads(files("h3_tables").joinpath("assets", f"timestep-plan.{arg
 document["schedules"] = [schedule for schedule in document["schedules"] if schedule["transformer_evaluations"] == 30]
 if len(document["schedules"]) != 1:
     raise SystemExit("the source must contain exactly one reviewed 30-step schedule")
-blocks, final, seen_blocks, seen_final = [], [], set(), set()
+blocks: list[dict[str, object]] = []
+final: list[dict[str, object]] = []
+seen_blocks, seen_final = set(), set()
 for evaluation in document["schedules"][0]["evaluations"]:
     for item in evaluation["modulation_classes"]:
         pair = (item["timestep"], item["modality_tag"])

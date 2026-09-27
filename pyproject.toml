@@ -13,6 +13,8 @@ strict = true
 warn_unreachable = true
 disallow_any_generics = true
 implicit_reexport = false
+# This client-script directory reuses the module names prepare/compare, which stops the run.
+exclude = ["^examples/client-scripts/h3-motion-context/"]
 
 # Static checks install the typed Runtime distribution from PyPI. Heavy model libraries remain
 # absent to check the package-facing contracts without their large third-party stub trees.
@@ -63,3 +65,5 @@ exclude = [".venv"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# Line length and import order are formatting, not merge gates.
+ignore = ["E501", "I001"]

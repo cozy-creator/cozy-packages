@@ -484,29 +484,18 @@ uv pip install --python .venv-check/bin/python \
 EXIT CODE, not the count of green lines: the count is the same whether or not a later fence
 ran red.
 
-The committed interface snapshots are NOT checkable from this shared environment. Each
-`metadata/package-interface.json` is emitted by that package's own LOCKED `cozy-runtime`, and
-different runtime versions emit different documents — 0.11.1 adds an `invocable` key that
-0.7.0 and 0.10.0 do not. Package locks can select different versions, so a shared environment
-reports a mismatch for every one of them, which reads as interface drift rather than as the
-wrong interpreter. Compare from the package's own venv, as CI does:
+`scripts/interface_current.py` checks a committed interface against `describe` output from
+any Runtime. It fails only when the committed document omits or contradicts the tree (an
+entrypoint, field, default or bound); ordering, formatting and keys one Runtime version emits
+and another does not are ignored:
 
 ```bash
-cd <package> && uv sync --locked && cd ..
-described=$(<package>/.venv/bin/cozy-runtime --json --dir <package> describe) || exit 1
-test "$described" = "$(cat <package>/metadata/package-interface.json)"
+<package>/.venv/bin/cozy-runtime --json --dir <package> describe |
+  <package>/.venv/bin/python scripts/interface_current.py <package>/metadata/package-interface.json
 ```
 
-`describe` is captured first because a failed or absent command prints nothing, and empty
-output compares unequal — indistinguishable from drift unless the exit status is checked.
-CI covers all four packages (`minimax-h3` in the H3 job, the rest in the per-package matrix),
-so a local run that skips one is not evidence about it.
-
-Do not copy the matrix job's `--no-install-project` for this. That flag is right for what CI
-uses it for — proving the locked dependency stack imports, and `describe`, which is static and
-needs no installed project — but a venv built with it cannot import the package's own modules,
-so the tools proofs die with `ModuleNotFoundError`. The H3 job omits the flag for that reason.
-Sync without it locally, or a missing install reads as a broken proof.
+Run the tools proofs from a venv synced without `--no-install-project`; CI's matrix uses that
+flag only for its import and describe checks.
 
 The H3 project environment is reproduced only from its committed lock:
 
