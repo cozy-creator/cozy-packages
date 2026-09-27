@@ -11,7 +11,7 @@ supported-markers = [
 
 [[package]]
 name = "anima"
-version = "0.2.14"
+version = "0.2.15"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -47,7 +47,7 @@ requires-dist = [
     { name = "regex", specifier = ">=2026.7.19" },
     { name = "safetensors", specifier = ">=0.8.0" },
     { name = "shellingham", specifier = ">=1.5.4" },
-    { name = "tensorfs", specifier = ">=0.3.48" },
+    { name = "tensorfs", specifier = ">=0.3.67" },
     { name = "tokenizers", specifier = ">=0.23.1" },
     { name = "torch", specifier = ">=2.14" },
     { name = "torchvision", specifier = ">=0.29" },
@@ -927,11 +927,11 @@ wheels = [
 
 [[package]]
 name = "tensorfs"
-version = "0.3.60"
+version = "0.3.67"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/8e/45/26294c4f19d2c77e05096c702d59a489065c687eedd942e50bb0d8cd2d2e/tensorfs-0.3.60.tar.gz", hash = "sha256:a5231015fea64c428bd2b5967a92ef03dc0e56686865bb9e75f5279fe92d7964", size = 854910, upload-time = "2026-09-27T12:09:03.04Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/85/7f/c379a6906cf0291709ed9cda4f927f7a8711dea508653928827cf5383f8e/tensorfs-0.3.67.tar.gz", hash = "sha256:acc9f09a918f21560987e4f8ab7b2d1aca9cfa53201abcd763eab4945386bdf8", size = 888272, upload-time = "2026-09-27T23:13:39.378Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/47/79/39624abb6ecddbfaeeec43e27fab64ae69d9698d253a2c24d7723f2cc189/tensorfs-0.3.60-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:cf9b240350f0b6891099432d43c266daeff71694afa146472eb966b63bf133b2", size = 8151208, upload-time = "2026-09-27T12:09:01.447Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/10/f3c5318a95f57ba85bb4ef70afd90f95e2fee3daaadcde8a4d6296acf01b/tensorfs-0.3.67-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:110e65721c3bfe38dd30a014d5d2ee20338d7992d1acb86c5feb67d39e24753d", size = 8313980, upload-time = "2026-09-27T23:13:37.559Z" },
 ]
 
 [[package]]
