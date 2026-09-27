@@ -38,11 +38,10 @@ from cozy_runtime.author import (
 from cozy_runtime.author._assets import Asset, GrantedInput, file_state
 from cozy_runtime.author._calls import _Broker, _CallType
 from cozy_runtime.author._codec import encode_frame
-from cozy_runtime.author._services import ProgressFrame, settle_frame
+from cozy_runtime.author._services import ProgressFrame
 from cozy_runtime.internal import interface_wheel, package_interface, static_interface
 from cozy_runtime.models.minimax_h3.continuation import AVContext
 from cozy_runtime.models.minimax_h3.official import FPS, MAX_CONDITIONER_VISION_TOKENS, frames_for
-from PIL import Image as PILImage
 
 
 class ReferenceOutput(msgspec.Struct):
@@ -579,11 +578,9 @@ def drive(
         "video",
         "image",
     }
-    final = settle_frame(record, result.result.continuation_frame.ref)
+    # The last child's PNG is forwarded byte-for-byte, never decoded and re-encoded.
     last = json.loads(answers[delivered + 1]["result"])["continuation_frame"]["digest"]
-    assert final._attempt == parent
-    with PILImage.open(io.BytesIO(final.read_bytes())) as a, PILImage.open(source[last]) as b:
-        assert a.tobytes() == b.tobytes()
+    assert result.result.continuation_frame.digest == last
     with av.open(io.BytesIO(result.result.video.read_bytes()), mode="r") as container:
         assert sum(1 for _ in container.decode(video=0)) == sum(
             min(duration_s, (362 - (context_frames if index else 0)) // FPS) * FPS
