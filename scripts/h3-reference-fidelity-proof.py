@@ -11,6 +11,7 @@ import gc
 import hashlib
 import json
 import sys
+import threading
 from importlib.metadata import version
 from pathlib import Path
 from types import SimpleNamespace
@@ -303,3 +304,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    # Runtime >= 0.18.54 computes the expected attention length on a daemon thread
+    # (`_expect`); exiting while it is inside torch aborts the interpreter.
+    for thread in threading.enumerate():
+        if thread is not threading.main_thread():
+            thread.join()
