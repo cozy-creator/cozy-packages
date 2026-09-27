@@ -2736,7 +2736,8 @@ def arm_numerics() -> None:
         True,
     )
     check("FP8 casts cover exactly the observed values", sum(casts.elements), fp8.numel() + 1)
-    check("FP8 float32 scratch is at most four MiB", max(casts.elements) <= 1024 * 1024, True)
+    # Runtime #747 (0.18.49) bounds every reduction at 16M elements: a 64 MiB float32 transient.
+    check("FP8 float32 scratch is at most 64 MiB", max(casts.elements) <= 16 * 1024 * 1024, True)
     poisoned = torch.tensor([1.0, float("nan")]).to(torch.float8_e4m3fn)
     poisoned_bytes = poisoned.view(torch.uint8).clone()
     refusal(
