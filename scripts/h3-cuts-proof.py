@@ -62,11 +62,12 @@ async def reference_renderer(
     steps: int,
     seed: int,
     background: Literal["normal", "white"],
+    reference_images: list[ImageAsset],
     out: Outputs,
     tel: Telemetry,
 ) -> ReferenceOutput:
     ctx.raise_if_cancelled()
-    assert aspect_ratio == "1:1" and megapixels == 1 and steps == 40
+    assert aspect_ratio == "1:1" and megapixels == 1 and steps == 40 and not reference_images
     tel.step_callback(steps, stage="denoise", overall_range=(0.1, 0.9))(2)
     rgb = bytes((seed % 251, 128, 255)) * WIDTH * HEIGHT
     image = out.save_image(ImageFrame(WIDTH, HEIGHT, rgb), format="png")
