@@ -1,4 +1,4 @@
-"""Text-to-image references using Qwen-Image-2.1, with Runtime-owned model execution."""
+"""Qwen-Image-2.1 generation and reference editing with Runtime-owned execution."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from cozy_runtime.author import (
     AssetBound,
     Context,
     ImageAsset,
+    MediaDecoder,
     Outputs,
     Shape,
     Telemetry,
@@ -94,6 +95,15 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 40
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     background: Background = "normal"
+    reference_images: Annotated[
+        list[ImageAsset],
+        AssetBound(
+            max_bytes=32 << 20,
+            max_decoded_bytes=20 << 20,
+            media_types=("image/png", "image/jpeg", "image/webp"),
+        ),
+        msgspec.Meta(max_length=10),
+    ] = msgspec.field(default_factory=list)
 
     def resolved_seed(self) -> int:
         return self.seed if self.seed is not None else secrets.randbits(53)
@@ -143,14 +153,25 @@ def generate_image(
     ctx: Context,
     payload: GenerateInput,
     model: QwenImage21Model,
+    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> ImageOutput:
     seed = payload.resolved_seed()
     width, height = payload.dimensions()
     ctx.raise_if_cancelled()
-    with tel.stage("encoding prompt", overall_range=(0.0, 0.1)):
-        embeds, mask = model.encode(reference_prompt(payload.prompt, payload.background))
+    reference_images, reference_latents, image_pad_mask = None, None, None
+    if payload.reference_images:
+        with tel.stage("encoding reference images", overall_range=(0.0, 0.08)):
+            reference_images = [decoder.value(asset) for asset in payload.reference_images]
+            conditioning_images, reference_latents = model.encode_reference_images(reference_images)
+        ctx.raise_if_cancelled()
+    with tel.stage("encoding prompt", overall_range=(0.08 if reference_images else 0.0, 0.1)):
+        prompt = reference_prompt(payload.prompt, payload.background)
+        if reference_images is None:
+            embeds, mask = model.encode(prompt)
+        else:
+            embeds, mask, image_pad_mask = model.encode_image_prompt(prompt, conditioning_images)
     with tel.stage("generating image", overall_range=(0.1, 0.9)):
         latents = model.denoise(
             embeds,
@@ -163,6 +184,9 @@ def generate_image(
                 payload.steps, stage="generating image", overall_range=(0.1, 0.9)
             ),
             cancel=ctx.raise_if_cancelled,
+            reference_images=reference_images,
+            reference_latents=reference_latents,
+            image_pad_mask=image_pad_mask,
         )
     ctx.raise_if_cancelled()
     with tel.stage("decoding image", overall_range=(0.9, 0.98)):

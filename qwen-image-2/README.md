@@ -1,6 +1,6 @@
 # Qwen Image 2
 
-`generate_image` creates one PNG from text using Qwen-Image-2.1. The model checkpoint is
+`generate_image` creates or edits one PNG using Qwen-Image-2.1. The model checkpoint is
 selected independently from the package. TensorFS owns model downloads and bytes;
 Runtime owns construction, memory residency and component execution.
 
@@ -11,6 +11,36 @@ returned. Seeds range from 0 through 9007199254740991 (the interoperable 53-bit
 integer range); omitting one chooses a random seed in that range. Select `aspect_ratio` and `megapixels` (1, 2 or 4); the default is `1:1` at 1 MP,
 exactly 1024×1024. Steps default to 40. Width and height are output fields only.
 Unknown ratios, tiers, and the removed width/height inputs are refused.
+
+## Image editing and references
+
+Set `reference_images` to one through ten images and describe the desired edit or
+composition in `prompt`. Omit it for ordinary text-to-image generation. The same
+Qwen-Image-2.1 checkpoint handles both modes; editing runs its complete instruction
+sampling schedule, with no image-to-image strength parameter.
+
+```sh
+cozy run paul/qwen-image-2/generate_image \
+  prompt='Change the background to a sunset beach; preserve the person and clothing.' \
+  --asset reference_images.0=portrait.png seed=42 --await
+
+cozy run paul/qwen-image-2/generate_image \
+  prompt='Place the person from image 1 in the room from image 2.' \
+  --asset reference_images.0=person.png --asset reference_images.1=room.png \
+  seed=42 --await
+```
+
+References are ordered. Each accepts PNG, JPEG or WebP up to 32 MiB encoded and
+20 MiB decoded RGB. Runtime verifies and decodes them through the ordinary input
+asset path. This package currently uses RGB input and output; transparent layer
+editing is not exposed. Each reference is resized to the upstream 1 MP conditioning
+area independently of the output's `megapixels` tier. Output dimensions still come
+from `aspect_ratio` and `megapixels`.
+
+Reference VAE encoding and multimodal prompt encoding each run once before
+denoising, in separate component residency leases. Denoising reuses their tensors
+and the upstream prefix KV cache across steps. Reference images add tokens and
+memory demand, so compare editing benchmarks separately from text-only runs.
 
 The upstream model is under the Qwen Research License, for noncommercial research
 and evaluation. This wrapper is not an authorization for commercial model use.
@@ -67,7 +97,7 @@ and pin it to the Hub index in the **consumer's** `pyproject.toml`:
 
 ```toml
 [project]
-dependencies = ["qwen-image-2>=0.1.0"]
+dependencies = ["qwen-image-2>=0.2.0"]
 
 [tool.uv.sources]
 qwen-image-2 = { index = "tensorhub-paul" }
