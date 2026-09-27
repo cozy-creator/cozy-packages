@@ -36,6 +36,7 @@ from .adaln_operations import (
 from .kernel import H3Topology, LowRankAdapter, adapter_shapes, precompute_tables, table_shapes
 from .plans import Task, TimestepPlan, parse_plan
 from .source import H3FullTransformer, inspection
+from .source import structures as _structures
 
 RANK = 64
 NUM_STEPS = 32
@@ -133,8 +134,12 @@ def overlay_shapes(
 
 
 def _adapter_component(
-    structure: SourceInspection, config: dict[str, Any], plan: TimestepPlan, topology: H3Topology
-) -> str:
+    structure: SourceInspection,
+    component: str,
+    config: dict[str, Any],
+    plan: TimestepPlan,
+    topology: H3Topology,
+) -> None:
     expected = {
         key: ("bf16", ((NUM_STEPS, *shape[1:]) if dtype == "f32" else shape))
         for key, (dtype, shape) in overlay_shapes(config, plan).items()
@@ -143,17 +148,36 @@ def _adapter_component(
     expected.update(
         {key: ("bf16", shape) for key, (_, shape) in adapter_shapes(topology, RANK).items()}
     )
-    components = set(structure.components)
-    rows = next(iter(structure.components.values())) if len(components) == 1 else {}
-    if len(components) != 1 or set(rows) != set(expected):
-        raise UnsupportedInput("PDD adapter must contain exactly its LoRA factors and 32 heads")
+    rows = structure.components[component]
+    if set(rows) != set(expected):
+        raise UnsupportedInput(
+            f"PDD adapter component {component} must contain exactly its LoRA factors and "
+            f"32 heads ({len(rows)} rows, expected {len(expected)})",
+            code="h3_turbo_adapter",
+        )
     for key, (dtype, shape) in expected.items():
         row = rows[key]
         if (row.logical_dtype, row.shape, row.encoding) != (dtype, shape, PLAIN) or tuple(
             (role, p.dtype, p.shape) for role, p in row.parts.items()
         ) != (("value", dtype, shape),):
-            raise UnsupportedInput(f"PDD adapter tensor {key} must be plain {dtype} {shape}")
-    return components.pop()
+            raise UnsupportedInput(
+                f"PDD adapter tensor {component}.{key} must be plain {dtype} {shape}",
+                code="h3_turbo_adapter",
+            )
+
+
+def adapter_components(structure: SourceInspection) -> dict[Task, str]:
+    """Name each task's adapter in one PDD checkpoint: the one component naming the task."""
+    found = {
+        task: [name for name in structure.components if task in name.lower()] for task in TASKS
+    }
+    if any(len(names) != 1 for names in found.values()) or len(structure.components) != 2:
+        raise UnsupportedInput(
+            "the PDD adapter checkpoint must hold exactly two components, one naming fl2va and "
+            f"one naming ref2va; it holds {sorted(structure.components)}",
+            code="h3_turbo_adapter",
+        )
+    return {task: names[0] for task, names in found.items()}
 
 
 def _read(
@@ -189,22 +213,23 @@ def _produce(
     ctx: Context,
     tel: Telemetry,
     *,
-    full: H3FullTransformer,
-    adapters: dict[Task, H3FullTransformer],
+    sources: dict[str, H3FullTransformer],
+    adapters: dict[Task, tuple[str, str]],
     configs: dict[str, Any],
     topologies: dict[Task, H3Topology],
+    output: str,
 ) -> ModelArtifact:
-    """One adapter transaction; LoRA factors inherit their exact source objects."""
-    source_models: dict[str, H3FullTransformer] = {"full": full}
-    source_models.update({str(task): model for task, model in adapters.items()})
-    structures = {name: inspection(ctx, model) for name, model in source_models.items()}
+    """One adapter transaction; LoRA factors inherit their exact source objects.
+
+    ``sources`` names the granted models; ``full`` is the base H3 model and ``adapters``
+    maps each task to its (source name, component) PDD adapter.
+    """
+    structures = _structures(ctx, sources)
     plans = {task: turbo_plan(task) for task in TASKS}
-    components = {
-        task: _adapter_component(
-            structures[task], configs[f"{task}_dit"], plans[task], topologies[task]
+    for task, (name, component) in adapters.items():
+        _adapter_component(
+            structures[name], component, configs[f"{task}_dit"], plans[task], topologies[task]
         )
-        for task in TASKS
-    }
     targets: dict[str, Target] = {}
     output_order: list[tuple[str, str]] = []
     for task in TASKS:
@@ -224,7 +249,7 @@ def _produce(
                             dtype,
                             shape,
                             source=(
-                                PartSource(task, components[task], key, "value")
+                                PartSource(*adapters[task], key, "value")
                                 if key.endswith((".lora_down", ".lora_up"))
                                 else None
                             ),
@@ -251,7 +276,7 @@ def _produce(
             },
         }
     raw = canonical_json.encode(config)
-    with ctx.output("model").open(
+    with ctx.output(output).open(
         Derivation(
             sources={name: structure.source for name, structure in structures.items()},
             targets=targets,
@@ -264,6 +289,7 @@ def _produce(
         if ctx.device.type == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = False
         torch.set_float32_matmul_precision("highest")
+        reused = computed = 0
         for task in TASKS:
             ctx.raise_if_cancelled()
             component = f"{task}_turbo"
@@ -273,7 +299,14 @@ def _produce(
                 if owner == component and role == "value"
             }
             tables = table_shapes(topologies[task], plans[task])
-            reader = partial(_read, transaction, task, components[task])
+            produced = tables.keys() | {
+                f"{prefix}.{suffix}"
+                for prefix in ("proj_out", "audio_proj_out")
+                for suffix in ("weight", "bias")
+            }
+            reused += len(produced & completed)
+            computed += len(produced - completed)
+            reader = partial(_read, transaction, *adapters[task])
             precompute_tables(
                 plan=plans[task],
                 topology=topologies[task],
@@ -297,8 +330,19 @@ def _produce(
                 for suffix, value in zip(("weight", "bias"), fused, strict=True):
                     if f"{prefix}.{suffix}" not in completed:
                         _write(transaction, component, f"{prefix}.{suffix}", value)
+        tel.metric("h3.turbo.reused_tensors", float(reused))
+        tel.metric("h3.turbo.computed_tensors", float(computed))
         transaction.add_config("model", raw)
         return ctx.adopt_model(transaction.commit())
+
+
+def _topologies() -> tuple[dict[str, Any], dict[Task, H3Topology]]:
+    sections = _sections()
+    configs = {
+        f"{task}_dit": sections["transformer" if task == "fl2va" else "transformer_ref"]
+        for task in TASKS
+    }
+    return configs, {task: H3Topology.from_config(configs[f"{task}_dit"]) for task in TASKS}
 
 
 def build_turbo_adapter(
@@ -308,44 +352,58 @@ def build_turbo_adapter(
     fl2va_adapter: H3FullTransformer,
     ref2va_adapter: H3FullTransformer,
     tel: Telemetry,
+    output: str = "model",
 ) -> ModelArtifact:
-    """Prepare a PDD-8 adapter independently of any quantized base checkpoint."""
-    sections = _sections()
-    configs = {
-        f"{task}_dit": sections["transformer" if task == "fl2va" else "transformer_ref"]
-        for task in TASKS
-    }
-    topologies = {
-        task: H3Topology.from_config(
-            sections["transformer" if task == "fl2va" else "transformer_ref"]
-        )
-        for task in TASKS
-    }
+    """Prepare a PDD-8 adapter from two single-component adapter checkpoints."""
+    configs, topologies = _topologies()
     for task in TASKS:
         _validate_generators(inspection(ctx, full), task, topologies[task])
+    single: dict[Task, H3FullTransformer] = {"fl2va": fl2va_adapter, "ref2va": ref2va_adapter}
+    adapters: dict[Task, tuple[str, str]] = {}
+    for task, model in single.items():
+        components = list(inspection(ctx, model).components)
+        if len(components) != 1:
+            raise UnsupportedInput(
+                f"{task}_adapter must be one PDD adapter component", code="h3_turbo_adapter"
+            )
+        adapters[task] = (task, components[0])
     return _produce(
         ctx,
         tel,
-        full=full,
-        adapters={"fl2va": fl2va_adapter, "ref2va": ref2va_adapter},
+        sources={"full": full, "fl2va": fl2va_adapter, "ref2va": ref2va_adapter},
+        adapters=adapters,
         configs=configs,
         topologies=topologies,
+        output=output,
     )
 
 
-@invocable(memoize=True, memo_dependencies=TURBO)
-async def prepare_turbo(
+@invocable(memoize=True, memo_version="h3-turbo-lora/1", memo_dependencies=TURBO)
+async def turbo_lora(
     ctx: Context,
     *,
-    full: H3FullTransformer,
-    fl2va_adapter: H3FullTransformer,
-    ref2va_adapter: H3FullTransformer,
+    adapters: H3FullTransformer,
+    base: H3FullTransformer,
     tel: Telemetry,
 ) -> ModelArtifact:
-    return build_turbo_adapter(
+    """Build the standalone PDD-8 turbo LoRA from the upstream PDD adapter pair.
+
+    ``adapters`` is the converted alibaba-pai/MiniMax-H3-Acc-LoRAs release: one component
+    per task. ``base`` is any full-precision H3 checkpoint; only its AdaLN modulation
+    weights and output heads are read. LoRA factors inherit the adapter objects; adapted
+    timestep tables and collapsed heads are computed and checkpointed per tensor, so an
+    interrupted run resumes where it stopped.
+    """
+    configs, topologies = _topologies()
+    for task in TASKS:
+        _validate_generators(inspection(ctx, base), task, topologies[task])
+    names = adapter_components(inspection(ctx, adapters))
+    return _produce(
         ctx,
-        full=full,
-        fl2va_adapter=fl2va_adapter,
-        ref2va_adapter=ref2va_adapter,
-        tel=tel,
+        tel,
+        sources={"full": base, "adapters": adapters},
+        adapters={task: ("adapters", component) for task, component in names.items()},
+        configs=configs,
+        topologies=topologies,
+        output="pdd8",
     )

@@ -21,3 +21,12 @@ TURBO = (
     MemoResource("h3_tables", "assets/timestep-plan.fl2va.turbo.json"),
     MemoResource("h3_tables", "assets/timestep-plan.ref2va.turbo.json"),
 )
+LANES = (
+    *STRUCTURE, "h3_tables.job", "h3_tables.lanes", "h3_tables.quantization",
+    "h3_tables.legacy_config", "cozy_runtime.derive.quantization",
+    "cozy_runtime.derive.microscale", "cozy_runtime.derive.safetensors_io",
+    MemoResource("h3_tables", "assets/timestep-plan.fl2va.json"),
+    MemoResource("h3_tables", "assets/timestep-plan.ref2va.json"),
+    MemoResource("h3_tables", "assets/h3-dit-quantization-plan.json"),
+    MemoDistribution("torch"), MemoDistribution("numpy"),
+)

@@ -366,7 +366,7 @@ def _refusals(granted: dict[str, SourceInspection]) -> None:
     _refuses(
         "a lane requesting a repeated output",
         "h3_lanes_repeated",
-        lambda: job._requested(job.LaneRequest(lanes=("bf16-full", "bf16-full"))),
+        lambda: job._requested(("bf16-full", "bf16-full")),
     )
 
 
