@@ -1,76 +1,39 @@
 name: ci
+# Automatic: one ~20 s job on master pushes that touch Python: syntax errors and undefined
+# names across every package (Python has no compile step; a package's own proofs only see
+# the modules they import).
+# On demand, before a release (fences, types, locks, wheels, locked environments, H3 arms):
+#   gh workflow run ci.yaml -R cozy-creator/packages --ref <branch> \
+#     [-f packages='["sdxl"]'] [-f h3=false]
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [master]
+    paths: ["**.py", "**/pyproject.toml", ".github/workflows/ci.yaml"]
   workflow_dispatch:
+    inputs:
+      packages:
+        description: JSON list of package environments to qualify
+        type: string
+        default: '["anima","sdxl","minimax-h3-tools","qwen-image-2"]'
+      h3:
+        description: Run H3 deterministic conformance
+        type: boolean
+        default: true
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  # Decides which heavy environments a PR or master push needs, from its changed files.
-  # Dispatch (gh workflow run ci.yaml -R cozy-creator/packages --ref <branch>) runs everything.
-  changes:
-    # Draft PRs are checkpoints; CI runs once the PR is ready for review.
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+  compile:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    outputs:
-      code: ${{ steps.plan.outputs.code }}
-      h3: ${{ steps.plan.outputs.h3 }}
-      packages: ${{ steps.plan.outputs.packages }}
     steps:
-      - id: plan
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          every='["anima","sdxl","minimax-h3-tools","qwen-image-2"]'
-          everything() {
-            printf 'code=true\nh3=true\npackages=%s\n' "$every" >> "$GITHUB_OUTPUT"
-            exit 0
-          }
-          if [ -n "$PR" ]; then
-            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" \
-              --jq '.[] | .filename, (.previous_filename // empty)')
-          elif [ "$GITHUB_EVENT_NAME" = push ] && [ -n "$BEFORE" ] && [ "${BEFORE//0/}" != "" ]; then
-            gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" > "$RUNNER_TEMP/compare.json"
-            # The compare API lists at most 300 files; a larger push runs everything.
-            [ "$(jq '.files | length' "$RUNNER_TEMP/compare.json")" -lt 300 ] || everything
-            files=$(jq -r '.files[] | .filename, (.previous_filename // empty)' "$RUNNER_TEMP/compare.json")
-          else
-            everything
-          fi
-          code=false h3=false all=false
-          declare -A pick=()
-          while IFS= read -r f; do
-            case "$f" in
-              "") continue ;;
-              anima/*|scripts/anima-*) pick[anima]=1 ;;
-              sdxl/*|scripts/sdxl*) pick[sdxl]=1 ;;
-              qwen-image-2/*|scripts/qwen-image-2-*) pick[qwen-image-2]=1 ;;
-              minimax-h3/*|minimax-h3-tools/*|examples/*|scripts/h3*|scripts/tensorfs_seeds.py)
-                h3=true; pick[minimax-h3-tools]=1 ;;
-              docs/*) continue ;;
-              */*) all=true ;;
-              *.md) continue ;;
-              *) all=true ;;
-            esac
-            code=true
-          done <<< "$files"
-          if [ "$all" = true ]; then
-            h3=true packages=$every
-          else
-            packages=$(jq -cn '$ARGS.positional' --args "${!pick[@]}")
-          fi
-          printf 'code=%s\nh3=%s\npackages=%s\n' "$code" "$h3" "$packages" | tee -a "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+      - run: uvx ruff@0.16.4 check --select E9,F63,F7,F82 .
 
   checks:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -138,13 +101,12 @@ jobs:
         run: uv run --no-project python scripts/torch_family.py --self-check
 
       - name: Native checkpoint repair script and resume
-        if: needs.changes.outputs.h3 == 'true'
+        if: inputs.h3
         run: .venv/bin/python scripts/h3-repair-proof.py
 
   h3-conformance:
     name: H3 deterministic conformance
-    needs: changes
-    if: needs.changes.outputs.h3 == 'true'
+    if: github.event_name == 'workflow_dispatch' && inputs.h3
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -221,8 +183,7 @@ jobs:
 
   package-locks:
     name: Package exact locked environments
-    needs: changes
-    if: needs.changes.outputs.packages != '[]'
+    if: github.event_name == 'workflow_dispatch' && inputs.packages != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -232,7 +193,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: ${{ fromJSON(needs.changes.outputs.packages) }}
+        package: ${{ fromJSON(inputs.packages) }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
