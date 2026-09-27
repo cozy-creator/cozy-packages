@@ -69,6 +69,7 @@ from cozy_runtime.models.minimax_h3.model import (
 from cozy_runtime.models.minimax_h3.model import (
     H3TurboLoRA as H3TurboLoRA,
 )
+from cozy_runtime.models.minimax_h3.model import condition_references
 from cozy_runtime.models.minimax_h3.official import (
     FPS,
     MAX_AUDIO_REFERENCES,
@@ -1023,10 +1024,9 @@ def _references_to_video(
                     width=width,
                     height=height,
                 )
-    with tel.stage("condition_text", overall_range=(0.03, 0.08)):
-        model.condition_text(task, state, checks=checks)
-    with tel.stage("condition_media", overall_range=(0.08, 0.15)):
-        model.condition_ref2va_media(task, state, checks=checks)
+    # Text and references at once where the text encoder lives on another rank.
+    with tel.stage("condition", overall_range=(0.03, 0.15)):
+        condition_references(model, task, state, checks=checks)
     if turbo_lora is None:
         sample = model.sample_ref2va
     else:
@@ -1411,8 +1411,13 @@ def _render_motion(
     _reference_policy(assets)
     saved_context: list[FileAsset] = []
 
-    def save_completed_context(state: Any, _pixels: Any) -> None:
-        tail = model.export_completed_av_tail(state, provenance=native_provenance)
+    def save_completed_context(state: Any, pixels: Any) -> None:
+        tail = model.export_completed_av_tail(
+            state,
+            frames=pixels,
+            windows=payload.next_context_frames,
+            provenance=native_provenance,
+        )
         saved_context.append(
             out.save_bytes(encode_context(tail), media_type="application/octet-stream")
         )
@@ -1637,6 +1642,9 @@ async def long_form_cuts(
             frame = result.continuation_frame
             warnings.extend(result.warnings)
             completed_work += render_work[index]
+        # Every GPU call has returned: assembly and outputs are CPU work, so the next
+        # request's shots start now.
+        ctx.release_gpus()
         if not videos:
             raise OutputError(f"shot 1 failed ({failure_code}): {failure_detail}")
         delivered_frames = sum(planned_frames[: len(videos)])
@@ -1793,6 +1801,9 @@ async def long_form(
             frame = shot_result.continuation_frame
             context = shot_result.context
             completed_work += render_work[index]
+        # Every GPU call has returned: assembly and outputs are CPU work, so the next
+        # request's shots start now.
+        ctx.release_gpus()
         if not videos:
             raise OutputError(
                 f"segment 1 of {len(payload.segments)} failed ({failure_code}): {failure_detail}"

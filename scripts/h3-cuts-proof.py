@@ -40,6 +40,7 @@ from cozy_runtime.author._calls import _Broker, _CallType
 from cozy_runtime.author._codec import encode_frame
 from cozy_runtime.author._services import ProgressFrame
 from cozy_runtime.internal import interface_wheel, package_interface, static_interface
+from cozy_runtime.internal.worker import machine_byte_results
 from cozy_runtime.models.minimax_h3.continuation import AVContext
 from cozy_runtime.models.minimax_h3.official import FPS, MAX_CONDITIONER_VISION_TOKENS, frames_for
 
@@ -210,21 +211,29 @@ async def motion_renderer(
         audio = np.zeros((2, count * RATE // FPS), np.float32)
         video = out.save_video(rgb, fps=FPS, audio=audio, sample_rate=RATE)
         frame = out.save_image(ImageFrame(WIDTH, HEIGHT, rgb[-1].tobytes()), format="png")
-        tail = AVContext(
-            {
-                frames: (
-                    torch.zeros((1, 24, 5 * ((frames - 5) // 17) + 2, HEIGHT // 16, WIDTH // 16)),
-                    torch.zeros((2 * ((frames * 5 + 2) // 3), 32)),
-                )
-                for frames in (22, 39, 56)
-            },
-            HEIGHT, WIDTH, count, CODE,
-        )
         if payload.next_context_frames:
+            tail = AVContext(
+                {
+                    frames: (
+                        torch.zeros(
+                            (1, 24, 5 * ((frames - 5) // 17) + 2, HEIGHT // 16, WIDTH // 16)
+                        ),
+                        torch.zeros((2 * ((frames * 5 + 2) // 3), 32)),
+                    )
+                    for frames in payload.next_context_frames
+                },
+                HEIGHT, WIDTH, count, CODE, max(payload.next_context_frames),
+            )
             kwargs["completed"](tail, rgb)
         else:
             assert kwargs["completed"] is None
         return h3.H3VideoOutput(video, frame, [])
+
+    def export(state: Any, *, frames: Any, windows: Any, provenance: str) -> Any:
+        # The delivered frames as landed, and only the windows the successor selects.
+        assert len(frames) == payload.duration_s * FPS and provenance == CODE
+        assert tuple(windows) == payload.next_context_frames == tuple(state.windows)
+        return state
 
     stubbed = cast(Any, h3)
     original = h3._references_to_video, stubbed.provenance, stubbed.context_provenance
@@ -233,7 +242,7 @@ async def motion_renderer(
     stubbed.context_provenance = lambda _: CODE
     model = SimpleNamespace(
         checkpoint_ref=MODEL,
-        export_completed_av_tail=lambda state, **_: state,
+        export_completed_av_tail=export,
     )
     try:
         return h3._render_motion(
@@ -288,6 +297,8 @@ def drive(
     cancelled = False
     completed_references: set[int] = set()
     canceled_children: set[int] = set()
+    settled: set[int] = set()
+    releases: list[int] = []
 
     def grant(path: str, digest: str, order: int = 0) -> GrantedInput:
         local = source[digest]
@@ -310,6 +321,11 @@ def drive(
         if kind == "model_prefetch":
             prefetches.append(value)
             return {"ok": True}
+        if kind == "gpu_release":
+            # Only after every child's result is in: assembly needs no GPU.
+            assert not pending and set(answers) <= settled, (sorted(answers), sorted(settled))
+            releases.append(len(calls))
+            return {"ok": True}
         index = int(value["call_index"])
         if kind in ("child_cancel", "child_forget"):
             if kind == "child_cancel":
@@ -331,6 +347,7 @@ def drive(
                     completed_references.add(index)
             if index in pending:
                 return {"ok": True, "state": "running", "progress": pending.pop(index)}
+            settled.add(index)
             return answers[index]
         assert kind == "child_call"
         calls.append(value)
@@ -576,6 +593,7 @@ def drive(
         assert result is None and outcome.terminal != "succeeded", outcome
         return {}
     assert result is not None and outcome.terminal == "succeeded", outcome
+    assert releases == [len(calls)], releases
     delivered = count if fail < 0 else fail
     assert result.result.delivered == delivered and result.result.complete == (fail < 0)
     assert len(result.outputs) == 2 and {item["kind"] for item in result.outputs} == {
@@ -625,8 +643,6 @@ def drive(
 
 def admissible_results() -> None:
     """Runtime grants native result outputs by fixed field path at child admission."""
-    from cozy_runtime.internal.worker import machine_byte_results
-
     built = static_interface.build(ROOT / "minimax-h3")
     interface = json.loads(package_interface.canonical_bytes(built))
     for entry in [*interface["entrypoints"], *interface["jobs"]]:
