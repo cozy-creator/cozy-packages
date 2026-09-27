@@ -1579,7 +1579,7 @@ async def long_form_cuts(
     render_work = [frames * steps for frames in planned_frames]
     reference_steps = 40
     reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * reference_steps
-    total_work = sum(render_work) + sum(planned_frames) + 1 + reference_work
+    total_work = sum(render_work) + sum(planned_frames) + reference_work
     completed_work = 0
     prefetch(cut_segment_turbo if payload.mode == "turbo" else cut_segment)
     images = await _create_references(ctx, payload.references, tel)
@@ -1676,13 +1676,8 @@ async def long_form_cuts(
         or [item.source_frames for item in assembled.segments] != planned_frames[: len(videos)]
     ):
         raise OutputError("assembled cuts differ from the declared frame clock", code="shot_frames")
-    completed_work += delivered_frames
+    # The last cut's own PNG is the final frame: forwarded, never decoded and re-encoded.
     assert frame is not None
-    with tel.scope(
-        "Saving final frame",
-        overall_range=(completed_work / total_work, (completed_work + 1) / total_work),
-    ):
-        final_frame = out.save_image(decoder.value(frame), format="png")
     complete = len(videos) == len(payload.segments)
     if not complete:
         warnings.append(
@@ -1691,7 +1686,7 @@ async def long_form_cuts(
         )
     return LongFormOutput(
         assembled.video,
-        final_frame,
+        frame,
         complete,
         len(videos),
         len(payload.segments),
@@ -1757,7 +1752,7 @@ async def long_form(
     render_work = [plan.sample_frames * steps for plan in plans]
     requested_frames = sum(plan.delivered_frames for plan in plans)
     reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * 40
-    total_work = sum(render_work) + requested_frames + 1 + reference_work
+    total_work = sum(render_work) + requested_frames + reference_work
     prefetch(motion_segment_turbo if payload.mode == "turbo" else motion_segment)
     images = await _create_references(ctx, payload.references, tel)
     completed_work = reference_work
@@ -1841,13 +1836,8 @@ async def long_form(
         raise OutputError("shot video differs from its declared frame count", code="shot_frames")
     if assembled.output_frames != delivered_frames:
         raise OutputError("assembled output differs from the long-form clock", code="shot_frames")
-    completed_work += delivered_frames
+    # The last segment's own PNG is the final frame: forwarded, never decoded and re-encoded.
     assert frame is not None
-    with tel.scope(
-        "Saving final frame",
-        overall_range=(completed_work / total_work, (completed_work + 1) / total_work),
-    ):
-        continuation_frame = out.save_image(decoder.value(frame), format="png")
     complete = len(videos) == len(payload.segments)
     if not complete:
         warnings.append(
@@ -1866,7 +1856,7 @@ async def long_form(
     )
     return LongFormOutput(
         video=assembled.video,
-        continuation_frame=continuation_frame,
+        continuation_frame=frame,
         complete=complete,
         delivered=len(videos),
         requested=len(payload.segments),

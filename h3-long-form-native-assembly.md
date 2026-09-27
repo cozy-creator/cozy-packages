@@ -1,8 +1,8 @@
 # H3 native long-form delivery
 
 The CPU parent awaits ordinary internal serving calls and assembles their clips on the
-rental with Runtime MediaDecoder and Outputs. It returns the final MP4 and final
-continuation PNG, plus delivery status. No intermediate directory or shot receipt list
+rental with Runtime MediaDecoder and Outputs. It returns the final MP4 and the last
+segment's continuation PNG, forwarded unchanged, plus delivery status. No intermediate directory or shot receipt list
 is part of the public result.
 
 One validation worker scans completed clips while the next shot renders. The assembler
