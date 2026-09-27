@@ -806,19 +806,21 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
     return float(bad / int(value.numel()))
 
 
-_DEFAULT_MODEL_LADDER = [
+_DEFAULT_MODEL_LADDER: list[dict[str, str | int]] = [
     {"gpu": "H100", "gpus": 2, "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
     {"gpu": "H100", "gpus": 4, "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
     {"gpu": "H200", "gpus": 1, "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
     {"gpu": "B200", "gpus": 1, "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
+    {"gpu": "RTX PRO 6000", "gpus": 1, "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
     {"gpu": "5090", "gpus": 1, "lane": "paul/minimax-h3@1.0.0-rc.2/fp8-pruned"},
 ]
 
-_DEFAULT_TURBO_LORA_LADDER = [
+_DEFAULT_TURBO_LORA_LADDER: list[dict[str, str | int]] = [
     {"gpu": "H100", "gpus": 2, "lane": "paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
     {"gpu": "H100", "gpus": 4, "lane": "paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
     {"gpu": "H200", "gpus": 1, "lane": "paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
     {"gpu": "B200", "gpus": 1, "lane": "paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
+    {"gpu": "RTX PRO 6000", "gpus": 1, "lane": "paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
     {"gpu": "5090", "gpus": 1, "lane": "paul/minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
 ]
 
@@ -835,7 +837,9 @@ def fl2va(
     return _keyframes_to_video(ctx, "fl2va", payload, assets, model, out, tel, steps=payload.steps)
 
 
-@app.entrypoint
+@app.entrypoint(
+    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER}
+)
 def fl2va_turbo(
     ctx: Context,
     payload: FirstLastFrameToVideoTurboInput,
@@ -875,7 +879,10 @@ def ref2va(
     )
 
 
-@app.entrypoint(preflight=preflight_reference_media_turbo)
+@app.entrypoint(
+    preflight=preflight_reference_media_turbo,
+    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
+)
 def ref2va_turbo(
     ctx: Context,
     payload: ReferenceMediaToVideoTurboInput,
