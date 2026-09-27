@@ -48,7 +48,9 @@ from cozy_runtime.author import (
     canonical_json,
     describe,
 )
+from cozy_runtime.author._assets import asset_dec_hook
 from cozy_runtime.author._attention_scope import _ACTIVE_LAYOUT
+from cozy_runtime.author._demand import normalize
 from cozy_runtime.author.fakes import (
     fake_attempt,
     fake_input,
@@ -104,6 +106,7 @@ from cozy_runtime.models.minimax_h3.adaln_pruned import (  # noqa: E402
     _AdaLNPrunedTimestepLookup,
 )
 from cozy_runtime.models.minimax_h3.conditioner import (  # noqa: E402
+    FinalHiddenState,
     build_text_conditioner,
     text_conditioner_config,
 )
@@ -1452,7 +1455,7 @@ def arm_graph_and_dtypes() -> None:
 
 
 def arm_conditioner_lifecycle() -> None:
-    print("\n== complete image conditioning releases autoregressive position cache ==")
+    print("\n== every conditioner forward releases the autoregressive position cache ==")
     torch.manual_seed(11)
     model = build_text_conditioner(tiny_text_config())
     arguments = {
@@ -1464,51 +1467,44 @@ def arm_conditioner_lifecycle() -> None:
         "use_cache": False,
         "output_hidden_states": True,
     }
-    state: dict[str, Any] = {}
-
-    def run(task: str, name: str, target: Any, *, component: str) -> None:
-        assert (task, name, component) == ("fl2va", "text_encoder", "text_encoder")
-        with torch.inference_mode():
-            target["hidden"] = tuple(
-                value.clone() for value in model.model(**arguments).hidden_states
-            )
-        assert model.model.rope_deltas is not None
-        if target.get("fail"):
-            raise RuntimeError("conditioner failure")
-
-    # Exercise the real Qwen forward through the package's actual condition_text
-    # lifetime boundary, without loading unrelated DiT and VAE checkpoint components.
-    pipe = cast(OfficialH3Pipeline, SimpleNamespace(components={"text_encoder": model}, _run=run))
-    run("fl2va", "text_encoder", state, component="text_encoder")
-    check(
-        "upstream keeps one position-delta tensor despite use_cache=False",
-        model.model.rope_deltas.numel(),
-        1,
-    )
-    expected = state["hidden"]
-    model.model.rope_deltas = None
+    with torch.inference_mode():
+        full = model.model(**arguments).hidden_states
+    check("the stack keeps 50 layers plus the embedding state", len(full), 51)
+    check("a full forward releases its position cache", model.model.rope_deltas is None, True)
+    # The release is a forward hook, so it runs on whichever group rank hosts the conditioner.
+    bare = build_text_conditioner(tiny_text_config())
+    bare.model._forward_hooks.clear()
+    with torch.inference_mode():
+        bare.model(**arguments)
+    red("upstream without the hook keeps its position cache", bare.model.rope_deltas is None, True)
+    conditioner = FinalHiddenState(model)
     for index in range(4):
-        OfficialH3Pipeline.condition_text(pipe, "fl2va", state)
+        with torch.inference_mode():
+            hidden = conditioner.model(**arguments).hidden_states
         check(
             f"conditioner call {index + 1} releases its generation cache",
             model.model.rope_deltas is None,
             True,
         )
         check(
-            f"conditioner call {index + 1} preserves every hidden state",
-            all(
-                torch.equal(left, right)
-                for left, right in zip(expected, state["hidden"], strict=True)
-            ),
-            True,
+            f"conditioner call {index + 1} returns exactly hidden_states[50]",
+            (list(hidden), torch.equal(hidden[50], full[50])),
+            ([50], True),
         )
-    state["fail"] = True
+
+    def refuse(*_: Any) -> None:
+        raise RuntimeError("conditioner failure")
+
+    handle = model.model.language_model.layers[0].register_forward_pre_hook(refuse)
     try:
-        OfficialH3Pipeline.condition_text(pipe, "fl2va", state)
+        with torch.inference_mode():
+            conditioner.model(**arguments)
     except RuntimeError as exc:
         check("conditioning failure is preserved", str(exc), "conditioner failure")
     else:
         fail("conditioning failure", "the fixture unexpectedly succeeded")
+    finally:
+        handle.remove()
     check(
         "failed conditioning also releases its position cache",
         model.model.rope_deltas is None,
@@ -3309,6 +3305,38 @@ def arm_interface() -> None:
             f"{name} clip length is whole seconds bounded by the served envelope",
             (duration["type"], duration["constraints"], duration["wire"]),
             ("int", {"ge": min(DURATIONS), "le": max(DURATIONS)}, "optional"),
+        )
+        # Staged admission reuses a scope's measured peak only within one shape cell, so the
+        # cell must name what sizes memory: frames and the reference count, never the prompt.
+        cells = {
+            (seconds, count): dict(
+                normalize(
+                    msgspec.convert(
+                        {
+                            "prompt": "a garden",
+                            "duration_s": seconds,
+                            "assets": [{"asset": f"input:{i}"} for i in range(count)],
+                        },
+                        type=surfaces[name].payload_type,
+                        dec_hook=asset_dec_hook,
+                    )
+                ).values
+            )
+            for seconds in (min(DURATIONS), max(DURATIONS))
+            for count in (1, 2)
+        }
+        steps = {} if name.endswith("_turbo") else {"steps": package.DEFAULT_STEPS}
+        check(
+            f"{name} shape cell is frames and reference count",
+            cells,
+            {
+                (seconds, count): {
+                    "assets": count,
+                    "frames": official.frames_for(seconds),
+                    **steps,
+                }
+                for seconds, count in cells
+            },
         )
         turbo = name.endswith("_turbo")
         models = entry["models"]
