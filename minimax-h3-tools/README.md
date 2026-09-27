@@ -26,8 +26,9 @@ cozy run fidika/minimax-h3-tools/turbo-lora fidika/minimax-h3-acc-loras@1.0.0/or
 ```
 
 `lanes`, `turbo-lora` and `retable` are memoized operations. Tables, heads and quantized
-tensors checkpoint as they complete; an interrupted run re-issued with the same inputs adopts
-the stopped run's completed work and computes only the remainder. The metrics
+tensors checkpoint as they complete; a request re-issued with the same inputs on the same
+worker adopts a retained stopped run's completed work (`cozy run pause <run>` retains it) and
+computes only the remainder. Quantized tensors encode on every available CPU. The metrics
 `h3.reused_tensors`/`h3.computed_tensors` (`h3.turbo.*` for the LoRA) report the split.
 
 `lanes` reads each distinct granted checkpoint's structure once and drops only source-only

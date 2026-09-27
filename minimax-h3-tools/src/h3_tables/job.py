@@ -571,8 +571,8 @@ async def lanes(
     all). Each lane is a row of
     ``lanes.LANES`` and commits to its own output slot, named after the lane. A component
     no lane treats is inherited by reference, so the conditioner and both VAEs stay
-    byte-shared across lanes. An interrupted run resumes: a fresh identical request adopts
-    every completed table and quantized tensor of the stopped one.
+    byte-shared across lanes. A fresh identical request adopts every completed table and
+    quantized tensor of a retained stopped attempt (a paused run) on the same worker.
     """
     requested = _requested(ALL_LANES if lanes is None else lanes)
     sources = {"dits": source, "shared": source}
@@ -648,7 +648,7 @@ async def lanes(
             name: stack.enter_context(
                 ctx.output(name).open(
                     Derivation(
-                        sources={name: info.source for name, info in granted.items()},
+                        sources={alias: info.source for alias, info in granted.items()},
                         targets=_lane_targets(
                             LANES[name], sections, tables, full_targets, selections[name]
                         ),
