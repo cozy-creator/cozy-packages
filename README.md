@@ -101,7 +101,8 @@ mapping and config data come from the pinned Diffusers 0.40 / Transformers 5.16 
 Its 2,641 destinations preserve constructor order: 2,440 roles inherit by reference;
 200 slices/reshapes and one projection transpose rewrite 322,289,664 bytes in bounded
 roles. The operation never constructs the full model or reads a source carrier path.
-Unknown keys, shapes, encodings or nonstandard CLIP position IDs refuse.
+Unknown keys, shapes or encodings refuse. Nonstandard CLIP position IDs (Civitai merges often
+corrupt them) are noted and ignored: the constructor rebuilds the stock sequence.
 
 `scripts/sdxl-normalization-proof.py` checks the complete mapping on meta and runs a
 small real native source through process exit after a checkpoint, resume and replay.

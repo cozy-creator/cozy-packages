@@ -40,6 +40,9 @@ from sdxl import normalization as norm  # noqa: E402
 from sdxl_normalization_plan import routes_for  # noqa: E402
 
 
+DTYPES = {"<f2": "f16", "<i8": "i64", "<f4": "f32"}
+
+
 def tiny_plan() -> norm.NormalizationPlan:
     tensor = norm.SourceTensor
     route = norm.TensorRoute
@@ -72,18 +75,27 @@ def tiny_plan() -> norm.NormalizationPlan:
 
 
 def source(
-    store: Any, plan: norm.NormalizationPlan, *, bad_positions: bool = False
+    store: Any,
+    plan: norm.NormalizationPlan,
+    *,
+    buffers: dict[tuple[str, str], np.ndarray[Any, Any]] | None = None,
 ) -> tuple[str, int, dict[str, bytes]]:
+    """A native SDXL source; ``buffers`` adds position-ID buffers the plan does not name."""
     targets: dict[str, Any] = {}
     values: dict[str, bytes] = {}
     order = []
+    extra = {
+        component: {key: norm.SourceTensor(DTYPES[value.dtype.str], value.shape)}
+        for (component, key), value in (buffers or {}).items()
+    }
     for component, rows in plan.source.items():
         additions = {}
-        for key, spec in rows.items():
+        for key, spec in {**rows, **extra.get(component, {})}.items():
             size = math.prod(spec.shape)
-            if key == "text_model.embeddings.position_ids":
-                positions = np.arange(size, dtype="<f2" if spec.dtype == "f16" else "<i8")
-                value = (positions[::-1] if bad_positions else positions).tobytes()
+            if (component, key) in (buffers or {}):
+                value = (buffers or {})[component, key].tobytes()
+            elif key == "text_model.embeddings.position_ids":
+                value = np.arange(size, dtype="<f2" if spec.dtype == "f16" else "<i8").tobytes()
             else:
                 # Include signed zero and a NaN payload: normalization must preserve bits.
                 value = (np.arange(size, dtype="<u2") + 0x7DFA).tobytes()
@@ -397,24 +409,14 @@ def main() -> None:
     assert len(norm.PLAN.targets) == 2641
     assert norm.PLAN.plain == next(d for alias, d in tensorfs.seed_digests() if alias == "plain/1")
     for name, dtype in (("f16", np.dtype("<f2")), ("i64", np.dtype("<i8")), ("f32", np.dtype("<f4"))):
-        valid_positions = np.arange(77, dtype=dtype)
-        norm._validate_position_ids(valid_positions.tobytes(), name, 77)
-        for bad_positions in (valid_positions[::-1], np.full(77, -1, dtype=dtype)):
-            try:
-                norm._validate_position_ids(bad_positions.tobytes(), name, 77)
-            except UnsupportedInput:
-                pass
-            else:
-                raise AssertionError("changed position IDs accepted")
+        stock = np.arange(77, dtype=dtype)
+        assert norm._stock_positions(stock.tobytes(), name, 77)
+        for changed in (stock[::-1], np.full(77, -1, dtype=dtype)):
+            assert not norm._stock_positions(changed.tobytes(), name, 77)
     for value in (0.5, float("nan"), float("inf")):
-        bad_positions = np.arange(77, dtype="<f2")
-        bad_positions[1] = value
-        try:
-            norm._validate_position_ids(bad_positions.tobytes(), "f16", 77)
-        except UnsupportedInput:
-            pass
-        else:
-            raise AssertionError("noninteger or nonfinite position ID accepted")
+        changed = np.arange(77, dtype="<f2")
+        changed[1] = value
+        assert not norm._stock_positions(changed.tobytes(), "f16", 77)
     with tempfile.TemporaryDirectory(prefix="sdxl-normalization-") as temporary:
         root = Path(temporary)
         store = tensorfs.Store.init(root / "store")
@@ -512,30 +514,51 @@ def main() -> None:
                 pass
             else:
                 raise AssertionError("unreviewed source entered normalization")
-        bad_store = tensorfs.Store.init(root / "bad-positions")
-        bad_manifest, bad_length, _ = source(bad_store, plan, bad_positions=True)
-        bad_model = _derive_model(QuantizationSource, bad_manifest)
+        # Civitai merges corrupt the buffer the constructor rebuilds anyway: cyberrealistic-xl
+        # (2840768) stores I64 with 40 of 77 entries shifted, nova-furry-xl (2943166) F16 with
+        # two drifted. Both normalize; neither buffer is emitted; one warning says so.
+        shifted = np.arange(77, dtype="<i8").reshape(1, 77)
+        shifted[0, 37:] += 1
+        drifted = np.arange(77, dtype="<f2").reshape(1, 77)
+        drifted[0, 70], drifted[0, 71] = 70.0625, 70.9375
+        buffers = {
+            ("text_encoder", "text_model.embeddings.position_ids"): shifted,
+            ("text_encoder_2", "transformer.text_model.embeddings.position_ids"): drifted,
+        }
+        merged_plan = norm.NormalizationPlan(
+            plain=plan.plain,
+            source={
+                component: {k: v for k, v in rows.items() if (component, k) not in buffers}
+                for component, rows in plan.source.items()
+            },
+            targets=plan.targets,
+            configs=plan.configs,
+        )
+        merged_store = tensorfs.Store.init(root / "changed-positions")
+        merged_manifest, merged_length, _ = source(merged_store, merged_plan, buffers=buffers)
+        telemetry = fake_telemetry(fake_attempt("changed-positions"))
         with NativeExecution(
-            bad_store,
+            merged_store,
             root,
-            "bad-positions",
+            "changed-positions",
             {
                 "source": ModelArtifact(
-                    "source", "model", ObjectRef(bad_manifest, bad_length), "sha256:" + "11" * 32
+                    "source", "model", ObjectRef(merged_manifest, merged_length),
+                    "sha256:" + "11" * 32,
                 )
             },
             {"model": norm.MAX_NEW_BYTES},
         ) as owner:
-            try:
-                norm._normalize(
-                    bad_model, owner.context(), fake_telemetry(fake_attempt("bad-positions")), plan
-                )
-            except UnsupportedInput as error:
-                assert "position IDs" in str(error)
-            else:
-                raise AssertionError("changed position-ID values were discarded")
-            transaction = next(iter(owner.client.opened))
-            assert bad_store.derived_lookup(transaction)["state"] != "committed"
+            merged = norm._normalize(
+                _derive_model(QuantizationSource, merged_manifest), owner.context(), telemetry,
+                merged_plan,
+            )
+        merged_header = merged_store.manifest(merged.manifest.digest)["header"]
+        assert merged_header is not None
+        produced = tensorfs.parse_header(merged_header)
+        assert not any(key.endswith("position_ids") for r in produced["components"].values() for key in r)
+        notes = [event for event in telemetry.events if "position IDs" in str(event)]
+        assert len(notes) == 1 and "text_encoder,text_encoder_2" in str(notes[0]), notes
     print(
         json.dumps(
             {
@@ -548,7 +571,7 @@ def main() -> None:
                 "wrong_component_slot_refused": True,
                 "split_transpose_reshape_bits_exact": True,
                 "unreviewed_sources_refused": True,
-                "changed_position_ids_refused": True,
+                "changed_position_ids_noted_not_refused": True,
                 "bf16_and_f32_sources_round_to_f16": True,
                 "optional_position_ids_either_way": True,
                 "f16_overflow_refused": True,

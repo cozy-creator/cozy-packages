@@ -69,8 +69,9 @@ PLAN = msgspec.json.decode(
 )
 
 
-#: Constructor-derived CLIP position IDs. Civitai checkpoints carry either, both or neither;
-#: the constructor rebuilds them, so they are validated when present and never emitted.
+#: Constructor-derived CLIP position IDs. Civitai checkpoints carry either, both or neither,
+#: and merges often corrupt them; the constructor rebuilds the stock sequence (as ComfyUI and
+#: diffusers do), so a stored buffer is never emitted and a changed one is only noted.
 OPTIONAL_BUFFERS = frozenset(
     {
         ("text_encoder", "text_model.embeddings.position_ids"),
@@ -189,15 +190,13 @@ def _bytes(
     return values.tobytes()
 
 
-def _validate_position_ids(raw: bytes, dtype: str, count: int) -> None:
+def _stock_positions(raw: bytes, dtype: str, count: int) -> bool:
+    """Whether a stored position-ID buffer is the stock ``arange``, exactly at any width."""
     if dtype == "bf16":
         values = (np.frombuffer(raw, dtype="<u2").astype("<u4") << 16).view("<f4")
     else:
         values = np.frombuffer(raw, dtype=_NUMPY[dtype])
-    # Exact comparison also rejects fractions, infinities and NaNs: the stock sequence is
-    # stored losslessly at every admitted width.
-    if not np.array_equal(values, np.arange(count, dtype="<i8")):
-        raise UnsupportedInput("SDXL source changed the constructor's position IDs")
+    return bool(np.array_equal(values, np.arange(count, dtype="<i8")))
 
 
 def _targets(plan: NormalizationPlan, dtypes: Mapping[tuple[str, str], str]) -> dict[str, Target]:
@@ -252,8 +251,9 @@ def _normalize(
             receipt = transaction.receipt
             assert receipt is not None
             return ctx.adopt_model(receipt)
-        # The stock CLIP position IDs are reconstructed by the constructor. A checkpoint
-        # that changed their values is outside this mapping even if its shapes still match.
+        # The constructor rebuilds the stock CLIP position IDs; a changed stored buffer is
+        # noted once and otherwise ignored.
+        changed = []
         for component, key in sorted(OPTIONAL_BUFFERS):
             buffer = tensors.get((component, key))
             if component not in components or buffer is None:
@@ -261,7 +261,15 @@ def _normalize(
             count = math.prod(buffer.shape)
             raw = bytearray(count * _WIDTH[buffer.logical_dtype])
             transaction.source_read_into("source", component, key, "value", 0, memoryview(raw))
-            _validate_position_ids(bytes(raw), buffer.logical_dtype, count)
+            if not _stock_positions(bytes(raw), buffer.logical_dtype, count):
+                changed.append(component)
+        if changed:
+            tel.log(
+                "the source's stored CLIP position IDs are not the stock sequence; "
+                "the constructor's stock IDs are used",
+                level="warning",
+                components=",".join(changed),
+            )
         completed = set(transaction.completed_parts())
         reused = written = unsaved = 0
         saved = time.monotonic()
@@ -365,7 +373,7 @@ _NORMALIZATION_MEMO = (
 
 
 _NORMALIZE_HELPERS = (
-    _normalize, _validate, _read, _to_f16, _bytes, _validate_position_ids, _targets,
+    _normalize, _validate, _read, _to_f16, _bytes, _stock_positions, _targets,
 )
 
 
