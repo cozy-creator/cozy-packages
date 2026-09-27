@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import math
+import os
+import threading
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import replace
 from importlib.resources import files
-from typing import Any, Literal, get_args
+from typing import Any, Literal, cast, get_args
 
 import msgspec
 import torch
@@ -24,6 +27,7 @@ from cozy_runtime.author import (
 from cozy_runtime.derive.quantization import (
     MAX_OUTPUT_BYTES,
     ArtifactQuantizationRequest,
+    QuantizationStats,
     prepare_quantization,
     quantize_component_into,
 )
@@ -481,7 +485,7 @@ def _treat(
     one pass over each of its two disjoint key sets.
     """
     component = selection.component
-    cast = write_cast(
+    casted = write_cast(
         transaction,
         ctx,
         tel,
@@ -491,35 +495,64 @@ def _treat(
         target_component=component,
     )
     stats = TreatmentStats(
-        cast_keys=cast.converted_keys,
-        cast_worst_relative_frobenius=cast.worst_relative_frobenius,
-        reused_keys=cast.reused_keys,
-        source_bytes_read=cast.source_bytes_read,
-        new_bytes_written=cast.new_bytes_written,
+        cast_keys=casted.converted_keys,
+        cast_worst_relative_frobenius=casted.worst_relative_frobenius,
+        reused_keys=casted.reused_keys,
+        source_bytes_read=casted.source_bytes_read,
+        new_bytes_written=casted.new_bytes_written,
     )
     if selection.plan is None or selection.treatment.encode is None:
         return stats
-    encoded = quantize_component_into(
-        transaction,
-        ctx,
-        request,
-        tel,
-        encoding=selection.treatment.encode,
-        plan=selection.plan,
-        component=selection.plan_component,
-        source=source,
-        source_component=component,
-        target_component=component,
-    )
+    plan, encoding = selection.plan, selection.treatment.encode
+    tensors = [tensor for tensor in plan.tensors if tensor.component == selection.plan_component]
+    count = max(1, min(len(tensors), len(os.sched_getaffinity(0))))
+    shared = cast(Telemetry, _SharedTelemetry(tel, len(tensors)))
+
+    def encode(shard: list[Any]) -> QuantizationStats:
+        return quantize_component_into(
+            transaction,
+            ctx,
+            request,
+            shared,
+            encoding=encoding,
+            plan=msgspec.structs.replace(plan, tensors=shard),
+            component=selection.plan_component,
+            source=source,
+            source_component=component,
+            target_component=component,
+        )
+
+    # Tensors encode independently: numpy releases the GIL, the handle serializes reads and
+    # writes, and the declared order fixes the output, so shards only change the wall time.
+    with ThreadPoolExecutor(count) as pool:
+        shards = list(pool.map(encode, [tensors[index::count] for index in range(count)]))
+    worsts = [shard.worst_relative_frobenius for shard in shards]
     return msgspec.structs.replace(
         stats,
-        encoded_keys=encoded.encoded_keys,
-        saturated_elements=encoded.saturated_elements,
-        worst_relative_frobenius=encoded.worst_relative_frobenius,
-        reused_keys=stats.reused_keys + encoded.reused_keys,
-        source_bytes_read=stats.source_bytes_read + encoded.source_bytes_read,
-        new_bytes_written=stats.new_bytes_written + encoded.new_bytes_written,
+        encoded_keys=sum(shard.encoded_keys for shard in shards),
+        saturated_elements=sum(shard.saturated_elements for shard in shards),
+        worst_relative_frobenius=None if None in worsts else max(cast(list[float], worsts)),
+        reused_keys=stats.reused_keys + sum(shard.reused_keys for shard in shards),
+        source_bytes_read=stats.source_bytes_read + sum(s.source_bytes_read for s in shards),
+        new_bytes_written=stats.new_bytes_written + sum(s.new_bytes_written for s in shards),
     )
+
+
+class _SharedTelemetry:
+    """Shard threads report through one lock as a single monotone per-stage tensor count."""
+
+    def __init__(self, tel: Telemetry, total: int) -> None:
+        self._tel, self._total, self._done = tel, total, 0
+        self._lock = threading.Lock()
+
+    def progress(self, _fraction: float, *, stage: str, **_: Any) -> None:
+        with self._lock:
+            self._done += 1
+            self._tel.progress(self._done / self._total, stage=stage)
+
+    def log(self, message: str, **fields: Any) -> None:
+        with self._lock:
+            self._tel.log(message, **fields)
 
 
 @invocable(memoize=True, memo_version="h3-lanes/1", memo_dependencies=LANES_MEMO)
