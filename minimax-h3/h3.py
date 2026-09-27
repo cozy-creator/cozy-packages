@@ -45,6 +45,7 @@ from cozy_runtime.author import (
     Outputs,
     Preflight,
     SavedVideo,
+    Shape,
     Telemetry,
     UnsupportedInput,
     VideoAsset,
@@ -174,6 +175,8 @@ MIN_DURATION_S = 5
 MAX_DURATION_S = 15
 assert_duration_envelope((MIN_DURATION_S, MAX_DURATION_S))
 DEFAULT_DURATION_S = MIN_DURATION_S
+# Frames size the DiT's sequence and every scope's scratch, so they are the request's demand
+# axis: staged admission reuses a scope's measured peak only for the same frame count.
 DurationSeconds = Annotated[
     int,
     msgspec.Meta(
@@ -184,6 +187,7 @@ DurationSeconds = Annotated[
             "grid; shorter is quadratically faster."
         ),
     ),
+    Shape(frames={s: frames_for(s) for s in range(MIN_DURATION_S, MAX_DURATION_S + 1)}),
 ]
 
 

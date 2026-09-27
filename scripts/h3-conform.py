@@ -48,7 +48,9 @@ from cozy_runtime.author import (
     canonical_json,
     describe,
 )
+from cozy_runtime.author._assets import asset_dec_hook
 from cozy_runtime.author._attention_scope import _ACTIVE_LAYOUT
+from cozy_runtime.author._demand import normalize
 from cozy_runtime.author.fakes import (
     fake_attempt,
     fake_input,
@@ -59,6 +61,7 @@ from cozy_runtime.author.fakes import (
 )
 from cozy_runtime.internal.derive import derive
 from cozy_runtime.internal.residency import ResidencyRefusal
+from cozy_runtime.internal.worker.plan import shape_cell
 from diffusers import (
     AutoencoderKLMiniMaxH3,
     AutoencoderKLMiniMaxH3Audio,
@@ -3309,6 +3312,34 @@ def arm_interface() -> None:
             f"{name} clip length is whole seconds bounded by the served envelope",
             (duration["type"], duration["constraints"], duration["wire"]),
             ("int", {"ge": min(DURATIONS), "le": max(DURATIONS)}, "optional"),
+        )
+        # Staged admission reuses a scope's measured peak only within one shape cell, so the
+        # cell must name what sizes memory: frames and the reference count, never the prompt.
+        cells = {
+            (seconds, count): shape_cell(
+                normalize(
+                    msgspec.convert(
+                        {
+                            "prompt": "a garden",
+                            "duration_s": seconds,
+                            "assets": [{"asset": f"input:{i}"} for i in range(count)],
+                        },
+                        type=surfaces[name].payload_type,
+                        dec_hook=asset_dec_hook,
+                    )
+                ).values
+            )
+            for seconds in (min(DURATIONS), max(DURATIONS))
+            for count in (1, 2)
+        }
+        steps = "" if name.endswith("_turbo") else f",steps={package.DEFAULT_STEPS}"
+        check(
+            f"{name} shape cell is frames and reference count",
+            cells,
+            {
+                (seconds, count): f"assets={count},frames={official.frames_for(seconds)}{steps}"
+                for seconds, count in cells
+            },
         )
         turbo = name.endswith("_turbo")
         models = entry["models"]
