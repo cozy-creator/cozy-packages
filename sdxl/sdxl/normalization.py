@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -33,6 +34,10 @@ from tensorfs.derived import (
 )
 
 MAX_NEW_BYTES = 1 << 30
+#: Checkpoint after this many accepted bytes or seconds, whichever comes first, and once
+#: at the end. A checkpoint is a durable resume point, not a per-part cost.
+CHECKPOINT_BYTES = 1 << 30
+CHECKPOINT_SECONDS = 30.0
 
 Component = Literal["text_encoder", "text_encoder_2", "unet", "vae"]
 _COMPONENTS: tuple[Component, ...] = ("text_encoder", "text_encoder_2", "unet", "vae")
@@ -258,7 +263,8 @@ def _normalize(
             transaction.source_read_into("source", component, key, "value", 0, memoryview(raw))
             _validate_position_ids(bytes(raw), buffer.logical_dtype, count)
         completed = set(transaction.completed_parts())
-        reused = written = 0
+        reused = written = unsaved = 0
+        saved = time.monotonic()
         for index, route in enumerate(plan.targets):
             ctx.raise_if_cancelled()
             dtype = dtypes[route.component, route.source_key]
@@ -269,8 +275,11 @@ def _normalize(
                 continue
             value = _bytes(transaction, route, plan.source[route.component][route.source_key], dtype)
             transaction.add_part(route.component, route.key, "value", value)
-            transaction.checkpoint()
             written += 1
+            unsaved += len(value)
+            if unsaved >= CHECKPOINT_BYTES or time.monotonic() - saved >= CHECKPOINT_SECONDS:
+                transaction.checkpoint()
+                unsaved, saved = 0, time.monotonic()
             tel.progress((index + 1) / len(plan.targets), stage="normalize-sdxl")
         tel.metric("sdxl.reused_tensors", float(reused))
         tel.metric("sdxl.computed_tensors", float(written))
@@ -278,7 +287,9 @@ def _normalize(
         for name, data in configs.items():
             if name not in completed_configs:
                 transaction.add_config(name, data)
-                transaction.checkpoint()
+                unsaved += len(data)
+        if unsaved:
+            transaction.checkpoint()
         return ctx.adopt_model(transaction.receipt or transaction.commit())
 
 
