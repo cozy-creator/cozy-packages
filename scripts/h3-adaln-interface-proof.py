@@ -189,6 +189,7 @@ def main() -> None:
         distribution="minimax-h3-tools",
         version=str(metadata["Version"]),
         implementation_wheel=implementation,
+        implementation_filename=args.implementation_wheel.name,
     )
     with tempfile.TemporaryDirectory(prefix="h3-adaln-overlay-") as area:
         root = Path(area)
