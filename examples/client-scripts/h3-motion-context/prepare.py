@@ -57,10 +57,7 @@ def main() -> None:
         "[tool.hatch.build.targets.wheel]\nonly-include = [\n"
         + "".join(f"    {quote(v)},\n" for v in roots)
         + "]\n\n"
-        '[tool.cozy]\norganization = "paul"\n\n'
-        '[tool.uv.sources]\nqwen-image-2 = { index = "tensorhub-paul" }\n\n'
-        '[[tool.uv.index]]\nname = "tensorhub-paul"\n'
-        'url = "https://tensorhub.com/v1/index/paul/simple/"\nexplicit = true\n'
+        '[tool.uv.sources]\nqwen-image-2 = { index = "tensorhub" }\n'
     )
     (destination / "pyproject.toml").write_text(project)
     (destination / "package.toml").write_text('[application]\nobject = "h3_motion_context:app"\n')

@@ -19,6 +19,10 @@ on:
         description: Run H3 deterministic conformance
         type: boolean
         default: true
+      account_index:
+        description: Account index the committed locks are bound to (`cozy package lock`)
+        type: string
+        default: https://tensorhub.com/v1/index/fidika/simple/
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -71,6 +75,7 @@ jobs:
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
+          scripts/bind-account-index.sh "${{ inputs.account_index }}" anima minimax-h3 sdxl minimax-h3-tools qwen-image-2
           for package in anima minimax-h3 sdxl minimax-h3-tools qwen-image-2; do
             uv lock --check --project "$package"
           done
@@ -120,6 +125,7 @@ jobs:
       # --no-cache: a second copy of the ~7.6 GiB CUDA closure does not fit the runner disk.
       - name: Exact locked environment
         run: |
+          scripts/bind-account-index.sh "${{ inputs.account_index }}" minimax-h3
           uv lock --check --project minimax-h3
           cd minimax-h3
           uv sync --locked --no-cache
@@ -203,6 +209,7 @@ jobs:
       - run: uv python install 3.12
       - name: Exact locked environment
         run: |
+          scripts/bind-account-index.sh "${{ inputs.account_index }}" ${{ matrix.package }}
           uv lock --check --project ${{ matrix.package }}
           cd ${{ matrix.package }}
           uv sync --locked --no-cache --no-install-project
