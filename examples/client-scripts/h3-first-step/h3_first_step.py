@@ -227,7 +227,7 @@ class TraceLoRA(H3TurboLoRA):
 class ProbeInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
     seed: int
-    duration_s: Annotated[int, msgspec.Meta(ge=5, le=15)] = 5
+    duration_s: Annotated[int, msgspec.Meta(ge=5, le=15)]
 
 
 class ProbeOutput(msgspec.Struct):

@@ -26,7 +26,7 @@ cozy run local/h3-lora-profile/probe \
   --idempotency-key=UNIQUE-PROFILE-COHORT --await --json --out=/absolute/path/results
 ```
 
-The input contains `prompt`, `seed` (default7381), `duration_s` (5 or15, default15)
+The input contains `prompt`, `seed` (default7381), `duration_s` (5 or15, required)
 and `profile` (defaulttrue). Final LoRA qualification uses the fixed15-second
 complex-fight input, with each LoRA independently compared to the same baseline.
 Use the exact same input once without`--lora` and once with the selected adapter.

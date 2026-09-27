@@ -42,8 +42,8 @@ _ACTIVE: ContextVar[Capture | None] = ContextVar("h3_attention_capture", default
 
 class Input(msgspec.Struct, forbid_unknown_fields=True):
     prompt: str
+    duration_s: Annotated[int, msgspec.Meta(ge=5, le=15)]
     seed: int = 7101
-    duration_s: Annotated[int, msgspec.Meta(ge=5, le=15)] = 15
     capture_step: Annotated[int, msgspec.Meta(ge=0, le=29)] = 0
     capture_block: Annotated[int, msgspec.Meta(ge=0, le=49)] = 0
     backends: tuple[str, ...] = ("fa3_bf16", "cudnn_bf16")

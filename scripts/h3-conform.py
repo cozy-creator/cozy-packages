@@ -178,7 +178,7 @@ from h3_order import construction_order, encode_order  # noqa: E402
 STEPS = supported_steps()
 DEFAULT_STEPS = min(STEPS)
 DURATIONS = supported_durations()
-DEFAULT_DURATION_S = min(DURATIONS)
+DEFAULT_DURATION_S = min(DURATIONS)  # this driver's fixture length; the package has no default
 DEFAULT_FRAMES = frames_for(DEFAULT_DURATION_S)
 #: The one canvas a generated clip resolves to without a keyframe.
 CANVAS_HEIGHT, CANVAS_WIDTH = 768, 1344
@@ -1189,14 +1189,17 @@ def arm_clip_length() -> None:
         "a fractional length refuses typed at decode",
         partial(msgspec.convert, 5.5, type=field),
     )
-    check(
-        "the request default is the cheapest served length",
-        (
-            package.FirstLastFrameToVideoInput(prompt="x").duration_s,
-            package.ReferenceMediaToVideoInput(prompt="x").duration_s,
-        ),
-        (min(DURATIONS), min(DURATIONS)),
-    )
+    # Owner ruling 2026-09-27: every generation call names its length; none defaults.
+    for wire in (
+        package.FirstLastFrameToVideoInput,
+        package.ReferenceMediaToVideoInput,
+        package.FirstLastFrameToVideoTurboInput,
+        package.ReferenceMediaToVideoTurboInput,
+    ):
+        refusal(
+            f"{wire.__name__} without duration_s refuses at decode",
+            partial(msgspec.convert, {"prompt": "x"}, type=wire),
+        )
     # `mute` never skipped audio generation: `decode_audio` ran regardless and the audio rows
     # denoised in the same packed sequence at every step, so the flag only suppressed the mux
     # while costing the caller the same time and money (se-052). It is deleted rather than
@@ -2226,7 +2229,10 @@ def arm_media() -> None:
         [image_ref.with_label("Alice"), video_ref, audio_ref, image_ref.with_label("アリス")]
     )
     policy = package.preflight_reference_media(
-        package.ReferenceMediaToVideoInput(prompt="The two characters meet."), mixed
+        package.ReferenceMediaToVideoInput(
+            prompt="The two characters meet.", duration_s=DEFAULT_DURATION_S
+        ),
+        mixed
     )
     check("metadata preflight counts duplicate image occurrences", policy.total, 4)
     check("reference labels preserve arbitrary caller text", mixed.info("アリス").label, "アリス")
@@ -2255,7 +2261,9 @@ def arm_media() -> None:
     refusal(
         "metadata preflight refuses audio-only before decoding",
         lambda: package.preflight_reference_media(
-            package.ReferenceMediaToVideoInput(prompt="An audio-only reference."),
+            package.ReferenceMediaToVideoInput(
+                prompt="An audio-only reference.", duration_s=DEFAULT_DURATION_S
+            ),
             Assets[Mixed]([audio_ref]),
         ),
         "reference_policy",
@@ -3302,9 +3310,14 @@ def arm_interface() -> None:
             field for field in entry["request"]["fields"] if field["name"] == "duration_s"
         )
         check(
-            f"{name} clip length is whole seconds bounded by the served envelope",
-            (duration["type"], duration["constraints"], duration["wire"]),
-            ("int", {"ge": min(DURATIONS), "le": max(DURATIONS)}, "optional"),
+            f"{name} clip length is required whole seconds bounded by the served envelope",
+            (
+                duration["type"],
+                duration["constraints"],
+                duration.get("wire", "required"),
+                "request/duration_s" in entry["invocable"]["defaults"],
+            ),
+            ("int", {"ge": min(DURATIONS), "le": max(DURATIONS)}, "required", False),
         )
         # Staged admission reuses a scope's measured peak only within one shape cell, so the
         # cell must name what sizes memory: frames and the reference count, never the prompt.
@@ -3514,16 +3527,6 @@ def arm_interface() -> None:
             if field["name"] == "segments"
         ),
         {"min_length": 1},
-    )
-    check(
-        "a long-form shot defaults to the longest served cell, not the cheapest",
-        package.Shot(prompt="x", seed=1).duration_s,
-        package.MAX_DURATION_S,
-    )
-    check(
-        "and that cell is longer than the single-clip default",
-        package.MAX_DURATION_S > package.DEFAULT_DURATION_S,
-        True,
     )
     check(
         "one replayed frame leaves the chain at every seam",

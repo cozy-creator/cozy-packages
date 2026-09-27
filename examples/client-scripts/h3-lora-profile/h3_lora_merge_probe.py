@@ -35,8 +35,8 @@ ROWS = 4096
 
 class Input(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
+    duration_s: Literal[5, 15]
     seed: int = 7381
-    duration_s: Literal[5, 15] = 15
     block: Literal[0, 25, 49] = 0
 
 
