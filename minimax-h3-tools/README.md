@@ -187,9 +187,8 @@ table-row labels. Already explicit valid layouts are preserved. All tensor objec
 including the video VAE's precision, are inherited unchanged. Other old plans
 require real retabling from their generating model; `restamp` refuses them.
 
-The small row-label parser is maintained in `minimax-h3/h3_table_layout.py` and
-copied byte-for-byte into the producer. `scripts/sync-h3-table-layout.py` verifies
-the copy in CI, avoiding a private package-index dependency for pure validation.
+The row-label parser is Runtime's `cozy_runtime.models.minimax_h3.table_layout`;
+the producer imports it rather than keeping a copy.
 
 `scripts/h3-turbo-store-proof.py` verifies native inheritance, cancellation, replay,
 and component contents. With the pinned upstream `minimax_h3_pdd.py` supplied as an

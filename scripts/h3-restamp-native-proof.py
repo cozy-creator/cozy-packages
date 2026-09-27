@@ -16,8 +16,8 @@ import tensorfs
 import torch
 from cozy_runtime.author import Invocation, ModelArtifact, ObjectRef, attempt, canonical_json
 from cozy_runtime.author._model import _derive_model
+from cozy_runtime.models.minimax_h3.table_layout import TableLayout
 from h3_tables import job
-from h3_tables._table_layout import TableLayout
 from h3_tables.kernel import H3Topology, table_shapes
 from h3_tables.plans import TASKS
 from h3_tables.source import H3FullTransformer

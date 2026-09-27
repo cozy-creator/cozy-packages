@@ -79,7 +79,6 @@ jobs:
 
       - name: Fences
         run: uv run --no-project python scripts/fence.py
-      - run: uv run --no-project python scripts/sync-h3-table-layout.py
 
       - name: Lint
         run: >-

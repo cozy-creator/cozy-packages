@@ -410,42 +410,9 @@ def _validate_video(video: DecodedVideo, field: str) -> None:
             code="reference_policy",
             fields=[field],
         )
-    for index, duration in enumerate(video.frame_durations):
-        if duration <= 0:
-            raise InvalidRequest(
-                f"{field} frame {index} has a non-positive presentation duration",
-                code="reference_policy",
-                fields=[field],
-            )
-        if (
-            index
-            and video.frame_pts[index - 1] + video.frame_durations[index - 1]
-            != video.frame_pts[index]
-        ):
-            raise InvalidRequest(
-                f"{field} has a presentation-clock gap or overlap before frame {index}",
-                code="reference_policy",
-                fields=[field],
-            )
+    # Frame and soundtrack clock alignment belong to the model's video_reference.
     if video.soundtrack is not None:
         _validate_audio_channels(video.soundtrack, field)
-        offset_samples = (
-            video.soundtrack.start_time - video.start_time
-        ) * video.soundtrack.sample_rate
-        target_samples = video.duration * video.soundtrack.sample_rate
-        if offset_samples.denominator != 1 or target_samples.denominator != 1:
-            raise InvalidRequest(
-                f"{field} video and soundtrack clocks do not meet on exact samples",
-                code="reference_policy",
-                fields=[field],
-            )
-        offset = video.soundtrack.start_time - video.start_time
-        if offset >= video.duration or offset + video.soundtrack.duration <= 0:
-            raise InvalidRequest(
-                f"{field} soundtrack does not overlap its video timeline",
-                code="reference_policy",
-                fields=[field],
-            )
 
 
 def _validate_audio_aggregate(duration: Fraction) -> None:

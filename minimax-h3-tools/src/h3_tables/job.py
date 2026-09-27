@@ -26,6 +26,7 @@ from cozy_runtime.derive.quantization import (
     prepare_quantization,
     quantize_component_into,
 )
+from cozy_runtime.models.minimax_h3.table_layout import TableLayout
 from tensorfs.derived import (
     Config,
     Derivation,
@@ -38,7 +39,6 @@ from tensorfs.derived import (
 
 from . import adaln_operations as _adaln_operations
 from . import lanes as _lanes
-from ._table_layout import TableLayout
 from .kernel import H3Topology, removed_keys, source_shapes, table_bytes, table_shapes
 from .kernel import precompute_tables as compute_tables
 from .lanes import (
