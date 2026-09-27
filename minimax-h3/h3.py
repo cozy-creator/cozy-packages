@@ -1642,6 +1642,9 @@ async def long_form_cuts(
             frame = result.continuation_frame
             warnings.extend(result.warnings)
             completed_work += render_work[index]
+        # Every GPU call has returned: assembly and outputs are CPU work, so the next
+        # request's shots start now.
+        ctx.release_gpus()
         if not videos:
             raise OutputError(f"shot 1 failed ({failure_code}): {failure_detail}")
         delivered_frames = sum(planned_frames[: len(videos)])
@@ -1798,6 +1801,9 @@ async def long_form(
             frame = shot_result.continuation_frame
             context = shot_result.context
             completed_work += render_work[index]
+        # Every GPU call has returned: assembly and outputs are CPU work, so the next
+        # request's shots start now.
+        ctx.release_gpus()
         if not videos:
             raise OutputError(
                 f"segment 1 of {len(payload.segments)} failed ({failure_code}): {failure_detail}"
