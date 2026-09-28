@@ -220,6 +220,10 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
     ("scripts/h3-cuts-proof.py", "cozy_runtime.author._calls"): (
         "Qualify cuts through Runtime's real broker; retire with a public child-call harness."
     ),
+    ("scripts/h3-cuts-proof.py", "cozy_runtime.author._executor_requests"): (
+        "Answer the broker's typed durable requests as a fake worker; retire with a public "
+        "child-call harness."
+    ),
     ("scripts/h3-cuts-proof.py", "cozy_runtime.author._assets"): (
         "Issue verified synthetic reference grants; retire with a public child-call harness."
     ),
@@ -238,6 +242,10 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
     ("scripts/h3-adaln-resume-proof.py", "cozy_runtime.author._model"): (
         "Native/broker qualification driver exercises the real Runtime boundary; retire when a "
         "public native invocation harness owns this fixture seam. "
+    ),
+    ("scripts/h3-adaln-interface-proof.py", "cozy_runtime.author._executor_requests"): (
+        "Answer the broker's typed child calls as a fake worker; retire with a public "
+        "child-call harness."
     ),
     ("scripts/h3-adaln-interface-proof.py", "cozy_runtime.author._calls"): (
         "Drive the installed helper's sibling calls through Runtime's real broker; retire with a "
@@ -261,6 +269,9 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "spelling is `cozy-model-contract-proof`, which today derives only inside a receipt- "
         "selected sandboxed build seat and has no in-process entry point for one synthetic "
         "model. Retire this entry when it grows one. "
+    ),
+    ("scripts/native_execution_fixture.py", "cozy_runtime.author._executor_requests"): (
+        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
     ),
     ("scripts/native_execution_fixture.py", "cozy_runtime.internal.seam"): (
         "Exercise the actual worker journal and descriptors; retire with a public native fixture. "

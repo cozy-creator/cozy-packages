@@ -174,7 +174,6 @@ def build_quantized(
             "preprocessing": "SageAttention SM90 public wrapper, included in each call",
         }
 
-    backend_name = "_flash_3_hub_fp8"
     kernel = dispatch._HUB_KERNELS_REGISTRY[dispatch.AttentionBackendName._FLASH_3_HUB].kernel_fn
     if not callable(kernel):
         raise OptionalBackendUnavailable("The measured production FA3 kernel is not loaded")
@@ -299,33 +298,26 @@ def build_quantized(
             "purpose": "isolate input quantization from FP8 attention arithmetic",
             **_source(production_fp8.quantise, "cozy-runtime"),
         }
-    # Explicit diagnostic coupling: measure the real quantizer on the same inputs.
-    production_fp8.bind(kernel)
-    try:
-        backend = dispatch.AttentionBackendName(backend_name)
-    except ValueError as error:
-        raise OptionalBackendUnavailable(
-            "The worker has not registered its production FA3 FP8 backend in Diffusers; "
-            "the oracle will not substitute an eager quantizer"
-        ) from error
-    function = dispatch._AttentionBackendRegistry._backends.get(backend)
-    if not callable(function):
-        raise OptionalBackendUnavailable(
-            "The production FA3 FP8 backend has no registered implementation"
-        )
 
     def fp8_call() -> Any:
-        return dispatch.dispatch_attention_fn(
-            q, k, v, backend=backend, scale=scale, is_causal=False
+        (q8, qs), (k8, ks), (v8, vs) = [production_fp8.quantise(x) for x in (q, k, v)]
+        return kernel(
+            q8,
+            k8,
+            v8,
+            softmax_scale=scale,
+            causal=False,
+            num_splits=1,
+            q_descale=qs,
+            k_descale=ks,
+            v_descale=vs,
         )
 
     return fp8_call, {
         **common,
-        **_source(function, "cozy-runtime"),
-        "diffusers_backend": backend_name,
+        **_source(production_fp8.quantise, "cozy-runtime"),
         "qkv_quantization": "Runtime production per-(batch, head) FP8 E4M3",
-        "preprocessing": "Registered production wrapper, included in each call",
-        "quantizer_path": "production wrapper selects fused or eager from actual input strides",
-        "registration": "diagnostic binds production quantizer to the loaded FA3 kernel",
+        "preprocessing": "Runtime production per-head quantization inside each call",
+        "quantizer_path": "production quantizer selects fused or eager from actual input strides",
         "input_contiguous": [x.is_contiguous() for x in (q, k, v)],
     }

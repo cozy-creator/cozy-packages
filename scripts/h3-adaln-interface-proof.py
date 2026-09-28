@@ -25,6 +25,15 @@ from cozy_runtime.author import (
     describe,
 )
 from cozy_runtime.author._calls import _Broker, _CallType
+from cozy_runtime.author._executor_requests import (
+    Answer,
+    CallState,
+    ChildCall,
+    ChildCancel,
+    ChildForget,
+    ChildPoll,
+)
+from cozy_runtime.author._executor_requests import Request as ExecutorRequest
 from h3_tables import job
 from h3_tables.adaln_operations import Selection
 from h3_tables.operations import precompute_adaln
@@ -79,18 +88,19 @@ def run(root: Path) -> None:
         bank_ref,
         pruned,
     ]
-    calls: list[dict[str, Any]] = []
+    calls: list[ChildCall] = []
 
-    def exchange(kind: str, frame: dict[str, Any]) -> dict[str, Any]:
-        if kind == "child_call":
-            calls.append(frame)
-        return {
-            "ok": True,
-            "state": "succeeded",
-            "result": canonical_json.encode(
-                msgspec.to_builtins(answers[frame["call_index"]])
-            ).decode(),
-        }
+    def exchange[A: Answer](request: ExecutorRequest, into: type[A], /) -> A:
+        assert isinstance(request, ChildCall | ChildPoll | ChildCancel | ChildForget)
+        if isinstance(request, ChildCall):
+            calls.append(request)
+        state = CallState(
+            ok=True,
+            state="succeeded",
+            result=canonical_json.encode(msgspec.to_builtins(answers[request.call_index])).decode(),
+        )
+        assert isinstance(state, into)
+        return state
 
     result, outcome, _ = attempt(
         app.get("prepare"),
@@ -104,14 +114,14 @@ def run(root: Path) -> None:
     )
     assert outcome.terminal == "succeeded" and result is not None, outcome
     assert result.result == pruned
-    assert [call["export"] for call in calls] == [
+    assert [call.export for call in calls] == [
         "select_adaln_weights",
         "select_adaln_weights",
         "compute_adaln_tables",
         "compute_adaln_tables",
         "apply_adaln",
     ]
-    payloads = [json.loads(call["payload"]) for call in calls]
+    payloads = [json.loads(call.payload) for call in calls]
     assert payloads[2]["source"] == msgspec.to_builtins(projected_fl)
     assert payloads[3]["source"] == msgspec.to_builtins(projected_ref)
     assert payloads[4] == {

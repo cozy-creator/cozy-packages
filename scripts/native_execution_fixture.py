@@ -6,14 +6,25 @@ import hashlib
 import socket
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import msgspec
 from cozy_runtime.author import Context, ModelArtifact, canonical_json
-from cozy_runtime.internal.seam import Channel, DescriptorReply
-from cozy_runtime.internal.weights_writer import ExecutionStorage
+from cozy_runtime.author._executor_requests import (
+    Answer,
+    Reply,
+    Request,
+    WriterAdopt,
+    WriterOutput,
+    WriterSource,
+    encode,
+    respond,
+)
+from cozy_runtime.internal.seam import Channel
+from cozy_runtime.internal.weights_writer import ExecutionStorage, WriterAttempt, WriterBinding
 from cozy_runtime.internal.worker.grants import MODEL_PREFIX
 from cozy_runtime.internal.worker.weights import WeightsExchange
 from cozy_runtime.internal.worker.workspace import Workspace
@@ -43,9 +54,10 @@ class NativeExecution:
         spec = {
             "format": "cozy.worker.v1.InvocationSpec/1",
             "deadline_unix_ms": 9_000_000_000_000,
+            "installation_id": "local-" + "11" * 16,
             "payload_digest": "sha256:" + "12" * 32,
             "job": {
-                "build_id": "13" * 32,
+                "installation_id": "local-" + "13" * 16,
                 "job_descriptor_id": "14" * 32,
                 "publication_contract": {"grant_id": "15" * 32, "outputs": destinations},
             },
@@ -81,50 +93,55 @@ class NativeExecution:
                 invocation_spec_canonical_bytes=raw,
             ),
         )
-        self.frames: list[pb.WorkerFrame] = []
         self.owner = WeightsExchange(
             store_root=Path(store.root),
             workspace=workspace,
-            send=self.frames.append,
             stop=threading.Event(),
             owner_scope=lambda: "package-proof",
         )
-        if after_checkpoint is not None:
+        self.checkpointed = False
 
-            def checkpoint(
-                attempt: Any, transaction: str, binding: Any, facts: dict[str, Any]
-            ) -> None:
-                self.owner.record_checkpoint(attempt, transaction, binding, facts)
+        def checkpoint(
+            attempt: WriterAttempt,
+            transaction: str,
+            binding: WriterBinding,
+            facts: Mapping[str, object],
+        ) -> None:
+            self.owner.record_checkpoint(attempt, transaction, binding, facts)
+            self.checkpointed = True
+            if after_checkpoint is not None:
                 after_checkpoint(facts)
 
-            self.owner.writer_broker.record_checkpoint = checkpoint
+        self.owner.writer_broker.record_checkpoint = checkpoint
         self.client = ExecutionStorage(self.spool, self.exchange, outputs)
         self.replayed_outputs: set[str] = set()
 
-    @property
-    def checkpointed(self) -> bool:
-        return any(frame.HasField("weights_checkpoint") for frame in self.frames)
+    def exchange[A: Answer](self, request: Request, into: type[A], /) -> A:
+        """One writer request across a real seam socket pair, its descriptor included."""
 
-    def exchange(
-        self, kind: str, frame: dict[str, Any], *, descriptor: bool = False
-    ) -> dict[str, Any]:
-        assert kind == "weights_writer"
-        answer = self.owner.writer_broker.handle(self.attempt, frame)
-        if not isinstance(answer, DescriptorReply):
-            return answer
-        assert descriptor
+        def handle(sent: Request) -> Reply:
+            assert isinstance(sent, WriterSource | WriterOutput | WriterAdopt)
+            return self.owner.writer_broker.handle(self.attempt, sent)
+
         left, right = socket.socketpair()
-        try:
-            with left, right:
-                sender, receiver = Channel(left), Channel(right)
-                sender.send(dict(answer))
-                sender.send_descriptor(answer.descriptor)
-                result = receiver.recv()
-                assert result is not None
-                result["descriptor"] = receiver.recv_descriptor()
-                return result
-        finally:
-            answer.descriptor.close()
+        with left, right:
+            executor, worker = Channel(left), Channel(right)
+            executor.send({"event": "request", "seq": 1, **encode(request)})
+            frame = worker.recv()
+            assert frame is not None
+            answer, handoff = respond(frame, handle)
+            try:
+                worker.send(answer)
+                if handoff is not None:
+                    worker.send_descriptor(handoff)
+            finally:
+                if handoff is not None:
+                    handoff.close()
+            reply = executor.recv()
+            assert reply is not None and reply["seq"] == 1
+            if reply.get("descriptor") is True:
+                reply["descriptor"] = executor.recv_descriptor()
+            return msgspec.convert(reply, into)
 
     def context(self) -> Context:
         def open_output(slot: str, definition: Any) -> Any:

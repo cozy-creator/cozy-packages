@@ -38,6 +38,18 @@ from cozy_runtime.author import (
 from cozy_runtime.author._assets import Asset, GrantedInput, file_state
 from cozy_runtime.author._calls import _Broker, _CallType
 from cozy_runtime.author._codec import encode_frame
+from cozy_runtime.author._executor_requests import (
+    Answer,
+    CallProgress,
+    CallState,
+    ChildCall,
+    ChildCancel,
+    ChildForget,
+    ChildPoll,
+    GpuRelease,
+    ModelPrefetch,
+    Request,
+)
 from cozy_runtime.author._services import ProgressFrame
 from cozy_runtime.internal import interface_wheel, package_interface, static_interface
 from cozy_runtime.internal.worker import machine_byte_results
@@ -285,13 +297,13 @@ def drive(
     parent = root.name if request_id is None else request_id
     export = ("motion_segment" if continuous else "cut_segment") + ("_turbo" if turbo else "")
     surface = next(item for item in describe(h3.app) if item.name == export)
-    calls: list[dict[str, Any]] = []
-    prefetches: list[dict[str, Any]] = []
+    calls: list[ChildCall] = []
+    prefetches: list[ModelPrefetch] = []
     events: list[Any] = []
     source: dict[str, Path] = {}
     media: dict[str, str] = {}
-    answers: dict[int, dict[str, Any]] = {}
-    pending: dict[int, dict[str, Any]] = {}
+    answers: dict[int, CallState] = {}
+    pending: dict[int, CallProgress] = {}
     cancelled = False
     completed_references: set[int] = set()
     canceled_children: set[int] = set()
@@ -314,47 +326,52 @@ def drive(
             order=order,
         )
 
-    def exchange(kind: str, value: dict[str, Any]) -> dict[str, Any]:
+    def exchange[A: Answer](request: Request, into: type[A], /) -> A:
+        reply = worker(request)
+        assert isinstance(reply, into), (request, reply)
+        return reply
+
+    def worker(request: Request) -> Answer:
         nonlocal cancelled
-        if kind == "model_prefetch":
-            prefetches.append(value)
-            return {"ok": True}
-        if kind == "gpu_release":
+        if isinstance(request, ModelPrefetch):
+            prefetches.append(request)
+            return Answer(ok=True)
+        if isinstance(request, GpuRelease):
             # Only after every child's result is in: assembly needs no GPU.
             assert not pending and set(answers) <= settled, (sorted(answers), sorted(settled))
             releases.append(len(calls))
-            return {"ok": True}
-        index = int(value["call_index"])
-        if kind in ("child_cancel", "child_forget"):
-            if kind == "child_cancel":
+            return Answer(ok=True)
+        assert isinstance(request, ChildCall | ChildPoll | ChildCancel | ChildForget), request
+        index = request.call_index
+        if isinstance(request, ChildCancel | ChildForget):
+            if isinstance(request, ChildCancel):
                 canceled_children.add(index)
-            return {"ok": True}
-        if kind == "child_poll":
+            return CallState(ok=True)
+        if isinstance(request, ChildPoll):
             if index < 2:
                 # Both requests must be submitted before awaiting either result.
                 # Settle the second first to prove identity is definition ordered.
                 assert len(calls) == 2
                 if index == 0 and 1 not in completed_references:
-                    return {"ok": True, "state": "running"}
+                    return CallState(ok=True, state="running")
                 if index == 1 and reference_cancel:
                     cancelled = True
-                    return {"ok": True, "state": "running"}
+                    return CallState(ok=True, state="running")
                 if index == 1 and reference_failure:
-                    return {"ok": False, "code": "child.failed", "detail": "reference failed"}
+                    return CallState(ok=False, code="child.failed", detail="reference failed")
                 if index not in pending:
                     completed_references.add(index)
             if index in pending:
-                return {"ok": True, "state": "running", "progress": pending.pop(index)}
+                return CallState(ok=True, state="running", progress=pending.pop(index))
             settled.add(index)
             return answers[index]
-        assert kind == "child_call"
-        calls.append(value)
+        calls.append(request)
         shot_index = index - 2
         if index >= 2 and shot_index in (fail, cancel):
             cancelled = shot_index == cancel
-            return {"ok": False, "code": "child.failed", "detail": "synthetic interruption"}
-        wire = json.loads(value["payload"])
-        is_reference = value["export"] == "generate_image"
+            return CallState(ok=False, code="child.failed", detail="synthetic interruption")
+        wire = json.loads(request.payload)
+        is_reference = request.export == "generate_image"
         if is_reference:
             assert wire["models"] == {"model": None}
             wire = wire["payload"]
@@ -455,17 +472,14 @@ def drive(
             # Every shot fills the fixed slot; only a shot with a successor pays for windows.
             context = next(item for item in outputs if item["output_id"] == "context")
             assert (context["length"] > 0) == successor, context
-        answers[index] = {
-            "ok": True,
-            "state": "succeeded",
-            "result": json.dumps(answer),
-            "byte_grants": outputs,
-        }
-        pending[index] = {
-            "sequence": 1,
-            "payload": asdict(next(event for event in emitted if isinstance(event, ProgressFrame))),
-        }
-        return {"ok": True, "child_request_id": f"{parent}-child-{index}"}
+        answers[index] = CallState(
+            ok=True, state="succeeded", result=json.dumps(answer), byte_grants=tuple(outputs)
+        )
+        pending[index] = CallProgress(
+            sequence=1,
+            payload=asdict(next(event for event in emitted if isinstance(event, ProgressFrame))),
+        )
+        return CallState(ok=True, child_request_id=f"{parent}-child-{index}")
 
     wire: dict[str, Any] = {
         "segments": [
@@ -608,11 +622,11 @@ def drive(
         if isinstance(event, ProgressFrame) and event.overall_fraction is not None
     ]
     assert overall == sorted(overall) and (overall[-1] == 1) == (fail < 0)
-    sent = [json.loads(call["payload"]) for call in calls[2:]]
+    sent = [json.loads(call.payload) for call in calls[2:]]
     assert all("[Shot 1]" in row["payload"]["prompt"] for row in sent)
     assert sent[0]["payload"]["seed"] == 0
     assert len(prefetches) == 1
-    fixed = [json.loads(answers[index]["result"])["image"]["digest"] for index in range(2)]
+    fixed = [json.loads(answers[index].result)["image"]["digest"] for index in range(2)]
     fixed += [voice] if audio else []
     for row in sent:
         assert [item["asset"] for item in row["assets"]] == fixed
@@ -629,7 +643,7 @@ def drive(
         for index, row in enumerate(sent[1:], 1):
             assert (
                 row["payload"]["context"]
-                == json.loads(answers[index + 1]["result"])["context"]["digest"]
+                == json.loads(answers[index + 1].result)["context"]["digest"]
             )
     return {"frames": result.result.delivered_frames, "calls": sent, "events": len(events)}
 

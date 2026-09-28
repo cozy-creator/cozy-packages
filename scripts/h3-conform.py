@@ -3554,7 +3554,14 @@ PARKED_DIT_SHORTFALL = ResidencyRefusal(
     "with ['audio_vae', 'fl2va_dit', 'video_vae'] resident, short by 9182778828 B. Every "
     "evictable component was already freed, so this is a capacity fact, not an allocation "
     "to retry",
-    {"resource": "vram", "scope": "component_use", "request_shape": "warm_ref2va"},
+    {
+        "resource": "vram",
+        "scope": "component_use",
+        "needed_bytes": 61237622220,
+        "available_bytes": 52054843392,
+        "evidence_class": "measured",
+        "request_shape": "warm_ref2va",
+    },
 )
 
 
