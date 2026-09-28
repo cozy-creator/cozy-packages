@@ -542,8 +542,6 @@ def _quantize(
 
 # One function per lane: Runtime requires a receipt for EVERY declared weights output. The
 # quantizer checkpoints every encoded tensor, so a re-issued run adopts completed tensors.
-# Runtime 0.18.20 (this package's lock) reads only memoize= statically; the fallback
-# operation identity is the installed release, which still admits partial-work adoption.
 @invocable(memoize=True)
 async def fp8(
     ctx: Context,
@@ -556,8 +554,6 @@ async def fp8(
     return _quantize(ctx, tel, source, "fp8", max_relative_frobenius)
 
 
-# Runtime 0.18.20 (this package's lock) reads only memoize= statically; the fallback
-# operation identity is the installed release, which still admits partial-work adoption.
 @invocable(memoize=True)
 async def mxfp8(
     ctx: Context,
