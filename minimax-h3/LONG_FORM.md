@@ -167,16 +167,14 @@ resolve beside the input JSON; absolute and `~/` filenames also work. URLs are n
 assets. `--asset references.0.image=...` is supported as an alternative to an image field.
 
 ```sh
-cozy package install paul/minimax-h3
-cozy run paul/minimax-h3/long_form --input story.json --rental=your-rental --await
+cozy package install fidika/minimax-h3
+cozy run fidika/minimax-h3/long_form --input story.json --rental=your-rental --await
 ```
 
 `long_form` continues completed audio/video context; `long_form_cuts` renders independent
-segments. Both use this 1.18.3 input contract. Old `shots`, per-item `prompt`, structured
-`dialogue`/`screen_text` markers and shared audio fields are not this contract.
+segments.
 
-Continuous segments default to 10 seconds, independent cut segments to 15; authored
-durations must be 5–15 seconds. In continuous mode, context_frames 22/39/56 permits at
+Every segment states `duration_s` (5–15 seconds); there is no default. In continuous mode, context_frames 22/39/56 permits at
 most 14/13/12 new seconds after the first segment. Longer requests are shortened and
 reported. At 24 fps, a 10-second delivered segment has 240 new frames, without replaying
 the context frames. Turbo uses eight PDD evaluations; standard mode permits 30/40/50 steps.

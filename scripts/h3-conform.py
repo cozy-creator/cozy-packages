@@ -3207,15 +3207,13 @@ def arm_interface() -> None:
     entries = {entry["name"]: entry for entry in interface["entrypoints"]}
     surfaces = {surface.name: surface for surface in describe(package.app)}
     check(
-        "official actions, turbo functions and the model-bearing segment",
+        "official actions, turbo functions and the model-bearing segments",
         set(entries),
         {
             "fl2va",
             "ref2va",
             "fl2va_turbo",
             "ref2va_turbo",
-            "segment",
-            "segment_turbo",
             "cut_segment",
             "cut_segment_turbo",
             "motion_segment",
@@ -3226,8 +3224,6 @@ def arm_interface() -> None:
         "only chained renderers are internal",
         {name for name, entry in entries.items() if entry.get("internal", False)},
         {
-            "segment",
-            "segment_turbo",
             "cut_segment",
             "cut_segment_turbo",
             "motion_segment",
@@ -3404,29 +3400,36 @@ def arm_interface() -> None:
     # render. A model slot here would make one attempt hold eight shots.
     check("long_form declares no model slot", "models" in jobs["long_form"], False)
     check(
-        "segment holds the H3 model for exactly one shot",
-        entries["segment"]["models"][0]["class"],
+        "motion_segment holds the H3 model for exactly one shot",
+        entries["motion_segment"]["models"][0]["class"],
         "H3Model",
     )
     check(
-        "segment is child-callable by its exact module and export",
-        (entries["segment"]["invocable"]["module"], entries["segment"]["invocable"]["export"]),
-        ("h3", "segment"),
+        "motion_segment is child-callable by its exact module and export",
+        (
+            entries["motion_segment"]["invocable"]["module"],
+            entries["motion_segment"]["invocable"]["export"],
+        ),
+        ("h3", "motion_segment"),
     )
     check(
         "a shot's identity is frozen in its own request",
-        [field["name"] for field in entries["segment"]["request"]["fields"]],
-        ["payload"],
+        [field["name"] for field in entries["motion_segment"]["request"]["fields"]],
+        ["payload", "assets"],
     )
-    # A child call names its whole intent: only the opening frame may be omitted, because a
-    # default would put a value into the intent digest that the caller never wrote.
+    # A child call names its whole intent: only context and provenance may be omitted,
+    # because a default would put a value into the intent digest that the caller never wrote.
     check(
         "a shot's prompt, seed, length and steps are all named, never defaulted",
-        sorted(entries["segment"]["invocable"]["defaults"]),
+        sorted(entries["motion_segment"]["invocable"]["defaults"]),
         [
+            "request/assets/[]/fidelity",
+            "request/assets/[]/label",
+            "request/payload/context",
+            "request/payload/context_frames",
             "request/payload/expected_provenance",
             "request/payload/expected_provenance/union/1/turbo_lora_manifest",
-            "request/payload/first_frame",
+            "request/payload/next_context_frames",
             "result/provenance/turbo_lora_manifest",
         ],
     )
@@ -3453,17 +3456,8 @@ def arm_interface() -> None:
     check("long-form has no contradictory standard step default", unseeded.steps, None)
     check(
         "turbo child has the independently bound base and adapter",
-        [slot["class"] for slot in entries["segment_turbo"]["models"]],
+        [slot["class"] for slot in entries["motion_segment_turbo"]["models"]],
         ["H3TurboBase", "H3TurboLoRA"],
-    )
-    refusal(
-        "turbo child cannot represent steps",
-        partial(
-            msgspec.convert,
-            {"prompt": "x", "seed": 1, "duration_s": 5, "steps": 8},
-            package.SegmentTurboInput,
-        ),
-        "ValidationError",
     )
     check(
         "long_form request fields",
