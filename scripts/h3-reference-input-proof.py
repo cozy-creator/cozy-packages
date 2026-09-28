@@ -6,11 +6,13 @@ import asyncio
 import sys
 from pathlib import Path
 
+import msgspec
 from cozy_runtime.author import ImageAsset, InvalidRequest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
 from story import (
     StoryReference,
+    compile_segments,
     image_prompt,
     resolve_reference_images,
     StorySegment,
@@ -62,6 +64,31 @@ async def main() -> None:
             pass
         else:
             raise AssertionError("invalid reference accepted")
+    # Run 1559: names as people type them decode from the request wire, normalise, and label
+    # the prompt; only a name with nothing visible, or a normalised duplicate, is refused.
+    typed = msgspec.convert(
+        [
+            {"name": " subject  1 ", "kind": "character", "description": "A tall courier."},
+            {"name": "<Dr. Zoë O'Neil>", "kind": "character", "description": "A surgeon."},
+            {"name": "2nd platform", "kind": "scene", "description": "A wet platform."},
+        ],
+        list[StoryReference],
+    )
+    assert [ref.name for ref in typed] == ["subject 1", "Dr. Zoë O'Neil", "2nd platform"]
+    (prompt,) = compile_segments("", [segment], typed)
+    assert "<subject 1> is the character shown in <Picture 1>." in prompt
+    assert "<Dr. Zoë O'Neil> is the character shown in <Picture 2>." in prompt
+    for names in (["<>"], [" "], ["Subject 1", "SUBJECT   1"]):
+        try:
+            refs = msgspec.convert(
+                [{"name": name, "kind": "scene", "description": "A place."} for name in names],
+                list[StoryReference],
+            )
+            validate_references(refs)
+        except (msgspec.ValidationError, InvalidRequest):
+            pass
+        else:
+            raise AssertionError(f"{names} accepted")
     entered, cancelled = asyncio.Event(), asyncio.Event()
 
     async def failing(reference: StoryReference) -> ImageAsset:
