@@ -232,10 +232,6 @@ jobs:
 
       # `Model.warm` is only observable by RUNNING it: the package's own constructors at
       # toy widths, under the author harness the executor's warm path is built from.
-      - name: SDXL normalization and native process restart
-        if: matrix.package == 'sdxl'
-        run: sdxl/.venv/bin/python scripts/sdxl-normalization-proof.py
-
       - name: Reference image request and output contract
         if: matrix.package == 'qwen-image-2'
         run: qwen-image-2/.venv/bin/python scripts/qwen-image-2-conform.py

@@ -14,10 +14,11 @@ Set VERSION, DESTINATION and QUANTIZED, then:
     cozy run examples/client-scripts/sdxl_prepare.py --rental=NAME --allow-publish org/model --await
 
 Works for any SDXL single-file checkpoint (f16, bf16 or f32; CLIP position IDs present or
-absent). On the rental that already ingested the version with `cozy model upload`, the
-download and conversion are memo hits. The script is the upload path until Runtime-owned
-jobs accept a `cozy run <fn> <in> <org/model>` destination; each lane is the ordinary
-memoized package function.
+absent): the conversion writes the servable fp16 checkpoint directly. On the rental that
+already ingested the version with `cozy model upload`, the download and conversion are memo
+hits. The script is the upload path until Runtime-owned jobs accept a
+`cozy run <fn> <in> <org/model>` destination; each lane is the ordinary memoized package
+function.
 """
 
 from collections.abc import Awaitable, Callable
@@ -28,7 +29,6 @@ from cozy_runtime.author.publication import upload_checkpoint
 from cozy_runtime.author.sources import convert_cozytensors, download_civitai
 
 from sdxl import fp8, mxfp8
-from sdxl.normalization import normalize
 
 VERSION = 2883731
 DESTINATION = "org/model"
@@ -39,7 +39,7 @@ PROFILE = "civitai/sdxl/single-file/1"
 async def main(ctx: ScriptContext) -> dict[str, str]:
     source = await download_civitai(VERSION)
     converted = await convert_cozytensors(source, profiles=(PROFILE,))
-    lanes = {"fp16": await normalize(source=converted)}
+    lanes = {"fp16": converted}
     for name, function in (("fp8", fp8), ("mxfp8", mxfp8)):
         if name in QUANTIZED:
             call = cast(Callable[..., Awaitable[ModelArtifact]], function)

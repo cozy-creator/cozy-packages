@@ -38,7 +38,6 @@ from sdxl_assessment_client.image_files import image_suffix, retain_image
 from sdxl_assessment_client.report_bundle import report_bundle
 
 from sdxl import generate
-from sdxl.normalization import normalize
 from sdxl.operations import quantization_plan
 
 SOURCE_VERSION = 128078
@@ -80,9 +79,8 @@ async def main(ctx: ScriptContext, *, out: Outputs) -> Tree:
     raw = await download_civitai(SOURCE_VERSION, file=SOURCE_FILE)
     converted = await convert_cozytensors(raw, profiles=("civitai/sdxl/single-file/1",))
     # The caller surface omits services injected into the admitted child signature.
-    normalize_call = cast(Callable[..., Awaitable[ModelArtifact]], normalize)
     quantize_call = cast(Callable[..., Awaitable[ModelArtifact]], quantize)
-    reference = await normalize_call(source=converted)
+    reference = converted
     candidate = await quantize_call(source=reference, plan=quantization_plan(), encoding=ENCODING)
     assessment = Assessment(
         generate=generate,

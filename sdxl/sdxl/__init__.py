@@ -705,17 +705,3 @@ async def mxfp8(
 app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
 app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
 
-
-# Normalization is a managed source operation; quantization policy is plain composition.
-from . import normalization  # noqa: E402
-
-app.job(
-    normalization.normalize_component, name="normalize-component",
-    weights=(WeightsOutput("model", max_new_bytes=normalization.MAX_NEW_BYTES),),
-    accelerator=False,
-)
-app.job(
-    normalization.assemble_normalized, name="assemble-normalized",
-    weights=(WeightsOutput("model", max_new_bytes=0),),
-    accelerator=False,
-)

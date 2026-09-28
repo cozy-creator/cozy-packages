@@ -54,8 +54,8 @@ cozy run examples/client-scripts/sdxl_prepare.py --rental=NAME --allow-publish o
 
 Their downloads and conversions repeat `cozy model upload` of the same pinned sources, so on
 the ingest rental they are memo hits. They are the upload path until Runtime-owned jobs accept
-a `cozy run <fn> <in> <org/model>` destination. SDXL normalization is four component functions
-plus an assembly because a whole-model native declaration exceeds the 1 MiB protocol bound.
+a `cozy run <fn> <in> <org/model>` destination. The SDXL conversion itself is servable: there
+is no normalization step.
 
 Edit the script and run it again. Each invocation starts at `main()`, while the
 library operations look up compatible completed results and validate that their
@@ -103,7 +103,7 @@ operation; SDXL and Anima helpers select components, and H3 supplies exact geome
 and canonical-order fingerprints. A caller or unrelated family edit that leaves
 that plan unchanged does not change the shared quantization target.
 
-`sdxl_fp8.py` composes native source/conversion/normalization/quantization with
+`sdxl_fp8.py` composes native source/conversion/quantization with
 24 fresh 1024² renders (eight prompts × candidate/reference/repeat), activation
 capture, memoized weight/media/capture/quality measurements, a fresh Eval fold,
 and explicit checkpoint/report/release effects. The local `sdxl-assessment` helper
