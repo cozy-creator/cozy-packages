@@ -143,12 +143,11 @@ async def renderer(
         steps = 8 if turbo else payload.steps
         tel.step_callback(steps, stage="denoise", overall_range=(0.15, 0.85))(2)
         rgb = pixels(seed, frames_for(duration))
-        frame = out.save_image(ImageFrame(WIDTH, HEIGHT, rgb[-1].tobytes()), format="png")
         audio = np.zeros((2, round(len(rgb) * RATE / FPS)), np.float32)
         video = out.save_video(rgb, fps=FPS, audio=audio, sample_rate=RATE)
         if capture is not None:
             capture(torch.from_numpy(rgb))
-        return h3.H3VideoOutput(video, frame, [])
+        return h3.H3VideoOutput(video, [])
 
     def refs(_ctx: Any, task: str, request: Any, images: Any, *_: Any, **kwargs: Any) -> Any:
         assert task == ("ref2va_turbo" if turbo else "ref2va")
@@ -210,7 +209,6 @@ async def motion_renderer(
             rgb[index, :, index % 90 : index % 90 + 6, 2] = 230
         audio = np.zeros((2, count * RATE // FPS), np.float32)
         video = out.save_video(rgb, fps=FPS, audio=audio, sample_rate=RATE)
-        frame = out.save_image(ImageFrame(WIDTH, HEIGHT, rgb[-1].tobytes()), format="png")
         if payload.next_context_frames:
             tail = AVContext(
                 {
@@ -227,7 +225,7 @@ async def motion_renderer(
             kwargs["completed"](tail, rgb)
         else:
             assert kwargs["completed"] is None
-        return h3.H3VideoOutput(video, frame, [])
+        return h3.H3VideoOutput(video, [])
 
     def export(state: Any, *, frames: Any, windows: Any, provenance: str) -> Any:
         # The delivered frames as landed, and only the windows the successor selects.
@@ -451,7 +449,7 @@ def drive(
         assert {item["output_id"] for item in outputs} == (
             {"image"}
             if is_reference
-            else {"video", "continuation_frame"} | ({"context"} if continuous else set())
+            else {"video"} | ({"context"} if continuous else set())
         )
         if continuous and not is_reference:
             # Every shot fills the fixed slot; only a shot with a successor pays for windows.
@@ -596,13 +594,8 @@ def drive(
     assert releases == [len(calls)], releases
     delivered = count if fail < 0 else fail
     assert result.result.delivered == delivered and result.result.complete == (fail < 0)
-    assert len(result.outputs) == 2 and {item["kind"] for item in result.outputs} == {
-        "video",
-        "image",
-    }
-    # The last child's PNG is forwarded byte-for-byte, never decoded and re-encoded.
-    last = json.loads(answers[delivered + 1]["result"])["continuation_frame"]["digest"]
-    assert result.result.continuation_frame.digest == last
+    # The joined video is the parent's only output; no last-frame image is delivered.
+    assert [item["kind"] for item in result.outputs] == ["video"], result.outputs
     with av.open(io.BytesIO(result.result.video.read_bytes()), mode="r") as container:
         assert sum(1 for _ in container.decode(video=0)) == sum(
             min(duration_s, (362 - (context_frames if index else 0)) // FPS) * FPS
@@ -723,7 +716,7 @@ def main() -> None:
         )
         + "\n"
     )
-    print("cut routing, references, assembly, two-file custody, progress and interruption: PASS")
+    print("cut routing, references, assembly, one-file custody, progress and interruption: PASS")
 
 
 if __name__ == "__main__":

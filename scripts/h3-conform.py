@@ -2088,7 +2088,7 @@ def finish_scaffold(frames: int) -> tuple[Any, Any]:
 
 
 def arm_media() -> None:
-    print("\n== ordered mixed references, exact clocks, and continuation identity ==")
+    print("\n== ordered mixed references and exact clocks ==")
     check(
         "maximum mixed reference policy",
         validate_reference_policy(["image"] * 9 + ["video"] * 3).total,
@@ -2372,12 +2372,6 @@ def arm_media() -> None:
     pixels, _ = package._rgb8(torch, decoded)
     check("RGB8 conversion shape", tuple(pixels.shape), (2, 1, 2, 3))
     check("RGB8 clamp and round", pixels[0].flatten().tolist(), [0, 128, 0, 125, 255, 255])
-    continuation = bytes(pixels[-1].numpy().tobytes())
-    check(
-        "continuation is the last pre-encode RGB frame",
-        continuation,
-        bytes([255, 64, 26, 0, 191, 230]),
-    )
 
     # The whole tail, for real (h3a-017): tiny official VAEs through the official decode
     # blocks, the real `Outputs` over a real spool, the runtime's own encoder, probe and
@@ -2402,9 +2396,9 @@ def arm_media() -> None:
         checks=NumericalChecks(cast(Any, telemetry), pipe.resident),
     )
     check(
-        "finish returns exactly two typed media assets",
-        (type(finished.video), type(finished.continuation_frame), len(outputs.saved)),
-        (VideoAsset, ImageAsset, 2),
+        "finish returns exactly one typed media asset",
+        (type(finished.video), len(outputs.saved)),
+        (VideoAsset, 1),
     )
     check("the video is the sink's committed mp4", finished.video.media_type, "video/mp4")
     log_events = [
@@ -2458,7 +2452,6 @@ def arm_media() -> None:
         {
             "video_pixel_digest": reference_digest,
             "audio_sample_digest": hashlib.sha256(waveform.numpy()).hexdigest(),
-            "continuation_pixel_digest": hashlib.sha256(reference[-1].numpy()).hexdigest(),
         },
     )
     facts = logs.get("h3 container facts") or {}
@@ -2501,9 +2494,9 @@ def arm_media() -> None:
         "the tail's stages are all measured",
         [
             name in stages
-            for name in ("decode_audio", "decode_video", "check_output", "encode_outputs")
+            for name in ("decode_audio", "decode_video", "check_output")
         ],
-        [True] * 4,
+        [True] * 3,
     )
     check(
         "finish receipt loses and refuses no Runtime observations",
@@ -3371,7 +3364,7 @@ def arm_interface() -> None:
         check(
             f"{name} exact customer result fields",
             [field["name"] for field in entry["result"]["fields"]],
-            ["video", "continuation_frame", "warnings"],
+            ["video", "warnings"],
         )
     for wire in (
         package.FirstLastFrameToVideoTurboInput,
@@ -3478,7 +3471,6 @@ def arm_interface() -> None:
         [field["name"] for field in jobs["long_form"]["result"]["fields"]],
         [
             "video",
-            "continuation_frame",
             "complete",
             "delivered",
             "requested",

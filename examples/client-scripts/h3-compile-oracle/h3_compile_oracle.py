@@ -402,7 +402,6 @@ def run(
         )
     return GenerationResult(
         video=result.video,
-        continuation_frame=result.continuation_frame,
         warnings=result.warnings,
         measurements=diagnostic.measurements,
         compiler_artifacts=diagnostic.compiler_artifacts,

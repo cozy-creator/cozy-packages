@@ -47,7 +47,7 @@ latency measurements:
 | Full warm compiled video | `run` | `mode=blocks profile=false warmup_steps=2` |
 | Warm compiled first-step profile | `probe` | `mode=blocks profile=true warmup_steps=2` |
 
-`run` produces the ordinary video and continuation frame plus measurements and
+`run` produces the ordinary video plus measurements and
 compiler artifacts. `probe` deliberately stops after the first denoising step,
 before video decoding; successful probe status is `first_step_only`. An outer
 completed request can contain a probe with `status=error`: inspect its retained

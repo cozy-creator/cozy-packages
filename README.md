@@ -127,9 +127,8 @@ The H3 package exposes both official actions from one model generation. Its norm
 published FP8-pruned base and the separate PDD-8 adapter. Omit `steps` in turbo mode.
 For standard sampling, select `mode="standard"`; omitted `steps` then means 30,
 with explicit 30/40/50 also supported. The CPU parent renders and assembles remotely,
-returning only the joined MP4 and the last continuation frame. Intermediate shot clips
-stay inside the serving calls. A partial delivery includes its playable completed portion
-and final frame; pass that frame as `opening_frame` in a new request to continue.
+returning only the joined MP4. Intermediate shot clips stay inside the serving calls. A
+partial delivery includes its playable completed portion.
 Four-GPU placement is chosen when submitting the run, not by the composition function.
 
 The `fl2va_turbo` and `ref2va_turbo` functions take two independent model slots:
@@ -324,10 +323,8 @@ and 1.0 clean-audio anchors) — plus one deduplicated union order of 315 block-
 final-normalization keys. These documents are the input boundary for `minimax-h3-tools`; that
 producer must not import package code. Each task has one table bank for the whole plan.
 
-Both actions return exactly one muxed MP4 and one lossless PNG continuation frame — the customer
-result carries nothing else. The continuation frame is captured from the final decoded RGB8 frame
-before MP4 encoding. Checkpoint, plan, geometry, and digest facts (including the continuation
-frame's separate stored-byte and source-RGB identities) are attempt observations emitted through
+Both actions return exactly one muxed MP4 and its warnings — the customer result carries nothing
+else. Checkpoint, plan, geometry, and digest facts are attempt observations emitted through
 Telemetry, never result fields.
 
 ### Release closure

@@ -181,8 +181,7 @@ the context frames. Turbo uses eight PDD evaluations; standard mode permits 30/4
 Reference generation uses 40 steps and 1024×1024 PNGs. Prompt validation happens before
 reference generation; every complete model prompt is limited to 4096 characters.
 
-Outputs use the default package folder. Only the assembled MP4 and final PNG are
-downloaded; references, intermediate clips and continuation context remain retained
-child results. The assembled MP4 retains its 256 MiB bound. Later-segment failure returns
+Outputs use the default package folder. Only the assembled MP4 is downloaded; references,
+intermediate clips and continuation context remain retained child results. The assembled MP4 retains its 256 MiB bound. Later-segment failure returns
 completed media with complete=false; first-segment failure and cancellation stay terminal.
 No prompt format guarantees speech intelligibility, identity preservation or seamless motion.

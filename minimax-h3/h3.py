@@ -36,7 +36,6 @@ from cozy_runtime.author import (
     FileAsset,
     Image,
     ImageAsset,
-    ImageFrame,
     ImagePreparation,
     InvalidRequest,
     MediaDecoder,
@@ -225,7 +224,6 @@ class H3VideoOutput(msgspec.Struct):
     attempt observations (se-012): they ride Telemetry, never the customer result."""
 
     video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",))]
-    continuation_frame: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
     warnings: list[str]
 
 
@@ -488,7 +486,7 @@ def _finish(
 
     # The encoder runs under the decode (h3a-017): each chunk is quantized on its device
     # and landed in the host buffer while a worker feeds the runtime's streaming MP4 sink.
-    with tel.stage("decode_video", overall_range=(0.90, 0.98)):
+    with tel.stage("decode_video", overall_range=(0.90, 0.97)):
         stream = _VideoStream(
             torch,
             out,
@@ -496,31 +494,32 @@ def _finish(
             waveform=waveform,
             sample_rate=sample_rate,
             cancel=cancel,
-            progress=tel.step_callback(frames, stage="decode_video", overall_range=(0.90, 0.98)),
+            progress=tel.step_callback(frames, stage="decode_video", overall_range=(0.90, 0.97)),
         )
         try:
             model.decode_video(task, state, on_chunk=stream.push, checks=checks)
-            saved, video_pixel_digest = stream.finish()
         except BaseException:
             stream.abandon()
             raise
+    try:
+        if completed is not None and stream.landed == frames:
+            cancel()
+            # A continuation's successor context, from the delivered RGB8 frames as landed,
+            # encoded on the GPUs while the MP4 sink drains (run 1516: ~0.5 s a segment).
+            with tel.stage("export_context", overall_range=(0.97, 0.98)):
+                completed(state, stream.pixels)
+        saved, video_pixel_digest = stream.finish()
+    except BaseException:
+        stream.abandon()
+        raise
     tel.metric("video_nonfinite_fraction", 0.0)
     pixels = stream.pixels
     _, height, width, _ = (int(value) for value in pixels.shape)
 
-    with tel.stage("check_output", overall_range=(0.98, 0.99)):
+    with tel.stage("check_output", overall_range=(0.98, 1.00)):
         warnings = report_after_encode(
             torch, pixels=pixels, waveform=waveform, requested=clock, tel=tel
         )
-
-    cancel()
-    frame_bytes = bytes(pixels[-1].numpy())
-    with tel.stage("encode_outputs", overall_range=(0.99, 1.00 if completed is None else 0.995)):
-        continuation = out.save_image(ImageFrame(width, height, frame_bytes), format="png")
-    if completed is not None:
-        # A continuation's successor context, from the delivered RGB8 frames as landed.
-        with tel.stage("export_context", overall_range=(0.995, 1.00)):
-            completed(state, pixels)
 
     tel.log(
         "h3 output geometry",
@@ -556,7 +555,6 @@ def _finish(
         "h3 source digests",
         video_pixel_digest=video_pixel_digest,
         audio_sample_digest=hashlib.sha256(waveform.numpy()).hexdigest(),
-        continuation_pixel_digest=hashlib.sha256(frame_bytes).hexdigest(),
     )
     tel.log(
         "h3 container facts",
@@ -569,7 +567,7 @@ def _finish(
         audio_decoded_samples=saved.audio.decoded_samples if saved.audio is not None else 0,
         video_bytes=saved.video.size_bytes,
     )
-    return H3VideoOutput(video=saved.video, continuation_frame=continuation, warnings=warnings)
+    return H3VideoOutput(video=saved.video, warnings=warnings)
 
 
 #: Frames per handoff slice: 8 frames of 1344x768 are 100 MB of fp32 source and 25 MB of
@@ -1060,12 +1058,6 @@ def _references_to_video(
 # shot and owns its intermediate bytes. Inference is not memoized.
 # Only encoded asset handles cross the loop. Assembly decodes one bounded event at a time.
 
-# A hand-off frame is exactly the generation canvas, which the conditioner already bounds
-# at 16.7 M pixels; three bytes a pixel is its decoded ceiling.
-_KEYFRAME_MAX_BYTES = 64 * _MIB
-_KEYFRAME_MAX_DECODED_BYTES = 3 * 16_777_216
-
-
 class SegmentOutput(msgspec.Struct):
     """`H3VideoOutput` without a default factory, which an invocable result may not carry."""
 
@@ -1075,14 +1067,6 @@ class SegmentOutput(msgspec.Struct):
             max_bytes=256 << 20,
             max_decoded_bytes=32 << 20,
             media_types=("video/mp4",),
-        ),
-    ]
-    continuation_frame: Annotated[
-        ImageAsset,
-        AssetBound(
-            max_bytes=_KEYFRAME_MAX_BYTES,
-            max_decoded_bytes=_KEYFRAME_MAX_DECODED_BYTES,
-            media_types=("image/png",),
         ),
     ]
     warnings: list[str]
@@ -1103,7 +1087,7 @@ class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
 
 
 class LongFormOutput(msgspec.Struct):
-    """The assembled video and final frame, with full or partial delivery status.
+    """The assembled video, with full or partial delivery status.
 
     A later-shot failure returns the completed portion with complete=False.
     Intermediate clips remain
@@ -1111,7 +1095,6 @@ class LongFormOutput(msgspec.Struct):
     """
 
     video: Annotated[VideoAsset, AssetBound(max_bytes=256 << 20, media_types=("video/mp4",))]
-    continuation_frame: Annotated[ImageAsset, AssetBound(media_types=("image/png",))]
     complete: bool
     delivered: int
     requested: int
@@ -1191,7 +1174,7 @@ def _render_cut(
         turbo_lora=turbo_lora,
     )
     tel.log("h3 cut rendering", native_path=task, seed=payload.seed, references=len(assets))
-    return SegmentOutput(shot.video, shot.continuation_frame, list(shot.warnings), observed)
+    return SegmentOutput(shot.video, list(shot.warnings), observed)
 
 
 @invocable(defaults={"model": _DEFAULT_MODEL_LADDER})
@@ -1314,7 +1297,6 @@ def _render_motion(
     )
     return MotionOutput(
         shot.video,
-        shot.continuation_frame,
         list(shot.warnings),
         observed,
         saved_context[0]
@@ -1444,7 +1426,6 @@ async def long_form_cuts(
     completed_work = reference_work
     videos: list[VideoAsset] = []
     expected = None
-    frame = None
     warnings: list[str] = []
     failed_index, failure_code, failure_detail = -1, "", ""
     with ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
@@ -1508,7 +1489,6 @@ async def long_form_cuts(
             expected = result.provenance
             videos.append(result.video)
             scanning.add(result.video)
-            frame = result.continuation_frame
             warnings.extend(result.warnings)
             completed_work += render_work[index]
         # Every GPU call has returned: assembly and outputs are CPU work, so the next
@@ -1537,8 +1517,6 @@ async def long_form_cuts(
         or [item.source_frames for item in assembled.segments] != planned_frames[: len(videos)]
     ):
         raise OutputError("assembled cuts differ from the declared frame clock", code="shot_frames")
-    # The last cut's own PNG is the final frame: forwarded, never decoded and re-encoded.
-    assert frame is not None
     complete = len(videos) == len(payload.segments)
     if not complete:
         warnings.append(
@@ -1547,7 +1525,6 @@ async def long_form_cuts(
         )
     return LongFormOutput(
         assembled.video,
-        frame,
         complete,
         len(videos),
         len(payload.segments),
@@ -1567,7 +1544,7 @@ async def long_form(
     out: Outputs,
     tel: Telemetry,
 ) -> LongFormOutput:
-    """Render and assemble remotely; deliver only the joined video and final frame."""
+    """Render and assemble remotely; deliver only the joined video."""
     ctx.raise_if_cancelled()
     if payload.mode == "turbo" and payload.steps is not None:
         raise InvalidRequest(
@@ -1618,7 +1595,6 @@ async def long_form(
     images = await _create_references(ctx, payload.references, tel)
     completed_work = reference_work
     videos: list[VideoAsset] = []
-    frame = None
     context = None
     expected: RenderProvenance | None = None
     failed_index, failure_code, failure_detail = -1, "", ""
@@ -1667,7 +1643,6 @@ async def long_form(
             videos.append(shot_result.video)
             scanning.add(shot_result.video)
             warnings.extend(shot_result.warnings)
-            frame = shot_result.continuation_frame
             context = shot_result.context
             completed_work += render_work[index]
         # Every GPU call has returned: assembly and outputs are CPU work, so the next
@@ -1700,8 +1675,6 @@ async def long_form(
         raise OutputError("shot video differs from its declared frame count", code="shot_frames")
     if assembled.output_frames != delivered_frames:
         raise OutputError("assembled output differs from the long-form clock", code="shot_frames")
-    # The last segment's own PNG is the final frame: forwarded, never decoded and re-encoded.
-    assert frame is not None
     complete = len(videos) == len(payload.segments)
     if not complete:
         warnings.append(
@@ -1720,7 +1693,6 @@ async def long_form(
     )
     return LongFormOutput(
         video=assembled.video,
-        continuation_frame=frame,
         complete=complete,
         delivered=len(videos),
         requested=len(payload.segments),

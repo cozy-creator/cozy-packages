@@ -29,7 +29,7 @@ The `long_form` continuous-shot API uses fixed references and completed AV-tail
 continuation. This is an explicit input-contract change to
 `long_form_cuts`: generated-shot history is removed, not silently ignored.
 
-Final outputs remain only the assembled MP4 and last frame. Fixed images and
+The only final output is the assembled MP4. Fixed images and
 individual shot outputs remain retained intermediate child results. Model quality
 needs a real matched render; conformance only establishes routing, input validation,
 reference custody and output assembly.

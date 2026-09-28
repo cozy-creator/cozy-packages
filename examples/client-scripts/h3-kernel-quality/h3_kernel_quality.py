@@ -241,4 +241,4 @@ def generate(
     measurements = out.save_bytes(
         json.dumps(report, sort_keys=True).encode(), media_type="application/json"
     )
-    return Result(video.video, video.continuation_frame, video.warnings, measurements)
+    return Result(video.video, video.warnings, measurements)
