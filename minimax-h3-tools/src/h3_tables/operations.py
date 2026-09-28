@@ -7,20 +7,16 @@ from importlib.resources import files
 from typing import Literal, cast
 
 from cozy_runtime.author import (
-    Context,
     ModelArtifact,
     UnsupportedInput,
     canonical_json,
-    invocable,
 )
 from cozy_runtime.derive.operations import QuantizationPlan
 from cozy_runtime.derive.operations import quantize as runtime_quantize
 from cozy_runtime.derive.quantization import (
     prepare_quantization,
 )
-from tensorfs.derived import Config, Derivation
 
-from ._memo import STRUCTURE
 from .adaln_operations import (
     Selection,
     _plan,
@@ -29,10 +25,10 @@ from .adaln_operations import (
     retable_adaln,
     select_adaln_weights,
 )
-from .model_config import dual_full_config, parse_production_config
+from .model_config import parse_production_config
 from .order import current_order, full_order
 from .quantization import h3_quantization_plan
-from .source import TARGET_COMPONENT, H3FullTransformer, select_full_targets, structures
+from .source import TARGET_COMPONENT
 
 
 def quantization_plan() -> QuantizationPlan:
@@ -147,29 +143,3 @@ async def precompute_adaln(
         fl2va=fl,
         ref2va=ref,
     )
-
-
-@invocable(memoize=True, memo_dependencies=STRUCTURE)
-async def assemble_full(
-    ctx: Context,
-    *,
-    dits: H3FullTransformer,
-    shared: H3FullTransformer,
-) -> ModelArtifact:
-    """Assemble converted DiTs and shared weights using the existing native H3 order."""
-    ctx.raise_if_cancelled()
-    assets = files(__package__).joinpath("assets")
-    sections = parse_production_config(assets.joinpath("model-config.json").read_bytes())
-    current = current_order(assets.joinpath("whole-order.json").read_bytes()).rows
-    sources = {"dits": dits, "shared": shared}
-    with ctx.output("model").open(
-        Derivation(
-            sources={name: info.source for name, info in structures(ctx, sources).items()},
-            targets=select_full_targets(ctx, sources),
-            configs={"model": Config("add")},
-            order=full_order(sections, current),
-        )
-    ) as transaction:
-        if transaction.receipt is None:
-            transaction.add_config("model", dual_full_config(sections))
-        return ctx.adopt_model(transaction.commit())

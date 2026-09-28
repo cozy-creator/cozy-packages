@@ -1,22 +1,17 @@
 # H3 preparation from a client script
 
 `h3_tables.operations.precompute_adaln` is an ordinary async Python helper.
-It composes managed operations alongside `assemble_full` and `quantize` in an
-unpublished client script:
+It composes managed operations alongside `quantize` in an unpublished client script:
 
 ```python
-from h3_tables.operations import assemble_full, precompute_adaln, quantize
+from h3_tables.operations import precompute_adaln, quantize
 
 async def main(ctx):
-    # dits and shared are ModelArtifacts returned by the source/conversion operations.
-    full = await assemble_full(dits=dits, shared=shared)
+    # full is a `bf16-full` lane, e.g. from `cozy run <org>/minimax-h3-tools/bf16-full`.
     pruned = await precompute_adaln(model=full, timesteps=50)
     fp8 = await quantize(source=pruned, encoding="fp8-rowwise/1")
     mxfp8 = await quantize(source=pruned, encoding="mxfp8/1")
 ```
-
-This client-script path requires Runtime 0.12 or newer for its source-preserving
-caller overlay and native attachments that add no tensor bytes.
 
 The current captured plan is the approved union of 30, 40 and 50 denoising steps.
 `timesteps` selects a supported step count; the retained BF16 bank supports all

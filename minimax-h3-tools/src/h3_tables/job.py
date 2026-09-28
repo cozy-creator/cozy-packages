@@ -21,7 +21,6 @@ from cozy_runtime.author import (
     Telemetry,
     UnsupportedInput,
     WeightsOutput,
-    canonical_json,
     invocable,
 )
 from cozy_runtime.derive.quantization import (
@@ -31,7 +30,6 @@ from cozy_runtime.derive.quantization import (
     prepare_quantization,
     quantize_component_into,
 )
-from cozy_runtime.models.minimax_h3.table_layout import TableLayout
 from tensorfs.derived import (
     Config,
     Derivation,
@@ -57,16 +55,14 @@ from .lanes import (
     lane_treatments,
     write_cast,
 )
-from .legacy_config import upgrade_legacy_table_config
 from .model_config import (
     dual_adaln_pruned_config,
     dual_full_config,
     parse_production_config,
 )
-from .operations import assemble_full as assemble_full_artifact
 from .order import current_order
 from .order import full_order as _full_order
-from .plans import TASKS, TimestepPlan, parse_declared_plan
+from .plans import TimestepPlan, parse_declared_plan
 from .quantization import h3_quantization_plan
 from .source import (
     TARGET_COMPONENT,
@@ -171,10 +167,6 @@ def _check_lane_outputs() -> None:
 _check_lane_outputs()
 
 
-class ProductionRequest(msgspec.Struct, forbid_unknown_fields=True):
-    pass
-
-
 class TreatmentStats(msgspec.Struct):
     """What one treatment of one component recorded on this attempt.
 
@@ -190,12 +182,6 @@ class TreatmentStats(msgspec.Struct):
     reused_keys: int = 0
     source_bytes_read: int = 0
     new_bytes_written: int = 0
-
-
-class AssemblyResult(msgspec.Struct):
-    artifact_transaction_id: str
-    tensorfs_receipt_digest: str
-    replayed: bool
 
 
 class RetableResult(msgspec.Struct, frozen=True):
@@ -289,41 +275,6 @@ def _compute_table_parts(
     if written != expected or len(table_shapes(topology, plan)) != topology.num_layers + 1:
         raise ValueError(f"{task} emitted {written} table bytes, expected {expected}")
     return source_bytes, written
-
-
-def _assembly_result(receipt: Mapping[str, Any], replayed: bool) -> AssemblyResult:
-    return AssemblyResult(receipt["transaction_id"], canonical_json.digest(receipt), replayed)
-
-
-@app.job(
-    weights=(WeightsOutput("model", max_new_bytes=64 << 10),),
-    accelerator=False,
-)
-def assemble_full(
-    ctx: Context,
-    payload: ProductionRequest,
-    dits: H3FullTransformer,
-    shared: H3FullTransformer,
-) -> AssemblyResult:
-    del payload
-    sections = parse_production_config(_asset("model-config.json"))
-    current = current_order(_asset("whole-order.json"))
-    config = dual_full_config(sections)
-    sources = {"dits": dits, "shared": shared}
-    with ctx.output("model").open(
-        Derivation(
-            sources={name: info.source for name, info in _structures(ctx, sources).items()},
-            targets=_select_full_targets(ctx, sources),
-            configs={"model": Config("add")},
-            order=_full_order(sections, current.rows),
-        )
-    ) as transaction:
-        replayed = transaction.receipt is not None
-        if not replayed:
-            transaction.add_config("model", config)
-        receipt = transaction.commit()
-        ctx.adopt_model(receipt)
-    return _assembly_result(receipt, replayed)
 
 
 def _table_additions(
@@ -972,135 +923,11 @@ app.job(
 )
 
 app.job(
-    assemble_full_artifact,
-    name="assemble-full-artifact",
-    weights=(WeightsOutput("model", 1 << 20),),
-    accelerator=False,
-)
-
-app.job(
     _adaln_operations.retable_adaln,
     name="retable-adaln",
     weights=(WeightsOutput("model", 1 << 20),),
     accelerator=False,
 )
-
-
-def _source_modulation(source: SourceInspection, sections: Mapping[str, dict[str, Any]]) -> str:
-    """Read the source's own modulation off its DiT rows rather than off a request field.
-
-    An AdaLN-pruned checkpoint carries the timestep table rows and none of the dynamic
-    modulation weights; a FULL one carries the modulation weights and no tables. Anything
-    else is not a lane this producer emitted, and the restamp refuses rather than guessing.
-    """
-    present = {(component, key) for component, rows in source.components.items() for key in rows}
-    verdicts: set[str] = set()
-    for task, section in SOURCE_SECTION.items():
-        component = TARGET_COMPONENT[task]
-        topology = H3Topology.from_config(sections[section])
-        keys = {key for owner, key in present if owner == component}
-        if not keys:
-            raise UnsupportedInput(f"restamp source has no {component}", code="h3_component_absent")
-        dynamic = set(removed_keys(topology)) & keys
-        tables = set(table_shapes(topology, _production_plan(task))) & keys
-        if tables and not dynamic:
-            verdicts.add("adaln-pruned")
-        elif dynamic and not tables:
-            verdicts.add("full")
-        else:
-            raise UnsupportedInput(
-                f"{component} carries neither a clean FULL nor a clean AdaLN-pruned row set "
-                f"({len(dynamic)} modulation rows, {len(tables)} table rows)",
-                code="h3_restamp_source_shape",
-            )
-    if len(verdicts) != 1:
-        raise UnsupportedInput(
-            f"the two DiTs disagree about modulation: {sorted(verdicts)}",
-            code="h3_restamp_source_shape",
-        )
-    return verdicts.pop()
-
-
-def _check_emitted_config(document: bytes, modulation: str, source: SourceInspection) -> None:
-    """Validate row meanings and stored table dimensions before inheriting table bytes."""
-    value = canonical_json.decode(document)
-    fields = {"task", "modulation"} | ({"table_keys"} if modulation == "adaln-pruned" else set())
-    tensors = {
-        (component, key): tensor
-        for component, rows in source.components.items()
-        for key, tensor in rows.items()
-    }
-    for task, component in TARGET_COMPONENT.items():
-        extension = value[component]["cozy_h3"]
-        if set(extension) not in (fields, fields | {"generating_projection_digest"}):
-            raise UnsupportedInput(
-                f"emitted {component} cozy_h3 has unexpected metadata fields",
-                code="h3_restamp_config_shape",
-            )
-        if extension["modulation"] != modulation or extension["task"] != task:
-            raise UnsupportedInput(
-                f"emitted {component} task/modulation differs from the source tensors",
-                code="h3_restamp_config_shape",
-            )
-        if modulation == "adaln-pruned":
-            layout = TableLayout.parse(extension["table_keys"])
-            plan = replace(
-                _production_plan(task), timesteps=layout.timesteps, block_rows=layout.block_keys
-            )
-            topology = H3Topology.from_config(value[component])
-            for key, shape in table_shapes(topology, plan).items():
-                tensor = tensors.get((component, key))
-                if (
-                    tensor is None
-                    or tensor.logical_dtype != "bf16"
-                    or tensor.encoding != PLAIN_SPEC
-                    or tensor.shape != shape
-                    or tensor.parts != {"value": Part("bf16", shape)}
-                ):
-                    raise UnsupportedInput(
-                        f"{component}.{key} stored dimensions/encoding differ from its table keys",
-                        code="h3_restamp_table_layout",
-                    )
-
-
-@app.job(
-    name="restamp", weights=(WeightsOutput("restamped", max_new_bytes=128 << 10),), accelerator=False
-)
-def restamp(
-    ctx: Context,
-    payload: ProductionRequest,
-    lane: H3FullTransformer,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """Migrate the exact frame-stamped AdaLN plan without changing any tensor bytes."""
-    del payload
-    ctx.raise_if_cancelled()
-    granted = inspection(ctx, lane)
-    sections = parse_production_config(_asset("model-config.json"))
-    modulation = _source_modulation(granted, sections)
-    document = upgrade_legacy_table_config(
-        granted.configs["model"], {task: _production_plan(task) for task in TASKS}
-    )
-    _check_emitted_config(document, modulation, granted)
-    components = sorted(granted.components)
-    if set(components) != set(_full_targets()):
-        raise UnsupportedInput("restamp requires exactly the five H3 base components")
-    with ctx.output("restamped").open(
-        Derivation(
-            sources={name: info.source for name, info in _structures(ctx, {"lane": lane}).items()},
-            targets={component: Target("lane", component) for component in components},
-            configs={"model": Config("add")},
-            order=tuple(
-                (component, key) for component, rows in granted.components.items() for key in rows
-            ),
-        )
-    ) as transaction:
-        if transaction.receipt is not None:
-            return ctx.adopt_model(transaction.commit())
-        transaction.add_config("model", document)
-        receipt = transaction.commit()
-    tel.metric("h3.source_bytes", 0, unit="bytes")
-    return ctx.adopt_model(receipt)
 
 
 from .turbo import turbo_lora  # noqa: E402

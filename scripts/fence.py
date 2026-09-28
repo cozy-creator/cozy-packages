@@ -203,13 +203,6 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "or relying on a whole-model pin. Retire when public diagnostic backend lookup "
         "exposes that exact operation."
     ),
-    ("scripts/h3-shared-vae-repair-proof.py", "cozy_runtime.author._model"): (
-        "Bind exact native fixture manifests; retire when a public native source factory can "
-        "bind production-shaped manifests instead of test:// identities. "
-    ),
-    ("scripts/h3-restamp-native-proof.py", "cozy_runtime.author._model"): (
-        "Bind the native source checkpoint for the metadata-only migration proof. "
-    ),
     ("scripts/h3-turbo-cp-proof.py", "cozy_runtime.internal.parallel"): (
         "Verify actual PDD hooks and component scopes under Runtime's Ulysses installation. "
     ),
@@ -265,11 +258,6 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
     ("scripts/tokenizer-assets-proof.py", "cozy_runtime.internal"): (
         "Construct package tokenizers under Runtime's real admission write fence; retire when "
         "the public fakes install that fence. "
-    ),
-    ("scripts/h3-repair-proof.py", "cozy_runtime.author._model"): (
-        "the repair integration driver constructs the same exact-checkpoint job source record "
-        "as Runtime; for_test intentionally permits test:// identities only. Retire when a "
-        "public native job fixture factory owns this constructor. "
     ),
     ("scripts/h3-conform.py", "cozy_runtime.internal.residency"): (
         "the warm arms raise Runtime's OWN `ResidencyRefusal` — the class, the typed "

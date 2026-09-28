@@ -105,10 +105,6 @@ jobs:
       - name: Native cohort validation accepts independent package environments
         run: uv run --no-project python scripts/torch_family.py --self-check
 
-      - name: Native checkpoint repair script and resume
-        if: inputs.h3
-        run: .venv/bin/python scripts/h3-repair-proof.py
-
   h3-conformance:
     name: H3 deterministic conformance
     if: github.event_name == 'workflow_dispatch' && inputs.h3
@@ -182,7 +178,7 @@ jobs:
 
           for module in (h3_diagnostics, h3_activation_trace, h3_resident_samples):
               assert "site-packages" in Path(module.__file__).parts
-          for name in ("h3_vae_roundtrip", "h3_checkpoint_repair"):
+          for name in ("h3_vae_roundtrip",):
               surface, = describe(script_app(name))
               assert surface.name == "main" and len(surface.model_bindings) == 1
           PYCODE
@@ -255,8 +251,6 @@ jobs:
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/stage-proof.py
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/full-source-proof.py
           minimax-h3-tools/.venv/bin/python scripts/h3-turbo-store-proof.py
-          minimax-h3-tools/.venv/bin/python scripts/h3-restamp-native-proof.py
-          minimax-h3-tools/.venv/bin/python scripts/h3-shared-vae-repair-proof.py
           minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/table-metadata-proof.py
           minimax-h3-tools/.venv/bin/python scripts/h3-adaln-resume-proof.py
           minimax-h3-tools/.venv/bin/python scripts/h3-adaln-binding-proof.py

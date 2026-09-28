@@ -377,8 +377,8 @@ def select(
     """Resolve one treatment against the granted source structure.
 
     ``allow_inert`` is for the NORMALISATIONS only: a lane row that changes nothing is a
-    catalogue mistake and refuses, but a restamp of a checkpoint whose video VAE is already
-    at the serving destination has simply nothing left to do, and that is a success.
+    catalogue mistake and refuses, but a source whose video VAE is already at the serving
+    destination (a `bf16-full` input) has nothing left to do, and that is a success.
 
     The two DiTs encode through the reviewed plan, never through shape. Every other
     component selects structurally with the Runtime's own ``prepare_source_quantization``

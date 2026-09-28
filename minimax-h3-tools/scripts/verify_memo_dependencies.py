@@ -16,11 +16,10 @@ sys.path[:] = [sys.argv[1], *json.loads(sys.argv[2])]
 from cozy_runtime.author._calls import _export
 from cozy_runtime.internal.memo_implementation import describe
 from sdxl.normalization import normalize_component,assemble_normalized
-from h3_tables.operations import assemble_full
 from h3_tables.adaln_operations import select_adaln_weights,compute_adaln_tables,apply_adaln,retable_adaln
 from h3_tables.turbo import turbo_lora
 from h3_tables.job import fp8_pruned,retable
-functions=(normalize_component,assemble_normalized,assemble_full,select_adaln_weights,
+functions=(normalize_component,assemble_normalized,select_adaln_weights,
            compute_adaln_tables,apply_adaln,retable_adaln,turbo_lora,fp8_pruned,retable)
 print(json.dumps({fn.__name__:describe(_export(fn).implementation) for fn in functions}))
 '''
@@ -29,7 +28,7 @@ print(json.dumps({fn.__name__:describe(_export(fn).implementation) for fn in fun
 def identities(root: Path) -> dict[str, str]:
     rows = json.loads(subprocess.check_output(
         [sys.executable, '-I', '-B', '-c', PROBE, str(root), json.dumps(sys.path)], text=True))
-    assert len(rows) == 10 and all(row.get('operation_identity') for row in rows.values()), rows
+    assert len(rows) == 9 and all(row.get('operation_identity') for row in rows.values()), rows
     return {name: row['operation_identity'] for name, row in rows.items()}
 
 

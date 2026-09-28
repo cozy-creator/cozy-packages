@@ -19,7 +19,6 @@ ingested or already fetched the input, its objects are in the pod Store and noth
 | `mxfp8-pruned` | same | `mxfp8-pruned` | grandfathered; native only on sm120 |
 | `turbo-lora` | the converted `alibaba-pai/MiniMax-H3-Acc-LoRAs` release (one fl2va and one ref2va component) | `pdd8` | `model.base=<full-precision H3>`; reads its modulation weights and heads only |
 | `retable` | an AdaLN-pruned lane | `adaln-pruned`, `tables` | `model.full=<full-precision H3>`; recomputes tables only |
-| `restamp` | an old frame-stamped AdaLN lane | `restamped` | config-only migration |
 
 Runtime requires a receipt for every declared weights output, so each lane is its own
 function. Until Runtime-owned jobs accept a destination, `examples/client-scripts/h3_lanes.py`
@@ -48,12 +47,6 @@ each final-normalization row names an exact float32 timestep, and each block-mod
 row names a timestep and modality. Sampling-plan hashes remain generation provenance;
 they do not decide serving compatibility. Producer and inference use byte-identical
 copies of the same small row-label parser, checked by CI.
-
-`restamp` preserves explicit valid row labels and validates them against the stored table
-dimensions. For the original checkpoint stamps it first proves the old 345-frame plan
-has identical ordered rows, then replaces its legacy digest with those labels. Unknown
-or changed historical plans require regenerating the tables. This metadata upgrade
-inherits every tensor object and does not normalize video-VAE precision.
 
 ## Lanes
 
@@ -93,12 +86,6 @@ represent any of them; the only six rank-2 float weights the component carries a
 `pre_block` ENCODER attention/MLP linears — so a shape rule does not refuse
 the component, it silently quantizes the audio conditioning path and leaves the BigVGAN
 decoder untouched.
-
-The standalone `assemble_full` job remains available for direct use; `lanes` does not
-invoke or nest it and owns the same transformations directly inside one weight-production
-attempt. The former per-task table jobs and `assemble_dual` are gone: `retable` replaces
-their table pass over an existing pruned checkpoint, and two jobs with byte-identical
-descriptors cannot coexist under Runtime 0.4's immutable job plans.
 
 Each lane contains both FL2VA and Ref2VA DiTs plus the shared 902/703/1,087 components.
 Full assembly drops the native-only `rope.inv_freq` buffer, leaving the exact 638-row
@@ -144,8 +131,8 @@ the Runtime wheel carries the reviewed quantization tensor specifications. The o
 `h3_tables.operations.quantization_plan()` helper binds their exact two-DiT geometry and
 this package's full/pruned construction-order digests for the single Runtime-owned
 `cozy_runtime.derive.operations.quantize` operation. Its compact plan contains no
-model bytes or executable policy. Noncanonical source order refuses; ordinary
-`assemble_full` and AdaLN producers already emit the accepted orders. These are not
+model bytes or executable policy. Noncanonical source order refuses; the lane
+functions and AdaLN producers already emit the accepted orders. These are not
 Creator-supplied assets. Run
 `scripts/order-proof.py` to recheck their closed census and
 `../../proofs/producer-callable.py` to validate the generated graph-free descriptor.
@@ -188,15 +175,6 @@ and two outputs; turbo preparation does not change the base schedule.
 
 The output binds to `minimax-h3`'s single `H3TurboModel` slot. Ordinary `H3Model`
 continues to consume a checkpoint with only the original five components.
-
-Old `1.0.0-rc.2` AdaLN checkpoints may still carry the retired `frames:345` plan
-identity. Before turbo preparation or current ordinary serving, run the `restamp`
-job through Creator with `model.lane=paul/minimax-h3@1.0.0-rc.2/fp8-pruned`.
-It resolves only the exact historical frame-only plan or the current known plan,
-verifies table geometry, and replaces their opaque stamps with explicit ordered
-table-row labels. Already explicit valid layouts are preserved. All tensor objects,
-including the video VAE's precision, are inherited unchanged. Other old plans
-require real retabling from their generating model; `restamp` refuses them.
 
 The row-label parser is Runtime's `cozy_runtime.models.minimax_h3.table_layout`;
 the producer imports it rather than keeping a copy.

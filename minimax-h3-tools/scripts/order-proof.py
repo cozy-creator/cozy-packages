@@ -240,31 +240,25 @@ def main() -> None:
         raise TypeError("package jobs are not one interface list")
     jobs = {str(row["name"]): row for row in declared}
     if set(jobs) != {
-        "assemble_full",
-        "lanes",
+        *lane_recipes.LANES,
         "retable",
         "apply-adaln",
         "compute-adaln-tables",
         "select-adaln-weights",
-        "assemble-full-artifact",
         "retable-adaln",
-        "restamp",
-        "prepare-turbo",
+        "turbo-lora",
     }:
-        raise RuntimeError(f"package callable compatibility changed: {sorted(jobs)}")
-    job = jobs["lanes"]
-    models = {row["path"]: row for row in job["models"]}
-    if set(models) != {"lanes.models.dits", "lanes.models.shared"}:
-        raise RuntimeError("lanes changed its two typed source slots")
-    outputs = {output["output_id"]: output for output in job["weights_outputs"]}
-    if set(outputs) != set(lane_recipes.LANES):
-        raise RuntimeError(
-            f"declared outputs {sorted(outputs)} are not the catalogue {sorted(lane_recipes.LANES)}"
-        )
-    if any("required_contract" in output for output in outputs.values()):
-        raise RuntimeError("lanes retained a publish-time tensor requirements contract")
-    if "resources" in job:
-        raise RuntimeError("lanes should derive and measure resources instead of authoring them")
+        raise RuntimeError(f"package callables changed: {sorted(jobs)}")
+    for lane in lane_recipes.LANES:
+        job = jobs[lane]
+        if [row["path"] for row in job["models"]] != [f"{lane}.models.source"]:
+            raise RuntimeError(f"{lane} changed its one typed source slot")
+        if [output["output_id"] for output in job["weights_outputs"]] != [lane]:
+            raise RuntimeError(f"{lane} does not declare exactly its own lane output")
+        if any("required_contract" in output for output in job["weights_outputs"]):
+            raise RuntimeError(f"{lane} retained a publish-time tensor requirements contract")
+        if "resources" in job:
+            raise RuntimeError(f"{lane} should derive and measure resources, not author them")
     retable = jobs["retable"]
     if {row["path"] for row in retable["models"]} != {
         "retable.models.full",
@@ -275,7 +269,8 @@ def main() -> None:
     }:
         raise RuntimeError("retable changed its two typed sources or two outputs")
     print(
-        f"H3 LANE CONTRACT PASS jobs={len(jobs)} graphs=0 outputs={len(outputs)} full_rows=3968 "
+        f"H3 LANE CONTRACT PASS jobs={len(jobs)} graphs=0 lanes={len(lane_recipes.LANES)} "
+        "full_rows=3968 "
         "task_rows=583 shared_text_drop=156 quantized_per_task=313 tables_per_task=51 "
         f"table_bytes_per_task={measured_bytes} table_budget_per_task={MAX_TABLE_BYTES} "
         "source_drop=rope dynamic_drops_per_task=106 "

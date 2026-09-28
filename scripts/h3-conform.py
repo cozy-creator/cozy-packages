@@ -158,9 +158,7 @@ from cozy_runtime.models.minimax_h3.turbo import (  # noqa: E402
     _LoRAHook,
 )
 from cozy_runtime.models.minimax_h3.vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
-from h3_tables import job as producer  # noqa: E402
 from h3_tables.lanes import NORMALISED_COMPONENTS, decode_operand  # noqa: E402
-from h3_tables.legacy_config import upgrade_legacy_table_config  # noqa: E402
 from h3_tables.model_config import (  # noqa: E402
     dual_adaln_pruned_config,
     dual_full_config,
@@ -168,7 +166,7 @@ from h3_tables.model_config import (  # noqa: E402
 )
 from h3_tables.order import current_order, full_order  # noqa: E402
 from h3_tables.plans import TASKS, parse_plan  # noqa: E402
-from h3_tables.source import TARGET_COMPONENT, official_full_specs  # noqa: E402
+from h3_tables.source import official_full_specs  # noqa: E402
 from h3_tables.turbo import collapse_head_bank, pdd_head_plan, pdd_time_grid  # noqa: E402
 
 import h3 as package  # noqa: E402
@@ -1405,27 +1403,6 @@ def arm_graph_and_dtypes() -> None:
         "an unscoped component cast would store the served destination",
         len(video_vae.state_dict()),
         len(served),
-    )
-    document = canonical_json.decode(producer._asset("model-config.json"))
-    old = copy.deepcopy(document)
-    for task, component in TARGET_COMPONENT.items():
-        old[component]["cozy_h3"].pop("table_keys")
-        old[component]["cozy_h3"]["timestep_plan_digest"] = canonical_json.digest(
-            {
-                **canonical_json.decode(producer._production_plan(task).canonical_bytes),
-                "frames": 345,
-            }
-        )
-    plans = {task: producer._production_plan(task) for task in TASKS}
-    migrated = upgrade_legacy_table_config(canonical_json.encode(old), plans)
-    check(
-        "restamp preserves exact historical row meanings", migrated, canonical_json.encode(document)
-    )
-    old["fl2va_dit"]["cozy_h3"]["timestep_plan_digest"] = "sha256:" + "0" * 64
-    refusal(
-        "restamp refuses unknown historical row meanings",
-        lambda: upgrade_legacy_table_config(canonical_json.encode(old), plans),
-        "h3_restamp_table_layout",
     )
     check("audio VAE state count", len(audio_vae.state_dict()), 1087)
     check("audio VAE parameter destinations", len(dict(audio_vae.named_parameters())), 832)

@@ -71,28 +71,14 @@ retention; TensorFS stores the artifact bytes. Reuse requires that Store and its
 retained bytes. There is no need for a previous run ID or Tensorhub publication.
 Inference runs fresh; checkpoint upload and release creation are explicit effects.
 
-- `h3_checkpoint_repair.py` is the completed, guarded repair recipe for exactly
-  four historical H3 roots. A corrected checkpoint is refused before mutation.
-  Its `[tool.cozy.weights]` metadata declares the finite output budget; `main`
-  receives the existing Model and WeightsSink capabilities and returns a real
-  ModelArtifact. The script performs no automatic upload or release mutation.
-- `h3_shared_vae_repair.py` repairs the four pinned rc2 revision 6 roots. It casts
-  each selected video VAE decoder operand once and sends identical bytes to four
-  native writers. TensorFS shares those objects; each lane inherits its existing
-  DiT bytes and order, including FP8/MXFP8 parts and AdaLN tables. Only the legacy
-  MXFP8 table metadata changes; existing explicit layouts remain byte-identical.
-  The script returns four artifacts in underscore output slots, ready for explicit
-  publication under the short lane names. It neither quantizes DiTs nor recomputes
-  tables. Retained completed parts resume without source reads, and completed output
-  transactions replay; a lost worker cannot supply its unretained local work.
 - `h3_vae_roundtrip.py` generates a fixed reference image, uses the existing H3
   VAE encode/decode methods, stages DiT between them, and records resident tensor
   hashes and Cozy Eval grid observations. It returns a video plus source and
   reconstruction PNGs. Change `FRAMES` or `CYCLE` in the file to change the probe.
 
-Supply an exact reviewed model with the ordinary `model.source=<ref>` (repair)
-or `model.model=<ref>` (VAE) term. Optional PEP 723 `[tool.cozy.models]` entries
-can set these defaults; explicit CLI terms take precedence. Imports and model
+Supply an exact reviewed model with the ordinary `model.model=<ref>` term. Optional
+PEP 723 `[tool.cozy.models]` entries can set these defaults; explicit CLI terms take
+precedence. Imports and model
 classes come from the captured library environment. Script-local classes and
 annotation expressions with function calls are not capability declarations.
 
