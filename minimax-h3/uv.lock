@@ -488,7 +488,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pydantic-core", specifier = ">=2.46.4" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "qwen-image-2", specifier = ">=0.2.2", index = "https://tensorhub.com/v1/index/fidika/simple/" },
+    { name = "qwen-image-2", specifier = ">=0.2.2", index = "http://127.0.0.1:8819/v1/index/paul/simple/" },
     { name = "regex", specifier = ">=2026.7.19" },
     { name = "safetensors", specifier = ">=0.8.0" },
     { name = "shellingham", specifier = ">=1.5.4" },
@@ -788,8 +788,8 @@ wheels = [
 
 [[package]]
 name = "qwen-image-2"
-version = "0.2.2"
-source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
+version = "0.2.3"
+source = { registry = "http://127.0.0.1:8819/v1/index/paul/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media", "qwen-image21"] },
     { name = "msgspec" },
@@ -797,7 +797,7 @@ dependencies = [
     { name = "pillow" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/files/8e857d7795df1ef41ca8156e13cd7953b6792d99cef96a3b308689feed6f2bd7/qwen_image_2-0.2.2-py3-none-any.whl", hash = "sha256:8e857d7795df1ef41ca8156e13cd7953b6792d99cef96a3b308689feed6f2bd7" },
+    { url = "http://127.0.0.1:8819/v1/index/paul/files/b22a5f1fade159171c27c581c3e217c05ad8f25470d7e35792626b2a20ff6da4/qwen_image_2-0.2.3-py3-none-any.whl", hash = "sha256:b22a5f1fade159171c27c581c3e217c05ad8f25470d7e35792626b2a20ff6da4" },
 ]
 
 [[package]]
