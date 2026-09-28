@@ -38,7 +38,7 @@ PROFILE = "civitai/sdxl/single-file/1"
 
 async def main(ctx: ScriptContext) -> dict[str, str]:
     source = await download_civitai(VERSION)
-    converted = await convert_cozytensors(source, profile=PROFILE)
+    converted = await convert_cozytensors(source, profiles=(PROFILE,))
     lanes = {"fp16": await normalize(source=converted)}
     for name, function in (("fp8", fp8), ("mxfp8", mxfp8)):
         if name in QUANTIZED:

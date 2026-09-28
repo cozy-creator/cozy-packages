@@ -74,11 +74,11 @@ async def main(ctx: ScriptContext, *, out: Outputs) -> Tree:
     judge_source = await download_huggingface(
         JUDGE_REPOSITORY, revision=JUDGE_REVISION, profiles=(JUDGE_PROFILE,)
     )
-    judge_raw = await convert_cozytensors(judge_source, profile=JUDGE_PROFILE)
+    judge_raw = await convert_cozytensors(judge_source, profiles=(JUDGE_PROFILE,))
     judge = await prepare_instrument(source=judge_raw, metadata=metadata, variant="qwen2b")
     ctx.log(f"Prepared retained judge: {judge.manifest.digest}")
     raw = await download_civitai(SOURCE_VERSION, file=SOURCE_FILE)
-    converted = await convert_cozytensors(raw, profile="civitai/sdxl/single-file/1")
+    converted = await convert_cozytensors(raw, profiles=("civitai/sdxl/single-file/1",))
     # The caller surface omits services injected into the admitted child signature.
     normalize_call = cast(Callable[..., Awaitable[ModelArtifact]], normalize)
     quantize_call = cast(Callable[..., Awaitable[ModelArtifact]], quantize)
