@@ -3,7 +3,7 @@ name = "minimax-h3"
 version = "1.19.0"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media,minimax-h3]>=0.18.61",
+    "cozy-runtime[media,minimax-h3]>=0.18.67",
     "cozy-eval>=0.7.3",
     "diffusers>=0.40.0",
     "hf-xet>=1.6.0",
@@ -15,7 +15,7 @@ dependencies = [
     "qwen-image-2>=0.2.2",
     "safetensors>=0.8.0",
     "shellingham>=1.5.4",
-    "tensorfs>=0.3.68",
+    "tensorfs>=0.3.74",
     "tokenizers>=0.23.1",
     "torch>=2.14",
     "torchvision>=0.29",

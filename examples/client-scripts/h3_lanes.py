@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime>=0.18.40,<1", "minimax-h3-tools"]
+# dependencies = ["cozy-runtime>=0.18.67,<1", "minimax-h3-tools"]
 # [tool.uv]
 # default-groups = []
 # [tool.uv.sources]
