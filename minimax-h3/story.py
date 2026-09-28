@@ -13,7 +13,7 @@ from msgspec.structs import replace
 from cozy_runtime.author import AssetBound, AudioAsset, ImageAsset, InvalidRequest
 from cozy_runtime.models.minimax_h3.official import validate_reference_policy
 
-_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,47}\Z")
+_NAME = re.compile(r"[A-Za-z](?:[A-Za-z0-9 _-]{0,46}[A-Za-z0-9_-])?\Z")
 # H3 fills audio time no section describes with invented speech; both sections are required.
 _AUDIO_HINTS = {
     "overall_soundscape": "describe the concrete non-voice sounds (room tone, footsteps, impacts, "
@@ -118,10 +118,11 @@ def validate_references(references: Sequence[StoryReference]) -> dict[str, Story
     for reference in references:
         if not _NAME.fullmatch(reference.name):
             raise InvalidRequest(
-                "reference names must start with a letter and use letters, digits, _ or -",
+                "reference names start with a letter, use letters, digits, spaces, _ or -, "
+                "end without a space and are at most 48 characters",
                 fields=["references"],
             )
-        key = reference.name.casefold()
+        key = " ".join(reference.name.split()).casefold()
         if key in by_name:
             raise InvalidRequest(
                 f"duplicate reference name: {reference.name}", fields=["references"]
