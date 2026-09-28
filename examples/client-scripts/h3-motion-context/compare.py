@@ -6,7 +6,7 @@
 # ///
 """Run next to the prepared private candidate directory using cozy run compare.py."""
 
-from h3_motion_context import Comparison, ComparisonInput, StoryReference, StorySegment, compare
+from h3_motion_context import Comparison, ComparisonInput, StoryReference, compare
 
 
 async def main() -> Comparison:
@@ -32,27 +32,18 @@ async def main() -> Comparison:
                     ),
                 ),
             ],
-            shared=(
-                "A continuous eye-level tracking shot, natural daylight. Footsteps and "
-                "soft outdoor wind, no music, no voices."
+            overall_soundscape="Footsteps and soft outdoor wind.",
+            predecessor=(
+                "summary:\n[reference generation] <courier> approaches the cart in <depot>.\n\n"
+                "detailed_description:\nA continuous eye-level tracking shot, natural daylight.\n"
+                "[Shot 1] <courier> walks steadily across <depot> toward the blue cargo cart. "
+                "The camera tracks smoothly beside her."
             ),
-            predecessor=StorySegment(
-                summary="[reference generation] <courier> approaches the cart in <depot>.",
-                detailed_description=(
-                    "[Shot 1] <courier> walks steadily across <depot> toward the blue cargo cart. "
-                    "The camera tracks smoothly beside her."
-                ),
-                overall_soundscape="Footsteps and soft outdoor wind.",
-                non_diegetic_music="N/A",
-            ),
-            continuation=StorySegment(
-                summary="[reference generation] <courier> reaches the cart in <depot>.",
-                detailed_description=(
-                    "[Shot 1] <courier> keeps walking across <depot>, reaches the blue cargo cart "
-                    "and rests one hand on its handle. The camera keeps tracking smoothly."
-                ),
-                overall_soundscape="Footsteps and soft outdoor wind.",
-                non_diegetic_music="N/A",
+            continuation=(
+                "summary:\n[reference generation] <courier> reaches the cart in <depot>.\n\n"
+                "detailed_description:\nA continuous eye-level tracking shot, natural daylight.\n"
+                "[Shot 1] <courier> keeps walking across <depot>, reaches the blue cargo cart "
+                "and rests one hand on its handle. The camera keeps tracking smoothly."
             ),
             seed=41001,
         )

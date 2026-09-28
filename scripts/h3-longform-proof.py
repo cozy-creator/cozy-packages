@@ -36,7 +36,7 @@ def main() -> None:
     proof.drive(root / "first-fails", continuous=True, fail=0)
     proof.drive(root / "reference-fails", continuous=True, reference_failure=True)
     proof.drive(root / "reference-cancels", continuous=True, reference_cancel=True)
-    proof.drive(root / "prompt-preflight", continuous=True, prompt="x" * 4000, refuse=True)
+    proof.drive(root / "long-prompt", continuous=True, prompt="x" * 20000)
     shortened = proof.drive(
         root / "frame-shortening", continuous=True, context_frames=56, duration_s=15
     )
@@ -59,7 +59,7 @@ def main() -> None:
                 "private_completed_av_context": True,
                 "two_public_assets": True,
                 "exact_delivered_frames": True,
-                "prompt_and_frame_preflight_before_qwen": True,
+                "frame_preflight_before_qwen": True,
             },
             indent=2,
         )

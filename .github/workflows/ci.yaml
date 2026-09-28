@@ -132,6 +132,9 @@ jobs:
       - name: Arms
         run: minimax-h3/.venv/bin/python scripts/h3-conform.py
 
+      - name: The exact text H3's encoder receives
+        run: minimax-h3/.venv/bin/python scripts/h3-prompt-proof.py
+
       - name: Native long-form assembly and one-file delivery
         run: |
           minimax-h3/.venv/bin/python scripts/h3-assembly-proof.py "$RUNNER_TEMP/h3-assembly"

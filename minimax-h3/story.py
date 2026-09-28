@@ -1,34 +1,35 @@
-"""Shared reference assets and verbatim H3 segment prompt assembly."""
+"""Shared reference assets and H3 segment prompts: authored text plus the global sections."""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Annotated, Literal
+from itertools import pairwise
+from typing import Annotated, Literal, NamedTuple
 
 import msgspec
-from msgspec.structs import replace
 from cozy_runtime.author import AssetBound, AudioAsset, ImageAsset, InvalidRequest
-from cozy_runtime.models.minimax_h3.official import validate_reference_policy
+from cozy_runtime.models.minimax_h3.official import Task, validate_reference_policy
 
-# H3 fills audio time no section describes with invented speech; both sections are required.
-_AUDIO_HINTS = {
-    "overall_soundscape": "describe the concrete non-voice sounds (room tone, footsteps, impacts, "
-    "breathing); write N/A only for total silence",
-    "non_diegetic_music": "describe the score, or write N/A for none",
-}
-
-
-class StorySegment(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
-    """One invocation with ordinary H3 text, including any camera-shot markers."""
-
-    summary: Annotated[str, msgspec.Meta(max_length=1024)] = ""
-    detailed_description: Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
-    overall_soundscape: Annotated[str, msgspec.Meta(max_length=1024)] = ""
-    non_diegetic_music: Annotated[str, msgspec.Meta(max_length=1024)] = ""
-    seed: int | None = None
-    duration_s: Annotated[int, msgspec.Meta(ge=5, le=15)]
+#: MiniMax's full-reference sections, in their canonical order.
+SECTIONS = (
+    "subject_definitions",
+    "summary",
+    "retention_analysis",
+    "detailed_description",
+    "overall_soundscape",
+    "non_diegetic_music",
+)
+# A header starts a line; any case, and `_`, `-` and space are the same separator.
+_HEADER = re.compile(
+    r"^[ \t]*(" + "|".join(name.replace("_", "[ _-]+") for name in SECTIONS) + r")[ \t]*:",
+    re.IGNORECASE | re.MULTILINE,
+)
+_TOKEN = re.compile(r"<([^<>\n]+)>")
+_MEDIA = re.compile(r"\s*(picture|audio|video)\s+(\d+)\s*", re.IGNORECASE)
+_SHOT = re.compile(r"\[Shot\s*(\d+)\]", re.IGNORECASE)
 
 
 class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
@@ -36,7 +37,7 @@ class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
 
     name: str
     kind: Literal["character", "scene", "audio"]
-    description: Annotated[str, msgspec.Meta(max_length=1024)] = ""
+    description: str = ""
     retention_analysis: Annotated[str, msgspec.Meta(max_length=1024)] | None = msgspec.field(
         default=None, name="retention-analysis"
     )
@@ -121,7 +122,7 @@ def validate_references(references: Sequence[StoryReference]) -> dict[str, Story
         raise InvalidRequest(str(exc), code="reference_policy", fields=["references"]) from exc
     by_name: dict[str, StoryReference] = {}
     for reference in references:
-        key = reference.name.casefold()
+        key = name_key(reference.name)
         if key in by_name:
             raise InvalidRequest(
                 f"duplicate reference name: {reference.name}", fields=["references"]
@@ -150,114 +151,204 @@ def validate_references(references: Sequence[StoryReference]) -> dict[str, Story
     return by_name
 
 
-def segment_prompt(
-    style: str,
-    segment: StorySegment,
-    *,
-    subject_definitions: str,
-    retention_analysis: str,
-    index: int,
-) -> str:
-    """Add section headings and shared style; never interpret or rewrite authored text."""
-    for field, value in (
-        ("subject_definitions", subject_definitions),
-        ("retention_analysis", retention_analysis),
-        ("detailed_description", segment.detailed_description),
-    ):
-        if not value.strip():
-            raise InvalidRequest(
-                f"segment {index + 1}: {field} must not be blank", fields=[field]
-            )
-    for field, hint in _AUDIO_HINTS.items():
-        if not getattr(segment, field).strip():
-            raise InvalidRequest(
-                f"segment {index + 1}: {field} is blank; {hint}",
-                code="h3_audio_section_required",
-                fields=[field],
-            )
-    description = style + "\n" + segment.detailed_description if style else segment.detailed_description
-    sections = [
-        "subject_definitions:\n" + subject_definitions,
-        "retention_analysis:\n" + retention_analysis,
-        "detailed_description:\n" + description,
-        "overall_soundscape:\n" + segment.overall_soundscape,
-        "non_diegetic_music:\n" + segment.non_diegetic_music,
-    ]
-    if segment.summary.strip():
-        sections.insert(1, "summary:\n" + segment.summary)
-    prompt = "\n\n".join(sections)
-    if len(prompt) > 4096:
-        raise InvalidRequest(
-            f"segment {index + 1}'s complete prompt exceeds 4096 characters",
-            fields=["segments", "style", "subject_definitions", "retention_analysis"],
-        )
-    return prompt
+def encoder_prompt(task: Task, prompt: str) -> str:
+    """The text H3's encoder receives: the prompt verbatim, plus `N/A` music unless it names it.
+
+    H3 invents score and speech for audio no section describes. The line takes the task's
+    upstream layout: fl2va's single-line fields, ref2va's heading-over-value sections.
+    """
+    if "non_diegetic_music" in prompt.casefold():
+        return prompt
+    line = "non_diegetic_music: N/A" if task.startswith("fl2va") else "non_diegetic_music:\nN/A"
+    return "\n\n".join(filter(None, (prompt.rstrip(), line)))
+
+
+class SegmentCall(NamedTuple):
+    prompt: str
+    references: list[StoryReference]
+    warnings: list[str]
+
+
+def name_key(name: str) -> str:
+    """How a `<Name>` token matches a reference: any case, `_`, `-` and space alike."""
+    return " ".join(re.sub(r"[_-]", " ", name).split()).casefold()
 
 
 def compile_segments(
-    style: str,
-    segments: Sequence[StorySegment],
+    prompts: Sequence[str],
     references: Sequence[StoryReference],
     *,
     overall_soundscape: str = "",
-    non_diegetic_music: str = "",
-) -> list[str]:
-    """Generate shared reference sections once; preserve all authored segment text."""
+    non_diegetic_music: str = "N/A",
+) -> list[SegmentCall]:
+    """Each segment's child call: its references, renumbered, and the global sections."""
     validate_references(references)
-    subject_definitions, retention_analysis = reference_sections(references)
-    def combine_audio(*values: str) -> str:
-        stated = [value.strip() for value in values if value.strip()]
-        described = [value for value in stated if value.upper() != "N/A"]
-        return "\n".join(described) if described else "N/A" if stated else ""
-
     return [
-        segment_prompt(
-            style,
-            replace(
-                segment,
-                overall_soundscape=combine_audio(overall_soundscape, segment.overall_soundscape),
-                non_diegetic_music=combine_audio(non_diegetic_music, segment.non_diegetic_music),
-            ),
-            subject_definitions=subject_definitions,
-            retention_analysis=retention_analysis, index=index,
-        )
-        for index, segment in enumerate(segments)
+        _segment_call(text, references, overall_soundscape, non_diegetic_music, index)
+        for index, text in enumerate(prompts)
     ]
 
 
-def reference_sections(references: Sequence[StoryReference]) -> tuple[str, str]:
-    """Use the same ordered image slots and literal names as the shared assets."""
+def _slot(ref: StoryReference) -> str:
+    return "audio" if ref.kind == "audio" else "picture"
+
+
+def _numbering(references: Sequence[StoryReference]) -> dict[tuple[str, int], StoryReference]:
+    """`<Picture N>` and `<Audio N>`: each kind counted in the given order."""
+    counts = {"picture": 0, "audio": 0}
+    slots: dict[tuple[str, int], StoryReference] = {}
+    for ref in references:
+        counts[_slot(ref)] += 1
+        slots[_slot(ref), counts[_slot(ref)]] = ref
+    return slots
+
+
+def _segment_call(
+    text: str,
+    references: Sequence[StoryReference],
+    soundscape: str,
+    music: str,
+    index: int,
+) -> SegmentCall:
+    """Scenes always; characters, and audio, only where the text names them.
+
+    A voice (audio whose description names a character) follows its character. Global
+    `<Picture N>`/`<Audio N>` tokens count as mentions and are renumbered for the child.
+    """
+    by_key = {name_key(ref.name): ref for ref in references}
+    by_slot = _numbering(references)
+
+    def lookup(token: re.Match[str]) -> StoryReference | None:
+        media = _MEDIA.fullmatch(token.group(1))
+        if media is None:
+            return by_key.get(name_key(token.group(1)))
+        return by_slot.get((media.group(1).lower(), int(media.group(2))))
+
+    def mentioned(span: str) -> list[StoryReference]:
+        found = {ref.name: ref for token in _TOKEN.finditer(span) if (ref := lookup(token))}
+        return list(found.values())
+
+    unmatched = dict.fromkeys(
+        token.group(0)
+        for token in _TOKEN.finditer(text)
+        if _MEDIA.fullmatch(token.group(1)) and lookup(token) is None
+    )
+    warnings = (
+        [f"Segment {index + 1}: {', '.join(unmatched)} match no reference; left as written."]
+        if unmatched else []
+    )
+    voices: dict[str, list[StoryReference]] = {}
+    for ref in references:
+        owner = [o for o in mentioned(ref.description) if o.kind != "audio"]
+        if ref.kind == "audio" and owner:
+            voices.setdefault(owner[0].name, []).append(ref)
+    attached = {ref.name: ref for ref in references if ref.kind == "scene"}
+    for ref in mentioned(text):
+        attached.setdefault(ref.name, ref)
+        for voice in voices.get(ref.name, []):
+            attached.setdefault(voice.name, voice)
+    used = list(attached.values())
+    if all(ref.kind == "audio" for ref in used):
+        # H3's ref2va needs an image: with no scene and no character named, send them all.
+        used = list(references)
+        warnings.append(
+            f"Segment {index + 1} names no character and there is no scene, so it receives "
+            f"all {len(used)} references."
+        )
+    _, start, end = _sections(text).get("detailed_description", (0, 0, 0))
+    markers = list(_SHOT.finditer(text, start, end))
+    spans = pairwise([marker.start() for marker in markers] + [end])
+    shots = [
+        (m.group(1), {ref.name for ref in mentioned(text[a:b])})
+        for m, (a, b) in zip(markers, spans, strict=True)
+    ]
+    child = {ref.name: slot for slot, ref in _numbering(used).items()}
+
+    def renumber(token: re.Match[str]) -> str:
+        ref = lookup(token) if _MEDIA.fullmatch(token.group(1)) else None
+        if ref is None or ref.name not in child:
+            return token.group(0)
+        kind, number = child[ref.name]
+        return f"<{kind.capitalize()} {number}>"
+
+    text = _TOKEN.sub(renumber, text)
     definitions, retention = [], []
-    pictures = audios = 0
-    for reference in references:
-        if reference.kind == "audio":
-            audios += 1
-            label_kind = f"Audio {audios}"
+    for ref in used:
+        kind, number = child[ref.name]
+        slot = f"<{kind.capitalize()} {number}>"
+        if ref.kind == "audio":
+            definitions.append(f"{slot} is the supplied audio reference for <{ref.name}>.")
+            preserved = "the referenced audio signal and its supplied timing"
+            label = slot
         else:
-            pictures += 1
-            label_kind = f"Picture {pictures}"
-        label = f"<{reference.name}>"
-        prompt_label = f"<{label_kind}>"
-        if reference.kind == "audio":
-            definitions.append(
-                f"{prompt_label} is the supplied audio reference for {label}."
-                + (f" {reference.description}" if reference.description else "")
+            definitions.append(f"<{ref.name}> is the {ref.kind} shown in {slot}.")
+            preserved = (
+                "the identity and defining visual features of the referenced character"
+                if ref.kind == "character"
+                else "the architecture, materials and defining features of the referenced environment"
             )
+            appears = [f"[Shot {n}]" for n, names in shots if ref.name in names]
+            label = f"<{ref.name}>" + (f" (appears in {', '.join(appears)})" if appears else "")
+        if ref.description:
+            definitions[-1] += f" {ref.description}"
+        retention.append(f"{label}: {ref.retention_analysis or f'fully_preserved - {preserved}.'}")
+    additions = {
+        "subject_definitions": "\n".join(definitions),
+        "retention_analysis": "\n".join(retention),
+        "overall_soundscape": soundscape.strip(),
+        "non_diegetic_music": music.strip() or "N/A",
+    }
+    return SegmentCall(_fill(text, additions), used, warnings)
+
+
+def _sections(text: str) -> dict[str, tuple[int, int, int]]:
+    """Each section's first header: (header start, body start, body end).
+
+    Text before the first header is the description when no header names one.
+    """
+    headers = list(_HEADER.finditer(text))
+    found: dict[str, tuple[int, int, int]] = {}
+    for i, header in enumerate(headers):
+        body_end = headers[i + 1].start() if i + 1 < len(headers) else len(text)
+        name = re.sub(r"[ _-]+", "_", header.group(1).lower())
+        found.setdefault(name, (header.start(), header.end(), body_end))
+    lead = headers[0].start() if headers else len(text)
+    if "detailed_description" not in found and text[:lead].strip():
+        found["detailed_description"] = (0, 0, lead)
+    return found
+
+
+def _fill(text: str, additions: dict[str, str]) -> str:
+    """Append each addition inside its section, or add the section in MiniMax order.
+
+    Only these insertions change the text, and an `N/A` body gives way to described content.
+    """
+    if not text.strip():
+        return "\n\n".join(f"{name}:\n{value}" for name, value in additions.items() if value)
+    found = _sections(text)
+    edits: list[tuple[int, int, int, str]] = []
+    for order, (name, addition) in enumerate(additions.items()):
+        if not addition:
+            continue
+        if name in found:
+            _, start, end = found[name]
+            body = text[start:end].strip()
+            if addition.upper() == "N/A" and body:
+                continue
+            if body.upper() == "N/A":
+                at = text.index(body, start)
+                edits.append((at, order, at + len(body), addition))
+            else:
+                at = start + len(text[start:end].rstrip())
+                edits.append((at, order, at, "\n" + addition))
+            continue
+        later = [found[n][0] for n in SECTIONS[SECTIONS.index(name) + 1:] if n in found]
+        section = f"{name}:\n{addition}"
+        if later:
+            edits.append((min(later), order, min(later), section + "\n\n"))
         else:
-            definitions.append(
-                f"{label} is the {reference.kind} shown in {prompt_label}."
-                + (f" {reference.description}" if reference.description else "")
-            )
-        preserved = (
-            "the identity and defining visual features of the referenced character"
-            if reference.kind == "character"
-            else "the referenced audio signal and its supplied timing"
-            if reference.kind == "audio"
-            else "the architecture, materials and defining features of the referenced environment"
-        )
-        analysis = (
-            f"fully_preserved - {preserved}."
-            if reference.retention_analysis is None else reference.retention_analysis
-        )
-        retention.append(f"{prompt_label if reference.kind == 'audio' else label}: {analysis}")
-    return "\n".join(definitions), "\n".join(retention)
+            at = len(text.rstrip())
+            edits.append((at, order, at, "\n\n" + section))
+    for start, _, end, insert in sorted(edits, reverse=True):
+        text = text[:start] + insert + text[end:]
+    return text

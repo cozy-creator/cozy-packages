@@ -61,4 +61,4 @@ package-index transport, or visual-quality qualification.
 
 The `long_form` API uses this same mixed reference resolver and completed AV context,
 with no shot-count cap. See [LONG_FORM.md](../LONG_FORM.md) for JSON filenames,
-`style`, the six-section prompt format and shared audio direction.
+free-text segment prompts and the sections the workflow adds.
