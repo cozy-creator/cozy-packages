@@ -49,6 +49,7 @@ from cozy_runtime.author import (
     SavedVideo,
     Telemetry,
     VideoAsset,
+    VideoJoin,
     invocable,
 )
 
@@ -328,6 +329,11 @@ class ScanAhead:
             )
         )
 
+    def result(self, index: int) -> _Scan:
+        """One added shot's scan, once it is done."""
+        self._check_active()
+        return self._pending[index].result()
+
     def finish(self, videos: Sequence[VideoAsset]) -> list[_Scan]:
         self._check_active()
         scans = [pending.result() for pending in self._pending]
@@ -336,6 +342,62 @@ class ScanAhead:
         ):
             raise InvalidRequest("assembly scan inputs changed", code="invalid_request")
         return scans
+
+
+class CutJoin:
+    """The cut join, made incremental. A segment's H.264 packets and its stretch of the
+    soundtrack join one CMAF video when the segment lands, and the video joined so far is a
+    revision the run publishes; the last revision is the joined video, byte for byte. A
+    segment's peak gain is its own, so a published fragment never changes when a later
+    segment is loud; it equals the one-shot join's unless a segment clips."""
+
+    def __init__(self, decoder: MediaDecoder, out: Outputs, check: Callable[[], None]) -> None:
+        self.decoder, self.out, self.check = decoder, out, check
+        self.join: VideoJoin | None = None
+        self.audio: DecodedAudioFormat | None = None
+        self.scans: list[_Scan] = []
+        self.output_audio = 0
+
+    def append(self, scan: _Scan, frames: int, *, last: bool) -> VideoAsset:
+        """Join one segment of `frames` planned frames; the video joined so far."""
+        audio = scan.header.audio
+        if audio is None or (self.audio is not None and not _same_audio(self.audio, audio)):
+            raise InvalidRequest(
+                "segment-audio assembly requires one common soundtrack on every video",
+                code="invalid_request",
+            )
+        if self.join is None:
+            self.audio, self.join = audio, self.out.join_video(_output_audio(audio))
+
+        def soundtrack(copied: int) -> Iterator[DecodedMediaEvent]:
+            if copied != frames:
+                raise OutputError(
+                    f"segment {len(self.scans) + 1} has {copied} frames, not its planned {frames}",
+                    code="shot_frames",
+                )
+            self.scans.append(replace(scan, frames=copied))
+            tolerance = self.out.video_audio_frame_samples
+            selection = _segment_selections(
+                self.scans, FRAME_RATE, audio, tolerance, trim_replay=False
+            )[-1]
+            gain = _global_gain(self.scans[-1:], [selection], [_Gains()], audio)
+            segment = _SegmentAudio(audio, selection, _Gains(), gain, self.output_audio)
+            with self.decoder.stream_audio(scan.asset) as stream:
+                for event in stream:
+                    self.check()
+                    if isinstance(event, DecodedAudioChunk) and (chunk := segment.take(event)):
+                        yield chunk
+            if (padding := segment.finish(self.scans[-1])) is not None:
+                yield padding
+            self.output_audio = segment.pts
+
+        return self.join.append(scan.asset, soundtrack, last=last)
+
+    def finish(self) -> SavedVideo:
+        """The joined video: the last revision when the last append said so."""
+        if self.join is None:
+            raise OutputError("no segment was joined", code="shot_frames")
+        return self.join.finish()
 
 
 def _scan_audio(decoder: MediaDecoder, asset: AudioAsset, check: Callable[[], None]) -> _AudioScan:

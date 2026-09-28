@@ -592,24 +592,42 @@ def drive(
         assert not calls and not prefetches, (calls, prefetches)
         assert not refuse_code or outcome.code == refuse_code, outcome
         return {}
+    # Each generated reference is published as it lands, the video after every segment.
+    shown = [item for item in record.published if item.output == "references"]
+    assert [item.label for item in shown] == ["Reference: Bridge", "Reference: Rover"], shown
+    revisions = [item for item in record.published if item.output == "video"]
+    delivered = count if fail < 0 and cancel < 0 else max(fail, cancel, 0)
+    # A cancel also stops the join in flight; what was published before it stays.
+    assert len(revisions) == delivered or cancel >= 0 and len(revisions) <= delivered, [
+        item.label for item in revisions
+    ]
+    frames = [
+        min(duration_s, (362 - (context_frames if index else 0)) // FPS) * FPS
+        if continuous else frames_for(duration_s)
+        for index in range(delivered)
+    ]
+    film = b""
+    for index, revision in enumerate(revisions):
+        # A revision is the film so far: one init, then one fragment per segment.
+        assert len(revision.parts) == index + 2 and revision.parts[0].duration_us == 0
+        film = b"".join((root / "parent" / part.local).read_bytes() for part in revision.parts)
+        with av.open(io.BytesIO(film), mode="r") as container:
+            assert sum(1 for _ in container.decode(video=0)) == sum(frames[: index + 1])
     if cancel >= 0:
         assert result is None and outcome.terminal == "canceled", outcome
         return {}
-    if fail == 0:
-        assert result is None and outcome.terminal != "succeeded", outcome
+    if fail >= 0:
+        # The run fails, and keeps the references and the film through its last good segment.
+        assert result is None and outcome.terminal == "failed", outcome
+        assert outcome.code == "segment_failed", outcome
         return {}
     assert result is not None and outcome.terminal == "succeeded", outcome
     assert releases == [len(calls)], releases
-    delivered = count if fail < 0 else fail
-    assert result.result.delivered == delivered and result.result.complete == (fail < 0)
-    # The joined video is the parent's only output; no last-frame image is delivered.
-    assert [item["kind"] for item in result.outputs] == ["video"], result.outputs
-    with av.open(io.BytesIO(result.result.video.read_bytes()), mode="r") as container:
-        assert sum(1 for _ in container.decode(video=0)) == sum(
-            min(duration_s, (362 - (context_frames if index else 0)) // FPS) * FPS
-            if continuous else frames_for(duration_s)
-            for index in range(delivered)
-        )
+    assert result.result.delivered_frames == sum(frames)
+    assert result.result.video.read_bytes() == film, "the final video is not its last revision"
+    # A list output is its publishes in order: the references as they landed.
+    assert [item.digest for item in result.result.references] == [item.digest for item in shown]
+    assert sorted(item["kind"] for item in result.outputs) == ["image", "image", "video"]
     overall = [
         event.overall_fraction
         for event in events
@@ -708,7 +726,7 @@ def main() -> None:
                 "reference_submission_concurrent": True,
                 "reverse_reference_completion": True,
                 "reference_failure_cancels_siblings": True,
-                "two_public_assets": True,
+                "references_and_video_published_as_they_land": True,
                 "cuts_preserve_all_frames": True,
                 "reference_slots_and_tokens_bounded": True,
                 "grouped_appearance_roles": True,

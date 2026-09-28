@@ -57,7 +57,7 @@ def main() -> None:
                 "cases": results,
                 "actual_h3_inference": False,
                 "private_completed_av_context": True,
-                "two_public_assets": True,
+                "references_and_video_published_as_they_land": True,
                 "exact_delivered_frames": True,
                 "frame_preflight_before_qwen": True,
             },

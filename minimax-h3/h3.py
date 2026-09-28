@@ -7,6 +7,7 @@ stages weighted roots, and joins those two boundaries.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import queue
 from collections.abc import Awaitable, Callable, Iterator, Sequence
@@ -93,7 +94,7 @@ from cozy_runtime.models.minimax_h3.official import (
 )
 from msgspec.structs import replace
 
-from assembly import AssembleVideoRequest, ScanAhead, assemble, assemble_video
+from assembly import CutJoin, ScanAhead, assemble_video
 from gates import MediaFacts, refuse_before_encode, report_after_encode
 from long_form_state import RenderProvenance, compatible, context_provenance, provenance
 from qwen_image_2 import AspectRatio as ReferenceAspectRatio
@@ -1080,22 +1081,14 @@ class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
 
 
 class LongFormOutput(msgspec.Struct):
-    """The assembled video, with full or partial delivery status.
-
-    A later-shot failure returns the completed portion with complete=False.
-    Intermediate clips remain
-    internal to the serving calls. First-shot failure and cancellation stay terminal.
-    """
+    """The joined video and the reference images made for it. Each is published as it lands:
+    every generated reference, and the video one segment at a time. A failed or canceled run
+    keeps what it published."""
 
     video: Annotated[VideoAsset, AssetBound(max_bytes=256 << 20, media_types=("video/mp4",))]
-    complete: bool
-    delivered: int
-    requested: int
+    references: list[ImageAsset]
     delivered_frames: int
     fps: int
-    failed_index: int
-    failure_code: str
-    failure_detail: str
     warnings: list[str]
 
 
@@ -1379,6 +1372,8 @@ async def _create_references(
     ctx: Context,
     references: list[StoryReference],
     tel: Telemetry,
+    out: Outputs,
+    shown: list[ImageAsset],
 ) -> dict[str, ImageAsset | AudioAsset]:
     reference_steps = 40
     # Managed dependencies install an asynchronous flat caller for the source
@@ -1398,7 +1393,10 @@ async def _create_references(
                 seed=reference_seed(reference, ctx.request_id),
                 background="white" if reference.kind == "character" else "normal",
             )
-            return result.image
+        # Each generated reference is shown the moment it exists.
+        out.publish("references", result.image, label=f"Reference: {reference.name}")
+        shown.append(result.image)
+        return result.image
 
     images = await resolve_reference_images(references, create_reference)
     for reference in references:
@@ -1421,7 +1419,8 @@ async def long_form_cuts(
     out: Outputs,
     tel: Telemetry,
 ) -> LongFormOutput:
-    """Generate reference-conditioned camera cuts; deliver only the final film and image.
+    """Generate reference-conditioned camera cuts. Each reference and the film so far are
+    published as they land; a failed or canceled run keeps them.
 
     Each segment is free text naming references as `<Name>`; see LONG_FORM.md for what
     the workflow adds. H3 fills undescribed audio with invented speech: name the non-voice
@@ -1436,111 +1435,100 @@ async def long_form_cuts(
     render_work = [frames * steps for frames in planned_frames]
     reference_steps = 40
     reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * reference_steps
-    total_work = sum(render_work) + sum(planned_frames) + reference_work
-    completed_work = 0
+    total_work = sum(render_work) + reference_work
     prefetch(cut_segment_turbo if payload.mode == "turbo" else cut_segment)
-    images = await _create_references(ctx, payload.references, tel)
+    references: list[ImageAsset] = []
+    images = await _create_references(ctx, payload.references, tel, out, references)
     completed_work = reference_work
-    videos: list[VideoAsset] = []
     expected = None
     warnings = [warning for call in calls for warning in call.warnings]
-    failed_index, failure_code, failure_detail = -1, "", ""
+    count = len(payload.segments)
+    cut = CutJoin(decoder, out, ctx.raise_if_cancelled)
+    joining: asyncio.Future[None] | None = None
     with ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
-        for index, shot in enumerate(payload.segments):
-            ctx.raise_if_cancelled()
-            selected = calls[index].references
-            prompt = calls[index].prompt
-            seed = shot_seed(shot, ctx.request_id, index)
-            assets = Assets[Mixed](
-                [
-                    images[ref.name].with_label(label)
-                    for ref, label in _label_references(selected)
-                ]
-            )
-            log_prompt(tel, "h3 segment prompt", prompt, segment=index + 1,
-                       references=", ".join(ref.name for ref in selected))
-            try:
-                with tel.scope(
-                    f"Segment {index + 1} of {len(payload.segments)}",
-                    overall_range=(
-                        completed_work / total_work,
-                        (completed_work + render_work[index]) / total_work,
-                    ),
-                ):
-                    if payload.mode == "turbo":
-                        result = await cut_segment_turbo(  # type: ignore[call-arg]
-                            payload=CutTurboInput(
-                                prompt=prompt,
-                                seed=seed,
-                                duration_s=shot.duration_s,
-                                expected_provenance=expected,
-                            ),
-                            assets=assets,
-                        )
-                    else:
-                        result = await cut_segment(  # type: ignore[call-arg]
-                            payload=CutInput(
-                                prompt=prompt,
-                                seed=seed,
-                                steps=steps,
-                                duration_s=shot.duration_s,
-                                expected_provenance=expected,
-                            ),
-                            assets=assets,
-                        )
-            except ChildCallError as failure:
+
+        def show(index: int, last: bool) -> None:
+            """Join shot `index` and publish the film so far, off the GPU path."""
+            revision = cut.append(scanning.result(index), planned_frames[index], last=last)
+            span = "shot 1" if index == 0 else f"shots 1-{index + 1}"
+            out.publish("video", revision, label=f"Video ({span} of {count})")
+
+        try:
+            for index, shot in enumerate(payload.segments):
                 ctx.raise_if_cancelled()
-                failed_index, failure_code, failure_detail = index, failure.code, str(failure)[:512]
-                break
-            compatible(result.provenance, expected)
-            expected = result.provenance
-            videos.append(result.video)
-            scanning.add(result.video)
-            warnings.extend(result.warnings)
-            completed_work += render_work[index]
-        # Every GPU call has returned: assembly and outputs are CPU work, so the next
-        # request's shots start now.
-        ctx.release_gpus()
-        if not videos:
-            raise OutputError(f"shot 1 failed ({failure_code}): {failure_detail}")
-        delivered_frames = sum(planned_frames[: len(videos)])
-        with tel.scope(
-            "Assembling video",
-            overall_range=(
-                completed_work / total_work,
-                (completed_work + delivered_frames) / total_work,
-            ),
-        ):
-            assembled = assemble(
-                AssembleVideoRequest(videos, transition="cut"),
-                decoder=decoder,
-                out=out,
-                tel=tel,
-                check=ctx.raise_if_cancelled,
-                scanned=scanning,
-            )
-    if (
-        assembled.output_frames != delivered_frames
-        or [item.source_frames for item in assembled.segments] != planned_frames[: len(videos)]
-    ):
-        raise OutputError("assembled cuts differ from the declared frame clock", code="shot_frames")
-    complete = len(videos) == len(payload.segments)
-    if not complete:
-        warnings.append(
-            f"PARTIAL DELIVERY: {len(videos)} of {len(payload.segments)} segments completed; "
-            f"segment {failed_index + 1} failed ({failure_code})."
-        )
+                selected = calls[index].references
+                prompt = calls[index].prompt
+                seed = shot_seed(shot, ctx.request_id, index)
+                assets = Assets[Mixed](
+                    [
+                        images[ref.name].with_label(label)
+                        for ref, label in _label_references(selected)
+                    ]
+                )
+                log_prompt(tel, "h3 segment prompt", prompt, segment=index + 1,
+                           references=", ".join(ref.name for ref in selected))
+                try:
+                    with tel.scope(
+                        f"Segment {index + 1} of {count}",
+                        overall_range=(
+                            completed_work / total_work,
+                            (completed_work + render_work[index]) / total_work,
+                        ),
+                    ):
+                        if payload.mode == "turbo":
+                            result = await cut_segment_turbo(  # type: ignore[call-arg]
+                                payload=CutTurboInput(
+                                    prompt=prompt,
+                                    seed=seed,
+                                    duration_s=shot.duration_s,
+                                    expected_provenance=expected,
+                                ),
+                                assets=assets,
+                            )
+                        else:
+                            result = await cut_segment(  # type: ignore[call-arg]
+                                payload=CutInput(
+                                    prompt=prompt,
+                                    seed=seed,
+                                    steps=steps,
+                                    duration_s=shot.duration_s,
+                                    expected_provenance=expected,
+                                ),
+                                assets=assets,
+                            )
+                except ChildCallError as failure:
+                    ctx.raise_if_cancelled()
+                    raise OutputError(
+                        f"shot {index + 1} of {count} failed ({failure.code}): {str(failure)[:512]}",
+                        code="segment_failed",
+                    ) from failure
+                compatible(result.provenance, expected)
+                expected = result.provenance
+                scanning.add(result.video)
+                warnings.extend(result.warnings)
+                completed_work += render_work[index]
+                if joining is not None:
+                    await joining
+                joining = asyncio.ensure_future(asyncio.to_thread(show, index, index + 1 == count))
+            # Every GPU call has returned: the rest is CPU work, so the next request's shots
+            # start now.
+            ctx.release_gpus()
+        finally:
+            if joining is not None:
+                # However the loop ends, the film through the last joined segment is published.
+                await asyncio.gather(joining, return_exceptions=True)
+        assert joining is not None
+        joining.result()
+        joined = cut.finish()
+    delivered_frames = sum(planned_frames)
+    if joined.frame_count != delivered_frames:
+        raise OutputError("the joined cuts differ from the declared frame clock", code="shot_frames")
     return LongFormOutput(
-        assembled.video,
-        complete,
-        len(videos),
-        len(payload.segments),
-        delivered_frames,
-        FPS,
-        failed_index,
-        failure_code,
-        failure_detail,
-        warnings,
+        video=joined.video,
+        references=references,
+        delivered_frames=delivered_frames,
+        fps=FPS,
+        warnings=warnings,
     )
 
 
@@ -1551,7 +1539,8 @@ async def long_form(
     out: Outputs,
     tel: Telemetry,
 ) -> LongFormOutput:
-    """Render and assemble remotely; deliver only the joined video.
+    """Render continuous segments and join them. Each reference and the video so far are
+    published as they land; a failed or canceled run keeps them.
 
     Each segment is free text naming references as `<Name>`; see LONG_FORM.md for what
     the workflow adds. H3 fills undescribed audio with invented speech: name the non-voice
@@ -1596,122 +1585,105 @@ async def long_form(
         for index, duration in enumerate(durations)
     ]
     render_work = [plan.sample_frames * steps for plan in plans]
-    requested_frames = sum(plan.delivered_frames for plan in plans)
     reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * 40
-    total_work = sum(render_work) + requested_frames + reference_work
+    total_work = sum(render_work) + reference_work
     prefetch(motion_segment_turbo if payload.mode == "turbo" else motion_segment)
-    images = await _create_references(ctx, payload.references, tel)
+    references: list[ImageAsset] = []
+    images = await _create_references(ctx, payload.references, tel, out, references)
     completed_work = reference_work
-    videos: list[VideoAsset] = []
     context = None
     expected: RenderProvenance | None = None
-    failed_index, failure_code, failure_detail = -1, "", ""
+    count = len(payload.segments)
+    cut = CutJoin(decoder, out, ctx.raise_if_cancelled)
+    joining: asyncio.Future[None] | None = None
     with ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
-        for index, shot in enumerate(payload.segments):
-            ctx.raise_if_cancelled()
-            seed = shot_seed(shot, ctx.request_id, index)
-            try:
-                with tel.scope(
-                    f"Segment {index + 1} of {len(payload.segments)}",
-                    overall_range=(
-                        completed_work / total_work,
-                        (completed_work + render_work[index]) / total_work,
-                    ),
-                ):
-                    assets = Assets[Mixed](
-                        [
-                            images[ref.name].with_label(label)
-                            for ref, label in _label_references(calls[index].references)
-                        ]
-                    )
-                    log_prompt(tel, "h3 segment prompt", calls[index].prompt, segment=index + 1,
-                               references=", ".join(ref.name for ref in calls[index].references))
-                    child_payload = MotionInput(
-                        prompt=calls[index].prompt,
-                        seed=seed,
-                        duration_s=durations[index],
-                        steps=steps,
-                        frames=held_frames(plans[index]),
-                        expected_provenance=expected,
-                        context=context,
-                        context_frames=payload.context_frames,
-                        next_context_frames=(
-                            (payload.context_frames,) if index + 1 < len(payload.segments) else ()
-                        ),
-                    )
-                    if payload.mode == "turbo":
-                        call = motion_segment_turbo(payload=child_payload, assets=assets)  # type: ignore[call-arg]
-                    else:
-                        call = motion_segment(payload=child_payload, assets=assets)  # type: ignore[call-arg]
-                    shot_result = await call
-            except ChildCallError as failure:
-                # Concurrent caller cancellation must not become a successful partial result.
+
+        def show(index: int, last: bool) -> None:
+            """Join segment `index` and publish the video so far, off the GPU path."""
+            revision = cut.append(scanning.result(index), plans[index].delivered_frames, last=last)
+            span = "segment 1" if index == 0 else f"segments 1-{index + 1}"
+            out.publish("video", revision, label=f"Video ({span} of {count})")
+
+        try:
+            for index, shot in enumerate(payload.segments):
                 ctx.raise_if_cancelled()
-                failed_index, failure_code, failure_detail = index, failure.code, str(failure)[:512]
-                break
-            compatible(shot_result.provenance, expected)
-            expected = shot_result.provenance
-            videos.append(shot_result.video)
-            scanning.add(shot_result.video)
-            warnings.extend(shot_result.warnings)
-            context = shot_result.context
-            completed_work += render_work[index]
-        # Every GPU call has returned: assembly and outputs are CPU work, so the next
-        # request's shots start now.
-        ctx.release_gpus()
-        if not videos:
-            raise OutputError(
-                f"segment 1 of {len(payload.segments)} failed ({failure_code}): {failure_detail}"
-            )
-        ctx.raise_if_cancelled()
-        delivered_frames = sum(plan.delivered_frames for plan in plans[: len(videos)])
-        with tel.scope(
-            "Assembling video",
-            overall_range=(
-                completed_work / total_work,
-                (completed_work + delivered_frames) / total_work,
-            ),
-        ):
-            assembled = assemble(
-                AssembleVideoRequest(videos=videos, transition="cut"),
-                decoder=decoder,
-                out=out,
-                tel=tel,
-                check=ctx.raise_if_cancelled,
-                scanned=scanning,
-            )
-    if [segment.source_frames for segment in assembled.segments] != [
-        plan.delivered_frames for plan in plans[: len(videos)]
-    ]:
-        raise OutputError("shot video differs from its declared frame count", code="shot_frames")
-    if assembled.output_frames != delivered_frames:
-        raise OutputError("assembled output differs from the long-form clock", code="shot_frames")
-    complete = len(videos) == len(payload.segments)
-    if not complete:
-        warnings.append(
-            f"PARTIAL DELIVERY: {len(videos)} of {len(payload.segments)} segments completed; "
-            f"segment {failed_index + 1} failed ({failure_code})."
-        )
+                seed = shot_seed(shot, ctx.request_id, index)
+                try:
+                    with tel.scope(
+                        f"Segment {index + 1} of {count}",
+                        overall_range=(
+                            completed_work / total_work,
+                            (completed_work + render_work[index]) / total_work,
+                        ),
+                    ):
+                        assets = Assets[Mixed](
+                            [
+                                images[ref.name].with_label(label)
+                                for ref, label in _label_references(calls[index].references)
+                            ]
+                        )
+                        log_prompt(tel, "h3 segment prompt", calls[index].prompt, segment=index + 1,
+                                   references=", ".join(ref.name for ref in calls[index].references))
+                        child_payload = MotionInput(
+                            prompt=calls[index].prompt,
+                            seed=seed,
+                            duration_s=durations[index],
+                            steps=steps,
+                            frames=held_frames(plans[index]),
+                            expected_provenance=expected,
+                            context=context,
+                            context_frames=payload.context_frames,
+                            next_context_frames=(
+                                (payload.context_frames,) if index + 1 < count else ()
+                            ),
+                        )
+                        if payload.mode == "turbo":
+                            call = motion_segment_turbo(payload=child_payload, assets=assets)  # type: ignore[call-arg]
+                        else:
+                            call = motion_segment(payload=child_payload, assets=assets)  # type: ignore[call-arg]
+                        # The previous segment joins in a thread while this one renders.
+                        shot_result = await call
+                except ChildCallError as failure:
+                    # Concurrent caller cancellation must not become a successful partial result.
+                    ctx.raise_if_cancelled()
+                    raise OutputError(
+                        f"segment {index + 1} of {count} failed ({failure.code}): {str(failure)[:512]}",
+                        code="segment_failed",
+                    ) from failure
+                compatible(shot_result.provenance, expected)
+                expected = shot_result.provenance
+                scanning.add(shot_result.video)
+                warnings.extend(shot_result.warnings)
+                context = shot_result.context
+                completed_work += render_work[index]
+                if joining is not None:
+                    await joining
+                joining = asyncio.ensure_future(asyncio.to_thread(show, index, index + 1 == count))
+            # Every GPU call has returned: the rest is CPU work, so the next request's shots
+            # start now.
+            ctx.release_gpus()
+        finally:
+            if joining is not None:
+                # However the loop ends, the film through the last joined segment is published.
+                await asyncio.gather(joining, return_exceptions=True)
+        assert joining is not None
+        joining.result()
+        joined = cut.finish()
+    delivered_frames = sum(plan.delivered_frames for plan in plans)
+    if joined.frame_count != delivered_frames:
+        raise OutputError("the joined video differs from the long-form clock", code="shot_frames")
     tel.log(
         "h3 long-form delivery",
         mode=payload.mode,
         steps=steps,
-        complete=complete,
-        delivered=len(videos),
-        requested=len(payload.segments),
+        segments=count,
         delivered_frames=delivered_frames,
-        failed_index=failed_index,
     )
     return LongFormOutput(
-        video=assembled.video,
-        complete=complete,
-        delivered=len(videos),
-        requested=len(payload.segments),
+        video=joined.video,
+        references=references,
         delivered_frames=delivered_frames,
         fps=FPS,
-        failed_index=failed_index,
-        failure_code=failure_code,
-        failure_detail=failure_detail,
         warnings=warnings,
     )
 
