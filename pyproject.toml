@@ -24,10 +24,6 @@ module = [
     "torch.*", "torchvision.*", "transformers.*", "tokenizers.*", "numpy.*", "PIL.*",
     "safetensors.*", "diffusers.*", "tfsbench", "tensorfs", "tensorfs.*", "cozy_eval.*",
     "av", "av.*",
-    "merge_arithmetic",
-    # The pinned private scratch probe requires the unmerged LoRA development cohort.
-    "cozy_runtime.internal.lora",
-    "attention_backends",
 ]
 ignore_missing_imports = true
 
@@ -45,15 +41,6 @@ module = ["anima", "sdxl"]
 disallow_subclassing_any = false
 disallow_untyped_decorators = false
 warn_unused_ignores = false
-
-[[tool.mypy.overrides]]
-module = ["h3-activation-proof"]
-disallow_subclassing_any = false
-
-# This private CUDA fixture subclasses Torch, absent from the light checking environment.
-[[tool.mypy.overrides]]
-module = ["mixed_model_qualification"]
-disallow_subclassing_any = false
 
 [tool.ruff]
 line-length = 100

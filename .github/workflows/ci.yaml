@@ -146,12 +146,6 @@ jobs:
       - name: PDD Ulysses parity at degrees two and four
         run: minimax-h3/.venv/bin/python scripts/h3-turbo-cp-proof.py
 
-      - name: Diagnostic hooks preserve outputs and stop explicitly
-        run: PYTHONPATH=minimax-h3 minimax-h3/.venv/bin/python scripts/h3-activation-proof.py
-
-      - name: Private first-step probe preserves model output and RNG
-        run: minimax-h3/.venv/bin/python scripts/h3-first-step-proof.py
-
       - name: Reference fidelity survives conditioning
         run: CUDA_VISIBLE_DEVICES='' minimax-h3/.venv/bin/python scripts/h3-reference-fidelity-proof.py
 
@@ -169,19 +163,6 @@ jobs:
           uv pip install --python minimax-h3/.venv/bin/python --no-deps dist/packages/minimax-h3/*.whl
           minimax-h3/.venv/bin/python -P scripts/package_import.py minimax-h3 --installed
 
-      - name: Worker-side script interfaces and installed model helpers
-        run: |
-          PYTHONPATH=examples/client-scripts minimax-h3/.venv/bin/python -P - <<'PYCODE'
-          from pathlib import Path
-          from cozy_runtime.author import describe, script_app
-          import h3_diagnostics, h3_activation_trace, h3_resident_samples
-
-          for module in (h3_diagnostics, h3_activation_trace, h3_resident_samples):
-              assert "site-packages" in Path(module.__file__).parts
-          for name in ("h3_vae_roundtrip",):
-              surface, = describe(script_app(name))
-              assert surface.name == "main" and len(surface.model_bindings) == 1
-          PYCODE
 
   package-locks:
     name: Package exact locked environments

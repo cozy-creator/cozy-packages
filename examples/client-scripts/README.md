@@ -27,23 +27,6 @@ cozy model publish paul/reference-image --release 0.1.0 \
   --lane original=sha256:CHECKPOINT_DIGEST
 ```
 
-`prepare_reference_image.py` is an optional composition example using those same
-native operations. It has no adjacent helper, local model implementation, or
-embedded tensor census:
-
-```sh
-cozy run examples/client-scripts/prepare_reference_image.py --describe
-cozy run examples/client-scripts/prepare_reference_image.py \
-  --rental=YOUR_RENTAL --allow-publish paul/reference-image --await
-```
-
-Edit its source pin and destination constants before use. `PUBLISH_RELEASE=False`
-keeps upload separate from release mutation; setting it to `True` explicitly adds
-`publish_release` to the composition. This example requires public Runtime 0.18.23
-or newer on both client and worker. These commands describe the workflow; they do
-not establish GPU execution or image-quality qualification.
-
-
 `sdxl_prepare.py` converts any Civitai SDXL checkpoint into its served lanes (`fp16`, plus
 the `fp8`/`mxfp8` package functions) and uploads them; `h3_lanes.py` does the same for every
 H3 lane and the PDD-8 turbo LoRA. Set their constants (scripts take no scalar arguments), then:
@@ -71,24 +54,10 @@ retention; TensorFS stores the artifact bytes. Reuse requires that Store and its
 retained bytes. There is no need for a previous run ID or Tensorhub publication.
 Inference runs fresh; checkpoint upload and release creation are explicit effects.
 
-- `h3_vae_roundtrip.py` generates a fixed reference image, uses the existing H3
-  VAE encode/decode methods, stages DiT between them, and records resident tensor
-  hashes and Cozy Eval grid observations. It returns a video plus source and
-  reconstruction PNGs. Change `FRAMES` or `CYCLE` in the file to change the probe.
-
-Supply an exact reviewed model with the ordinary `model.model=<ref>` term. Optional
-PEP 723 `[tool.cozy.models]` entries can set these defaults; explicit CLI terms take
-precedence. Imports and model
-classes come from the captured library environment. Script-local classes and
-annotation expressions with function calls are not capability declarations.
-
-The VAE example captures the adjacent editable `minimax-h3` library through
-`tool.uv.sources`. Its `h3_diagnostics`, `h3_activation_trace`, and
-`h3_resident_samples` modules share H3's existing inference and component scopes.
-The activation helpers remain ordinary library functions: observers wrap the
-original denoise callback and never replace the sampler. Historical fingerprint
-expectations identify their original checkpoint and are observations, not universal
-requirements for later checkpoints.
+Scripts bind models with ordinary `model.<slot>=<ref>` terms. Optional PEP 723
+`[tool.cozy.models]` entries can set these defaults; explicit CLI terms take precedence.
+Imports and model classes come from the captured library environment. Script-local classes
+and annotation expressions with function calls are not capability declarations.
 
 Completed memoized operations and independently retained partial work can be reused
 by a new script on the same worker. A script itself starts from `main()` each time;
