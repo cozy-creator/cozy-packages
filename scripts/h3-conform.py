@@ -3426,6 +3426,27 @@ def arm_interface() -> None:
             "result/provenance/turbo_lora_manifest",
         ],
     )
+    # Run 1560: a 12 s continuation shared a 6 s opener's shape and ran on its peak.
+    opener = package.plan_continuation(6 * package.FPS)
+    follower = package.plan_continuation(12 * package.FPS, context_frames=56)
+    check(
+        "a segment's shape is the frames its DiT holds: window plus conditioning context",
+        [
+            dict(
+                normalize(
+                    package.MotionInput(
+                        prompt="x",
+                        seed=1,
+                        duration_s=seconds,
+                        steps=package.TURBO_STEPS,
+                        frames=package.held_frames(plan),
+                    )
+                ).values
+            )
+            for seconds, plan in ((6, opener), (12, follower))
+        ],
+        [{"frames": 158, "steps": 8}, {"frames": 345 + 56, "steps": 8}],
+    )
     segment_fields = next(
         field for field in jobs["long_form"]["request"]["fields"] if field["name"] == "segments"
     )["type"]["list"]["fields"]
