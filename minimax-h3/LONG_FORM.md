@@ -93,5 +93,12 @@ cozy run fidika/minimax-h3/long_form --input story.json --await
 mode, `context_frames` 22/39/56 allows at most 14/13/12 new seconds after the first
 segment; longer segments are shortened and reported. `long_form_cuts` renders
 independent segments. Turbo uses eight PDD evaluations, and standard allows 30/40/50
-steps. Only the assembled MP4 is downloaded. If a later segment fails, the completed part
-is returned with `complete=false`.
+steps.
+
+Outputs arrive as they are made. Each generated reference image is published when it
+lands, and the video after every segment as the joined film so far: one file,
+`<run>-video.mp4`, appended in place (a fragmented MP4, one init plus one fragment per
+segment) that `cozy run play <run>` follows live. The final MP4 is the last revision, byte
+for byte, bounded at 256 MiB. A failed or canceled run fails, but keeps the references and
+the film through its last good segment. Loudness is set per segment as it is joined, so a
+later, louder segment never changes a fragment already published.
