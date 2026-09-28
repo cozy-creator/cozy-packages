@@ -1578,7 +1578,7 @@ async def long_form_cuts(
     frame = None
     warnings: list[str] = []
     failed_index, failure_code, failure_detail = -1, "", ""
-    with ScanAhead(decoder, ctx.raise_if_cancelled) as scanning:
+    with ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
         for index, shot in enumerate(payload.segments):
             ctx.raise_if_cancelled()
             selected = payload.references
@@ -1753,7 +1753,7 @@ async def long_form(
     context = None
     expected: RenderProvenance | None = None
     failed_index, failure_code, failure_detail = -1, "", ""
-    with ScanAhead(decoder, ctx.raise_if_cancelled) as scanning:
+    with ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
         for index, shot in enumerate(payload.segments):
             ctx.raise_if_cancelled()
             seed = shot_seed(shot, ctx.request_id, index)

@@ -5,9 +5,11 @@ rental with Runtime MediaDecoder and Outputs. It returns the final MP4 and the l
 segment's continuation PNG, forwarded unchanged, plus delivery status. No intermediate directory or shot receipt list
 is part of the public result.
 
-One validation worker scans completed clips while the next shot renders. The assembler
-preserves the frame/sample clock, validates common media formats, removes one replayed
-frame at each continuous join, and checks the encoded output. A later child failure
+One validation worker scans each completed clip's soundtrack while the next shot renders.
+Cuts copy every clip's H.264 packets through Runtime's `save_video_concat` and encode only
+the joined soundtrack, trimmed or padded per clip to the exact frame clock; Runtime checks
+the frame clock and codec parameters on the packets. A continuous join removes one
+replayed frame at each seam and re-encodes; so do a master track and unjoinable tracks. A later child failure
 assembles the completed portion; first-child failure and cancellation remain terminal.
 
 The final image can be supplied as `opening_frame` for a new shot sequence. Runtime's
