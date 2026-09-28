@@ -1218,13 +1218,24 @@ app.entrypoint(internal=True)(cut_segment_turbo)
 MotionContextAsset = Annotated[
     FileAsset, AssetBound(max_bytes=64 << 20, media_types=("application/octet-stream",))
 ]
+#: A segment's new seconds. Its memory is sized by `MotionInput.frames`, not by these alone.
+SegmentSeconds = Annotated[int, msgspec.Meta(ge=MIN_DURATION_S, le=MAX_DURATION_S)]
+
+
+def held_frames(plan: ContinuationPlan) -> int:
+    """The frames a segment's DiT holds: its sampled window and the context it conditions on."""
+    return plan.sample_frames + plan.prefix_frames
 
 
 class MotionInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Prompt
     seed: int
-    duration_s: DurationSeconds
+    duration_s: SegmentSeconds
     steps: int
+    #: `held_frames` of this segment: the shape Runtime banks its memory by. A continuation
+    #: holds more than its seconds say, so a 12 s segment after a 6 s one ran on the 6 s
+    #: peak and ran out on GPU 1 (run 1560). Any other value is refused.
+    frames: int
     context_frames: Literal[22, 39, 56] = 22
     expected_provenance: RenderProvenance | None = None
     context: MotionContextAsset | None = None
@@ -1260,6 +1271,12 @@ def _render_motion(
     delivery = plan_continuation(
         payload.duration_s * FPS, context_frames=0 if context is None else payload.context_frames
     )
+    if payload.frames != held_frames(delivery):
+        raise InvalidRequest(
+            f"a {payload.duration_s} s segment with this context holds "
+            f"{held_frames(delivery)} frames, not {payload.frames}",
+            fields=["payload.frames"],
+        )
     _reference_policy(assets)
     saved_context: list[FileAsset] = []
 
@@ -1631,6 +1648,7 @@ async def long_form(
                         seed=seed,
                         duration_s=durations[index],
                         steps=steps,
+                        frames=held_frames(plans[index]),
                         expected_provenance=expected,
                         context=context,
                         context_frames=payload.context_frames,

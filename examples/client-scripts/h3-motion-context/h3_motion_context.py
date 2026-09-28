@@ -27,6 +27,7 @@ from h3 import (
     MotionInput,
     _create_references,
     app,
+    held_frames,
     motion_segment_turbo,
 )
 from story import StoryReference as StoryReference
@@ -70,7 +71,12 @@ async def compare(
     started = time.monotonic()
     first = await motion_segment_turbo(  # type: ignore[call-arg]
         payload=MotionInput(
-            prompt=prompts[0], seed=seed, duration_s=10, steps=8, next_context_frames=(22, 39, 56)
+            prompt=prompts[0],
+            seed=seed,
+            duration_s=10,
+            steps=8,
+            frames=held_frames(plans[0]),
+            next_context_frames=(22, 39, 56),
         ),
         assets=assets,
     )
@@ -92,6 +98,7 @@ async def compare(
                 seed=seed + 1,
                 duration_s=10,
                 steps=8,
+                frames=held_frames(plan),
                 context_frames=plan.prefix_frames,  # type: ignore[arg-type]
                 context=first.context,
                 expected_provenance=first.provenance,
