@@ -30,7 +30,6 @@ from sdxl_assessment_client.control_inputs import load_controls, validate_select
 from sdxl_assessment_client.control_jobs import scale_unet_x2
 
 from sdxl import generate
-from sdxl.normalization import normalize
 from sdxl.operations import quantization_plan
 
 SPLIT = "calibration"  # held_out uses a separately frozen policy; final inputs are disjoint.
@@ -58,8 +57,7 @@ async def main(ctx: ScriptContext, *, out: Outputs) -> Tree:
     judge = await prepare_instrument(source=converted_judge, metadata=metadata, variant="qwen2b")
     raw = await download_civitai(128078, file="civitai/files/92696")
     converted = await convert_cozytensors(raw, profiles=("civitai/sdxl/single-file/1",))
-    normalize_call = cast(Callable[..., Awaitable[ModelArtifact]], normalize)
-    reference = await normalize_call(source=converted)
+    reference = converted
     candidate = reference
     if CASE == "quantized":
         quantize_call = cast(Callable[..., Awaitable[ModelArtifact]], quantize)
