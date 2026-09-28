@@ -101,9 +101,10 @@ from qwen_image_2 import ImageOutput as ReferenceImageOutput
 from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate_image as generate_reference
 from story import (
-    StorySegment,
-    compile_segments,
+    SegmentCall,
     StoryReference,
+    compile_segments,
+    encoder_prompt,
     image_prompt,
     reference_seed,
     resolve_reference_images,
@@ -144,7 +145,6 @@ KeyframeAssets = Annotated[Assets[Image], AssetLimits(images=2)]
 DEFAULT_REFERENCE_IMAGE_SHORT_EDGE = 1024
 _SHORT_EDGE_LADDER = (2048, 1536, 1024, 768, 512, 256)
 _REFERENCE_FIDELITY_EDGES = {"low": 256, "medium": 1024, "high": REFERENCE_IMAGE_SHORT_EDGE}
-Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
 # The shipped plans own the enum and must agree for both inference tasks.
 SUPPORTED_STEPS = data_values(
     __file__, "timestep-plans/fl2va.json", "schedules", "transformer_evaluations"
@@ -191,32 +191,23 @@ DurationSeconds = Annotated[
 ]
 
 
-class FirstLastFrameToVideoInput(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
-    prompt: Prompt
+class ClipInput(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
+    """One H3 generation: a turbo call's request and every long_form segment.
+
+    `prompt` is any text, sent verbatim, after each reference's `<Picture N>`, `<Video N>`
+    or `<Audio N>` label (numbered per kind in input order; a video with sound also takes the
+    next `<Audio N>`). Text that never names non_diegetic_music gains an `N/A` music line.
+    """
+
+    prompt: str
     seed: int | None = None
+    duration_s: DurationSeconds
+
+
+class StandardClipInput(ClipInput, kw_only=True):
+    """`ClipInput` with the standard calls' denoise steps."""
+
     steps: Steps = DEFAULT_STEPS
-    duration_s: DurationSeconds
-
-
-class ReferenceMediaToVideoInput(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
-    prompt: Prompt
-    seed: int | None = None
-    steps: Steps = DEFAULT_STEPS
-    duration_s: DurationSeconds
-
-
-# The turbo functions carry no `steps`: PDD-8 fixes eight transformer evaluations, so the
-# parameter is unrepresentable on the wire rather than refused at runtime.
-class FirstLastFrameToVideoTurboInput(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
-    prompt: Prompt
-    seed: int | None = None
-    duration_s: DurationSeconds
-
-
-class ReferenceMediaToVideoTurboInput(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
-    prompt: Prompt
-    seed: int | None = None
-    duration_s: DurationSeconds
 
 
 class H3VideoOutput(msgspec.Struct):
@@ -228,7 +219,7 @@ class H3VideoOutput(msgspec.Struct):
 
 
 def preflight_reference_media(
-    payload: ReferenceMediaToVideoInput, assets: ReferenceAssets
+    payload: StandardClipInput, assets: ReferenceAssets
 ) -> ReferencePolicyFacts:
     """Refuse cross-field count errors before Runtime hydrates a single asset."""
     del payload
@@ -236,7 +227,7 @@ def preflight_reference_media(
 
 
 def preflight_reference_media_turbo(
-    payload: ReferenceMediaToVideoTurboInput, assets: ReferenceAssets
+    payload: ClipInput, assets: ReferenceAssets
 ) -> ReferencePolicyFacts:
     del payload
     return _reference_policy(assets)
@@ -800,7 +791,7 @@ _DEFAULT_TURBO_LORA_LADDER: list[dict[str, str | int]] = [
 @app.entrypoint(defaults={"model": _DEFAULT_MODEL_LADDER})
 def fl2va(
     ctx: Context,
-    payload: FirstLastFrameToVideoInput,
+    payload: StandardClipInput,
     assets: KeyframeAssets,
     model: H3Model,
     out: Outputs,
@@ -814,7 +805,7 @@ def fl2va(
 )
 def fl2va_turbo(
     ctx: Context,
-    payload: FirstLastFrameToVideoTurboInput,
+    payload: ClipInput,
     assets: KeyframeAssets,
     base_model: H3TurboBase,
     turbo_lora: H3TurboLoRA,
@@ -838,7 +829,7 @@ def fl2va_turbo(
 @app.entrypoint(preflight=preflight_reference_media, defaults={"model": _DEFAULT_MODEL_LADDER})
 def ref2va(
     ctx: Context,
-    payload: ReferenceMediaToVideoInput,
+    payload: StandardClipInput,
     assets: ReferenceAssets,
     facts: Preflight[ReferencePolicyFacts],
     model: H3Model,
@@ -857,7 +848,7 @@ def ref2va(
 )
 def ref2va_turbo(
     ctx: Context,
-    payload: ReferenceMediaToVideoTurboInput,
+    payload: ClipInput,
     assets: ReferenceAssets,
     facts: Preflight[ReferencePolicyFacts],
     base_model: H3TurboBase,
@@ -883,7 +874,7 @@ def ref2va_turbo(
 def _keyframes_to_video(
     ctx: Context,
     task: Task,
-    payload: FirstLastFrameToVideoInput | FirstLastFrameToVideoTurboInput,
+    payload: ClipInput,
     assets: KeyframeAssets,
     model: H3Model,
     out: Outputs,
@@ -900,7 +891,7 @@ def _keyframes_to_video(
         model,
         out,
         tel,
-        prompt=payload.prompt,
+        prompt=encoder_prompt(task, payload.prompt),
         seed=payload.seed,
         duration_s=payload.duration_s,
         steps=steps,
@@ -929,6 +920,7 @@ def _render_keyframes(
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=seed)
     checks = NumericalChecks(tel, model.pipe.resident)
+    log_prompt(tel, "h3 encoder prompt", prompt)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
         state = model.pipe.start_fl2va(
             prompt=prompt,
@@ -972,7 +964,7 @@ def _render_keyframes(
 def _references_to_video(
     ctx: Context,
     task: Task,
-    payload: ReferenceMediaToVideoInput | ReferenceMediaToVideoTurboInput,
+    payload: ClipInput,
     assets: ReferenceAssets,
     model: H3Model,
     out: Outputs,
@@ -998,8 +990,10 @@ def _references_to_video(
             total=sizing.total,
             budget=MAX_CONDITIONER_VISION_TOKENS,
         )
+        prompt = encoder_prompt(task, payload.prompt)
+        log_prompt(tel, "h3 encoder prompt", prompt)
         state = model.pipe.start_ref2va(
-            prompt=payload.prompt,
+            prompt=prompt,
             references=references,
             generator=model.pipe.generator(view.generator),
             steps=steps,
@@ -1076,11 +1070,10 @@ class SegmentOutput(msgspec.Struct):
 class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
     """Fixed references and completed audio/video context for one continuous sequence."""
 
-    segments: Annotated[list[StorySegment], msgspec.Meta(min_length=1)]
+    segments: Annotated[list[ClipInput], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=MAX_REFERENCES)]
-    style: str = ""
     overall_soundscape: str = ""
-    non_diegetic_music: str = ""
+    non_diegetic_music: str = "N/A"
     context_frames: Literal[22, 39, 56] = 22
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
@@ -1106,7 +1099,7 @@ class LongFormOutput(msgspec.Struct):
     warnings: list[str]
 
 
-def shot_seed(shot: StorySegment, request_id: str, index: int) -> int:
+def shot_seed(shot: ClipInput, request_id: str, index: int) -> int:
     """Choose once per request/shot, without changing seeds when its attempt retries."""
     if shot.seed is not None:
         return shot.seed
@@ -1137,11 +1130,11 @@ CutAssets = Annotated[
 ]
 
 
-class CutInput(ReferenceMediaToVideoInput, kw_only=True):
+class CutInput(StandardClipInput, kw_only=True):
     expected_provenance: RenderProvenance | None = None
 
 
-class CutTurboInput(ReferenceMediaToVideoTurboInput, kw_only=True):
+class CutTurboInput(ClipInput, kw_only=True):
     expected_provenance: RenderProvenance | None = None
 
 
@@ -1228,7 +1221,7 @@ def held_frames(plan: ContinuationPlan) -> int:
 
 
 class MotionInput(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: Prompt
+    prompt: str
     seed: int
     duration_s: SegmentSeconds
     steps: int
@@ -1295,12 +1288,7 @@ def _render_motion(
     shot = _references_to_video(
         ctx,
         task,
-        ReferenceMediaToVideoInput(
-            prompt=payload.prompt,
-            seed=payload.seed,
-            duration_s=payload.duration_s,
-            steps=cast(Steps, payload.steps),
-        ),
+        ClipInput(prompt=payload.prompt, seed=payload.seed, duration_s=payload.duration_s),
         assets,
         model,
         out,
@@ -1362,18 +1350,29 @@ app.entrypoint(internal=True)(motion_segment)
 app.entrypoint(internal=True)(motion_segment_turbo)
 
 
-class CutSegment(StorySegment):
-    pass
-
-
 class LongFormCutsInput(msgspec.Struct, forbid_unknown_fields=True):
-    segments: Annotated[list[CutSegment], msgspec.Meta(min_length=1)]
+    segments: Annotated[list[ClipInput], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=MAX_REFERENCES)]
-    style: str = ""
     overall_soundscape: str = ""
-    non_diegetic_music: str = ""
+    non_diegetic_music: str = "N/A"
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
+
+
+def log_prompt(tel: Telemetry, event: str, prompt: str, **fields: str | int) -> None:
+    """The text's digest and ends: a log value holds 400 characters, not a whole prompt."""
+    digest = hashlib.sha256(prompt.encode()).hexdigest()
+    tel.log(event, digest=digest, chars=len(prompt), head=prompt[:400], tail=prompt[-400:], **fields)
+
+
+def segment_calls(payload: LongFormInput | LongFormCutsInput) -> list[SegmentCall]:
+    """Each segment's child call: its text plus the global sections, and its references."""
+    return compile_segments(
+        [shot.prompt for shot in payload.segments],
+        payload.references,
+        overall_soundscape=payload.overall_soundscape,
+        non_diegetic_music=payload.non_diegetic_music,
+    )
 
 
 async def _create_references(
@@ -1424,19 +1423,15 @@ async def long_form_cuts(
 ) -> LongFormOutput:
     """Generate reference-conditioned camera cuts; deliver only the final film and image.
 
-    Each segment needs a concrete `overall_soundscape` (shared, its own, or both) and a
-    `non_diegetic_music` (N/A for none). H3 fills undescribed audio with invented speech:
-    name the non-voice sounds, and write "silently, lips closed" where no one speaks.
+    Each segment is free text naming references as `<Name>`; see LONG_FORM.md for what
+    the workflow adds. H3 fills undescribed audio with invented speech: name the non-voice
+    sounds, and write "silently, lips closed" where no one speaks.
     """
     ctx.raise_if_cancelled()
     if payload.mode == "turbo" and payload.steps is not None:
         raise InvalidRequest("turbo fixes eight PDD evaluations; omit steps", fields=["steps"])
     steps = TURBO_STEPS if payload.mode == "turbo" else payload.steps or DEFAULT_STEPS
-    prompts = compile_segments(
-        payload.style, payload.segments, payload.references,
-        overall_soundscape=payload.overall_soundscape,
-        non_diegetic_music=payload.non_diegetic_music,
-    )
+    calls = segment_calls(payload)
     planned_frames = [frames_for(shot.duration_s) for shot in payload.segments]
     render_work = [frames * steps for frames in planned_frames]
     reference_steps = 40
@@ -1448,13 +1443,13 @@ async def long_form_cuts(
     completed_work = reference_work
     videos: list[VideoAsset] = []
     expected = None
-    warnings: list[str] = []
+    warnings = [warning for call in calls for warning in call.warnings]
     failed_index, failure_code, failure_detail = -1, "", ""
     with ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
         for index, shot in enumerate(payload.segments):
             ctx.raise_if_cancelled()
-            selected = payload.references
-            prompt = prompts[index]
+            selected = calls[index].references
+            prompt = calls[index].prompt
             seed = shot_seed(shot, ctx.request_id, index)
             assets = Assets[Mixed](
                 [
@@ -1462,18 +1457,8 @@ async def long_form_cuts(
                     for ref, label in _label_references(selected)
                 ]
             )
-            tel.log(
-                "h3 cut reference selection", shot=index + 1, seed=seed, references=len(selected)
-            )
-            for slot, ref in enumerate(selected, 1):
-                tel.log(
-                    "h3 cut reference",
-                    shot=index + 1,
-                    picture=slot,
-                    digest=images[ref.name].digest,
-                    subject=ref.name,
-                    description=ref.description,
-                )
+            log_prompt(tel, "h3 segment prompt", prompt, segment=index + 1,
+                       references=", ".join(ref.name for ref in selected))
             try:
                 with tel.scope(
                     f"Segment {index + 1} of {len(payload.segments)}",
@@ -1568,9 +1553,9 @@ async def long_form(
 ) -> LongFormOutput:
     """Render and assemble remotely; deliver only the joined video.
 
-    Each segment needs a concrete `overall_soundscape` (shared, its own, or both) and a
-    `non_diegetic_music` (N/A for none). H3 fills undescribed audio with invented speech:
-    name the non-voice sounds, and write "silently, lips closed" where no one speaks.
+    Each segment is free text naming references as `<Name>`; see LONG_FORM.md for what
+    the workflow adds. H3 fills undescribed audio with invented speech: name the non-voice
+    sounds, and write "silently, lips closed" where no one speaks.
     """
     ctx.raise_if_cancelled()
     if payload.mode == "turbo" and payload.steps is not None:
@@ -1583,18 +1568,14 @@ async def long_form(
         if payload.mode == "turbo"
         else (DEFAULT_STEPS if payload.steps is None else payload.steps)
     )
-    prompts = compile_segments(
-        payload.style, payload.segments, payload.references,
-        overall_soundscape=payload.overall_soundscape,
-        non_diegetic_music=payload.non_diegetic_music,
-    )
+    calls = segment_calls(payload)
     # Motion context shares the native window with new frames. Shorten requested
     # segments to its whole-second budget instead of refusing a valid 5-15s request.
     durations = [
         min(shot.duration_s, (MAX_FRAMES - (payload.context_frames if index else 0)) // FPS)
         for index, shot in enumerate(payload.segments)
     ]
-    warnings: list[str] = []
+    warnings = [warning for call in calls for warning in call.warnings]
     for index, (shot, duration) in enumerate(zip(payload.segments, durations, strict=True)):
         if duration != shot.duration_s:
             warning = (
@@ -1640,11 +1621,13 @@ async def long_form(
                     assets = Assets[Mixed](
                         [
                             images[ref.name].with_label(label)
-                            for ref, label in _label_references(payload.references)
+                            for ref, label in _label_references(calls[index].references)
                         ]
                     )
+                    log_prompt(tel, "h3 segment prompt", calls[index].prompt, segment=index + 1,
+                               references=", ".join(ref.name for ref in calls[index].references))
                     child_payload = MotionInput(
-                        prompt=prompts[index],
+                        prompt=calls[index].prompt,
                         seed=seed,
                         duration_s=durations[index],
                         steps=steps,

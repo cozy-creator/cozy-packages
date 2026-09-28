@@ -31,7 +31,7 @@ from h3 import (
     motion_segment_turbo,
 )
 from story import StoryReference as StoryReference
-from story import StorySegment, compile_segments
+from story import compile_segments
 
 
 class Comparison(msgspec.Struct):
@@ -42,9 +42,9 @@ class Comparison(msgspec.Struct):
 
 class ComparisonInput(msgspec.Struct, forbid_unknown_fields=True):
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=9)]
-    predecessor: StorySegment
-    continuation: StorySegment
-    shared: str
+    predecessor: str
+    continuation: str
+    overall_soundscape: str = ""
     seed: int = 41001
 
 
@@ -60,25 +60,27 @@ async def compare(
     """One shared predecessor, three independently generated continuations, three MP4s."""
     references = payload.references
     seed = payload.seed
-    prompts = compile_segments(
-        payload.shared, [payload.predecessor, payload.continuation], references,
+    calls = compile_segments(
+        [payload.predecessor, payload.continuation],
+        references,
+        overall_soundscape=payload.overall_soundscape,
     )
     plans = [plan_continuation(240, context_frames=n) for n in (0, 22, 39, 56)]
     images = await _create_references(ctx, references, tel)
-    assets = Assets[Mixed](
-        [images[ref.name].with_label(f"Picture {slot}") for slot, ref in enumerate(references, 1)]
+    first_assets, next_assets = (
+        Assets[Mixed]([images[ref.name] for ref in call.references]) for call in calls
     )
     started = time.monotonic()
     first = await motion_segment_turbo(  # type: ignore[call-arg]
         payload=MotionInput(
-            prompt=prompts[0],
+            prompt=calls[0].prompt,
             seed=seed,
             duration_s=10,
             steps=8,
             frames=held_frames(plans[0]),
             next_context_frames=(22, 39, 56),
         ),
-        assets=assets,
+        assets=first_assets,
     )
     tel.log(
         "motion comparison predecessor",
@@ -94,7 +96,7 @@ async def compare(
         started = time.monotonic()
         following = await motion_segment_turbo(  # type: ignore[call-arg]
             payload=MotionInput(
-                prompt=prompts[1],
+                prompt=calls[1].prompt,
                 seed=seed + 1,
                 duration_s=10,
                 steps=8,
@@ -103,7 +105,7 @@ async def compare(
                 context=first.context,
                 expected_provenance=first.provenance,
             ),
-            assets=assets,
+            assets=next_assets,
         )
         tel.log(
             "motion comparison continuation",

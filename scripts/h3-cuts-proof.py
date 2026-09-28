@@ -102,9 +102,8 @@ import h3  # noqa: E402
 from long_form_state import RenderProvenance  # noqa: E402
 from story import (  # noqa: E402
     StoryReference,
+    compile_segments,
     reference_seed,
-    StorySegment,
-    segment_prompt,
     validate_references,
 )
 
@@ -484,16 +483,15 @@ def drive(
     wire: dict[str, Any] = {
         "segments": [
             {
-                "summary": "[reference generation] <Rover> travels across <Bridge>.",
-                "detailed_description": "[Shot 1] <Rover> moves across <Bridge>.",
-                "overall_soundscape": "A flowing woodland stream.",
-                "non_diegetic_music": "N/A",
+                "prompt": "summary:\n[reference generation] <Rover> travels across <Bridge>.\n\n"
+                "detailed_description:\nPhotorealistic nature photography.\n"
+                "[Shot 1] <Rover> moves across <Bridge>." + (prompt or ""),
                 "duration_s": duration_s,
                 **({"seed": 0} if index == 0 else {}),
             }
             for index in range(count)
         ],
-        "style": "Photorealistic nature photography.",
+        "overall_soundscape": "A flowing woodland stream.",
         "references": [
             {
                 "name": "Rover",
@@ -512,8 +510,6 @@ def drive(
     }
     if continuous:
         wire["context_frames"] = context_frames
-    if prompt is not None:
-        wire["style"] = prompt
     if bad == "empty-references":
         wire["references"] = []
     elif bad == "duplicate":
@@ -524,8 +520,6 @@ def drive(
         wire["references"][1]["seed"] = -1
     elif bad == "seed-too-large":
         wire["references"][1]["seed"] = 9007199254740992
-    elif bad == "empty-description":
-        wire["segments"][-1]["detailed_description"] = " "
     elif bad == "too-many-references":
         wire["references"] = [
             {"name": f"Person{i}", "kind": "character", "description": "A person"} for i in range(10)
@@ -626,7 +620,8 @@ def drive(
     assert all("[Shot 1]" in row["payload"]["prompt"] for row in sent)
     assert sent[0]["payload"]["seed"] == 0
     assert len(prefetches) == 1
-    fixed = [json.loads(answers[index].result)["image"]["digest"] for index in range(2)]
+    # The scene (Bridge) first, then the character the text names and its voice.
+    fixed = [json.loads(answers[index].result)["image"]["digest"] for index in (1, 0)]
     fixed += [voice] if audio else []
     for row in sent:
         assert [item["asset"] for item in row["assets"]] == fixed
@@ -675,7 +670,7 @@ def main() -> None:
     assert (
         repeated["calls"][1]["payload"]["seed"] == results["fixed"]["calls"][1]["payload"]["seed"]
     )
-    drive(root / "oversized-prompt", prompt="x" * 4000, refuse=True)
+    drive(root / "long-prompt", prompt="x" * 20000)
     audio = drive(root / "audio", audio=True)
     assert all(len(row["assets"]) == 3 for row in audio["calls"])
     drive(
@@ -687,7 +682,6 @@ def main() -> None:
         "empty",
         "seed",
         "seed-too-large",
-        "empty-description",
         "legacy",
         "too-many-references",
     ):
@@ -697,16 +691,10 @@ def main() -> None:
     assert len(named) == 9
     assert reference_seed(refs[0], "request") == reference_seed(refs[0], "request")
     assert reference_seed(refs[0], "request") != reference_seed(refs[1], "request")
-    prompt = segment_prompt(
-        "A gathering", StorySegment(
-            summary="[reference generation] A gathering.",
-            detailed_description="[Shot 1] <Person8> waves.",
-            overall_soundscape="Room tone.", non_diegetic_music="N/A", duration_s=10,
-        ),
-        index=0, subject_definitions="<Person8> is in <Picture 9>.", retention_analysis="<Person8>: fully_preserved - identity.",
-    )
-    assert "<Person8> waves" in prompt and "<Picture 9>" in prompt
-    assert prompt.endswith("overall_soundscape:\nRoom tone.\n\nnon_diegetic_music:\nN/A")
+    ((prompt, attached, _),) = compile_segments(["[Shot 1] <Person8> waves."], refs)
+    assert [ref.name for ref in attached] == ["Person8"]
+    assert "<Person8> is the character shown in <Picture 1>." in prompt
+    assert "<Picture 2>" not in prompt and prompt.endswith("non_diegetic_music:\nN/A")
     assert "first frame" not in prompt and "preceding shot" not in prompt
     assert set(ROUTES) == {"ref2va", "ref2va_turbo"}
     (root / "evidence.json").write_text(

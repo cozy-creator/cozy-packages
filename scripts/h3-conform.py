@@ -913,7 +913,7 @@ def arm_reference_resolution() -> None:
         partial(
             msgspec.convert,
             {"prompt": "A person in a garden.", "reference_image_short_edge": 768},
-            type=package.ReferenceMediaToVideoInput,
+            type=package.StandardClipInput,
         ),
     )
 
@@ -1172,7 +1172,7 @@ def arm_clip_length() -> None:
         partial(start_ref2va, frames_for(16)),
     )
 
-    field = get_type_hints(package.FirstLastFrameToVideoInput, include_extras=True)["duration_s"]
+    field = get_type_hints(package.StandardClipInput, include_extras=True)["duration_s"]
     check(
         "every served second decodes typed",
         [msgspec.convert(seconds, type=field) for seconds in DURATIONS],
@@ -1188,12 +1188,7 @@ def arm_clip_length() -> None:
         partial(msgspec.convert, 5.5, type=field),
     )
     # Owner ruling 2026-09-27: every generation call names its length; none defaults.
-    for wire in (
-        package.FirstLastFrameToVideoInput,
-        package.ReferenceMediaToVideoInput,
-        package.FirstLastFrameToVideoTurboInput,
-        package.ReferenceMediaToVideoTurboInput,
-    ):
+    for wire in (package.StandardClipInput, package.ClipInput):
         refusal(
             f"{wire.__name__} without duration_s refuses at decode",
             partial(msgspec.convert, {"prompt": "x"}, type=wire),
@@ -1202,10 +1197,7 @@ def arm_clip_length() -> None:
     # denoised in the same packed sequence at every step, so the flag only suppressed the mux
     # while costing the caller the same time and money (se-052). It is deleted rather than
     # documented, and a payload that still carries it refuses as an unknown field.
-    for name, request in (
-        ("fl2va", package.FirstLastFrameToVideoInput),
-        ("ref2va", package.ReferenceMediaToVideoInput),
-    ):
+    for name, request in (("standard", package.StandardClipInput), ("turbo", package.ClipInput)):
         refusal(
             f"{name} refuses a mute field on the wire",
             partial(msgspec.convert, {"prompt": "x", "mute": True}, type=request),
@@ -2206,7 +2198,7 @@ def arm_media() -> None:
         [image_ref.with_label("Alice"), video_ref, audio_ref, image_ref.with_label("アリス")]
     )
     policy = package.preflight_reference_media(
-        package.ReferenceMediaToVideoInput(
+        package.StandardClipInput(
             prompt="The two characters meet.", duration_s=DEFAULT_DURATION_S
         ),
         mixed
@@ -2238,7 +2230,7 @@ def arm_media() -> None:
     refusal(
         "metadata preflight refuses audio-only before decoding",
         lambda: package.preflight_reference_media(
-            package.ReferenceMediaToVideoInput(
+            package.StandardClipInput(
                 prompt="An audio-only reference.", duration_s=DEFAULT_DURATION_S
             ),
             Assets[Mixed]([audio_ref]),
@@ -3241,8 +3233,8 @@ def arm_interface() -> None:
         },
     )
     expected = {
-        "fl2va": (["prompt", "seed", "steps", "duration_s", "assets"], ["fl2va_dit"]),
-        "ref2va": (["prompt", "seed", "steps", "duration_s", "assets"], ["ref2va_dit"]),
+        "fl2va": (["prompt", "seed", "duration_s", "steps", "assets"], ["fl2va_dit"]),
+        "ref2va": (["prompt", "seed", "duration_s", "steps", "assets"], ["ref2va_dit"]),
         "fl2va_turbo": (["prompt", "seed", "duration_s", "assets"], ["fl2va_dit", "fl2va_turbo"]),
         "ref2va_turbo": (
             ["prompt", "seed", "duration_s", "assets"],
@@ -3366,10 +3358,7 @@ def arm_interface() -> None:
             [field["name"] for field in entry["result"]["fields"]],
             ["video", "warnings"],
         )
-    for wire in (
-        package.FirstLastFrameToVideoTurboInput,
-        package.ReferenceMediaToVideoTurboInput,
-    ):
+    for wire in (package.ClipInput,):
         refusal(
             f"{wire.__name__} cannot represent steps",
             partial(msgspec.convert, {"prompt": "x", "steps": 8}, wire),
@@ -3456,8 +3445,8 @@ def arm_interface() -> None:
         {"name": "seed", "type": {"union": ["int", "null"]}, "wire": "optional"},
     )
     unseeded = msgspec.json.decode(
-        b'{"segments":[{"detailed_description":"x","duration_s":5},'
-        b'{"detailed_description":"y","duration_s":5,"seed":null}],'
+        b'{"segments":[{"prompt":"x","duration_s":5},'
+        b'{"prompt":"y","duration_s":5,"seed":null}],'
         b'"references":[{"name":"Hero","kind":"character"}]}',
         type=package.LongFormInput,
     )
@@ -3473,13 +3462,23 @@ def arm_interface() -> None:
         [slot["class"] for slot in entries["motion_segment_turbo"]["models"]],
         ["H3TurboBase", "H3TurboLoRA"],
     )
+    for job in ("long_form", "long_form_cuts"):
+        segment = next(f for f in jobs[job]["request"]["fields"] if f["name"] == "segments")
+        check(
+            f"a {job} segment is a turbo call's request, field for field",
+            [(f["name"], f["type"]) for f in segment["type"]["list"]["fields"]],
+            [
+                (f["name"], f["type"])
+                for f in entries["ref2va_turbo"]["request"]["fields"]
+                if f["name"] != "assets"
+            ],
+        )
     check(
         "long_form request fields",
         [field["name"] for field in jobs["long_form"]["request"]["fields"]],
         [
             "segments",
             "references",
-            "style",
             "overall_soundscape",
             "non_diegetic_music",
             "context_frames",
