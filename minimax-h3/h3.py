@@ -1022,7 +1022,7 @@ def _references_to_video(
                     width=width,
                     height=height,
                 )
-    # Text and references at once where the text encoder lives on another rank.
+    # Text and references at once where the text encoder lives on another GPU.
     with tel.stage("condition", overall_range=(0.03, 0.15)):
         condition_references(model, task, state, checks=checks)
     if turbo_lora is None:
