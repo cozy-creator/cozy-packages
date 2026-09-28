@@ -744,10 +744,10 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-eval", extras = ["jobs", "weights", "judge"], specifier = ">=0.7.2,<0.8" },
-    { name = "cozy-runtime", specifier = ">=0.18.67,<1" },
+    { name = "cozy-eval", extras = ["jobs", "weights", "judge"], specifier = ">=0.7.2" },
+    { name = "cozy-runtime", specifier = ">=0.18.67" },
     { name = "numpy", specifier = ">=2.5" },
-    { name = "tensorfs", specifier = ">=0.3.74,<0.4" },
+    { name = "tensorfs", specifier = ">=0.3.74" },
     { name = "torch", specifier = ">=2.14" },
     { name = "torchvision", specifier = ">=0.29" },
 ]
