@@ -67,8 +67,7 @@ When a package starts using a new Runtime API:
 3. Update the package lockfile and run package conformance. Set its minimum
    Runtime version to the oldest version that supplies the APIs it actually uses.
 4. Run the checked publication command above. Repeat `--profile` for every
-   supported image profile. Use `--purpose` only when a package explicitly supports
-   one purpose; the default checks both.
+   supported image profile.
 5. Install the published release with the local Creator CLI and verify its input
    and callable interface. Include execution qualification appropriate to the change.
 

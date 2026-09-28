@@ -18,7 +18,6 @@ def main() -> None:
     parser.add_argument(
         "--profile", action="append", required=True, help="supported worker profile"
     )
-    parser.add_argument("--purpose", choices=("normal", "development", "both"), default="both")
     parser.add_argument("--dotenv", type=Path)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--secrets-dir", type=Path)
@@ -38,7 +37,7 @@ def main() -> None:
     archive = subprocess.check_output(
         ["git", "archive", revision, "--", args.package], cwd=repository
     )
-    command = ["go", "run", "./cmd/check-package-runtime", "--purpose", args.purpose]
+    command = ["go", "run", "./cmd/check-package-runtime"]
     for profile in args.profile:
         command.extend(("--profile", profile))
     for name in ("dotenv", "config", "secrets-dir"):
