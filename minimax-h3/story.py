@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import re
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, Literal
 
@@ -13,7 +12,6 @@ from msgspec.structs import replace
 from cozy_runtime.author import AssetBound, AudioAsset, ImageAsset, InvalidRequest
 from cozy_runtime.models.minimax_h3.official import validate_reference_policy
 
-_NAME = re.compile(r"[A-Za-z](?:[A-Za-z0-9 _-]{0,46}[A-Za-z0-9_-])?\Z")
 # H3 fills audio time no section describes with invented speech; both sections are required.
 _AUDIO_HINTS = {
     "overall_soundscape": "describe the concrete non-voice sounds (room tone, footsteps, impacts, "
@@ -36,7 +34,7 @@ class StorySegment(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
 class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
     """A supplied image or an image generated from its shared visual description."""
 
-    name: Annotated[str, msgspec.Meta(min_length=1, max_length=48)]
+    name: str
     kind: Literal["character", "scene", "audio"]
     description: Annotated[str, msgspec.Meta(max_length=1024)] = ""
     retention_analysis: Annotated[str, msgspec.Meta(max_length=1024)] | None = msgspec.field(
@@ -55,6 +53,13 @@ class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
         AssetBound(max_bytes=256 << 20, max_decoded_bytes=2 << 30),
     ] = None
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
+
+    def __post_init__(self) -> None:
+        # Prompts quote the name as <name>: any text reads as a name once its brackets and
+        # extra whitespace go.
+        self.name = " ".join(self.name.replace("<", " ").replace(">", " ").split())
+        if not self.name:
+            raise ValueError("a reference name needs at least one visible character")
 
 
 def reference_seed(reference: StoryReference, request_id: str) -> int:
@@ -116,13 +121,7 @@ def validate_references(references: Sequence[StoryReference]) -> dict[str, Story
         raise InvalidRequest(str(exc), code="reference_policy", fields=["references"]) from exc
     by_name: dict[str, StoryReference] = {}
     for reference in references:
-        if not _NAME.fullmatch(reference.name):
-            raise InvalidRequest(
-                "reference names start with a letter, use letters, digits, spaces, _ or -, "
-                "end without a space and are at most 48 characters",
-                fields=["references"],
-            )
-        key = " ".join(reference.name.split()).casefold()
+        key = reference.name.casefold()
         if key in by_name:
             raise InvalidRequest(
                 f"duplicate reference name: {reference.name}", fields=["references"]

@@ -172,8 +172,8 @@ references remain capped at nine, with twelve total references. `<Picture N>` an
 labels and supplied text are passed to H3; Cozy does not transcribe or rewrite them.
 
 One to twelve references are supported: at most nine visual references and three audio
-references. Asset names start with a letter and contain only
-letters, digits, `_` or `-`, and must be unique ignoring case. PNG/JPEG/WebP image fields
+references. Names may be any text; whitespace is collapsed and `<`/`>` are dropped, and
+names must be unique ignoring case. PNG/JPEG/WebP image fields
 use the normal verified asset path (64 MiB encoded, 256 MiB decoded). Relative filenames
 resolve beside the input JSON; absolute and `~/` filenames also work. URLs are not input
 assets. `--asset references.0.image=...` is supported as an alternative to an image field.
