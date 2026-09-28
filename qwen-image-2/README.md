@@ -62,9 +62,7 @@ cozy model publish paul/reference-image --release 0.1.0 \
 
 Replace `YOUR_RENTAL` and `CHECKPOINT_DIGEST` with the selected rental name and
 returned checkpoint digest. Upload creates the checkpoint; the separate publish
-command creates the release used by the package's default binding. The optional
-[client script](../examples/client-scripts/prepare_reference_image.py) shows how to
-compose the same native operations in Python. Preparation and descriptor checks
+command creates the release used by the package's default binding. Preparation and descriptor checks
 alone do not qualify GPU inference or the generated image.
 
 ## Resolution buckets
