@@ -54,10 +54,10 @@ async def main(ctx: ScriptContext, *, out: Outputs) -> Tree:
     raw_judge = await download_huggingface(
         JUDGE_REPOSITORY, revision=JUDGE_REVISION, profiles=(JUDGE_PROFILE,)
     )
-    converted_judge = await convert_cozytensors(raw_judge, profile=JUDGE_PROFILE)
+    converted_judge = await convert_cozytensors(raw_judge, profiles=(JUDGE_PROFILE,))
     judge = await prepare_instrument(source=converted_judge, metadata=metadata, variant="qwen2b")
     raw = await download_civitai(128078, file="civitai/files/92696")
-    converted = await convert_cozytensors(raw, profile="civitai/sdxl/single-file/1")
+    converted = await convert_cozytensors(raw, profiles=("civitai/sdxl/single-file/1",))
     normalize_call = cast(Callable[..., Awaitable[ModelArtifact]], normalize)
     reference = await normalize_call(source=converted)
     candidate = reference

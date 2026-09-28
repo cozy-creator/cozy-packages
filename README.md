@@ -89,7 +89,7 @@ from sdxl.operations import quantize
 async def main(ctx):
     raw = await download_civitai(128078, file="civitai/files/92696")
     split = await convert_cozytensors(
-        raw, profile="civitai/101055/128078/single-file-fp16"
+        raw, profiles=("civitai/101055/128078/single-file-fp16",)
     )
     original = await normalize(source=split)
     return await quantize(source=original, encoding="fp8-rowwise/1")
