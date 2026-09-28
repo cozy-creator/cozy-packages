@@ -1405,7 +1405,12 @@ async def long_form_cuts(
     out: Outputs,
     tel: Telemetry,
 ) -> LongFormOutput:
-    """Generate reference-conditioned camera cuts; deliver only the final film and image."""
+    """Generate reference-conditioned camera cuts; deliver only the final film and image.
+
+    Each segment needs a concrete `overall_soundscape` (shared, its own, or both) and a
+    `non_diegetic_music` (N/A for none). H3 fills undescribed audio with invented speech:
+    name the non-voice sounds, and write "silently, lips closed" where no one speaks.
+    """
     ctx.raise_if_cancelled()
     if payload.mode == "turbo" and payload.steps is not None:
         raise InvalidRequest("turbo fixes eight PDD evaluations; omit steps", fields=["steps"])
@@ -1544,7 +1549,12 @@ async def long_form(
     out: Outputs,
     tel: Telemetry,
 ) -> LongFormOutput:
-    """Render and assemble remotely; deliver only the joined video."""
+    """Render and assemble remotely; deliver only the joined video.
+
+    Each segment needs a concrete `overall_soundscape` (shared, its own, or both) and a
+    `non_diegetic_music` (N/A for none). H3 fills undescribed audio with invented speech:
+    name the non-voice sounds, and write "silently, lips closed" where no one speaks.
+    """
     ctx.raise_if_cancelled()
     if payload.mode == "turbo" and payload.steps is not None:
         raise InvalidRequest(

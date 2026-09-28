@@ -14,6 +14,12 @@ from cozy_runtime.author import AssetBound, AudioAsset, ImageAsset, InvalidReque
 from cozy_runtime.models.minimax_h3.official import validate_reference_policy
 
 _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,47}\Z")
+# H3 fills audio time no section describes with invented speech; both sections are required.
+_AUDIO_HINTS = {
+    "overall_soundscape": "describe the concrete non-voice sounds (room tone, footsteps, impacts, "
+    "breathing); write N/A only for total silence",
+    "non_diegetic_music": "describe the score, or write N/A for none",
+}
 
 
 class StorySegment(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
@@ -162,18 +168,23 @@ def segment_prompt(
             raise InvalidRequest(
                 f"segment {index + 1}: {field} must not be blank", fields=[field]
             )
+    for field, hint in _AUDIO_HINTS.items():
+        if not getattr(segment, field).strip():
+            raise InvalidRequest(
+                f"segment {index + 1}: {field} is blank; {hint}",
+                code="h3_audio_section_required",
+                fields=[field],
+            )
     description = style + "\n" + segment.detailed_description if style else segment.detailed_description
     sections = [
         "subject_definitions:\n" + subject_definitions,
         "retention_analysis:\n" + retention_analysis,
         "detailed_description:\n" + description,
+        "overall_soundscape:\n" + segment.overall_soundscape,
+        "non_diegetic_music:\n" + segment.non_diegetic_music,
     ]
     if segment.summary.strip():
         sections.insert(1, "summary:\n" + segment.summary)
-    if segment.overall_soundscape.strip() and segment.overall_soundscape.strip().upper() != "N/A":
-        sections.append("overall_soundscape:\n" + segment.overall_soundscape)
-    if segment.non_diegetic_music.strip() and segment.non_diegetic_music.strip().upper() != "N/A":
-        sections.append("non_diegetic_music:\n" + segment.non_diegetic_music)
     prompt = "\n\n".join(sections)
     if len(prompt) > 4096:
         raise InvalidRequest(
@@ -195,11 +206,9 @@ def compile_segments(
     validate_references(references)
     subject_definitions, retention_analysis = reference_sections(references)
     def combine_audio(*values: str) -> str:
-        return "\n".join(
-            value.strip()
-            for value in values
-            if value.strip() and value.strip().upper() != "N/A"
-        )
+        stated = [value.strip() for value in values if value.strip()]
+        described = [value for value in stated if value.upper() != "N/A"]
+        return "\n".join(described) if described else "N/A" if stated else ""
 
     return [
         segment_prompt(

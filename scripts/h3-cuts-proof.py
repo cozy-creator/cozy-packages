@@ -692,6 +692,7 @@ def main() -> None:
         index=0, subject_definitions="<Person8> is in <Picture 9>.", retention_analysis="<Person8>: fully_preserved - identity.",
     )
     assert "<Person8> waves" in prompt and "<Picture 9>" in prompt
+    assert prompt.endswith("overall_soundscape:\nRoom tone.\n\nnon_diegetic_music:\nN/A")
     assert "first frame" not in prompt and "preceding shot" not in prompt
     assert set(ROUTES) == {"ref2va", "ref2va_turbo"}
     (root / "evidence.json").write_text(

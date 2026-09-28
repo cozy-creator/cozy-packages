@@ -10,15 +10,14 @@ For example, authored `<Reina>` reaches the model as `<Reina>`.
 The overall input contains:
 
 - `style`: one shared overall-style string.
-- `overall_soundscape`: optional ambience/physical sound shared by every segment.
-- `non_diegetic_music`: optional audience-only score shared by every segment.
+- `overall_soundscape`: ambience/physical sound shared by every segment.
+- `non_diegetic_music`: audience-only score shared by every segment.
 - `references`: the ordered image inputs or descriptions used to generate them.
 - `segments`: the ordered generation requests.
 
-Each segment requires `detailed_description` and `duration_s`. `summary`,
-`overall_soundscape`, and `non_diegetic_music` are optional and default to blank.
-When an overall audio field and its segment field are both supplied, the overall text
-is prepended to the segment text in that section.
+Each segment requires `detailed_description` and `duration_s`; `summary` is optional.
+Every segment must end up with both audio sections, from the overall field, its own
+field, or both (overall text first). Write `N/A` for none; blank is refused.
 `seed` is optional. There are no per-segment reference subsets or reordered image slots.
 
 ```json
@@ -86,8 +85,8 @@ non_diegetic_music:
 The parenthesized lines above explain placement; they are not inserted into the model
 prompt. Supplied field values, including tag names, quotes, punctuation and internal
 whitespace, are preserved. If style is empty, only the segment description is used.
-Blank summary/audio values are omitted. `N/A` audio values are omitted from the model
-prompt entirely, so the text encoder does not spend tokens encoding an empty instruction.
+A blank summary is omitted. Both audio sections are always sent, `N/A` literally, as in
+MiniMax's own prompts.
 Headers are separated by one blank line. Definitions,
 retention text, style and ordered reference assets are shared identically across segments.
 
@@ -123,6 +122,19 @@ Dialogue belongs in `detailed_description`. `overall_soundscape` describes ambie
 physical sounds; `non_diegetic_music` describes the audience-only score. H3's `N/A`
 convention requests total silence in soundscape or no score in music. No automatic
 quote detection, speech extraction, translation or punctuation repair is performed.
+
+## Unwanted speech
+
+H3 has no negative prompt or guidance scale, and it fills audio time that no section
+describes with invented, often non-English speech. Prevent it in the text:
+
+- Describe the concrete non-voice sounds in `overall_soundscape`: room tone, weather,
+  footsteps, cloth, impacts, breathing. A line such as "Environmental ambience continues
+  across segments." names no sound. Six-second clips, five seeds each: that line gave 18.5%
+  speech (3 of 5 clips babbled); a quiet or a loud concrete description gave 0%.
+- Where nobody should speak, say so in the action: "walks silently, her lips closed".
+  After a line, add "then closes her lips". Characters who never speak get no `(S1)` ID.
+- Use `N/A` in `overall_soundscape` only for total silence.
 
 ## References and execution
 
