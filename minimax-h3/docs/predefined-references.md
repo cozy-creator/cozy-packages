@@ -1,7 +1,7 @@
 # Fixed subjects for camera-cut stories
 
 `long_form_cuts` uses a supplied `image` or generates it from the shared `description`
-using `paul/qwen-image-2/generate_image` before rendering any H3 shot. Generated character images use a
+using `fidika/qwen-image-2/generate_image` before rendering any H3 shot. Generated character images use a
 plain white background. Scene images contain the described location. The whole
 request declares one to nine references; each shot explicitly selects its named
 references. Each shot is an independent Ref2VA generation, with no first/last-frame
