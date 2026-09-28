@@ -186,23 +186,6 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "Bind native codec fixtures and their file-state guards to the author invocation. "
         "Retire when a public native asset fixture supports changed-input controls. "
     ),
-    (
-        "examples/client-scripts/h3-lora-profile/h3_lora_scratch_probe.py",
-        "cozy_runtime.internal.lora",
-    ): (
-        "Private experiment compares exact pinned Runtime LoRA methods using the original "
-        "hook classes and request context, without mutating serving weights or global methods. "
-        "Retire with this one-off scratch qualification; this is not a public author API."
-    ),
-    (
-        "examples/client-scripts/h3-attention-oracle/attention_quantized.py",
-        "cozy_runtime.internal.attention_fp8",
-    ): (
-        "Private experiment measures the actual production FP8 quantizer, including "
-        "preprocessing, on identical captured H3 tensors. Avoid copying its implementation "
-        "or relying on a whole-model pin. Retire when public diagnostic backend lookup "
-        "exposes that exact operation."
-    ),
     ("scripts/h3-turbo-cp-proof.py", "cozy_runtime.internal.parallel"): (
         "Verify actual PDD hooks and component scopes under Runtime's Ulysses installation. "
     ),
