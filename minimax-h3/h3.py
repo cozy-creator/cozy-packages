@@ -1358,7 +1358,7 @@ class LongFormCutsInput(msgspec.Struct):
 def log_prompt(tel: Telemetry, event: str, prompt: str, **fields: str | int) -> None:
     """The text's digest and ends: a log value holds 400 characters, not a whole prompt."""
     digest = hashlib.sha256(prompt.encode()).hexdigest()
-    tel.log(event, digest=digest, chars=len(prompt), head=prompt[:400], tail=prompt[-400:], **fields)
+    tel.log(event, level="info", digest=digest, chars=len(prompt), head=prompt[:400], tail=prompt[-400:], **fields)
 
 
 def segment_calls(payload: LongFormInput | LongFormCutsInput) -> list[SegmentCall]:

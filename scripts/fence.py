@@ -186,6 +186,10 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "Bind native codec fixtures and their file-state guards to the author invocation. "
         "Retire when a public native asset fixture supports changed-input controls. "
     ),
+    ("scripts/h3-progressive-join-proof.py", "cozy_runtime.author._assets"): (
+        "Bind native progressive codec fixtures and their file-state guards to the author invocation. "
+        "Retire when a public native asset fixture supplies these grants. "
+    ),
     ("scripts/h3-turbo-cp-proof.py", "cozy_runtime.internal.parallel"): (
         "Verify actual PDD hooks and component scopes under Runtime's Ulysses installation. "
     ),

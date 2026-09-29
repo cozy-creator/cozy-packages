@@ -12,7 +12,6 @@ import json
 import sys
 import time
 import wave
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -31,6 +30,7 @@ from cozy_runtime.author import (
     Invocation,
     Outputs,
     Telemetry,
+    ThreadPoolExecutor,
     attempt,
     describe,
     invocable,
@@ -299,6 +299,7 @@ def drive(
     calls: list[ChildCall] = []
     prefetches: list[ModelPrefetch] = []
     events: list[Any] = []
+    activity: list[tuple[int, bool, bool, bool]] = []
     source: dict[str, Path] = {}
     media: dict[str, str] = {}
     answers: dict[int, CallState] = {}
@@ -376,7 +377,7 @@ def drive(
             wire = wire["payload"]
             assert wire["background"] == ("white" if index == 0 else "normal")
             assert (
-                "white studio" in wire["prompt"]
+                all(text in wire["prompt"] for text in ("front view", "back view", "plain white background"))
                 if index == 0
                 else "without people" in wire["prompt"]
             )
@@ -396,6 +397,7 @@ def drive(
             if continuous and wire["payload"].get("context") is not None:
                 grants["payload.context"] = grant("payload.context", wire["payload"]["context"])
         emitted: list[Any] = []
+        child_activity: list[tuple[int, bool, bool, bool]] = []
         with ThreadPoolExecutor(max_workers=1) as pool:
             result, outcome, record = pool.submit(
                 attempt,
@@ -411,9 +413,13 @@ def drive(
                     time.monotonic() + 60,
                     assets=grants,
                     progress=emitted.append,
+                    activity=lambda sequence, active, known, finished: child_activity.append(
+                        (sequence, active, known, finished)
+                    ),
                 ),
             ).result()
         assert outcome.terminal == "succeeded", outcome
+        assert child_activity and child_activity[-1][1:] == (False, True, True), child_activity
         assert result is not None
         outputs: list[dict[str, Any]] = []
 
@@ -579,8 +585,13 @@ def drive(
             cancel=lambda: cancelled,
             progress=events.append,
             assets=parent_assets,
+            activity=lambda sequence, active, known, finished: activity.append(
+                (sequence, active, known, finished)
+            ),
         ),
     )
+    if outcome.terminal == "succeeded":
+        assert activity and activity[-1][1:] == (False, True, True), activity
     if reference_cancel:
         assert result is None and outcome.terminal == "canceled", outcome
         assert len(calls) == 2
@@ -611,8 +622,12 @@ def drive(
     ]
     film = b""
     for index, revision in enumerate(revisions):
-        # A revision is the film so far: one init, then one fragment per segment.
-        assert len(revision.parts) == index + 2 and revision.parts[0].duration_us == 0
+        # Live revisions retain an init and fragments. The completed revision is
+        # one indexed MP4, with the same encoded video and decoded timeline.
+        if outcome.terminal == "succeeded" and index + 1 == count:
+            assert len(revision.parts) == 1 and revision.parts[0].duration_us > 0
+        else:
+            assert len(revision.parts) == index + 2 and revision.parts[0].duration_us == 0
         film = b"".join((root / "parent" / part.local).read_bytes() for part in revision.parts)
         with av.open(io.BytesIO(film), mode="r") as container:
             assert sum(1 for _ in container.decode(video=0)) == sum(frames[: index + 1])
