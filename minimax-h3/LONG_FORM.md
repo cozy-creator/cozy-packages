@@ -79,6 +79,11 @@ often non-English speech. Prevent it in the text:
 
 ## References and execution
 
+Generated character references ask Qwen Image 2.1 for a character sheet with two
+full-body views side by side: front and back, on a plain white background, with
+consistent appearance, proportions and clothing. The authored character description
+is included verbatim apart from surrounding whitespace.
+
 A reference has:
 
 - `name` and `kind` (`character`, `scene` or `audio`);

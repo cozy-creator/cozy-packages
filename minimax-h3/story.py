@@ -102,9 +102,10 @@ def image_prompt(reference: StoryReference) -> str:
     if reference.kind == "character":
         return (
             f"{reference.description.strip()}\n"
-            "A full-body subject reference with clear identifying features, a natural "
-            "neutral pose, and the entire subject visible against a plain white studio "
-            "background. One subject, one view, no panels or labels."
+            "A character reference sheet showing two full-body views of the same character "
+            "side by side: a front view and a back view. Show the entire character in a "
+            "natural neutral pose against a plain white background. Keep the character's "
+            "appearance, proportions and clothing consistent between both views."
         )
     return (
         f"{reference.description.strip()}\n"
