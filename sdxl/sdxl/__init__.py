@@ -173,7 +173,7 @@ _WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
 #: costs at a shape every card fits.
 _WARM_SIDE = 512
 
-class Txt2ImgInput(msgspec.Struct, forbid_unknown_fields=True):
+class Txt2ImgInput(msgspec.Struct):
     prompt: str
     negative_prompt: str = ""
     aspect_ratio: AspectRatio = AspectRatio.SQUARE
