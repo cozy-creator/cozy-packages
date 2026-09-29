@@ -598,7 +598,7 @@ def drive(
     revisions = [item for item in record.published if item.output == "video"]
     delivered = count if fail < 0 and cancel < 0 else max(fail, cancel, 0)
     # A cancel also stops the join in flight; what was published before it stays.
-    assert len(revisions) == delivered or cancel >= 0 and len(revisions) <= delivered, [
+    assert len(revisions) == delivered or (cancel >= 0 and len(revisions) <= delivered), [
         item.label for item in revisions
     ]
     frames = [

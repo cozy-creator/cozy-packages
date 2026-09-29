@@ -3487,18 +3487,13 @@ def arm_interface() -> None:
         ],
     )
     check(
-        "long_form returns only final media and delivery status",
+        "long_form returns its video and references, each published as it lands",
         [field["name"] for field in jobs["long_form"]["result"]["fields"]],
         [
             "video",
-            "complete",
-            "delivered",
-            "requested",
+            "references",
             "delivered_frames",
             "fps",
-            "failed_index",
-            "failure_code",
-            "failure_detail",
             "warnings",
         ],
     )
