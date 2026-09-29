@@ -178,10 +178,8 @@ class Txt2ImgInput(msgspec.Struct, forbid_unknown_fields=True):
     negative_prompt: str = ""
     aspect_ratio: AspectRatio = AspectRatio.SQUARE
     megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP1
-    #: None: HiDiffusion above tier 1 only. At tier 1 it is a square-only opt-in: about a
-    #: third faster, but the early steps compose at half resolution (simpler scenes, lost
-    #: backgrounds); non-square tier-1 buckets regressed and never use it. Above tier 1
-    #: there is no baseline to fall back to.
+    #: None runs HiDiffusion where base SDXL cannot go: above tier 1. An explicit choice
+    #: always runs, and the result warns where it is known to hurt.
     hidiffusion: bool | None = None
     #: LAYER 1 of the two-layer clamp. These bounds REJECT; they never quietly clip. The
     #: `ModelDefault` marker is what makes the field omittable on the wire and concrete
@@ -199,11 +197,6 @@ class Txt2ImgInput(msgspec.Struct, forbid_unknown_fields=True):
                 f"no {self.megapixels.value}-megapixel bucket for aspect "
                 f"{self.aspect_ratio.value}; this tier offers: {offered}"
             )
-        if self.megapixels is not Megapixels.MP1 and self.hidiffusion is False:
-            raise ValueError(
-                "megapixels above 1 requires HiDiffusion: base SDXL is trained at ~1MP "
-                "and duplicates subjects beyond it — omit hidiffusion or send true"
-            )
 
 
 class ImageOutput(msgspec.Struct):
@@ -216,10 +209,12 @@ class ImageOutput(msgspec.Struct):
     """Whether the negative branch ran. Value-plane gating, made observable: a caller can
     see that `guidance <= 1.0` bought it a one-pass step rather than having to trust it."""
     hidiffusion_applied: bool
-    """Whether this request actually used HiDiffusion after the tier and geometry gates."""
+    """Whether this request used HiDiffusion."""
     digest: str
     """sha256 of the decoded RGB pixel bytes — the determinism fence over the WHOLE loop,
     not over one step."""
+    warnings: list[str]
+    """Explicit choices that ran although they are known to hurt the picture."""
 
 
 # ------------------------------------------------------------------ the model
@@ -541,12 +536,13 @@ def generate(
     view = model.for_request(ctx, seed=payload.seed)
     width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
     steps = payload.steps
-    # Above tier 1 HiDiffusion always runs — decode already refused the contradiction —
-    # and any aspect is legal: past its training resolution base SDXL is not an
-    # alternative. At tier 1 it is an explicit opt-in, square only.
-    hidiffusion_applied = payload.megapixels is not Megapixels.MP1 or (
-        bool(payload.hidiffusion) and width == height
-    )
+    above_native = payload.megapixels is not Megapixels.MP1
+    hidiffusion_applied = above_native if payload.hidiffusion is None else payload.hidiffusion
+    warnings: list[str] = []
+    if above_native and not hidiffusion_applied:
+        warnings.append("HiDiffusion off above 1 MP: expect duplicated or tiled subjects")
+    if hidiffusion_applied and not above_native:
+        warnings.append("HiDiffusion at 1 MP composes at half resolution: expect simpler scenes")
     # The value plane, and the only branch in this file that reads a request number: above
     # 1.0 the negative branch is worth its second forward pass, at or below it is not.
     classifier_free = payload.guidance > 1.0
@@ -641,6 +637,7 @@ def generate(
         classifier_free=classifier_free,
         hidiffusion_applied=hidiffusion_applied,
         digest=hashlib.sha256(rgb).hexdigest(),
+        warnings=warnings,
     )
 
 
