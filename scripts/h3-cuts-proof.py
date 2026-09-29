@@ -377,7 +377,10 @@ def drive(
             wire = wire["payload"]
             assert wire["background"] == ("white" if index == 0 else "normal")
             assert (
-                all(text in wire["prompt"] for text in ("front view", "back view", "plain white background"))
+                all(text in wire["prompt"] for text in (
+                    "Generate exactly one image", "front view on the left",
+                    "back view on the right", "plain white background",
+                ))
                 if index == 0
                 else "without people" in wire["prompt"]
             )
