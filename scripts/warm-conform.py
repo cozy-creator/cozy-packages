@@ -184,7 +184,7 @@ def arm_sdxl() -> None:
     check("one classifier-free UNet step at 512px", unet_inputs, [(2, 4, 64, 64)])
     check("decoded one 512px frame", decoded, [(1, 3, 512, 512)])
     unet = pipe.components["unet"]
-    check("HiDiffusion applied for the step", unet._cozy_hidiffusion_active, True)
+    check("base SDXL for the default tier-1 step", unet._cozy_hidiffusion_active, False)
     arm_cancelled(package.SdxlModel.for_test(
         pipe=package.build_pipeline(sdxl_config()),
         tokenizers=(FakeTokenizer(), FakeTokenizer()),

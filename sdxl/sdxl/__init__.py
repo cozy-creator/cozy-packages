@@ -17,6 +17,7 @@ What it adds over cr-008b's corpus fixture, which it is otherwise faithful to (i
     how the demand axes are derived from a preset the runtime cannot otherwise measure
     (§1.2). A pair this package does not offer is unspellable, not rounded. Tiers above
     1 ride HiDiffusion — base SDXL duplicates subjects past its training resolution.
+    Tier 1 is base SDXL unless the caller opts in.
   * `ModelDefault` steps/guidance, and the TWO-LAYER CLAMP. Layer 1 is the field's own
     `Meta` bound, which REJECTS what the caller actually sent. Layer 2 is a deployment's
     visible `Clamp`, which lowers it and says so in the adjustments envelope. A silent
@@ -177,14 +178,15 @@ class Txt2ImgInput(msgspec.Struct, forbid_unknown_fields=True):
     negative_prompt: str = ""
     aspect_ratio: AspectRatio = AspectRatio.SQUARE
     megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP1
-    #: A caller may opt out of HiDiffusion without changing the selected model or package.
-    #: At tier 1, non-square buckets always use baseline SDXL because those live
-    #: comparisons regressed. Above tier 1 there is no baseline to fall back to.
-    hidiffusion: bool = True
+    #: None: HiDiffusion above tier 1 only. At tier 1 it is a square-only opt-in: about a
+    #: third faster, but the early steps compose at half resolution (simpler scenes, lost
+    #: backgrounds); non-square tier-1 buckets regressed and never use it. Above tier 1
+    #: there is no baseline to fall back to.
+    hidiffusion: bool | None = None
     #: LAYER 1 of the two-layer clamp. These bounds REJECT; they never quietly clip. The
     #: `ModelDefault` marker is what makes the field omittable on the wire and concrete
     #: before the handler runs — the handler sees `int`, never `int | None`.
-    steps: Annotated[ModelDefault[int], msgspec.Meta(ge=1, le=50)] = 30
+    steps: Annotated[ModelDefault[int], msgspec.Meta(ge=1, le=50)] = 20
     guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=0.0, le=20.0)] = 7.0
     seed: int = 1005
 
@@ -197,7 +199,7 @@ class Txt2ImgInput(msgspec.Struct, forbid_unknown_fields=True):
                 f"no {self.megapixels.value}-megapixel bucket for aspect "
                 f"{self.aspect_ratio.value}; this tier offers: {offered}"
             )
-        if self.megapixels is not Megapixels.MP1 and not self.hidiffusion:
+        if self.megapixels is not Megapixels.MP1 and self.hidiffusion is False:
             raise ValueError(
                 "megapixels above 1 requires HiDiffusion: base SDXL is trained at ~1MP "
                 "and duplicates subjects beyond it — omit hidiffusion or send true"
@@ -350,7 +352,7 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
 
     def warm(self, ctx: Context) -> None:
         """One dry step — tokenize, encode, denoise, decode — at the default request's
-        shape (classifier-free batch, HiDiffusion on), so no request pays a first-call
+        shape (classifier-free batch, base SDXL), so no request pays a first-call
         cost. The runtime calls it once per fill, before the placement serves. Outputs
         are dropped, so no schedule: the tensors carry their own dtype and device."""
         ctx.raise_if_cancelled()
@@ -359,7 +361,7 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
         latents = prompt.new_empty((2, 4, side, side)).normal_()
         time_ids = prompt.new_tensor([[_WARM_SIDE, _WARM_SIDE, 0, 0, _WARM_SIDE, _WARM_SIDE]] * 2)
         noise = self.denoise(
-            latents, 999, prompt.repeat(2, 1, 1), pooled.repeat(2, 1), time_ids, 0, 1, True
+            latents, 999, prompt.repeat(2, 1, 1), pooled.repeat(2, 1), time_ids, 0, 1, False
         )
         self.decode(noise.chunk(2)[1])
 
@@ -417,8 +419,12 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
         original_dtype = next(vae.parameters()).dtype
         upcast = bool(getattr(vae.config, "force_upcast", False))
         if upcast:
-            vae.to(dtype=torch.float32)
-            latents = latents.to(dtype=torch.float32)
+            # The SDXL VAE overflows fp16. bf16 has fp32's range: 48 dB PSNR to fp32 on the
+            # 1024px fox (run 1642), ~0.5 s faster on an RTX 4070 Laptop.
+            native_bf16 = latents.is_cuda and torch.cuda.is_bf16_supported(including_emulation=False)
+            wide = torch.bfloat16 if native_bf16 else torch.float32
+            vae.to(dtype=wide)
+            latents = latents.to(dtype=wide)
         try:
             with torch.inference_mode():
                 return vae.decode(latents / self.pipe.vae_scale).sample
@@ -537,9 +543,9 @@ def generate(
     steps = payload.steps
     # Above tier 1 HiDiffusion always runs — decode already refused the contradiction —
     # and any aspect is legal: past its training resolution base SDXL is not an
-    # alternative. At tier 1 the measured geometry gate stands: square only.
-    hidiffusion_applied = payload.hidiffusion and (
-        payload.megapixels is not Megapixels.MP1 or width == height
+    # alternative. At tier 1 it is an explicit opt-in, square only.
+    hidiffusion_applied = payload.megapixels is not Megapixels.MP1 or (
+        bool(payload.hidiffusion) and width == height
     )
     # The value plane, and the only branch in this file that reads a request number: above
     # 1.0 the negative branch is worth its second forward pass, at or below it is not.
