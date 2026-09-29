@@ -1,7 +1,8 @@
 """The exact text H3's encoder receives, built by the package's own prompt code; no model.
 
 One-off calls send their prompt verbatim, plus an `N/A` music line when it names none.
-long_form segments also gain the global sections and only the references they name.
+long_form segments also gain the global sections, `style` among them, and only the
+references they name. Unknown request fields are ignored; a missing required one refuses.
 """
 
 from __future__ import annotations
@@ -305,6 +306,67 @@ def coffee(lab: dict[str, Any]) -> None:
     )
 
 
+def style() -> None:
+    look = "Soft watercolor animation with muted pastel colors."
+    kite = [
+        {"name": "Kite", "kind": "character", "description": "A red paper kite."},
+        {"name": "Beach", "kind": "scene", "description": "An empty sandy beach."},
+    ]
+    texts = [
+        "summary:\n<Kite> climbs.\n\ndetailed_description:\n[Shot 1] <Kite> climbs.",
+        "<Kite> dips toward the sand.",
+    ]
+    wire: dict[str, Any] = {
+        "references": kite,
+        "style": look,
+        "segments": [{"prompt": text, "duration_s": 5} for text in texts],
+    }
+    definitions = (
+        "subject_definitions:\n<Beach> is the scene shown in <Picture 1>. An empty sandy beach.\n"
+        "<Kite> is the character shown in <Picture 2>. A red paper kite.\n\n"
+    )
+    retention = f"<Beach>: fully_preserved - {SCENE}.\n<Kite>{{}}: fully_preserved - {PERSON}.\n\n"
+    styled = [
+        f"{definitions}summary:\n<Kite> climbs.\n\nstyle:\n{look}\n\nretention_analysis:\n"
+        + retention.format(" (appears in [Shot 1])")
+        + "detailed_description:\n[Shot 1] <Kite> climbs.\n\nnon_diegetic_music:\nN/A",
+        f"{definitions}style:\n{look}\n\nretention_analysis:\n{retention.format('')}"
+        "<Kite> dips toward the sand.\n\nnon_diegetic_music:\nN/A",
+    ]
+    own = "<Kite> spins.\n\nStyle: Grainy black-and-white film."
+
+    def prompts(job: Any, payload: dict[str, Any]) -> list[str]:
+        return [call[0] for call in calls(job, payload)]
+
+    for job in (h3.LongFormInput, h3.LongFormCutsInput):
+        name = job.__name__
+        check(f"{name}: style is a section in both segments", prompts(job, wire), styled)
+        check(
+            f"{name}: no style, no section",
+            prompts(job, {key: value for key, value in wire.items() if key != "style"}),
+            [text.replace(f"style:\n{look}\n\n", "") for text in styled],
+        )
+        check(
+            f"{name}: a segment's own style is kept",
+            prompts(job, {**wire, "segments": [{"prompt": own, "duration_s": 5}]}),
+            [f"{definitions}retention_analysis:\n{retention.format('')}{own}\n\n"
+             "non_diegetic_music:\nN/A"],
+        )
+        extra = {
+            **wire,
+            "mood": "calm",
+            "segments": [{**wire["segments"][0], "camera": "static"}, wire["segments"][1]],
+            "references": [{**kite[0], "pose": "standing"}, kite[1]],
+        }
+        check(f"{name}: unknown fields are ignored, not refused", prompts(job, extra), styled)
+        try:
+            calls(job, {**wire, "segments": [{"prompt": "x", "duraton_s": 5}]})
+        except msgspec.ValidationError as exc:
+            check(f"{name}: a misspelled duration_s still refuses", "duration_s" in str(exc), True)
+        else:
+            raise AssertionError("a segment without duration_s was accepted")
+
+
 async def references() -> None:
     supplied = ImageAsset("sha256:" + "a" * 64)
     generated = ImageAsset("sha256:" + "b" * 64)
@@ -361,5 +423,6 @@ async def references() -> None:
 if __name__ == "__main__":
     one_offs()
     long_form()
+    style()
     asyncio.run(references())
     print("H3 prompts: PASS")
