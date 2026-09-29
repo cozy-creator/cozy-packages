@@ -50,6 +50,7 @@ from typing import Annotated, Any, Literal
 import cozy_runtime.derive as derive
 import msgspec
 import torch
+import cozy_runtime.author as cozy_author
 from cozy_runtime.author import (
     App,
     AssetBound,
@@ -238,6 +239,14 @@ def _hidiffusion_unet_type() -> type[Any]:
                 if hidiffusion:
                     self.num_upsamplers = self._cozy_base_num_upsamplers
                     apply_hidiffusion(self)
+                    # Its size hook writes the image size from the args and keeps nothing else,
+                    # so a step that ran out of device memory may run again. Runtimes before
+                    # memory v3 have no `pure`: nothing to mark there.
+                    mark = getattr(cozy_author, "pure", None)
+                    for handle in self.info["hooks"] if mark is not None else ():
+                        hook = self._forward_pre_hooks.get(handle.id)
+                        if hook is not None:
+                            mark(hook)
                 else:
                     remove_hidiffusion(self)
                     self.num_upsamplers = self._cozy_base_num_upsamplers
