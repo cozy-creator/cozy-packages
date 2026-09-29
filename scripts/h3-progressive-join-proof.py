@@ -77,8 +77,12 @@ def fixtures(root: Path) -> list[Path]:
         for frame in range(frames):
             pixels[frame, :, frame % 90 : frame % 90 + 6, 2] = 230
         samples = round(frames * RATE / FPS)
-        signal = np.sin(np.arange(samples, dtype=np.float32) * (2 * np.pi * (220 + 40 * index) / RATE))
-        clip = out.save_video(pixels, fps=FPS, audio=np.stack([signal, signal]) * 0.1, sample_rate=RATE)
+        signal = np.sin(
+            np.arange(samples, dtype=np.float32) * (2 * np.pi * (220 + 40 * index) / RATE)
+        )
+        clip = out.save_video(
+            pixels, fps=FPS, audio=np.stack([signal, signal]) * 0.1, sample_rate=RATE
+        )
         path = root / f"{index}.mp4"
         path.write_bytes(clip.read_bytes())
         paths.append(path)
@@ -123,9 +127,20 @@ def decoded(path: Path) -> tuple[list[bytes], bytes]:
 
 def probe(target: str) -> dict[str, Any]:
     raw = subprocess.run(
-        ["ffprobe", "-v", "error", "-count_frames", "-show_entries",
-         "stream=codec_type,nb_read_frames:format=duration", "-of", "json", target],
-        check=True, capture_output=True, text=True,
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-count_frames",
+            "-show_entries",
+            "stream=codec_type,nb_read_frames:format=duration",
+            "-of",
+            "json",
+            target,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
     facts: dict[str, Any] = json.loads(raw)
     return facts
@@ -161,9 +176,14 @@ def main() -> None:
     stream = root / "stream"
     stream.mkdir()
     (stream / "init.mp4").write_bytes((spool / parts[0].local).read_bytes())
-    lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-PLAYLIST-TYPE:EVENT",
-             f"#EXT-X-TARGETDURATION:{max(-(-p.duration_us // 1_000_000) for p in parts[1:])}",
-             "#EXT-X-INDEPENDENT-SEGMENTS", '#EXT-X-MAP:URI="init.mp4"']
+    lines = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:7",
+        "#EXT-X-PLAYLIST-TYPE:EVENT",
+        f"#EXT-X-TARGETDURATION:{max(-(-p.duration_us // 1_000_000) for p in parts[1:])}",
+        "#EXT-X-INDEPENDENT-SEGMENTS",
+        '#EXT-X-MAP:URI="init.mp4"',
+    ]
     for index, part in enumerate(parts[1:]):
         (stream / f"{index}.m4s").write_bytes((spool / part.local).read_bytes())
         lines += [f"#EXTINF:{part.duration_us / 1e6:.6f},", f"{index}.m4s"]
@@ -175,8 +195,21 @@ def main() -> None:
     duration = float(facts["format"]["duration"])
     assert abs(duration - sum(FRAMES) / FPS) < 1 / FPS, facts
     stamps = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries", "packet=pts_time",
-         "-of", "csv=p=0", str(playlist)], check=True, capture_output=True, text=True,
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v",
+            "-show_entries",
+            "packet=pts_time",
+            "-of",
+            "csv=p=0",
+            str(playlist),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.split()
     times = sorted(float(value) for value in stamps)
     steps = [b - a for a, b in itertools.pairwise(times)]
@@ -185,7 +218,9 @@ def main() -> None:
         "segments": len(FRAMES),
         "frames": sum(FRAMES),
         "hls_duration_s": duration,
-        "revision_bytes": [(root / f"revision-{i + 1}.mp4").stat().st_size for i in range(len(FRAMES))],
+        "revision_bytes": [
+            (root / f"revision-{i + 1}.mp4").stat().st_size for i in range(len(FRAMES))
+        ],
         "decoded_equal_to_one_shot_join": True,
         "final_is_last_revision_byte_for_byte": True,
         "hls_gapless": True,
