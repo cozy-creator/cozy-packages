@@ -299,6 +299,16 @@ class SdxlPipeline:
                     torch.float16
                 ),
             }
+        # Capture hooks are installed lazily by Transformers. Declare the exact
+        # owned callbacks before Runtime adopts these components.
+        from .capture import declare_output_capture
+
+        for name in ("text_encoder", "text_encoder_2"):
+            declare_output_capture(self.components[name])
+        mark = getattr(cozy_author, "pure", None)
+        if mark is not None:
+            for name in ("text_encoder", "text_encoder_2", "vae"):
+                mark(self.components[name])
         unet = self.components["unet"]
         # HiDiffusion recognizes this constructed SDXL UNet by its module keys. Keep the
         # package free of a catalog/model identifier and let that structural check decide.
