@@ -79,10 +79,11 @@ often non-English speech. Prevent it in the text:
 
 ## References and execution
 
-Generated character references ask Qwen Image 2.1 for a character sheet with two
-full-body views side by side: front and back, on a plain white background, with
-consistent appearance, proportions and clothing. The authored character description
-is included verbatim apart from surrounding whitespace.
+Each character reference uses one Qwen Image 2.1 call and returns exactly one image.
+That image is a character design sheet: a full-body front view on the left and back
+view on the right, together on one plain white canvas, with consistent appearance,
+proportions and clothing. The authored character description is included verbatim
+apart from surrounding whitespace.
 
 A reference has:
 

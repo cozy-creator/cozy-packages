@@ -102,10 +102,11 @@ def image_prompt(reference: StoryReference) -> str:
     if reference.kind == "character":
         return (
             f"{reference.description.strip()}\n"
-            "A character reference sheet showing two full-body views of the same character "
-            "side by side: a front view and a back view. Show the entire character in a "
-            "natural neutral pose against a plain white background. Keep the character's "
-            "appearance, proportions and clothing consistent between both views."
+            "Generate exactly one image: a character design sheet on a plain white background. "
+            "Within this single image, place two full-body views of the same character side "
+            "by side: the front view on the left and the back view on the right. Show the "
+            "entire character in each view, in a natural neutral pose. Keep the character's "
+            "appearance, proportions and clothing consistent across both views."
         )
     return (
         f"{reference.description.strip()}\n"
