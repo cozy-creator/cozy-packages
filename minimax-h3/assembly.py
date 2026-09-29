@@ -24,7 +24,7 @@ import math
 from array import array
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from threading import Event
@@ -48,6 +48,7 @@ from cozy_runtime.author import (
     Outputs,
     SavedVideo,
     Telemetry,
+    ThreadPoolExecutor,
     VideoAsset,
     VideoJoin,
     invocable,

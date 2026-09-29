@@ -11,7 +11,7 @@ import asyncio
 import hashlib
 import queue
 from collections.abc import Awaitable, Callable, Iterator, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from contextlib import suppress
 from fractions import Fraction
 from functools import partial
@@ -47,6 +47,7 @@ from cozy_runtime.author import (
     SavedVideo,
     Shape,
     Telemetry,
+    ThreadPoolExecutor,
     UnsupportedInput,
     VideoAsset,
     data_values,
