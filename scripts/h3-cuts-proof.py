@@ -524,8 +524,11 @@ def drive(
         wire["references"] = [
             {"name": f"Person{i}", "kind": "character", "description": "A person"} for i in range(10)
         ]
-    elif bad == "legacy":
-        wire["history_frames"] = 0
+    elif bad == "unknown-fields":
+        # Ignored, not refused, at every level; `style` reaches each segment as a section.
+        wire |= {"history_frames": 0, "style": "Muted pastel watercolor."}
+        wire["segments"][0]["camera"] = "static"
+        wire["references"][0]["pose"] = "standing"
     parent_assets: dict[str, GrantedInput] = {}
     voice = ""
     if audio:
@@ -636,6 +639,8 @@ def drive(
     assert overall == sorted(overall) and (overall[-1] == 1) == (fail < 0)
     sent = [json.loads(call.payload) for call in calls[2:]]
     assert all("[Shot 1]" in row["payload"]["prompt"] for row in sent)
+    styled = ["style:\nMuted pastel watercolor." in row["payload"]["prompt"] for row in sent]
+    assert styled == [bad == "unknown-fields"] * len(sent), styled
     assert sent[0]["payload"]["seed"] == 0
     assert len(prefetches) == 1
     # The scene (Bridge) first, then the character the text names and its voice.
@@ -689,6 +694,7 @@ def main() -> None:
         repeated["calls"][1]["payload"]["seed"] == results["fixed"]["calls"][1]["payload"]["seed"]
     )
     drive(root / "long-prompt", prompt="x" * 20000)
+    drive(root / "unknown-fields", bad="unknown-fields")
     audio = drive(root / "audio", audio=True)
     assert all(len(row["assets"]) == 3 for row in audio["calls"])
     drive(
@@ -700,7 +706,6 @@ def main() -> None:
         "empty",
         "seed",
         "seed-too-large",
-        "legacy",
         "too-many-references",
     ):
         drive(root / bad, bad=bad, refuse=True)

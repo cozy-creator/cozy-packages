@@ -192,7 +192,7 @@ DurationSeconds = Annotated[
 ]
 
 
-class ClipInput(msgspec.Struct, forbid_unknown_fields=True, kw_only=True):
+class ClipInput(msgspec.Struct, kw_only=True):
     """One H3 generation: a turbo call's request and every long_form segment.
 
     `prompt` is any text, sent verbatim, after each reference's `<Picture N>`, `<Video N>`
@@ -1068,11 +1068,12 @@ class SegmentOutput(msgspec.Struct):
     provenance: RenderProvenance
 
 
-class LongFormInput(msgspec.Struct, forbid_unknown_fields=True):
+class LongFormInput(msgspec.Struct):
     """Fixed references and completed audio/video context for one continuous sequence."""
 
     segments: Annotated[list[ClipInput], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=MAX_REFERENCES)]
+    style: str = ""
     overall_soundscape: str = ""
     non_diegetic_music: str = "N/A"
     context_frames: Literal[22, 39, 56] = 22
@@ -1213,7 +1214,7 @@ def held_frames(plan: ContinuationPlan) -> int:
     return plan.sample_frames + plan.prefix_frames
 
 
-class MotionInput(msgspec.Struct, forbid_unknown_fields=True):
+class MotionInput(msgspec.Struct):
     prompt: str
     seed: int
     duration_s: SegmentSeconds
@@ -1343,9 +1344,10 @@ app.entrypoint(internal=True)(motion_segment)
 app.entrypoint(internal=True)(motion_segment_turbo)
 
 
-class LongFormCutsInput(msgspec.Struct, forbid_unknown_fields=True):
+class LongFormCutsInput(msgspec.Struct):
     segments: Annotated[list[ClipInput], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=MAX_REFERENCES)]
+    style: str = ""
     overall_soundscape: str = ""
     non_diegetic_music: str = "N/A"
     mode: Literal["turbo", "standard"] = "turbo"
@@ -1363,6 +1365,7 @@ def segment_calls(payload: LongFormInput | LongFormCutsInput) -> list[SegmentCal
     return compile_segments(
         [shot.prompt for shot in payload.segments],
         payload.references,
+        style=payload.style,
         overall_soundscape=payload.overall_soundscape,
         non_diegetic_music=payload.non_diegetic_music,
     )
@@ -1423,8 +1426,9 @@ async def long_form_cuts(
     published as they land; a failed or canceled run keeps them.
 
     Each segment is free text naming references as `<Name>`; see LONG_FORM.md for what
-    the workflow adds. H3 fills undescribed audio with invented speech: name the non-voice
-    sounds, and write "silently, lips closed" where no one speaks.
+    the workflow adds, such as `style` as each segment's `style:` section. H3 fills
+    undescribed audio with invented speech: name the non-voice sounds, and write
+    "silently, lips closed" where no one speaks.
     """
     ctx.raise_if_cancelled()
     if payload.mode == "turbo" and payload.steps is not None:
@@ -1543,8 +1547,9 @@ async def long_form(
     published as they land; a failed or canceled run keeps them.
 
     Each segment is free text naming references as `<Name>`; see LONG_FORM.md for what
-    the workflow adds. H3 fills undescribed audio with invented speech: name the non-voice
-    sounds, and write "silently, lips closed" where no one speaks.
+    the workflow adds, such as `style` as each segment's `style:` section. H3 fills
+    undescribed audio with invented speech: name the non-voice sounds, and write
+    "silently, lips closed" where no one speaks.
     """
     ctx.raise_if_cancelled()
     if payload.mode == "turbo" and payload.steps is not None:

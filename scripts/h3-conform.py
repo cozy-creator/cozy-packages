@@ -908,13 +908,13 @@ def arm_reference_resolution() -> None:
         finally:
             pipe._blocks["ref2va"].sub_blocks["before_encode"] = before
 
-    refusal(
-        "typed request refuses removed reference edge argument",
-        partial(
-            msgspec.convert,
-            {"prompt": "A person in a garden.", "reference_image_short_edge": 768},
+    check(
+        "typed request ignores the removed reference edge argument",
+        msgspec.convert(
+            {"prompt": "A person in a garden.", "duration_s": 5, "reference_image_short_edge": 768},
             type=package.StandardClipInput,
         ),
+        package.StandardClipInput(prompt="A person in a garden.", duration_s=5),
     )
 
 
@@ -1195,12 +1195,13 @@ def arm_clip_length() -> None:
         )
     # `mute` never skipped audio generation: `decode_audio` ran regardless and the audio rows
     # denoised in the same packed sequence at every step, so the flag only suppressed the mux
-    # while costing the caller the same time and money (se-052). It is deleted rather than
-    # documented, and a payload that still carries it refuses as an unknown field.
+    # while costing the caller the same time and money (se-052). It is deleted, and an
+    # unknown field is ignored, not refused.
     for name, request in (("standard", package.StandardClipInput), ("turbo", package.ClipInput)):
-        refusal(
-            f"{name} refuses a mute field on the wire",
-            partial(msgspec.convert, {"prompt": "x", "mute": True}, type=request),
+        check(
+            f"{name} ignores a mute field on the wire",
+            msgspec.convert({"prompt": "x", "duration_s": 5, "mute": True}, type=request),
+            request(prompt="x", duration_s=5),
         )
     # A plan holds one row per (timestep, modality); no row depends on the frame count, so
     # a served length never needs a re-tabled checkpoint.
@@ -3359,10 +3360,10 @@ def arm_interface() -> None:
             ["video", "warnings"],
         )
     for wire in (package.ClipInput,):
-        refusal(
-            f"{wire.__name__} cannot represent steps",
-            partial(msgspec.convert, {"prompt": "x", "steps": 8}, wire),
-            "ValidationError",
+        check(
+            f"{wire.__name__} cannot represent steps; the field is ignored",
+            msgspec.convert({"prompt": "x", "duration_s": 5, "steps": 8}, wire),
+            wire(prompt="x", duration_s=5),
         )
         check(
             f"{wire.__name__} keeps the base request's other fields",
@@ -3479,6 +3480,7 @@ def arm_interface() -> None:
         [
             "segments",
             "references",
+            "style",
             "overall_soundscape",
             "non_diegetic_music",
             "context_frames",

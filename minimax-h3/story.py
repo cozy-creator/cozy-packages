@@ -13,10 +13,11 @@ import msgspec
 from cozy_runtime.author import AssetBound, AudioAsset, ImageAsset, InvalidRequest
 from cozy_runtime.models.minimax_h3.official import Task, validate_reference_policy
 
-#: MiniMax's full-reference sections, in their canonical order.
+#: MiniMax's full-reference sections, plus `style`, in their canonical order.
 SECTIONS = (
     "subject_definitions",
     "summary",
+    "style",
     "retention_analysis",
     "detailed_description",
     "overall_soundscape",
@@ -32,7 +33,7 @@ _MEDIA = re.compile(r"\s*(picture|audio|video)\s+(\d+)\s*", re.IGNORECASE)
 _SHOT = re.compile(r"\[Shot\s*(\d+)\]", re.IGNORECASE)
 
 
-class StoryReference(msgspec.Struct, forbid_unknown_fields=True):
+class StoryReference(msgspec.Struct):
     """A supplied image or an image generated from its shared visual description."""
 
     name: str
@@ -178,15 +179,18 @@ def compile_segments(
     prompts: Sequence[str],
     references: Sequence[StoryReference],
     *,
+    style: str = "",
     overall_soundscape: str = "",
     non_diegetic_music: str = "N/A",
 ) -> list[SegmentCall]:
     """Each segment's child call: its references, renumbered, and the global sections."""
     validate_references(references)
-    return [
-        _segment_call(text, references, overall_soundscape, non_diegetic_music, index)
-        for index, text in enumerate(prompts)
-    ]
+    shared = {
+        "style": style.strip(),
+        "overall_soundscape": overall_soundscape.strip(),
+        "non_diegetic_music": non_diegetic_music.strip() or "N/A",
+    }
+    return [_segment_call(text, references, shared, index) for index, text in enumerate(prompts)]
 
 
 def _slot(ref: StoryReference) -> str:
@@ -206,8 +210,7 @@ def _numbering(references: Sequence[StoryReference]) -> dict[tuple[str, int], St
 def _segment_call(
     text: str,
     references: Sequence[StoryReference],
-    soundscape: str,
-    music: str,
+    shared: dict[str, str],
     index: int,
 ) -> SegmentCall:
     """Scenes always; characters, and audio, only where the text names them.
@@ -295,8 +298,7 @@ def _segment_call(
     additions = {
         "subject_definitions": "\n".join(definitions),
         "retention_analysis": "\n".join(retention),
-        "overall_soundscape": soundscape.strip(),
-        "non_diegetic_music": music.strip() or "N/A",
+        **shared,
     }
     return SegmentCall(_fill(text, additions), used, warnings)
 
@@ -319,21 +321,21 @@ def _sections(text: str) -> dict[str, tuple[int, int, int]]:
 
 
 def _fill(text: str, additions: dict[str, str]) -> str:
-    """Append each addition inside its section, or add the section in MiniMax order.
+    """Append each addition inside its section, or add the section in canonical order.
 
-    Only these insertions change the text, and an `N/A` body gives way to described content.
+    Only these insertions change the text. An `N/A` body gives way to described content;
+    a segment's own style, and its own music over a global `N/A`, are kept.
     """
+    additions = {name: additions[name] for name in SECTIONS if additions.get(name)}
     if not text.strip():
-        return "\n\n".join(f"{name}:\n{value}" for name, value in additions.items() if value)
+        return "\n\n".join(f"{name}:\n{value}" for name, value in additions.items())
     found = _sections(text)
     edits: list[tuple[int, int, int, str]] = []
     for order, (name, addition) in enumerate(additions.items()):
-        if not addition:
-            continue
         if name in found:
             _, start, end = found[name]
             body = text[start:end].strip()
-            if addition.upper() == "N/A" and body:
+            if body and (name == "style" or addition.upper() == "N/A"):
                 continue
             if body.upper() == "N/A":
                 at = text.index(body, start)

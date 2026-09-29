@@ -7,13 +7,18 @@ prompt, so the workflow copies the global information into it.
 ## Request
 
 - `references`: characters, scenes and audio, shared by every segment.
+- `style`: look shared by every segment (optional).
 - `overall_soundscape`: sound shared by every segment (optional).
 - `non_diegetic_music`: score shared by every segment (default `N/A`).
 - `segments`: the ordered calls.
 - `context_frames` (long_form), `mode` (`turbo` or `standard`) and `steps` (standard only).
 
+Unknown fields are ignored, not refused; a missing required field, such as a misspelled
+`duration_s`, still refuses.
+
 ```json
 {
+  "style": "Soft watercolor animation with muted pastel colors.",
   "overall_soundscape": "A low hum of laboratory machinery fills the hall.",
   "references": [
     {"name": "Subject-4", "kind": "character", "description": "An adult woman in a white lab coat."},
@@ -32,9 +37,9 @@ prompt, so the workflow copies the global information into it.
 
 Write prompts in MiniMax's [full-reference format](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md):
 `subject_definitions`, `summary`, `retention_analysis`, `detailed_description`,
-`overall_soundscape`, `non_diegetic_music`. Any section may be missing. Text before the
-first heading counts as the description. Headings match in any case, with `_`, `-` or a
-space between words.
+`overall_soundscape`, `non_diegetic_music`, plus `style` after `summary`. Any section may
+be missing. Text before the first heading counts as the description. Headings match in any
+case, with `_`, `-` or a space between words.
 
 1. **References.** Name them as `<Name>` (any case; `_`, `-` and space alike). Each segment
    gets every scene, the characters it names, and the audio it names. An audio reference
@@ -44,15 +49,16 @@ space between words.
    A global `<Picture N>` or `<Audio N>` in the text also names its reference and is
    renumbered to match. A token that matches nothing, such as `<Video 1>`, stays as
    written, with a warning.
-3. **Sections.** The workflow adds four sections: `subject_definitions` (one line per
-   attached reference), `retention_analysis` (one line per attached reference, with the
-   `[Shot N]` markers that name it), and the global `overall_soundscape` and
-   `non_diegetic_music`.
+3. **Sections.** The workflow adds `subject_definitions` (one line per attached
+   reference), `retention_analysis` (one line per attached reference, with the
+   `[Shot N]` markers that name it), and the global `style` (when set),
+   `overall_soundscape` and `non_diegetic_music`.
    - If the segment already has one of these sections, the global content is appended
      inside it.
-   - If the section is missing, it is added in MiniMax order, under the canonical heading.
+   - If the section is missing, it is added in the order above, under the canonical heading.
    - A body of `N/A` gives way to described global content.
-   - A global `N/A` never replaces a segment's own music.
+   - A global `N/A` never replaces a segment's own music, and a segment's own `style`
+     is kept as written.
 4. **Everything else** reaches the model byte for byte.
 
 H3's ref2va needs an image. A segment with no scene and no named character therefore

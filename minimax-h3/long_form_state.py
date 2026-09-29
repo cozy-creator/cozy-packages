@@ -8,7 +8,7 @@ import msgspec
 from cozy_runtime.author import InvalidRequest
 
 
-class RenderProvenance(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+class RenderProvenance(msgspec.Struct, frozen=True):
     model_manifest: str
     turbo_lora_manifest: str = ""
 

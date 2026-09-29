@@ -62,7 +62,7 @@ PEAK_CEILING = 0.999
 FRAME_RATE = Fraction(24)
 
 
-class AssembleVideoRequest(msgspec.Struct, forbid_unknown_fields=True):
+class AssembleVideoRequest(msgspec.Struct):
     videos: Annotated[
         list[VideoAsset],
         AssetBound(
