@@ -23,6 +23,7 @@ from PIL import Image
 
 app = App()
 Background = Literal["normal", "white"]
+CacheMode = Literal["enabled", "disabled"]
 
 
 class AspectRatio(Enum):
@@ -95,6 +96,7 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 40
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     background: Background = "normal"
+    kv_cache_mode: Literal["auto", "enabled", "disabled"] = "auto"
     reference_images: Annotated[
         list[ImageAsset],
         AssetBound(
@@ -120,6 +122,7 @@ class ImageOutput(msgspec.Struct):
     width: int
     height: int
     seed: int
+    kv_cache_mode: CacheMode
 
 
 def reference_prompt(prompt: str, background: Background) -> str:
@@ -158,6 +161,12 @@ def generate_image(
     tel: Telemetry,
 ) -> ImageOutput:
     seed = payload.resolved_seed()
+    cache_mode: CacheMode | None = None
+
+    def selected_cache(enabled: bool) -> None:
+        nonlocal cache_mode
+        cache_mode = "enabled" if enabled else "disabled"
+
     width, height = payload.dimensions()
     ctx.raise_if_cancelled()
     reference_images, reference_latents, image_pad_mask = None, None, None
@@ -187,11 +196,17 @@ def generate_image(
             reference_images=reference_images,
             reference_latents=reference_latents,
             image_pad_mask=image_pad_mask,
+            use_kv_cache=None
+            if payload.kv_cache_mode == "auto"
+            else payload.kv_cache_mode == "enabled",
+            on_cache_mode=selected_cache,
         )
+    if cache_mode is None:
+        raise RuntimeError("Qwen denoising did not report its request cache mode")
     ctx.raise_if_cancelled()
     with tel.stage("decoding image", overall_range=(0.9, 0.98)):
         decoded = model.decode(latents, width=width, height=height)
         image = rgb_image(decoded)
     with tel.stage("saving image", overall_range=(0.98, 1.0)):
         asset = out.save_image(image, format="png")
-    return ImageOutput(asset, width, height, seed)
+    return ImageOutput(asset, width, height, seed, cache_mode)

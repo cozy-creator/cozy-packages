@@ -12,6 +12,14 @@ integer range); omitting one chooses a random seed in that range. Select `aspect
 exactly 1024×1024. Steps default to 40. Width and height are output fields only.
 Unknown ratios, tiers, and the removed width/height inputs are refused.
 
+`kv_cache_mode=auto` chooses whether to retain the prefix attention cache before
+denoising and returns the selected `enabled` or `disabled` mode in the result.
+The choice stays fixed through all steps and memory retries. Cached and recomputed
+attention can produce different images in reduced precision; an OOM never restarts
+the generation with the other mode. To reproduce a result, keep its seed and
+`kv_cache_mode`, along with the model, input and execution settings. An explicit
+`enabled` mode may need more memory; `disabled` recomputes the prefix each step.
+
 ## Image editing and references
 
 Set `reference_images` to one through ten images and describe the desired edit or
@@ -39,7 +47,7 @@ from `aspect_ratio` and `megapixels`.
 
 Reference VAE encoding and multimodal prompt encoding each run once before
 denoising, in separate component residency leases. Denoising reuses their tensors
-and the upstream prefix KV cache across steps. Reference images add tokens and
+and, when selected, the upstream prefix KV cache across steps. Reference images add tokens and
 memory demand, so compare editing benchmarks separately from text-only runs.
 
 The upstream model is under the Qwen Research License, for noncommercial research
