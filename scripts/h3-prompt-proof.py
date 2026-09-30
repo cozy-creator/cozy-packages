@@ -173,6 +173,23 @@ def music() -> None:
             wire["segments"] = [{"prompt": inline, "duration_s": 5, "non_diegetic_music": override}]
             check(f"{job.__name__}: inline score with override {override!r}",
                   calls(job, wire)[0][0], prefix + f"non_diegetic_music:\n{wanted}")
+        referenced = {
+            "references": [scene, *[
+                {"name": name, "kind": "audio", "audio": "sha256:" + digit * 64}
+                for name, digit in (("OldScore", "a"), ("ChosenScore", "b"))
+            ]],
+            "segments": [{
+                "prompt": ONE_LINE + "\n\nnon_diegetic_music:\nUse <Audio 1>.",
+                "duration_s": 5,
+                "non_diegetic_music": "Play <Audio 2> softly.",
+            }],
+        }
+        text, attached, warnings = calls(job, referenced)[0]
+        check(f"{job.__name__}: only the overriding score is attached",
+              (attached, warnings), (["Beach", "ChosenScore"], []))
+        check(f"{job.__name__}: overriding audio is renumbered to its child slot",
+              text.endswith("non_diegetic_music:\nPlay <Audio 1> softly."), True)
+        check(f"{job.__name__}: overwritten score is absent", "OldScore" in text, False)
     check("music override stays out of one-off ClipInput", "non_diegetic_music" in h3.ClipInput.__struct_fields__, False)
 
 
