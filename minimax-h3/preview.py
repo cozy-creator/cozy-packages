@@ -63,12 +63,12 @@ from story import encoder_prompt
 app = App()
 
 CANVASES = {"preview": (960, 480), "native": (1536, 768)}
-# The requested pair uses one identical H3 gang on the actual Terrence GPU SKU.
+# The requested pair uses one identical H3 gang on the verified Asirpa GPU SKU.
 BENCH_MODEL: list[dict[str, str | int]] = [
-    {"gpu": "RTX PRO 6000", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"}
+    {"gpu": "H100", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"}
 ]
 BENCH_LORA: list[dict[str, str | int]] = [
-    {"gpu": "RTX PRO 6000", "gpus": 4, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"}
+    {"gpu": "H100", "gpus": 4, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"}
 ]
 Canvas = Annotated[Literal["preview", "native"], Shape(pixels=CANVASES)]
 Duration = Annotated[Literal[10], Shape(frames={10: 243})]

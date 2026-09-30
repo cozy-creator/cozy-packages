@@ -493,7 +493,7 @@
           },
           "default_ladder": [
             {
-              "gpu": "RTX PRO 6000",
+              "gpu": "H100",
               "gpus": 4,
               "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"
             }
@@ -878,7 +878,7 @@
           },
           "default_ladder": [
             {
-              "gpu": "RTX PRO 6000",
+              "gpu": "H100",
               "gpus": 4,
               "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"
             }
@@ -907,7 +907,7 @@
           },
           "default_ladder": [
             {
-              "gpu": "RTX PRO 6000",
+              "gpu": "H100",
               "gpus": 4,
               "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"
             }

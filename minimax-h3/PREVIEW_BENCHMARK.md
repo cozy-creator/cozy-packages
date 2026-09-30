@@ -84,3 +84,12 @@ Preserve the neutral two-segment qualification and paired inputs for the next
 user-provided worker; do not rent a replacement. Both final GPU receipts and the
 ordinary remote software probe remain pending. The fixed four-card Blackwell
 placement must be rechecked against that worker before resuming.
+
+## Asirpa placement qualification
+
+The user-provided next worker is Asirpa, rental `pr-15975cbca908e1b3ef8f`.
+Its actual inventory is four NVIDIA H100 80GB HBM3 GPUs (81,559 MiB each).
+Both H3 arms now select the same four-card H100 gang; all canvases, prompt, seed,
+reference bytes, Turbo schedule and upscale checkpoint remain as qualified.
+This is a placement change from the stopped Terrence plan, not a cross-machine
+speed comparison. User requests 1983 and 1982 must finish before submission.
