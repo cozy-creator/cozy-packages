@@ -13,6 +13,7 @@ import sys
 import time
 import wave
 from dataclasses import asdict
+from fractions import Fraction
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Annotated, Any, Literal, cast
@@ -648,16 +649,42 @@ def drive(
         for index in range(delivered)
     ]
     film = b""
+    previous_packets: list[tuple[Fraction, Fraction, Fraction, bytes]] = []
+    previous_frames: list[tuple[Fraction, str]] = []
     for index, revision in enumerate(revisions):
-        # Live revisions retain an init and fragments. The completed revision is
-        # one indexed MP4, with the same encoded video and decoded timeline.
-        if outcome.terminal == "succeeded" and index + 1 == count:
-            assert len(revision.parts) == 1 and revision.parts[0].duration_us > 0
-        else:
-            assert len(revision.parts) == index + 2 and revision.parts[0].duration_us == 0
+        # Every published .92 revision is an indexed replacement. Its earlier
+        # encoded packets and decoded frames retain their exact content and clock.
+        assert len(revision.parts) == 1 and revision.parts[0].duration_us > 0
         film = b"".join((root / "parent" / part.local).read_bytes() for part in revision.parts)
+        expected_frames = sum(frames[: index + 1])
         with av.open(io.BytesIO(film), mode="r") as container:
-            assert sum(1 for _ in container.decode(video=0)) == sum(frames[: index + 1])
+            stream = container.streams.video[0]
+            assert stream.duration is not None and stream.time_base is not None
+            assert stream.duration * stream.time_base == Fraction(expected_frames, FPS)
+            packets = [
+                (packet.pts * packet.time_base, packet.dts * packet.time_base,
+                 packet.duration * packet.time_base, bytes(packet))
+                for packet in container.demux(video=0) if packet.size
+            ]
+        with av.open(io.BytesIO(film), mode="r") as container:
+            decoded = [
+                (frame.pts * frame.time_base, sha(frame.to_ndarray(format="rgb24").tobytes()))
+                for frame in container.decode(video=0)
+            ]
+        assert len(decoded) == expected_frames
+        assert packets[:len(previous_packets)] == previous_packets
+        assert decoded[:len(previous_frames)] == previous_frames
+        previous_packets, previous_frames = packets, decoded
+        # A fresh player can seek to a non-keyframe point in each growing revision.
+        target = min(13, expected_frames - 1)
+        with av.open(io.BytesIO(film), mode="r") as container:
+            stream = container.streams.video[0]
+            container.seek(int(Fraction(target, FPS) / stream.time_base), stream=stream,
+                           backward=True)
+            selected = next(frame for frame in container.decode(video=0)
+                            if frame.pts * frame.time_base >= Fraction(target, FPS))
+            assert (selected.pts * selected.time_base,
+                    sha(selected.to_ndarray(format="rgb24").tobytes())) == decoded[target]
     if cancel >= 0:
         assert result is None and outcome.terminal == "canceled", outcome
         return {}
