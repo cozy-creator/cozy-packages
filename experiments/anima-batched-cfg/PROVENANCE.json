@@ -1,0 +1,19 @@
+{
+  "owner": "benchmark_profile_analysis",
+  "purpose": "Isolated CPU-tested Anima CFG batch-layout experiment; no production default promotion",
+  "branch": "experiment/anima-batched-cfg-20260929",
+  "base_sha": "ba17a0717990952a04dd0cc2dcfd5c1b44d9fce2",
+  "source": "/home/fidika/cozy/.worktrees/packages/cozy-memory-interleaved-20260929/benchmarks/cozy_memory_interleaved/cohorts/r14-equal-six/packages/anima",
+  "gpu_qualified": false,
+  "source_sha256": {
+    "anima/LICENSE.model.md": "3ab19eea6d1a4a08d1256851c32e5df533dfd7b760313c56797b78ee2ee24724",
+    "anima/__init__.py": "f5edc352a6707049cd9a84d50efa9317bab056be81b8b5d1a98dd52ee3cb350b",
+    "anima/operations.py": "ee08809267df11273581605d7775be98d4936d8384b9d8d5accc507037e720f3",
+    "anima/t5_tokenizer/tokenizer.json": "35d68e7b16911b6ee06bbdef28577c34eb391905550e8740a48aa6984c2382c5",
+    "anima/t5_tokenizer/tokenizer_config.json": "3b5e68830ffc0f92ddf95b0e3994991c27926e38ead3575a9a5c0e0d6e90140d",
+    "anima/tokenizer/chat_template.jinja": "44d5f08f3f72b837eaad09f13a54c1f9f4eb58d75240334548b7fd52a5437fa5",
+    "anima/tokenizer/tokenizer.json": "f36e3013e43c57d3e43b8877b32af2d9a3582448e3a766d728bb9abd580d8f7a",
+    "anima/tokenizer/tokenizer_config.json": "6b589ccd67dac34cfd9e274864e34c819309cec98d99bb76aa1e13faf217d03e"
+  },
+  "dependency_policy": "Base public anima pyproject requirements; immutable benchmark candidate must record actual resolved versions"
+}
