@@ -61,7 +61,7 @@
                             },
                             {
                               "name": "torch_seed",
-                              "type": "int"
+                              "type": "str"
                             },
                             {
                               "name": "model_manifest",
@@ -286,7 +286,7 @@
                 },
                 {
                   "name": "torch_seed",
-                  "type": "int"
+                  "type": "str"
                 },
                 {
                   "name": "model_manifest",
@@ -681,7 +681,7 @@
                 },
                 {
                   "name": "torch_seed",
-                  "type": "int"
+                  "type": "str"
                 },
                 {
                   "name": "model_manifest",
@@ -1067,7 +1067,7 @@
                             },
                             {
                               "name": "torch_seed",
-                              "type": "int"
+                              "type": "str"
                             },
                             {
                               "name": "model_manifest",
@@ -1290,7 +1290,7 @@
                 },
                 {
                   "name": "torch_seed",
-                  "type": "int"
+                  "type": "str"
                 },
                 {
                   "name": "model_manifest",

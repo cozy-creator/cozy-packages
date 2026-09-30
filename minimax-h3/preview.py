@@ -142,7 +142,8 @@ class LatentInfo(msgspec.Struct, kw_only=True):
     sampled_frames: int
     delivered_frames: int
     seed: int
-    torch_seed: int
+    # Torch seeds are full-width uint64; preserve decimal digits across JSON custody.
+    torch_seed: str
     model_manifest: str
     turbo_lora_manifest: str
     prompt: str
@@ -263,7 +264,7 @@ async def generate_latents(
         sampled_frames=delivery.sample_frames,
         delivered_frames=delivery.delivered_frames,
         seed=payload.seed,
-        torch_seed=generator.initial_seed(),
+        torch_seed=str(generator.initial_seed()),
         model_manifest=base_model.checkpoint_ref,
         turbo_lora_manifest=turbo_lora.checkpoint_ref,
         prompt=prompt,

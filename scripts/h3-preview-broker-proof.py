@@ -36,7 +36,7 @@ from cozy_runtime.author._executor_requests import (
     Request,
 )
 from cozy_runtime.author.fakes import fake_attempt, fake_input, fake_outputs
-from cozy_runtime.internal import source_interfaces
+from cozy_runtime.internal import canonical, source_interfaces
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "minimax-h3"))
@@ -125,7 +125,7 @@ def run(root: Path) -> None:
                 sampled_frames=243,
                 delivered_frames=240,
                 seed=data["seed"],
-                torch_seed=71,
+                torch_seed="4073474745462816035",
                 model_manifest="sha256:" + "1" * 64,
                 turbo_lora_manifest="sha256:" + "2" * 64,
                 prompt=data["prompt"],
@@ -207,7 +207,7 @@ def run(root: Path) -> None:
         answers[request.call_index] = CallState(
             ok=True,
             state="succeeded",
-            result=json.dumps(project(value)),
+            result=canonical.write(project(value)).decode(),
             byte_grants=tuple(outputs),
         )
         return CallState(ok=True, child_request_id=name)
@@ -265,6 +265,8 @@ def run(root: Path) -> None:
         metadata["A"]["latents"]["upscale_scale"] == 1.6
         and metadata["B"]["latents"]["upscale_scale"] is None
     )
+    assert metadata["A"]["latents"]["torch_seed"] == "4073474745462816035"
+    assert metadata["B"]["latents"]["torch_seed"] == "4073474745462816035"
     for video in [result.result.preview_upscaled, result.result.native]:
         with av.open(str(video._local)) as container:
             assert len(list(container.decode(video=0))) == 240

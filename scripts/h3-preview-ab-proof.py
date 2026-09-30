@@ -131,7 +131,7 @@ def run(evidence: Path) -> None:
             sampled_frames=243,
             delivered_frames=240,
             seed=2768991793,
-            torch_seed=71,
+            torch_seed="4073474745462816035",
             model_manifest="sha256:" + "1" * 64,
             turbo_lora_manifest="sha256:" + "2" * 64,
             prompt="same",
