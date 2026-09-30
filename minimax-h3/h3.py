@@ -53,6 +53,7 @@ from cozy_runtime.author import (
     data_values,
     invocable,
     prefetch,
+    uses_components,
 )
 from cozy_runtime.models.minimax_h3.continuation import (
     AVContext,
@@ -788,6 +789,77 @@ _DEFAULT_TURBO_LORA_LADDER: list[dict[str, str | int]] = [
     {"gpu": "RTX PRO 6000", "gpus": 1, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
     {"gpu": "5090", "gpus": 1, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
 ]
+
+
+class DenseH3Model(H3Model):
+    """Experiment only: keep Sol's dense fallback for all 30 evaluations."""
+
+    @uses_components("fl2va_dit")
+    def sample_fl2va(
+        self,
+        state: Any,
+        *,
+        on_step: Callable[[int], None],
+        cancel: Callable[[], None],
+        checks: NumericalChecks,
+    ) -> ScheduleFacts:
+        root = self.pipe.components["fl2va_dit"]
+        checks.component("fl2va_dit", root)
+        with checks.forwards(root, "fl2va_dit"):
+            return self.pipe.denoise(
+                "fl2va", state, on_step=on_step, cancel=cancel, checks=checks,
+                sol_dense_steps=30,
+            )
+
+
+class DenseH3TurboBase(H3TurboBase):
+    """Experiment only: keep Sol's dense fallback for all eight evaluations."""
+
+    @uses_components("fl2va_dit")
+    def sample_fl2va_turbo(
+        self,
+        state: Any,
+        *,
+        turbo_lora: H3TurboLoRA,
+        on_step: Callable[[int], None],
+        cancel: Callable[[], None],
+        checks: NumericalChecks,
+        sol_dense_steps: int = 8,
+    ) -> ScheduleFacts:
+        return turbo_lora.sample_fl2va(
+            self, state, on_step=on_step, cancel=cancel,
+            checks=checks, sol_dense_steps=sol_dense_steps,
+        )
+
+
+@app.entrypoint(defaults={"model": _DEFAULT_MODEL_LADDER})
+def fl2va_dense(
+    ctx: Context,
+    payload: StandardClipInput,
+    assets: KeyframeAssets,
+    model: DenseH3Model,
+    out: Outputs,
+    tel: Telemetry,
+) -> H3VideoOutput:
+    return _keyframes_to_video(ctx, "fl2va", payload, assets, model, out, tel, steps=payload.steps)
+
+
+@app.entrypoint(
+    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER}
+)
+def fl2va_turbo_dense(
+    ctx: Context,
+    payload: ClipInput,
+    assets: KeyframeAssets,
+    base_model: DenseH3TurboBase,
+    turbo_lora: H3TurboLoRA,
+    out: Outputs,
+    tel: Telemetry,
+) -> H3VideoOutput:
+    return _keyframes_to_video(
+        ctx, "fl2va_turbo", payload, assets, base_model, out, tel,
+        steps=TURBO_STEPS, turbo_lora=turbo_lora,
+    )
 
 
 @app.entrypoint(defaults={"model": _DEFAULT_MODEL_LADDER})
