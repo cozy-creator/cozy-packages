@@ -826,8 +826,8 @@ class DenseH3TurboBase(H3TurboBase):
         checks: NumericalChecks,
         sol_dense_steps: int = 8,
     ) -> ScheduleFacts:
-        return super().sample_fl2va_turbo(
-            state, turbo_lora=turbo_lora, on_step=on_step, cancel=cancel,
+        return turbo_lora.sample_fl2va(
+            self, state, on_step=on_step, cancel=cancel,
             checks=checks, sol_dense_steps=sol_dense_steps,
         )
 
