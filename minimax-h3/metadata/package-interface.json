@@ -1520,6 +1520,18 @@
               "list": {
                 "asset": "image"
               }
+            },
+            "constraints": {
+              "min_length": 2,
+              "max_length": 2
+            },
+            "asset_bound": {
+              "max_bytes": 33554432,
+              "media_types": [
+                "image/png",
+                "image/jpeg",
+                "image/webp"
+              ]
             }
           },
           {

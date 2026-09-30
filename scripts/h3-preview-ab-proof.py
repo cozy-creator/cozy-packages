@@ -53,6 +53,14 @@ def run(evidence: Path) -> None:
     (ROOT / "minimax-h3/metadata/package-interface.json").write_text(
         json.dumps(interface, indent=2) + "\n"
     )
+    pair_job = next(row for row in interface["jobs"] if row["name"] == "compare")
+    image_field = next(field for field in pair_job["request"]["fields"] if field["name"] == "reference_images")
+    assert image_field["constraints"] == {"min_length": 2, "max_length": 2}
+    assert "image/png" in image_field["asset_bound"]["media_types"]
+    # Client admission uses this emitted bound before creating a remote run.
+    inputs = json.loads((evidence / "inputs.json").read_text())
+    assert all(Path(row["path"]).stat().st_size <= image_field["asset_bound"]["max_bytes"]
+               for row in inputs["reference_files"])
     plan = plan_continuation(240)
     assert (plan.sample_frames, plan.delivered_frames, plan.prefix_frames) == (243, 240, 0)
     step = MiniMaxH3Ref2VASetupStep()

@@ -490,7 +490,15 @@ async def decode_latents(
 class PairInput(msgspec.Struct, kw_only=True):
     prompt: str
     seed: int
-    reference_images: list[ImageAsset]
+    reference_images: Annotated[
+        list[ImageAsset],
+        AssetBound(
+            max_bytes=32 << 20,
+            max_decoded_bytes=256 << 20,
+            media_types=("image/png", "image/jpeg", "image/webp"),
+        ),
+        msgspec.Meta(min_length=2, max_length=2),
+    ]
     duration_s: Duration = 10
 
 
