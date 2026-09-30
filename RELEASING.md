@@ -83,3 +83,22 @@ worker capability check remains authoritative for new worker APIs, and an existi
 private rental may need `cozy rental update <name>` before using such an API.
 Ordinary dependency updates belong to the package environment and do not require
 updating the worker's global Python environment.
+
+## H3 1.24.3 qualification
+
+H3 1.24.3 requires Runtime 0.18.89 for tracked background execution. Its production
+lock changes Runtime 0.18.73 to 0.18.89 and TensorFS 0.3.74 to 0.3.78. Torch 2.14.0,
+torchvision 0.29.0, Qwen Image 2 version 0.2.3, and Cozy Eval 0.7.5 remain unchanged.
+The one-image character sheet prompt from 1.24.2 and the callable interface remain
+unchanged.
+
+Qualification uses the published Runtime 0.18.89 and TensorFS 0.3.78 with the CPU
+prompt, long-form, assembly, and progressive-join proof scripts. The long-form
+fixture checks complete execution observations for the composer and each child.
+The progressive proof checks immutable live fragments, copied video packets,
+decoded media, final duration, and seeks between keyframes. Rendering in these
+proofs is synthetic; the checks validate workflow, custody, and codec behavior.
+
+Publication still requires the checked worker-image preflight above with Runtime
+0.18.89 or newer on each supported profile. Publish the same frozen H3 wheel to
+each Hub; each account's dependency index must resolve the committed versions.
