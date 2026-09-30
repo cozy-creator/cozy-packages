@@ -15,6 +15,7 @@ from typing import Any, get_type_hints
 import msgspec
 from cozy_runtime.author import AudioAsset, ImageAsset, InvalidRequest
 from cozy_runtime.models.minimax_h3.official import Task
+from diffusers.modular_pipelines.minimax_h3.encoders import MiniMaxH3Ref2VATextEncoderStep
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
 import h3
@@ -127,8 +128,6 @@ def calls(job: Any, wire: dict[str, Any]) -> list[tuple[str, list[str], list[str
 
 
 def music() -> None:
-    from diffusers.modular_pipelines.minimax_h3.encoders import MiniMaxH3Ref2VATextEncoderStep
-
     score = "A gentle string quartet, no vocals."
     scene = {"name": "Beach", "kind": "scene", "description": "An empty beach."}
     prefix = (

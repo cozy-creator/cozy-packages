@@ -113,6 +113,11 @@ WIDTH, HEIGHT, RATE = 96, 64, 32000
 ROUTES: list[str] = []
 
 
+def video_frame_record(frame: av.VideoFrame) -> tuple[Fraction, str]:
+    assert frame.pts is not None and frame.time_base is not None
+    return frame.pts * frame.time_base, sha(frame.to_ndarray(format="rgb24").tobytes())
+
+
 def sha(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
@@ -661,15 +666,16 @@ def drive(
             stream = container.streams.video[0]
             assert stream.duration is not None and stream.time_base is not None
             assert stream.duration * stream.time_base == Fraction(expected_frames, FPS)
-            packets = [
-                (packet.pts * packet.time_base, packet.dts * packet.time_base,
-                 packet.duration * packet.time_base, bytes(packet))
-                for packet in container.demux(video=0) if packet.size
-            ]
+            packets: list[tuple[Fraction, Fraction, Fraction, bytes]] = []
+            for packet in container.demux(video=0):
+                if packet.size:
+                    assert packet.pts is not None and packet.dts is not None
+                    assert packet.time_base is not None and packet.duration is not None
+                    packets.append((packet.pts * packet.time_base, packet.dts * packet.time_base,
+                                    packet.duration * packet.time_base, bytes(packet)))
         with av.open(io.BytesIO(film), mode="r") as container:
             decoded = [
-                (frame.pts * frame.time_base, sha(frame.to_ndarray(format="rgb24").tobytes()))
-                for frame in container.decode(video=0)
+                video_frame_record(frame) for frame in container.decode(video=0)
             ]
         assert len(decoded) == expected_frames
         assert packets[:len(previous_packets)] == previous_packets
@@ -679,12 +685,12 @@ def drive(
         target = min(13, expected_frames - 1)
         with av.open(io.BytesIO(film), mode="r") as container:
             stream = container.streams.video[0]
-            container.seek(int(Fraction(target, FPS) / stream.time_base), stream=stream,
-                           backward=True)
-            selected = next(frame for frame in container.decode(video=0)
-                            if frame.pts * frame.time_base >= Fraction(target, FPS))
-            assert (selected.pts * selected.time_base,
-                    sha(selected.to_ndarray(format="rgb24").tobytes())) == decoded[target]
+            time_base = stream.time_base
+            assert time_base is not None
+            container.seek(int(Fraction(target, FPS) / time_base), stream=stream, backward=True)
+            selected_record = next(candidate_record for frame in container.decode(video=0)
+                                   if (candidate_record := video_frame_record(frame))[0] >= Fraction(target, FPS))
+            assert selected_record == decoded[target]
     if cancel >= 0:
         assert result is None and outcome.terminal == "canceled", outcome
         return {}
