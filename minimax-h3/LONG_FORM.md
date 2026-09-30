@@ -7,7 +7,7 @@ prompt, so the workflow copies the global information into it.
 ## Request
 
 - `references`: characters, scenes and audio, shared by every segment.
-- `style`: look shared by every segment (optional).
+- `style`: look shared by generated reference images and every segment (optional).
 - `overall_soundscape`: sound shared by every segment (optional).
 - `non_diegetic_music`: score shared by every segment (default `N/A`).
 - `segments`: the ordered calls.

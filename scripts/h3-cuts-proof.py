@@ -378,7 +378,10 @@ def drive(
             wire = wire["payload"]
             assert wire["background"] == ("white" if index == 0 else "normal")
             reference_style = "Muted pastel watercolor." if bad == "unknown-fields" else style
-            assert (f"style:\n{reference_style}" in wire["prompt"]) if reference_style else "style:\n" not in wire["prompt"]
+            if reference_style:
+                assert f"style:\n{reference_style}" in wire["prompt"]
+            else:
+                assert "style:\n" not in wire["prompt"]
             assert "Use anime styling only when explicitly requested." in wire["prompt"]
             assert (
                 all(text in wire["prompt"] for text in (
@@ -718,6 +721,10 @@ def main() -> None:
     )
     drive(root / "long-prompt", prompt="x" * 20000)
     drive(root / "unknown-fields", bad="unknown-fields")
+    for continuous in (False, True):
+        for style_name in ("realistic", "anime", "watercolor"):
+            drive(root / f"style-{continuous}-{style_name}", continuous=continuous,
+                  style=style_name, count=1)
     audio = drive(root / "audio", audio=True)
     assert all(len(row["assets"]) == 3 for row in audio["calls"])
     drive(
