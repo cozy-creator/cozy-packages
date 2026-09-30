@@ -722,7 +722,7 @@ def generate(
     scheduler.set_timesteps(steps, device=device)
     from .shared_noise import raw_noise
 
-    generator = _request_generator(torch, view.generator, device=device)
+    generator = _request_generator(torch, view.generator, device=device)  # noqa: F841 - preserve setup
     latents = (
         raw_noise("sdxl", payload.seed, (1, 4, height // 8, width // 8),
                   device=device, dtype=torch.float16)

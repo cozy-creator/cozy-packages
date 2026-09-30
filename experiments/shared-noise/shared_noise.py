@@ -35,7 +35,11 @@ def comfy_noise(latent: Any, seed: int, batch_inds: Any = None) -> Any:
     if batch_inds is not None:
         raise ValueError('Private noise experiment excludes indexed batches')
     shape = tuple(latent.shape)
-    model = { (1, 4, 128, 128): 'sdxl', (1, 16, 1, 128, 128): 'anima' }.get(shape)
+    if shape == (1, 16, 128, 128):
+        # Explicit single-frame NCTHW→NCHW boundary, never a numel-based reshape.
+        noise = raw_noise('anima', seed, (1, 16, 1, 128, 128), device='cpu', dtype=latent.dtype)
+        return noise.squeeze(2)
+    model = {(1, 4, 128, 128): 'sdxl', (1, 16, 1, 128, 128): 'anima'}.get(shape)
     if model is None:
         raise ValueError('Unsupported private latent geometry')
     return raw_noise(model, seed, shape, device='cpu', dtype=latent.dtype)
