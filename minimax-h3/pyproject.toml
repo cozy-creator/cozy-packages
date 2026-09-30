@@ -1,6 +1,6 @@
 [project]
-name = "minimax-h3"
-version = "1.25.2"
+name = "h3-preview-ab"
+version = "0.0.1"
 requires-python = ">=3.12"
 dependencies = [
     "cozy-runtime[media,minimax-h3]>=0.18.89",
@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.entry-points."cozy.application"]
-default = "h3:app"
+default = "preview:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -31,6 +31,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 only-include = [
+    "preview.py",
+    "latent_upscale_net.py",
+    "benchmark-licenses",
     "assembly.py",
     "gates.py",
     "h3.py",
