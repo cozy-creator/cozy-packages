@@ -9,6 +9,24 @@ supported-markers = [
 ]
 
 [[package]]
+name = "accelerate"
+version = "1.15.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "psutil" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f5/b5/1d3ed029ac71d3f2961346829a268da923698e9fd63f218f78841f216bfd/accelerate-1.15.0.tar.gz", hash = "sha256:5654f8c5eaa0d4fa68b33e287a97765da6849bf6d51dcac874e73fbbddfb6134", size = 422615, upload-time = "2026-09-09T13:04:49.078Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/4c/34f0450479d01195027260da68d8a3880683f1640c3ca5adf64acb3185f1/accelerate-1.15.0-py3-none-any.whl", hash = "sha256:97eacca0b73e45cb867dbf8c5d5d4dc32219544300e0c8992c7334dc2ef33cec", size = 394295, upload-time = "2026-09-09T13:04:47.331Z" },
+]
+
+[[package]]
 name = "annotated-doc"
 version = "0.0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -123,7 +141,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.18.92"
+version = "0.18.99"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -135,10 +153,10 @@ dependencies = [
     { name = "protobuf" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/58/ef/38a18ca1fa394785400e2e1fad5668b3edbe212b8246c14283ace10578a0/cozy_runtime-0.18.92.tar.gz", hash = "sha256:3845d7dbb5c08b0b0fe00959a2ce3ec1427610db7d3b345ed0080544051df01c", size = 5020036, upload-time = "2026-09-30T06:07:24.534Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0c/bc/f31146c176bb7cc8a46058b35a433b5bdbf800bdd5cba5202862d408e159/cozy_runtime-0.18.99.tar.gz", hash = "sha256:44de1f4402631072b9c0bab5a189255be94791d49b538f072e0d8be30c0e9ba2", size = 5116103, upload-time = "2026-09-30T23:01:47.596Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/33/1e744b0a9be2d9c664634416e6779a913c1d853530a87df83fb5c265bd6f/cozy_runtime-0.18.92-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:f99c8b158fefd77686eebf56dfb2430c2dad0ce7c6e4f858d0c80f4799053806", size = 22056415, upload-time = "2026-09-30T06:07:17.221Z" },
-    { url = "https://files.pythonhosted.org/packages/64/2e/19b84bab3cf20af1bc342c5d3354e92f6db09f2ed2b4452ae78e013c2c2d/cozy_runtime-0.18.92-py3-none-any.whl", hash = "sha256:6e909e998af86eaf764ee5390dc258aa366e097af0bc097084326a4b641eacbb", size = 3400628, upload-time = "2026-09-30T06:07:20.51Z" },
+    { url = "https://files.pythonhosted.org/packages/07/db/dbf76f3b0ba88e44a45b3e383ad1ce271b7484aa05f728ada25c28990384/cozy_runtime-0.18.99-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:fa34e613d404f68aabfd927ed35cd16c8449068b2e2cd065fca5f33f956317d5", size = 22082975, upload-time = "2026-09-30T23:01:41.294Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/92/a46064fe3bda58cb2ec8d435808f0a24348dd2c0f1217525b3900a46e326/cozy_runtime-0.18.99-py3-none-any.whl", hash = "sha256:09c1dcbf7d819c61ee0561e14ce6cc9d9319829ad6d40249cdbc388a140394bb", size = 3422219, upload-time = "2026-09-30T23:01:43.954Z" },
 ]
 
 [package.optional-dependencies]
@@ -148,6 +166,7 @@ media = [
 minimax-h3 = [
     { name = "diffusers" },
     { name = "numpy" },
+    { name = "peft" },
     { name = "safetensors" },
     { name = "tokenizers" },
     { name = "torch" },
@@ -323,6 +342,51 @@ wheels = [
 ]
 
 [[package]]
+name = "h3-attention-comparison"
+version = "0.0.1"
+source = { editable = "." }
+dependencies = [
+    { name = "cozy-eval" },
+    { name = "cozy-runtime", extra = ["media", "minimax-h3"] },
+    { name = "diffusers" },
+    { name = "hf-xet" },
+    { name = "msgspec" },
+    { name = "numpy" },
+    { name = "pydantic-core" },
+    { name = "pyyaml" },
+    { name = "qwen-image-2" },
+    { name = "regex" },
+    { name = "safetensors" },
+    { name = "shellingham" },
+    { name = "tensorfs" },
+    { name = "tokenizers" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "transformers" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cozy-eval", specifier = ">=0.7.3" },
+    { name = "cozy-runtime", extras = ["media", "minimax-h3"], specifier = ">=0.18.99" },
+    { name = "diffusers", specifier = ">=0.40.0" },
+    { name = "hf-xet", specifier = ">=1.6.0" },
+    { name = "msgspec", specifier = ">=0.19" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pydantic-core", specifier = ">=2.46.4" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "qwen-image-2", specifier = ">=0.2.2", index = "http://127.0.0.1:8819/v1/index/paul/simple/" },
+    { name = "regex", specifier = ">=2026.7.19" },
+    { name = "safetensors", specifier = ">=0.8.0" },
+    { name = "shellingham", specifier = ">=1.5.4" },
+    { name = "tensorfs", specifier = ">=0.3.74" },
+    { name = "tokenizers", specifier = ">=0.23.1" },
+    { name = "torch", specifier = ">=2.14" },
+    { name = "torchvision", specifier = ">=0.29" },
+    { name = "transformers", specifier = ">=5.16.1" },
+]
+
+[[package]]
 name = "hf-xet"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -452,51 +516,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
-]
-
-[[package]]
-name = "minimax-h3"
-version = "1.25.3"
-source = { editable = "." }
-dependencies = [
-    { name = "cozy-eval" },
-    { name = "cozy-runtime", extra = ["media", "minimax-h3"] },
-    { name = "diffusers" },
-    { name = "hf-xet" },
-    { name = "msgspec" },
-    { name = "numpy" },
-    { name = "pydantic-core" },
-    { name = "pyyaml" },
-    { name = "qwen-image-2" },
-    { name = "regex" },
-    { name = "safetensors" },
-    { name = "shellingham" },
-    { name = "tensorfs" },
-    { name = "tokenizers" },
-    { name = "torch" },
-    { name = "torchvision" },
-    { name = "transformers" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cozy-eval", specifier = ">=0.7.3" },
-    { name = "cozy-runtime", extras = ["media", "minimax-h3"], specifier = ">=0.18.92" },
-    { name = "diffusers", specifier = ">=0.40.0" },
-    { name = "hf-xet", specifier = ">=1.6.0" },
-    { name = "msgspec", specifier = ">=0.19" },
-    { name = "numpy", specifier = ">=1.26" },
-    { name = "pydantic-core", specifier = ">=2.46.4" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "qwen-image-2", specifier = ">=0.2.2", index = "https://tensorhub.com/v1/index/fidika/simple/" },
-    { name = "regex", specifier = ">=2026.7.19" },
-    { name = "safetensors", specifier = ">=0.8.0" },
-    { name = "shellingham", specifier = ">=1.5.4" },
-    { name = "tensorfs", specifier = ">=0.3.74" },
-    { name = "tokenizers", specifier = ">=0.23.1" },
-    { name = "torch", specifier = ">=2.14" },
-    { name = "torchvision", specifier = ">=0.29" },
-    { name = "transformers", specifier = ">=5.16.1" },
 ]
 
 [[package]]
@@ -700,6 +719,27 @@ wheels = [
 ]
 
 [[package]]
+name = "peft"
+version = "0.20.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "accelerate" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "psutil" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "torch" },
+    { name = "tqdm" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b4/08/02541a2c29be7c78698f73d438bc0e733b214f3f35ec5db79fca8da8fc61/peft-0.20.0.tar.gz", hash = "sha256:4769c8093a4ca145fd6fb3fd4dd50449675f5fe46434ad1e98b285a132d4b1d0", size = 880503, upload-time = "2026-07-28T13:46:01.85Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/28/79/13bcabb8048126422d5c4b880575d40886c726f354db88cfeed4325525bb/peft-0.20.0-py3-none-any.whl", hash = "sha256:0fbba16ffebfad3de96e06f2da6860fd860292324b85b6141909fa1e26ea9233", size = 775777, upload-time = "2026-07-28T13:45:59.809Z" },
+]
+
+[[package]]
 name = "pillow"
 version = "12.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -730,6 +770,18 @@ sdist = { url = "https://files.pythonhosted.org/packages/a7/e7/0553e21d25ca4d9f5
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/f8/bd5804695ba400e423c33fd4d9f58c28d86633d5ba1945c36ff3967d98cb/protobuf-7.36.0-cp310-abi3-manylinux2014_x86_64.whl", hash = "sha256:70f5ec8eb0da81a44360c0dc0beac99a0d78071d21956a7076bae8bd2051841b", size = 340439, upload-time = "2026-08-20T16:33:56.992Z" },
     { url = "https://files.pythonhosted.org/packages/01/c3/629999e78d46c1115c11886d51c6bd68c17ce4a944f1ea3e153a91316a33/protobuf-7.36.0-py3-none-any.whl", hash = "sha256:53374d53fc29a67f7dbbf0ade47d7526a0f0137bf0f9c90e48d8a60790ef748c", size = 177024, upload-time = "2026-08-20T16:34:00.053Z" },
+]
+
+[[package]]
+name = "psutil"
+version = "7.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/aa/c6/d1ddf4abb55e93cebc4f2ed8b5d6dbad109ecb8d63748dd2b20ab5e57ebe/psutil-7.2.2.tar.gz", hash = "sha256:0746f5f8d406af344fd547f1c8daa5f5c33dbc293bb8d6a16d80b4bb88f59372", size = 493740, upload-time = "2026-01-28T18:14:54.428Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/d6/246513fbf9fa174af531f28412297dd05241d97a75911ac8febefa1a53c6/psutil-7.2.2-cp313-cp313t-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1a571f2330c966c62aeda00dd24620425d4b0cc86881c89861fbc04549e5dc63", size = 181476, upload-time = "2026-01-28T18:15:01.884Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/2e/e6782744700d6759ebce3043dcfa661fb61e2fb752b91cdeae9af12c2178/psutil-7.2.2-cp314-cp314t-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1fa4ecf83bcdf6e6c8f4449aff98eefb5d0604bf88cb883d7da3d8d2d909546a", size = 182383, upload-time = "2026-01-28T18:15:13.445Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/70/5d8df3b09e25bce090399cf48e452d25c935ab72dad19406c77f4e828045/psutil-7.2.2-cp36-abi3-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:076a2d2f923fd4821644f5ba89f059523da90dc9014e85f8e45a5774ca5bc6f9", size = 155560, upload-time = "2026-01-28T18:15:25.976Z" },
+    { url = "https://files.pythonhosted.org/packages/04/78/0acd37ca84ce3ddffaa92ef0f571e073faa6d8ff1f0559ab1272188ea2be/psutil-7.2.2-cp36-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:b58fabe35e80b264a4e3bb23e6b96f9e45a3df7fb7eed419ac0e5947c61e47cc", size = 148266, upload-time = "2026-01-28T18:15:31.597Z" },
 ]
 
 [[package]]
@@ -789,7 +841,7 @@ wheels = [
 [[package]]
 name = "qwen-image-2"
 version = "0.2.4"
-source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
+source = { registry = "http://127.0.0.1:8819/v1/index/paul/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media", "qwen-image21"] },
     { name = "msgspec" },
@@ -797,7 +849,7 @@ dependencies = [
     { name = "pillow" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/files/c67fc2a6cb4b75a45d99c4a4d335e6f9a7e346161b6d517c944690ea73c0f611/qwen_image_2-0.2.4-py3-none-any.whl", hash = "sha256:c67fc2a6cb4b75a45d99c4a4d335e6f9a7e346161b6d517c944690ea73c0f611" },
+    { url = "http://127.0.0.1:8819/v1/index/paul/files/c67fc2a6cb4b75a45d99c4a4d335e6f9a7e346161b6d517c944690ea73c0f611/qwen_image_2-0.2.4-py3-none-any.whl", hash = "sha256:c67fc2a6cb4b75a45d99c4a4d335e6f9a7e346161b6d517c944690ea73c0f611" },
 ]
 
 [[package]]
