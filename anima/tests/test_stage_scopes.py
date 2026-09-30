@@ -90,6 +90,11 @@ def fixture_model() -> anima.AnimaModel:
         t5_tokenizer=tokenizer,
         scheduler_config=dict(FlowMatchEulerDiscreteScheduler().config),
     )
+    anima.cozy_author.pure(transformer)
+    anima.cozy_author.pure(conditioner)
+    if encoder.rotary_emb.rope_type == "default":
+        anima.cozy_author.pure(encoder)
+    anima._declare_vae_retry_state(vae)
     return anima.AnimaModel.for_test(pipe=pipe)
 
 
