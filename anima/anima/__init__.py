@@ -218,25 +218,37 @@ class _AnimaVae(AutoencoderKLQwenImage):
             or a.device.type not in ("cpu", "cuda")
             or a.ndim != 5
             or b.ndim != 5
+            or a.layout != torch.strided
+            or b.layout != torch.strided
             or any(a.shape[i] != b.shape[i] for i in range(5) if i != axis)
             or not a.is_contiguous()
             or not b.is_contiguous()
-            or a.untyped_storage().data_ptr() == b.untyped_storage().data_ptr()
+            or not a.numel()
+            or not b.numel()
+            or (torch.is_grad_enabled() and (a.requires_grad or b.requires_grad))
         ):
             return False
-        coefficients = torch.tensor(
-            [(1 - i / extent, i / extent) for i in range(extent)],
-            dtype=b.dtype,
-            device=b.device,
-        )
+        a_storage, b_storage = a.untyped_storage(), b.untyped_storage()
+        a_start, b_start = a_storage.data_ptr(), b_storage.data_ptr()
+        if a_start < b_start + b_storage.nbytes() and b_start < a_start + a_storage.nbytes():
+            return False
         shape = [1] * 5
         shape[axis] = extent
         source = [slice(None)] * 5
         target = [slice(None)] * 5
         source[axis] = slice(-extent, None)
         target[axis] = slice(extent)
-        left = a[tuple(source)] * coefficients[:, 0].reshape(shape)
-        right = b[tuple(target)] * coefficients[:, 1].reshape(shape)
+        a_overlap, b_overlap = a[tuple(source)], b[tuple(target)]
+        # Scalar and batched kernels can choose different NaN payloads.
+        if not (torch.isfinite(a_overlap).all() & torch.isfinite(b_overlap).all()).item():
+            return False
+        coefficients = torch.tensor(
+            [(1 - i / extent, i / extent) for i in range(extent)],
+            dtype=b.dtype,
+            device=b.device,
+        )
+        left = a_overlap * coefficients[:, 0].reshape(shape)
+        right = b_overlap * coefficients[:, 1].reshape(shape)
         b[tuple(target)] = left + right
         return True
 
