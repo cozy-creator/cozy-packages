@@ -40,7 +40,8 @@ exact development-version requirement. It includes public .92 plus the explicit 
 canvas and retained-CPU-latent decode changes from Runtime PR #1013, plus the
 reviewed captured-call precedence repair and Qwen console-monitor timing fix. Recreate its
 `.benchmark-wheels/` file from that branch's source-derived build receipt before
-locking or capturing this project. Do not substitute the machine's public .92 SDK.
+locking or capturing this project. Preserve its exact version and wheel hash as
+pinned in `pyproject.toml` and `uv.lock`; do not relabel it as a public SDK.
 
 CPU qualification covers upstream geometry, the entire checkpoint meta census,
 bitwise small-network 1.6× parity with Director, managed upscaler scope, retained
@@ -49,13 +50,26 @@ managed parent/child routes, and real 10-second MP4 encoding with exactly three
 final assets. The GPU model execution in the broker fixture is synthetic; it is
 not a video quality or GPU memory qualification.
 
-The real pair must run through ordinary `cozy`, on the existing Terrence rental,
-only after the release owner confirms its current user workflow has finished,
-the Runtime .92 / CLI .21 handoffs are complete, and these private sources are reviewed.
-Do not interrupt other work or reduce the requested canvas on admission failure.
-Record the actual executor SDK/module and model/kernel receipts before interpreting
-results. Acquisition and loading are separate from handler stages; one ordered pair
-is not a statistically controlled warm-speed measurement.
+Resume through ordinary `cozy` only on the user's next provided worker. Terrence
+has ended, and no replacement rental is authorized. Before submitting any work:
+
+- Verify Worker Runtime **0.18.93 or later** carries the captured-call precedence
+  repair. `Calls.bindings` runs in the Worker; the private SDK alone cannot repair
+  that boundary in a .92 Worker.
+- Verify CLI **0.1.21 or later**, while preserving the exact repaired private SDK
+  wheel and version already pinned by this project.
+- Check the new worker's actual GPU SKU and count against the planned **four RTX
+  PRO 6000 Blackwell GPUs**. Recheck availability and active work; do not assume
+  Terrence's old inventory or UUIDs describe the next worker.
+- Complete the neutral two-segment H3 qualification, including Qwen references,
+  segment music and an indexed live MP4 revision. Then run this package's CPU
+  `software` probe and verify its actual executor SDK before the matched pair.
+
+Keep both arms on the same verified four-card placement. Do not interrupt other
+work or reduce the requested canvas on admission failure. Record the actual GPU
+UUIDs, admitted model manifests and attention choices in the comparison metadata.
+Acquisition and loading are separate from handler stages; one ordered pair is not
+a statistically controlled warm-speed measurement.
 
 Only `preview-upscaled.mp4`, `native-768p.mp4`, and `comparison.json` belong in the
 final `~/.cozy/outputs/` directory. Source checkpoints, latents, and diagnostics stay
