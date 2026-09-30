@@ -1,0 +1,23 @@
+{
+  "source_head": "37ff2b8ea76da39b8efed30224d04353d1f5f8e1",
+  "source_directory": "experiments/sdxl-stable-vae",
+  "changes": [
+    "Model.warm body: cancellation check then return",
+    "private project identity in pyproject and lock only"
+  ],
+  "baseline_sha256": {
+    "README.md": "7a9b63d55ce80bc1cb8ddeb1c1cb5c3851aa36571dc6d44123fb36913fb48e86",
+    "package.toml": "ddb9b7cba77ce3819f89f9be3f60242ef1d62e8b053b4a69d0932e3a38bb9c19",
+    "uv.lock": "b5cdda7711d433b63400524f257fa723269c61a90ca45e53b93ae2d89b81491a",
+    "pyproject.toml": "0072602ffe92cb22777448b58baf5ad011caa807f6f28085790932d8aee52f23",
+    "FROZEN-SOURCE.json": "797bdee06f8730c78b31297892ddd842522847d8c7eb9670a332c9561a3476ae",
+    "sdxl/capture.py": "ba25feb5b2a315867685c2573ed26327a2334620c59879d759f50626dfeec8b4",
+    "sdxl/clip_merges.txt": "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a",
+    "sdxl/clip_vocab.json": "e089ad92ba36837a0d31433e555c8f45fe601ab5c221d4f607ded32d9f7a4349",
+    "sdxl/__init__.py": "cb02bf0d1f0002cd84163f46b4246ad15a022317faef3cdda3053d5d42213b00",
+    "sdxl/operations.py": "ede13b9643fb4703e8e3d4c96018ca15b37d81dd42eb9784f9b1416b3633047b",
+    "metadata/package-interface.json": "cbc65d617cef8443936f9307fc8816c6f77b139bcb0a65fa5d9f27e7ae42face",
+    "tests/test_stable_vae.py": "c7b52f17a5e4167326433a5e2074dae4676d80d2d968a15d969e9aaba0f05d03",
+    "tests/legacy_decode.py": "7a631d055dcc47f98f907ecfdde75d5ff65150269e43e2e1b9c6e2d4c6e72550"
+  }
+}
