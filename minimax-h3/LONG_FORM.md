@@ -2,7 +2,7 @@
 
 A segment is one H3 call. It takes the same fields as `ref2va_turbo`: free-text `prompt`,
 `duration_s` (5–15, required) and optional `seed`. A `long_form` segment also accepts
-`context_frames: false` to disable inherited motion for that segment. The model only ever sees one segment's
+the boolean `context_frames`, defaulting to `true`; `false` disables inherited motion for that segment. The model only ever sees one segment's
 prompt, so the workflow copies the global information into it.
 
 ## Request
@@ -109,9 +109,9 @@ twelve references in all. An audio-only set is refused.
 cozy run fidika/minimax-h3/long_form --input story.json --await
 ```
 
-`long_form` uses one global numeric `context_frames`, defaulting to 22. Omit a segment's
-`context_frames` to inherit that window, or set it to `false` to disable continuation for
-that segment. Per-segment numeric values and `true` are refused. Global 0 disables
+`long_form` uses one global numeric `context_frames`, defaulting to 22. A segment's
+`context_frames` defaults to `true`, which inherits that window. Set it to `false` to
+disable continuation for that segment. Per-segment numeric values are refused. Global 0 disables
 continuation throughout. The first segment always uses 0 because there is no previous clip.
 
 Global 0 or a segment's `false` attaches no previous audio/video context. Ordinary authored character,

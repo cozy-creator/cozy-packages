@@ -44,7 +44,9 @@ def main() -> None:
     for name, global_frames, local_frames in (
         ("default-22", None, None),
         ("mixed-cut-resume", 56, (None, None, False, None)),
+        ("explicit-true", 56, (True, True, False, True)),
         ("global-off", 0, (None, False, None, None)),
+        ("global-off-with-true", 0, (True, True, False, True)),
         ("global-22", 22, (False, None, False, None)),
         ("first-has-no-source", 39, (None, False, None, False)),
     ):
@@ -52,7 +54,7 @@ def main() -> None:
             root / name, continuous=True, count=4, duration_s=15,
             context_frames=global_frames, segment_context_frames=local_frames, audio=True,
         )
-    for value in (True, 0, 22, 56):
+    for value in (0, 22, 56):
         proof.drive(
             root / f"invalid-segment-context-{value}", continuous=True, refuse=True,
             segment_context_frames=(None, value, None),

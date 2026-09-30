@@ -1075,11 +1075,7 @@ ContextFrames = Literal[0, 22, 39, 56]
 class LongFormSegment(ClipInput, kw_only=True):
     """One segment; false disables the global audio/video continuation window."""
 
-    context_frames: bool | None = None
-
-    def __post_init__(self) -> None:
-        if self.context_frames is not None and self.context_frames is not False:
-            raise ValueError("segment context_frames accepts only false; omit it to inherit the global value")
+    context_frames: bool = True
 
 
 class LongFormInput(msgspec.Struct):
