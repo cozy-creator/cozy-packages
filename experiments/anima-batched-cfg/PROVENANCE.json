@@ -1,0 +1,8 @@
+{
+  "owner": "benchmark_profile_analysis",
+  "purpose": "Isolated CPU-tested Anima CFG batch-layout experiment; no production default promotion",
+  "branch": "experiment/anima-batched-cfg-20260929",
+  "base_sha": "ba17a0717990952a04dd0cc2dcfd5c1b44d9fce2",
+  "source": "anima/",
+  "gpu_qualified": false
+}
