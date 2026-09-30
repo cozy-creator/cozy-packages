@@ -256,7 +256,8 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         there is no attempt to meter, so the phases stay silent."""
         card = GenerateInput(prompt="")
         ctx.raise_if_cancelled()
-        self.render(
+        render_request(
+            self,
             card.quality_prefix,
             card.negative_prompt,
             512,
@@ -270,7 +271,7 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         )
 
     @uses_components("text_encoder", "text_conditioner", "transformer", "vae")
-    def render(
+    def prepare_request(
         self,
         prompt: str,
         negative_prompt: str,
@@ -285,7 +286,7 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
     ) -> Any:
         device = next(self.pipe.components["transformer"].parameters()).device
         generator = torch.Generator(device=device).manual_seed(seed)
-        pipeline: Any = _text2image_pipeline(device, phases)
+        pipeline: Any = _text2image_pipeline(device, phases, self)
         pipeline.register_components(
             **self.pipe.components,
             scheduler=FlowMatchEulerDiscreteScheduler.from_config(self.pipe.scheduler_config),
@@ -298,24 +299,47 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         pipeline.guider._start, pipeline.guider._stop = cfg_interval
         transformer = self.pipe.components["transformer"]
         restore_cache = _apply_first_block_cache(transformer, pipeline.guider, first_block_cache)
-        phases.enter(_ENCODE_PROMPT)
-        try:
-            result = pipeline(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                width=width,
-                height=height,
-                num_inference_steps=steps,
-                generator=generator,
-                output="images",
-                output_type="pt",
-            )
-        finally:
-            restore_cache()
-        return result
+        return pipeline, generator, restore_cache
+
+    @uses_components("text_encoder")
+    def encode_stage(self, block: Any, components: Any, state: Any) -> Any:
+        return block(components, state)
+
+    @uses_components("text_conditioner", "transformer")
+    def condition_stage(self, block: Any, components: Any, state: Any) -> Any:
+        return block(components, state)
+
+    @uses_components("transformer")
+    def denoise_stage(self, block: Any, components: Any, state: Any) -> Any:
+        return block(components, state)
+
+    @uses_components("vae")
+    def decode_stage(self, block: Any, components: Any, state: Any) -> Any:
+        return block(components, state)
 
 
-def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
+def render_request(
+    model: AnimaModel, prompt: str, negative_prompt: str, width: int, height: int,
+    steps: int, guidance: float, cfg_interval: tuple[float, float],
+    first_block_cache: float, seed: int, phases: _Phases,
+) -> Any:
+    pipeline, generator, restore_cache = model.prepare_request(
+        prompt, negative_prompt, width, height, steps, guidance, cfg_interval,
+        first_block_cache, seed, phases,
+    )
+    phases.enter(_ENCODE_PROMPT)
+    try:
+        return pipeline(
+            prompt=prompt, negative_prompt=negative_prompt, width=width, height=height,
+            num_inference_steps=steps, generator=generator, output="images", output_type="pt",
+        )
+    finally:
+        # FBC cleanup only restores Python hook/forward/cache bindings. It must run
+        # even when a failed device cannot admit another component scope.
+        restore_cache()
+
+
+def _text2image_pipeline(device: Any, phases: _Phases, scope_owner: AnimaModel | None = None) -> Any:
     """The text2image pipeline, instrumented on the blocks it will actually run.
 
     `ModularPipeline.blocks` is a property returning a DEEPCOPY, so a hook installed through
@@ -347,6 +371,10 @@ def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
         raise RuntimeError(f"Diffusers Anima text2image blocks changed: {order}")
     blocks.sub_blocks["denoise.denoise"].progress_bar = _progress_bar(phases)
     blocks.sub_blocks.insert("conditioning", Announce(), order.index("denoise.text_conditioning"))
+    if scope_owner is not None:
+        from .stage_scopes import install_scopes
+
+        install_scopes(blocks, scope_owner)
     return RuntimeAnimaPipeline(blocks=blocks)
 
 
@@ -444,7 +472,8 @@ def generate(
             "cfg_interval_start must not exceed cfg_interval_stop", code="cfg_interval"
         )
     with _Phases(tel) as phases:
-        images = model.render(
+        images = render_request(
+            model,
             payload.quality_prefix + payload.prompt,
             payload.negative_prompt,
             width,
