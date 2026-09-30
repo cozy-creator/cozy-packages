@@ -8,10 +8,10 @@ import inspect
 import sys
 import json
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Protocol, TypedDict, cast
 
 import msgspec
 import cozy_runtime
@@ -29,6 +29,7 @@ from cozy_runtime.author import (
     Model,
     ModelArtifact,
     Outputs,
+    PendingCall,
     Shape,
     Telemetry,
     VideoAsset,
@@ -45,7 +46,7 @@ from cozy_runtime.models.minimax_h3.official import (
     ScheduleFacts,
     OfficialH3Pipeline,
 )
-from diffusers.modular_pipelines import PipelineState
+from diffusers.modular_pipelines.modular_pipeline import PipelineState
 from safetensors.torch import load as load_tensors
 from safetensors.torch import save as save_tensors
 from tensorfs.derived import Config, Derivation, Part, Target, Tensor
@@ -63,14 +64,28 @@ app = App()
 
 CANVASES = {"preview": (960, 480), "native": (1536, 768)}
 # The requested pair uses one identical H3 gang on the actual Terrence GPU SKU.
-BENCH_MODEL = [{"gpu": "RTX PRO 6000", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"}]
-BENCH_LORA = [
+BENCH_MODEL: list[dict[str, str | int]] = [
+    {"gpu": "RTX PRO 6000", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"}
+]
+BENCH_LORA: list[dict[str, str | int]] = [
     {"gpu": "RTX PRO 6000", "gpus": 4, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"}
 ]
 Canvas = Annotated[Literal["preview", "native"], Shape(pixels=CANVASES)]
 Duration = Annotated[Literal[10], Shape(frames={10: 243})]
 LatentFile = Annotated[FileAsset, AssetBound(max_bytes=128 << 20)]
-WEIGHT_CONFIG = {
+
+
+class UpscaleConfig(TypedDict):
+    in_channels: int
+    in_blocks: int
+    out_blocks: int
+    channels: int
+    dropout: float
+    temporal_every: int
+    temporal_kernel: int
+
+
+WEIGHT_CONFIG: UpscaleConfig = {
     "in_channels": 24,
     "in_blocks": 12,
     "out_blocks": 12,
@@ -128,6 +143,8 @@ class LatentInfo(msgspec.Struct, kw_only=True):
     delivered_frames: int
     seed: int
     torch_seed: int
+    model_manifest: str
+    turbo_lora_manifest: str
     prompt: str
     reference_digests: list[str]
     reference_sizes: list[list[int]]
@@ -247,6 +264,8 @@ async def generate_latents(
         delivered_frames=delivery.delivered_frames,
         seed=payload.seed,
         torch_seed=generator.initial_seed(),
+        model_manifest=base_model.checkpoint_ref,
+        turbo_lora_manifest=turbo_lora.checkpoint_ref,
         prompt=prompt,
         reference_digests=[assets.info(i).digest for i in range(len(assets))],
         reference_sizes=reference_sizes,
@@ -264,14 +283,19 @@ async def generate_latents(
 
 
 class UpscalePipeline:
-    def __init__(self, configuration: dict[str, int | float]) -> None:
+    def __init__(self, configuration: UpscaleConfig) -> None:
         self.components = {"upscaler": LatentResizer3D(**configuration).eval()}
 
 
 def build_upscaler(config: ModelConfig) -> UpscalePipeline:
-    configuration = {
-        key: config.as_float(key) if key == "dropout" else config.as_int(key)
-        for key in WEIGHT_CONFIG
+    configuration: UpscaleConfig = {
+        "in_channels": config.as_int("in_channels"),
+        "in_blocks": config.as_int("in_blocks"),
+        "out_blocks": config.as_int("out_blocks"),
+        "channels": config.as_int("channels"),
+        "dropout": config.as_float("dropout"),
+        "temporal_every": config.as_int("temporal_every"),
+        "temporal_kernel": config.as_int("temporal_kernel"),
     }
     if configuration != WEIGHT_CONFIG:
         raise ValueError("unsupported benchmark upscaler architecture")
@@ -299,6 +323,8 @@ class LatentUpscaler(Model[UpscalePipeline]):
             mean = x.new_tensor(LATENTS_MEAN).view(1, -1, 1, 1, 1)
             std = x.new_tensor(LATENTS_STD).view(1, -1, 1, 1, 1)
             y = net((x - mean) / std, scale, target, enable_chunking=False)
+            if not isinstance(y, torch.Tensor):
+                raise ValueError("upscaler did not return a tensor")
             return (y * std + mean).to(dtype=video.dtype).cpu()
 
 
@@ -474,6 +500,27 @@ class PairOutput(msgspec.Struct):
     metadata: Annotated[FileAsset, AssetBound(max_bytes=1 << 20, media_types=("application/json",))]
 
 
+# Managed call sites expose the static wire signature, while the registered
+# implementation also accepts injected services/models. The broker proof checks
+# these exact contracts through the real generated request/result codecs.
+class PrepareCall(Protocol):
+    def __call__(self, *, source: ModelArtifact) -> PendingCall[ModelArtifact]: ...
+
+
+class GenerateCall(Protocol):
+    def __call__(
+        self, *, payload: GenerateInput, assets: Assets[ImageAsset]
+    ) -> PendingCall[Latents]: ...
+
+
+class UpscaleCall(Protocol):
+    def __call__(self, *, payload: UpscaleInput, model: ModelArtifact) -> PendingCall[Latents]: ...
+
+
+class DecodeCall(Protocol):
+    def __call__(self, *, payload: DecodeInput) -> PendingCall[Rendered]: ...
+
+
 async def compare(ctx: Context, *, payload: PairInput, out: Outputs, tel: Telemetry) -> PairOutput:
     if len(payload.reference_images) != 2:
         raise ValueError("benchmark requires the approved character and background images")
@@ -489,10 +536,10 @@ async def compare(ctx: Context, *, payload: PairInput, out: Outputs, tel: Teleme
         ),
     )
     native_source = await convert_cozytensors(source, profiles=("as-is/1",))
-    checkpoint = await prepare_upscaler(source=native_source)
+    checkpoint = await cast(PrepareCall, prepare_upscaler)(source=native_source)
     conversion_wall = time.perf_counter() - checkpoint_start
     a_start = time.perf_counter()
-    a_raw = await generate_latents(
+    a_call = cast(GenerateCall, generate_latents)(
         payload=GenerateInput(
             prompt=payload.prompt,
             canvas="preview",
@@ -501,17 +548,22 @@ async def compare(ctx: Context, *, payload: PairInput, out: Outputs, tel: Teleme
         ),
         assets=Assets(payload.reference_images),
     )
-    a_lifted = await upscale_latents(payload=UpscaleInput(a_raw), model=checkpoint)
-    a = await decode_latents(payload=DecodeInput(a_lifted))
+    a_raw = await a_call
+    upscale_call = cast(UpscaleCall, upscale_latents)(payload=UpscaleInput(a_raw), model=checkpoint)
+    a_lifted = await upscale_call
+    a_decode = cast(DecodeCall, decode_latents)(payload=DecodeInput(a_lifted))
+    a = await a_decode
     a_wall = time.perf_counter() - a_start
     b_start = time.perf_counter()
-    b_raw = await generate_latents(
+    b_call = cast(GenerateCall, generate_latents)(
         payload=GenerateInput(
             prompt=payload.prompt, canvas="native", seed=payload.seed, duration_s=payload.duration_s
         ),
         assets=Assets(payload.reference_images),
     )
-    b = await decode_latents(payload=DecodeInput(b_raw))
+    b_raw = await b_call
+    b_decode = cast(DecodeCall, decode_latents)(payload=DecodeInput(b_raw))
+    b = await b_decode
     b_wall = time.perf_counter() - b_start
     if a.info.prompt != b.info.prompt or a.info.reference_sizes != b.info.reference_sizes:
         raise ValueError("paired conditioning differs")
@@ -519,6 +571,18 @@ async def compare(ctx: Context, *, payload: PairInput, out: Outputs, tel: Teleme
         raise ValueError("paired references or sampler differs")
     if a.info.seed != b.info.seed or a.info.torch_seed != b.info.torch_seed:
         raise ValueError("paired numeric seeds differ")
+    if (a.info.model_manifest, a.info.turbo_lora_manifest) != (
+        b.info.model_manifest,
+        b.info.turbo_lora_manifest,
+    ):
+        raise ValueError("paired admitted model manifests differ")
+    observed_calls: list[tuple[str, PendingCall[Latents] | PendingCall[Rendered]]] = [
+        ("A_generate", a_call),
+        ("A_upscale", upscale_call),
+        ("A_decode", a_decode),
+        ("B_generate", b_call),
+        ("B_decode", b_decode),
+    ]
     metadata = {
         "schema": "cozy.h3-preview-comparison/1",
         "request_id": ctx.request_id,
@@ -543,7 +607,16 @@ async def compare(ctx: Context, *, payload: PairInput, out: Outputs, tel: Teleme
             "video_digest": b.video.digest,
             "warnings": b.warnings,
         },
+        "child_execution": {
+            name: {
+                "request_id": call.request_id,
+                "observation": msgspec.to_builtins(call.observation),
+            }
+            for name, call in observed_calls
+        },
         "limits": [
+            "Prepare/condition are host intervals; asynchronous GPU work can finish in the fenced denoise readback.",
+            "Actual GPU UUIDs and per-GPU attention choices are read from these child IDs in Runtime execution evidence.",
             "One ordered pair: first-arm cold preparation is not a fair warm-speed comparison.",
             "Same numeric seed; resolution changes noise grids and subsequent audio RNG draws.",
             "Both benchmark canvases are 2:1; source run 1937 was 1344x768.",
@@ -592,7 +665,7 @@ def software(ctx: Context, payload: SoftwareInput) -> Software:
         importlib.metadata.version("tensorfs"),
         importlib.metadata.version("h3-preview-ab"),
         "height" in parameters and "width" in parameters,
-        torch.cuda.is_initialized(),
+        cast(Callable[[], bool], torch.cuda.is_initialized)(),
     )
 
 

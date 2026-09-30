@@ -126,6 +126,8 @@ def run(root: Path) -> None:
                 delivered_frames=240,
                 seed=data["seed"],
                 torch_seed=71,
+                model_manifest="sha256:" + "1" * 64,
+                turbo_lora_manifest="sha256:" + "2" * 64,
                 prompt=data["prompt"],
                 reference_digests=[row["asset"] for row in raw["assets"]],
                 reference_sizes=[[1024, 1024], [1024, 1024]],

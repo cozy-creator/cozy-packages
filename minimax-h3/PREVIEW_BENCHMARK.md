@@ -37,7 +37,8 @@ manual CUDA weight loading, or new TensorFS source profile is needed.
 
 The exact private Runtime wheel is selected through the local wheel source and an
 exact development-version requirement. It includes public .92 plus the explicit H3
-canvas and retained-CPU-latent decode changes from Runtime PR #1013. Recreate its
+canvas and retained-CPU-latent decode changes from Runtime PR #1013, plus the
+reviewed captured-call precedence repair and Qwen console-monitor timing fix. Recreate its
 `.benchmark-wheels/` file from that branch's source-derived build receipt before
 locking or capturing this project. Do not substitute the machine's public .92 SDK.
 
@@ -63,3 +64,9 @@ in private custody. No public upscaler API or package publication is part of thi
 The private `software` CPU job reports the actual executor SDK/module and whether
 explicit canvas support is present, without initializing CUDA. Run it through the
 same captured package before the GPU pair and retain its ordinary run evidence.
+
+Terrence was shut down by the user before either GPU qualification was submitted.
+Preserve the neutral two-segment qualification and paired inputs for the next
+user-provided worker; do not rent a replacement. Both final GPU receipts and the
+ordinary remote software probe remain pending. The fixed four-card Blackwell
+placement must be rechecked against that worker before resuming.

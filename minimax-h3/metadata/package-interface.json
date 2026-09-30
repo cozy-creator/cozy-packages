@@ -64,6 +64,14 @@
                               "type": "int"
                             },
                             {
+                              "name": "model_manifest",
+                              "type": "str"
+                            },
+                            {
+                              "name": "turbo_lora_manifest",
+                              "type": "str"
+                            },
+                            {
                               "name": "prompt",
                               "type": "str"
                             },
@@ -279,6 +287,14 @@
                 {
                   "name": "torch_seed",
                   "type": "int"
+                },
+                {
+                  "name": "model_manifest",
+                  "type": "str"
+                },
+                {
+                  "name": "turbo_lora_manifest",
+                  "type": "str"
                 },
                 {
                   "name": "prompt",
@@ -668,6 +684,14 @@
                   "type": "int"
                 },
                 {
+                  "name": "model_manifest",
+                  "type": "str"
+                },
+                {
+                  "name": "turbo_lora_manifest",
+                  "type": "str"
+                },
+                {
                   "name": "prompt",
                   "type": "str"
                 },
@@ -1046,6 +1070,14 @@
                               "type": "int"
                             },
                             {
+                              "name": "model_manifest",
+                              "type": "str"
+                            },
+                            {
+                              "name": "turbo_lora_manifest",
+                              "type": "str"
+                            },
+                            {
                               "name": "prompt",
                               "type": "str"
                             },
@@ -1259,6 +1291,14 @@
                 {
                   "name": "torch_seed",
                   "type": "int"
+                },
+                {
+                  "name": "model_manifest",
+                  "type": "str"
+                },
+                {
+                  "name": "turbo_lora_manifest",
+                  "type": "str"
                 },
                 {
                   "name": "prompt",

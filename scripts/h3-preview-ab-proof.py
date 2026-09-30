@@ -124,6 +124,8 @@ def run(evidence: Path) -> None:
             delivered_frames=240,
             seed=2768991793,
             torch_seed=71,
+            model_manifest="sha256:" + "1" * 64,
+            turbo_lora_manifest="sha256:" + "2" * 64,
             prompt="same",
             reference_digests=["a", "b"],
             reference_sizes=[[1024, 1024], [1024, 1024]],

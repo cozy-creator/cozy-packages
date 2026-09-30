@@ -123,8 +123,8 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.18.92+dev.hdb209f884a831dd753c517b5e41995450e624a0301eacf06f417db39aadf35df"
-source = { path = ".benchmark-wheels/cozy_runtime-0.18.92+dev.hdb209f884a831dd753c517b5e41995450e624a0301eacf06f417db39aadf35df-cp312-abi3-manylinux_2_28_x86_64.whl" }
+version = "0.18.92+dev.heea81b1ca46c39b7f97613465f0bae339eea76aca8b2898ec16e25d4839dcb6b"
+source = { path = ".benchmark-wheels/cozy_runtime-0.18.92+dev.heea81b1ca46c39b7f97613465f0bae339eea76aca8b2898ec16e25d4839dcb6b-cp312-abi3-manylinux_2_28_x86_64.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
@@ -136,7 +136,7 @@ dependencies = [
     { name = "tensorfs" },
 ]
 wheels = [
-    { filename = "cozy_runtime-0.18.92+dev.hdb209f884a831dd753c517b5e41995450e624a0301eacf06f417db39aadf35df-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:848113c3e0a7328e4395410d8b2358eea6c9d53853f376be43a4f018b70b60fd" },
+    { filename = "cozy_runtime-0.18.92+dev.heea81b1ca46c39b7f97613465f0bae339eea76aca8b2898ec16e25d4839dcb6b-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c78b396962670ff4d9eb8a8a4780a81bba991ea0456190443f906940f95a85a8" },
 ]
 
 [package.optional-dependencies]
@@ -381,7 +381,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cozy-eval", specifier = ">=0.7.3" },
-    { name = "cozy-runtime", extras = ["media", "minimax-h3"], path = ".benchmark-wheels/cozy_runtime-0.18.92+dev.hdb209f884a831dd753c517b5e41995450e624a0301eacf06f417db39aadf35df-cp312-abi3-manylinux_2_28_x86_64.whl" },
+    { name = "cozy-runtime", extras = ["media", "minimax-h3"], path = ".benchmark-wheels/cozy_runtime-0.18.92+dev.heea81b1ca46c39b7f97613465f0bae339eea76aca8b2898ec16e25d4839dcb6b-cp312-abi3-manylinux_2_28_x86_64.whl" },
     { name = "diffusers", specifier = ">=0.40.0" },
     { name = "hf-xet", specifier = ">=1.6.0" },
     { name = "msgspec", specifier = ">=0.19" },
