@@ -17,8 +17,8 @@ from cozy_runtime.author import AudioAsset, ImageAsset, InvalidRequest
 from cozy_runtime.models.minimax_h3.official import Task
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
-import h3  # noqa: E402
-from story import (  # noqa: E402
+import h3
+from story import (
     StoryReference,
     encoder_prompt,
     resolve_reference_images,
@@ -109,6 +109,8 @@ def one_offs() -> None:
             ("a one-line prompt", ONE_LINE, f"{ONE_LINE}\n\n{music}"),
             ("trailing whitespace", ONE_LINE + "\n\n", f"{ONE_LINE}\n\n{music}"),
             ("music named in any case", "Kites.\nNON_DIEGETIC_MUSIC: harp", "Kites.\nNON_DIEGETIC_MUSIC: harp"),
+            ("music heading with spaces", "Kites.\nNon Diegetic Music: harp", "Kites.\nNon Diegetic Music: harp"),
+            ("music heading with hyphens", "Kites.\nnon-diegetic-music: harp", "Kites.\nnon-diegetic-music: harp"),
             ("an empty prompt", "", music),
         ):
             payload = request(wire, {"prompt": prompt, "duration_s": 15})
@@ -122,6 +124,56 @@ def calls(job: Any, wire: dict[str, Any]) -> list[tuple[str, list[str], list[str
         (encoder_prompt(child, call.prompt), [ref.name for ref in call.references], call.warnings)
         for call in h3.segment_calls(request(job, wire))
     ]
+
+
+def music() -> None:
+    from diffusers.modular_pipelines.minimax_h3.encoders import MiniMaxH3Ref2VATextEncoderStep
+
+    score = "A gentle string quartet, no vocals."
+    scene = {"name": "Beach", "kind": "scene", "description": "An empty beach."}
+    prefix = (
+        "subject_definitions:\n<Beach> is the scene shown in <Picture 1>. An empty beach.\n\n"
+        f"retention_analysis:\n<Beach>: fully_preserved - {SCENE}.\n\n{ONE_LINE}\n\n"
+    )
+
+    class TokenizerInput:
+        """Observe the actual upstream presentation's tokenizer input without model weights."""
+
+        def __init__(self) -> None:
+            self.text: list[str] = []
+
+        def __call__(self, value: str, *, add_special_tokens: bool) -> dict[str, list[int]]:
+            assert not add_special_tokens
+            self.text.append(value)
+            return {"input_ids": list(value.encode())}
+
+    for job in (h3.LongFormInput, h3.LongFormCutsInput):
+        wire: dict[str, Any] = {
+            "references": [scene], "non_diegetic_music": score,
+            "segments": [{"prompt": ONE_LINE, "duration_s": 5} for _ in range(5)],
+        }
+        expected = [prefix + f"non_diegetic_music:\n{score}"] * 5
+        check(f"{job.__name__}: global score reaches all five segments",
+              [row[0] for row in calls(job, wire)], expected)
+        for segment, value in zip(wire["segments"][1:], (None, "Solo piano.", "", "N/A"), strict=True):
+            segment["non_diegetic_music"] = value
+        expected = [prefix + f"non_diegetic_music:\n{value}"
+                    for value in (score, score, "Solo piano.", "N/A", "N/A")]
+        actual = [row[0] for row in calls(job, wire)]
+        check(f"{job.__name__}: omitted/null inherit and explicit music replaces", actual, expected)
+        for prompt in actual:
+            observed = TokenizerInput()
+            tokens, _ = MiniMaxH3Ref2VATextEncoderStep._build_presentation(
+                observed, prompt, [], [], [], [],
+            )
+            check(f"{job.__name__}: upstream tokenizer receives the exact composed score",
+                  (observed.text, tokens), ([prompt], list(prompt.encode())))
+        inline = ONE_LINE + "\n\nnon_diegetic_music:\nInline harp."
+        for override, wanted in ((None, "Inline harp."), ("Drums.", "Drums."), ("N/A", "N/A")):
+            wire["segments"] = [{"prompt": inline, "duration_s": 5, "non_diegetic_music": override}]
+            check(f"{job.__name__}: inline score with override {override!r}",
+                  calls(job, wire)[0][0], prefix + f"non_diegetic_music:\n{wanted}")
+    check("music override stays out of one-off ClipInput", "non_diegetic_music" in h3.ClipInput.__struct_fields__, False)
 
 
 def long_form() -> None:
@@ -468,5 +520,6 @@ if __name__ == "__main__":
     long_form()
     retention_defaults()
     style()
+    music()
     asyncio.run(references())
     print("H3 prompts: PASS")
