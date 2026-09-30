@@ -85,6 +85,12 @@ view on the right, together on one plain white canvas, with consistent appearanc
 proportions and clothing. The authored character description is included verbatim
 apart from surrounding whitespace.
 
+The global `style` text also reaches every Qwen character and scene reference
+request. For example, `style: realistic` guides both reference images and H3 video
+segments. The front/back layout does not prescribe an art style: references follow
+the explicitly requested style, default to a realistic photographic look when no
+style is specified, and use anime styling only when explicitly requested.
+
 A reference has:
 
 - `name` and `kind` (`character`, `scene` or `audio`);

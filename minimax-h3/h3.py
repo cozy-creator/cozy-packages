@@ -1378,6 +1378,8 @@ async def _create_references(
     tel: Telemetry,
     out: Outputs,
     shown: list[ImageAsset],
+    *,
+    style: str,
 ) -> dict[str, ImageAsset | AudioAsset]:
     reference_steps = 40
     # Managed dependencies install an asynchronous flat caller for the source
@@ -1390,7 +1392,7 @@ async def _create_references(
         # GPU admission; this CPU composer submits at most nine independent calls.
         with tel.scope(f"Creating reference {reference.name}"):
             result = await reference_generator(
-                prompt=image_prompt(reference),
+                prompt=image_prompt(reference, style),
                 aspect_ratio=ReferenceAspectRatio.SQUARE,
                 megapixels=ReferenceMegapixels.MP1,
                 steps=reference_steps,
@@ -1443,7 +1445,7 @@ async def long_form_cuts(
     total_work = sum(render_work) + reference_work
     prefetch(cut_segment_turbo if payload.mode == "turbo" else cut_segment)
     references: list[ImageAsset] = []
-    images = await _create_references(ctx, payload.references, tel, out, references)
+    images = await _create_references(ctx, payload.references, tel, out, references, style=payload.style)
     completed_work = reference_work
     expected = None
     warnings = [warning for call in calls for warning in call.warnings]
@@ -1595,7 +1597,7 @@ async def long_form(
     total_work = sum(render_work) + reference_work
     prefetch(motion_segment_turbo if payload.mode == "turbo" else motion_segment)
     references: list[ImageAsset] = []
-    images = await _create_references(ctx, payload.references, tel, out, references)
+    images = await _create_references(ctx, payload.references, tel, out, references, style=payload.style)
     completed_work = reference_work
     context = None
     expected: RenderProvenance | None = None

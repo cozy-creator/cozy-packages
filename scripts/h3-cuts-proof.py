@@ -291,6 +291,7 @@ def drive(
     refuse_code: str = "",
     context_frames: int = 39,
     duration_s: int = 5,
+    style: str = "",
 ) -> dict[str, Any]:
     root.mkdir()
     parent = root.name if request_id is None else request_id
@@ -376,6 +377,9 @@ def drive(
             assert wire["models"] == {"model": None}
             wire = wire["payload"]
             assert wire["background"] == ("white" if index == 0 else "normal")
+            reference_style = "Muted pastel watercolor." if bad == "unknown-fields" else style
+            assert (f"style:\n{reference_style}" in wire["prompt"]) if reference_style else "style:\n" not in wire["prompt"]
+            assert "Use anime styling only when explicitly requested." in wire["prompt"]
             assert (
                 all(text in wire["prompt"] for text in (
                     "Generate exactly one image", "front view on the left",
@@ -501,6 +505,7 @@ def drive(
             for index in range(count)
         ],
         "overall_soundscape": "A flowing woodland stream.",
+        "style": style,
         "references": [
             {
                 "name": "Rover",

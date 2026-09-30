@@ -98,21 +98,29 @@ async def resolve_reference_images(
     return images
 
 
-def image_prompt(reference: StoryReference) -> str:
+def image_prompt(reference: StoryReference, style: str = "") -> str:
+    parts = [reference.description.strip()]
+    if style.strip():
+        parts.append(f"style:\n{style.strip()}")
     if reference.kind == "character":
-        return (
-            f"{reference.description.strip()}\n"
+        parts.append(
             "Generate exactly one image: a character design sheet on a plain white background. "
             "Within this single image, place two full-body views of the same character side "
             "by side: the front view on the left and the back view on the right. Show the "
             "entire character in each view, in a natural neutral pose. Keep the character's "
             "appearance, proportions and clothing consistent across both views."
         )
-    return (
-        f"{reference.description.strip()}\n"
-        "An environment reference image showing the architecture, materials and defining "
-        "features of the location, without people, labels or panels."
+    else:
+        parts.append(
+            "An environment reference image showing the architecture, materials and defining "
+            "features of the location, without people, labels or panels."
+        )
+    parts.append(
+        "Follow the visual style explicitly requested in the description or style section. "
+        "If no visual style is specified, use a realistic photographic look. "
+        "Use anime styling only when explicitly requested."
     )
+    return "\n\n".join(parts)
 
 
 def validate_references(references: Sequence[StoryReference]) -> dict[str, StoryReference]:
