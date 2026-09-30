@@ -1,0 +1,121 @@
+{
+  "status": "exact private source projection and pinned AST interface proven; no artifact or activation",
+  "owner": "/root/decoder_diagnostic_completion",
+  "worktree_base_sha": "5001dcb42ca5d6c7731e6bbd86b70fc87144e67f",
+  "source_package": "/home/fidika/cozy/.worktrees/packages/cozy-memory-interleaved-20260929/benchmarks/cozy_memory_interleaved/cohorts/r20-reserve-canonical-refill-target3/packages/anima",
+  "diagnostic_package": "/home/fidika/cozy/.worktrees/packages/295-anima-blend-private-prep-20260930/benchmarks/cozy_memory_interleaved/cohorts/r20-anima-blend-decoder-probe-20260930/packages/anima",
+  "copied_qualified_content_sha256": {
+    "anima/LICENSE.model.md": "3ab19eea6d1a4a08d1256851c32e5df533dfd7b760313c56797b78ee2ee24724",
+    "anima/__init__.py": "f2b66865eacb40a45d37cf73dbb2f1064f3414e3b52d6688ff7b0871e8ea0178",
+    "anima/operations.py": "ee08809267df11273581605d7775be98d4936d8384b9d8d5accc507037e720f3",
+    "anima/stage_scopes.py": "9a5a973040060eb7d5545084c21dc9e7f4b7e592d507af891fd598bed3e2d220",
+    "anima/t5_tokenizer/tokenizer.json": "35d68e7b16911b6ee06bbdef28577c34eb391905550e8740a48aa6984c2382c5",
+    "anima/t5_tokenizer/tokenizer_config.json": "3b5e68830ffc0f92ddf95b0e3994991c27926e38ead3575a9a5c0e0d6e90140d",
+    "anima/tokenizer/chat_template.jinja": "44d5f08f3f72b837eaad09f13a54c1f9f4eb58d75240334548b7fd52a5437fa5",
+    "anima/tokenizer/tokenizer.json": "f36e3013e43c57d3e43b8877b32af2d9a3582448e3a766d728bb9abd580d8f7a",
+    "anima/tokenizer/tokenizer_config.json": "6b589ccd67dac34cfd9e274864e34c819309cec98d99bb76aa1e13faf217d03e",
+    "configs/modular_model_index.json": "043c257f13165131c3141160ba39018bfc273f681e8e21ac85fb39d1490ad04b",
+    "configs/scheduler.json": "aedcf349fcadd5493b7dcec85827e5cfb38751c1ad7fda0d67ea5fdc08aa826b",
+    "configs/text_conditioner.json": "556df47c5db947e108db9b1ad8c40ee22b08b0a65bba72dd9b240ea2cd42a890",
+    "configs/text_encoder.json": "84d477d57a20538af60eb43d1d119cdf0f86fc3ca756f3458394955ec83b016a",
+    "configs/transformer.json": "bf42ca1e331067f70063e7596d33869095bf360bfb5fd3ff4cd5a36b95632aa9",
+    "configs/vae.json": "f9917414da358ab86f0f5b53975015d74fa4fc2973a7dc6a5b1bea5cf2592798",
+    "metadata/package-interface.json": "cf987552796b254e52dea2a99afce8b9aab2ac67e4111a449a106253eb50c032",
+    "package.toml": "80a24abed0af38f3493bab7a6e22ee73149cb9c9494c730cb93e5ef4f36992b2",
+    "pyproject.toml": "cb4e128e38401de34cf20bcc43aa1f8a9d8419e0838dbdf4a4bed67c9d1f4ad2",
+    "uv.lock": "16c72e7fee84e5eacf4de3146477a7ce5f6c7f77761022bc4104ea1fb4331f69"
+  },
+  "reviewed_helper_commit": "50bb350abe9cae65fccc0aef60f2303ffe365aa1",
+  "inverse_author_sha256": "f2b66865eacb40a45d37cf73dbb2f1064f3414e3b52d6688ff7b0871e8ea0178",
+  "exact_six_changed_paths": [
+    "anima/__init__.py",
+    "anima/diagnostic_decode.py",
+    "metadata/package-interface.json",
+    "package.toml",
+    "pyproject.toml",
+    "uv.lock"
+  ],
+  "all_other_qualified_bytes_exact": true,
+  "lock_objects_exact_except_private_root_name": true,
+  "project_objects_exact_except_private_identity_and_app": true,
+  "direct_locked_wheel_rows": [
+    {
+      "name": "cozy-runtime",
+      "source": {
+        "path": "/home/fidika/.cozy/outputs/memory-246-inference-20260929/final-r20-reserve-canonical-refill/cozy_runtime-0.19.0+dev.hd2506c977e35ae2d1d50e1439b3f4320d199b35c2c0e405b47bb3859172487bf-cp312-abi3-manylinux_2_28_x86_64.whl"
+      },
+      "wheel": {
+        "filename": "cozy_runtime-0.19.0+dev.hd2506c977e35ae2d1d50e1439b3f4320d199b35c2c0e405b47bb3859172487bf-cp312-abi3-manylinux_2_28_x86_64.whl",
+        "hash": "sha256:6660f87c105bf5de504f9e783a0019164d1f35f12d7fa162c0a3f9081e23e073"
+      }
+    },
+    {
+      "name": "tensorfs",
+      "source": {
+        "path": "/home/fidika/.cozy/outputs/memory-246-inference-20260929/final-r20-reserve-canonical-refill/tensorfs/tensorfs-0.3.78+cozy.r15.20260929.g1e81d356-cp312-abi3-linux_x86_64.whl"
+      },
+      "wheel": {
+        "filename": "tensorfs-0.3.78+cozy.r15.20260929.g1e81d356-cp312-abi3-linux_x86_64.whl",
+        "hash": "sha256:6bc907a5abce86753c5568551fda3ee409c8e0b0005869e09001c4fbc66cb9d8"
+      }
+    }
+  ],
+  "runtime_sha256": "6660f87c105bf5de504f9e783a0019164d1f35f12d7fa162c0a3f9081e23e073",
+  "agent_sha256": "1ca770d63f038ba33b5db61321487acc4afcf5eb703a81bc153605da90207697",
+  "tensorfs_sha256": "6bc907a5abce86753c5568551fda3ee409c8e0b0005869e09001c4fbc66cb9d8",
+  "diagnostic_files_sha256": {
+    "anima/LICENSE.model.md": "3ab19eea6d1a4a08d1256851c32e5df533dfd7b760313c56797b78ee2ee24724",
+    "anima/__init__.py": "e8fcd0c6ecd23dec1e87672c64c65987fe3dac28ede022d0ddc348abb1c8f025",
+    "anima/diagnostic_decode.py": "e601a529d224b27d1b00f3b1153307012206414faa3b6c717d2030a97d1ccf62",
+    "anima/operations.py": "ee08809267df11273581605d7775be98d4936d8384b9d8d5accc507037e720f3",
+    "anima/stage_scopes.py": "9a5a973040060eb7d5545084c21dc9e7f4b7e592d507af891fd598bed3e2d220",
+    "anima/t5_tokenizer/tokenizer.json": "35d68e7b16911b6ee06bbdef28577c34eb391905550e8740a48aa6984c2382c5",
+    "anima/t5_tokenizer/tokenizer_config.json": "3b5e68830ffc0f92ddf95b0e3994991c27926e38ead3575a9a5c0e0d6e90140d",
+    "anima/tokenizer/chat_template.jinja": "44d5f08f3f72b837eaad09f13a54c1f9f4eb58d75240334548b7fd52a5437fa5",
+    "anima/tokenizer/tokenizer.json": "f36e3013e43c57d3e43b8877b32af2d9a3582448e3a766d728bb9abd580d8f7a",
+    "anima/tokenizer/tokenizer_config.json": "6b589ccd67dac34cfd9e274864e34c819309cec98d99bb76aa1e13faf217d03e",
+    "configs/modular_model_index.json": "043c257f13165131c3141160ba39018bfc273f681e8e21ac85fb39d1490ad04b",
+    "configs/scheduler.json": "aedcf349fcadd5493b7dcec85827e5cfb38751c1ad7fda0d67ea5fdc08aa826b",
+    "configs/text_conditioner.json": "556df47c5db947e108db9b1ad8c40ee22b08b0a65bba72dd9b240ea2cd42a890",
+    "configs/text_encoder.json": "84d477d57a20538af60eb43d1d119cdf0f86fc3ca756f3458394955ec83b016a",
+    "configs/transformer.json": "bf42ca1e331067f70063e7596d33869095bf360bfb5fd3ff4cd5a36b95632aa9",
+    "configs/vae.json": "f9917414da358ab86f0f5b53975015d74fa4fc2973a7dc6a5b1bea5cf2592798",
+    "metadata/package-interface.json": "eaa3abe0ca0d8772f4ff0923255454add70c58b7632993170c8e6896f6e640cd",
+    "package.toml": "faa44811f77d39ec8a85a8e577119751283293e31b907bbc7b18171bb382be0c",
+    "pyproject.toml": "1e71ced719682f34db39976ebdd39e84cb2cd18a408ca6c3d99206dfeaf5965b",
+    "uv.lock": "d84c0daed31c0ef0540bc0baacd868df92cee0b1c75fc3a61e6f32f94b3af871"
+  },
+  "interface_sha256": "eaa3abe0ca0d8772f4ff0923255454add70c58b7632993170c8e6896f6e640cd",
+  "entrypoint_count": 1,
+  "generated_descriptor_bound_bytes": {
+    "image": 67108864,
+    "argument": 1048576,
+    "scalar_raw": 16777216,
+    "broadcast_raw": 16777216,
+    "scalar_rgb": 4194304,
+    "broadcast_rgb": 4194304,
+    "report": 1048576,
+    "trace": 134217728
+  },
+  "generated_descriptor_total_bytes": 245366784,
+  "base_encoded_leaves_existing_and_inherited": true,
+  "identity_fields_are_reproduction_facts_not_peer_admission_gates": true,
+  "model_imported": false,
+  "conformance_oracle_run": false,
+  "artifact_built": false,
+  "registered": false,
+  "installed": false,
+  "gpu_executed": false,
+  "cpu_contracts_sha256": "52964fbfc0018c1cedd289e246d8dec497afec66f2ec6fb88ae1c28491fcfa9c",
+  "ported_blend_proof_sha256": "39556f16a38e2d9b16539a3a5f31962a8a2f1d2a9ac5949791a6a47d74cc8910",
+  "source_only_review_checkpoint": true,
+  "borrowed_source_tree_retained_untracked": true,
+  "scope": "private constructor-owned decoder diagnostic only; all borrowed author/assets remain exact and local",
+  "remaining": [
+    "root plus independent exact diff and source/cohort review",
+    "actual Builder artifact and inherited-model/single-entrypoint acceptance",
+    "ordinary CPU preflight, accepted Worker descriptors/output grants and scope limits",
+    "explicit authorization before registration, installation, model import/weights or GPU profiling"
+  ],
+  "proof_boundary": "full1024 CPU traversal uses actual pinned upstream decode/tiler with a shape-preserving decoder double; it does not prove GPU shape, model kernels, profiler traces or speed"
+}
