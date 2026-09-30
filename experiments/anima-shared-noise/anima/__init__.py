@@ -233,11 +233,17 @@ def _declare_vae_retry_state(vae: Any) -> None:
     declare(vae, save, restore)
 
 
+from .observer import observe_request, observe_network, install_anima_observer, observe_generator
+
+class ObservedCosmos(CosmosTransformer3DModel):
+    forward = observe_network(CosmosTransformer3DModel.forward, "anima")
+
+
 class AnimaPipeline:
     def __init__(self, config: Any) -> None:
         mapping = config.mapping()
         with transformer_init.no_init_weights():
-            transformer = CosmosTransformer3DModel.from_config(mapping["transformer"]).to(
+            transformer = ObservedCosmos.from_config(mapping["transformer"]).to(
                 torch.bfloat16
             )
             text_encoder: Any = Qwen3Model(Qwen3Config(**mapping["text_encoder"]))
@@ -325,6 +331,7 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
     ) -> Any:
         device = next(self.pipe.components["transformer"].parameters()).device
         generator = torch.Generator(device=device).manual_seed(seed)
+        observe_generator(generator)
         pipeline: Any = _text2image_pipeline(device, phases, self)
         pipeline.register_components(
             **self.pipe.components,
@@ -413,6 +420,7 @@ def _text2image_pipeline(device: Any, phases: _Phases, scope_owner: AnimaModel |
         raise RuntimeError(f"Diffusers Anima text2image blocks changed: {order}")
     blocks.sub_blocks["denoise.denoise"].progress_bar = _progress_bar(phases)
     blocks.sub_blocks.insert("conditioning", Announce(), order.index("denoise.text_conditioning"))
+    install_anima_observer(blocks)
     if scope_owner is not None:
         from .stage_scopes import install_scopes
 
@@ -499,6 +507,7 @@ def _progress_bar(phases: _Phases) -> Callable[..., _DenoiseProgress]:
 
 
 @app.entrypoint
+@observe_request("cozy", "anima")
 def generate(
     ctx: Context,
     payload: GenerateInput,

@@ -28,7 +28,10 @@ def raw_noise(model: str, seed: int, shape: tuple[int, ...], *, device: Any, dty
         raise RuntimeError('Private noise payload changed')
     # Writable owner prevents a non-writable-buffer warning; no global RNG is touched.
     source = torch.frombuffer(bytearray(data), dtype=torch.float32).reshape(shape)
-    return source.to(device=device, dtype=dtype)
+    result = source.to(device=device, dtype=dtype)
+    from .observer import provider_return
+    provider_return(model, seed, row['sha256'], row['shape'], result)
+    return result
 
 
 def comfy_noise(latent: Any, seed: int, batch_inds: Any = None) -> Any:

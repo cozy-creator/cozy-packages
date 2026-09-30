@@ -1,6 +1,8 @@
 # Private shared raw-noise quality input experiment
 
-This draft prepares two canonical CPUF32 inputs and isolated adapters. It is not a
+This draft prepares two canonical CPUF32 inputs and isolated adapters.
+The authorized observer extension is documented in OBSERVER.md; input-only history
+below describes the preserved1b2dc456 checkpoint. It is not a
 public seed change, performance cell, neural quality metric or cross-engine bitwise
 parity claim. Old benchmark files/defaults remain unchanged. TensorFS/Varena adoption
 is unrelated and remains design-only.

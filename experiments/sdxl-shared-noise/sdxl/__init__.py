@@ -345,10 +345,14 @@ def _declare_unet_retry_state(unet: Any) -> None:
     declare(unet, save, restore, hooks=hooks)
 
 
+from .observer import observe_request, observe_network, first_group, sdxl_first_state
+
 def _hidiffusion_unet_type() -> type[Any]:
     """The patched UNet owner, imported only when Runtime constructs the model."""
     class HiDiffusionUNet(UNet2DConditionModel):
         """Select and reset the request's denoising implementation before step zero."""
+
+        forward = observe_network(UNet2DConditionModel.forward, "sdxl")
 
         _cozy_base_num_upsamplers: int
         _cozy_hidiffusion_active: bool
@@ -675,6 +679,7 @@ def _request_generator(torch: Any, source: object, *, device: Any) -> Any:
 
 
 @app.entrypoint
+@observe_request("cozy", "sdxl")
 def generate(
     ctx: Context,
     payload: Txt2ImgInput,
@@ -740,6 +745,8 @@ def generate(
     else:
         batch_prompt, batch_pooled, batch_ids = prompt, pooled, time_ids
 
+    sdxl_first_state(scheduler, latents, batch_prompt, batch_pooled, batch_ids, generator)
+
     on_step = tel.step_callback(steps, stage="denoise", overall_range=(0.10, 0.90))
     # HiDiffusion's window-attention shift uses torch's CPU RNG. Isolate and seed it from
     # the request so a canceled or concurrent history cannot change this request's output.
@@ -750,16 +757,17 @@ def generate(
                 ctx.raise_if_cancelled()
                 batch = torch.cat([latents] * 2) if classifier_free else latents
                 model_input = scheduler.scale_model_input(batch, timestep)
-                noise = model.denoise(
-                    model_input,
-                    timestep,
-                    batch_prompt,
-                    batch_pooled,
-                    batch_ids,
-                    index,
-                    steps,
-                    hidiffusion_applied,
-                )
+                with first_group(index == 0):
+                    noise = model.denoise(
+                        model_input,
+                        timestep,
+                        batch_prompt,
+                        batch_pooled,
+                        batch_ids,
+                        index,
+                        steps,
+                        hidiffusion_applied,
+                    )
                 if classifier_free:
                     uncond, cond = noise.chunk(2)
                     noise = uncond + payload.guidance * (cond - uncond)

@@ -28,7 +28,10 @@ def raw_noise(model: str, seed: int, shape: tuple[int, ...], *, device: Any, dty
         raise RuntimeError('Private noise payload changed')
     # Writable owner prevents a non-writable-buffer warning; no global RNG is touched.
     source = torch.frombuffer(bytearray(data), dtype=torch.float32).reshape(shape)
-    return source.to(device=device, dtype=dtype)
+    result = source.to(device=device, dtype=dtype)
+    from .observer import provider_return
+    provider_return(model, seed, row['sha256'], row['shape'], result)
+    return result
 
 
 def comfy_noise(latent: Any, seed: int, batch_inds: Any = None) -> Any:
@@ -38,7 +41,17 @@ def comfy_noise(latent: Any, seed: int, batch_inds: Any = None) -> Any:
     if shape == (1, 16, 128, 128):
         # Explicit single-frame NCTHW→NCHW boundary, never a numel-based reshape.
         noise = raw_noise('anima', seed, (1, 16, 1, 128, 128), device='cpu', dtype=latent.dtype)
-        return noise.squeeze(2)
+        result = noise.squeeze(2)
+        from .observer import CURRENT
+        record = CURRENT.get()
+        if record is not None:
+            row = record.events[-1]
+            if row['event'] != 'provider_return':
+                raise RuntimeError('provider observation order changed')
+            row['before_axis_mapping'] = row['returned']
+            row['returned'] = record.tensor(result)
+            row['axis_mapping'] = 'NCTHW_to_NCHW_squeeze_temporal_2'
+        return result
     model = {(1, 4, 128, 128): 'sdxl', (1, 16, 1, 128, 128): 'anima'}.get(shape)
     if model is None:
         raise ValueError('Unsupported private latent geometry')

@@ -89,8 +89,28 @@ def test_frozen_assets_and_only_author_injection_delta(model):
         a=ast.parse(original);b=ast.parse(candidate)
         class Undo(ast.NodeTransformer):
             def visit_ImportFrom(self,node):
-                return None if node.module=='shared_noise'else node
+                return None if node.module in ('shared_noise','observer')else node
+            def visit_ClassDef(self,node):
+                if node.name=='ObservedCosmos':return None
+                return self.generic_visit(node)
+            def visit_Name(self,node):
+                if node.id=='ObservedCosmos':node.id='CosmosTransformer3DModel'
+                return node
+            def visit_Assign(self,node):
+                if isinstance(node.value,ast.Call)and isinstance(node.value.func,ast.Name)and node.value.func.id=='observe_network':return None
+                return self.generic_visit(node)
+            def visit_If(self,node):
+                if 'CURRENT' in ast.unparse(node.test):return None
+                return self.generic_visit(node)
+            def visit_Expr(self,node):
+                if isinstance(node.value,ast.Call)and isinstance(node.value.func,ast.Name)and node.value.func.id in ('sdxl_first_state','install_anima_observer','observe_generator'):return None
+                return self.generic_visit(node)
+            def visit_With(self,node):
+                node=self.generic_visit(node)
+                if any(isinstance(x.context_expr,ast.Call)and isinstance(x.context_expr.func,ast.Name)and x.context_expr.func.id=='first_group'for x in node.items):return node.body
+                return node
             def visit_FunctionDef(self,node):
+                node.decorator_list=[d for d in node.decorator_list if not(isinstance(d,ast.Call)and isinstance(d.func,ast.Name)and d.func.id=='observe_request')]
                 if node.name=='render_request':
                     node.args.args=[x for x in node.args.args if x.arg!='initial_noise'];node.args.defaults=[]
                 return self.generic_visit(node)
