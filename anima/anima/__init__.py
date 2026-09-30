@@ -204,6 +204,55 @@ def _tokenizer(path: Path) -> Any:
     )
 
 
+class _AnimaVae(AutoencoderKLQwenImage):
+    def _blend(self, a: Any, b: Any, extent: int, axis: int) -> bool:
+        # A dyadic ramp fits exactly up to the dtype's significand precision.
+        if (
+            type(extent) is not int
+            or extent <= 0
+            or extent & (extent - 1)
+            or a.dtype != b.dtype
+            or a.dtype not in (torch.bfloat16, torch.float16, torch.float32, torch.float64)
+            or extent > 2 / torch.finfo(a.dtype).eps
+            or a.device != b.device
+            or a.device.type not in ("cpu", "cuda")
+            or a.ndim != 5
+            or b.ndim != 5
+            or any(a.shape[i] != b.shape[i] for i in range(5) if i != axis)
+            or not a.is_contiguous()
+            or not b.is_contiguous()
+            or a.untyped_storage().data_ptr() == b.untyped_storage().data_ptr()
+        ):
+            return False
+        coefficients = torch.tensor(
+            [(1 - i / extent, i / extent) for i in range(extent)],
+            dtype=b.dtype,
+            device=b.device,
+        )
+        shape = [1] * 5
+        shape[axis] = extent
+        source = [slice(None)] * 5
+        target = [slice(None)] * 5
+        source[axis] = slice(-extent, None)
+        target[axis] = slice(extent)
+        left = a[tuple(source)] * coefficients[:, 0].reshape(shape)
+        right = b[tuple(target)] * coefficients[:, 1].reshape(shape)
+        b[tuple(target)] = left + right
+        return True
+
+    def blend_v(self, a: Any, b: Any, blend_extent: int) -> Any:
+        extent = min(a.shape[-2], b.shape[-2], blend_extent)
+        if self._blend(a, b, extent, 3):
+            return b
+        return super().blend_v(a, b, blend_extent)
+
+    def blend_h(self, a: Any, b: Any, blend_extent: int) -> Any:
+        extent = min(a.shape[-1], b.shape[-1], blend_extent)
+        if self._blend(a, b, extent, 4):
+            return b
+        return super().blend_h(a, b, blend_extent)
+
+
 class AnimaPipeline:
     def __init__(self, config: Any) -> None:
         mapping = config.mapping()
@@ -216,7 +265,7 @@ class AnimaPipeline:
             text_conditioner = AnimaTextConditioner.from_config(
                 mapping["text_conditioner"]
             ).to(torch.bfloat16)
-            vae = AutoencoderKLQwenImage.from_config(mapping["vae"]).to(torch.bfloat16)
+            vae = _AnimaVae.from_config(mapping["vae"]).to(torch.bfloat16)
 
         for component in (transformer, text_encoder, text_conditioner, vae):
             component.eval()
