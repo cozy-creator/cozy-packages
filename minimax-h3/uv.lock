@@ -456,7 +456,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.25.1"
+version = "1.25.2"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-eval" },

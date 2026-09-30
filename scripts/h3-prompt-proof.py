@@ -68,7 +68,9 @@ non_diegetic_music:
 N/A"""
 ONE_LINE = "A red kite climbs over an empty beach."
 SCENE = "the architecture, materials and defining features of the referenced environment"
-PERSON = "the identity and defining visual features of the referenced character"
+PERSON = (
+    "keep the face, hair, and outfit of the referenced character. Ignore the white background"
+)
 LAB = [
     {"name": "Subject-1", "kind": "character", "description": "A tall courier in a red jacket."},
     {"name": "Subject-2", "kind": "character", "description": "An adult woman in a black tactical suit."},
@@ -306,6 +308,47 @@ def coffee(lab: dict[str, Any]) -> None:
     )
 
 
+def retention_defaults() -> None:
+    references = [
+        {"name": "Hero", "kind": "character", "description": "A courier in a teal coat."},
+        {"name": "Depot", "kind": "scene", "description": "A wet train platform."},
+        {"name": "Voice", "kind": "audio", "audio": "sha256:" + "c" * 64},
+    ]
+    wire: dict[str, Any] = {
+        "references": references,
+        "segments": [{
+            "prompt": "detailed_description:\n[Shot 1] <Hero> speaks with <Voice> at <Depot>.",
+            "duration_s": 5,
+        }],
+    }
+    labels = ["<Depot> (appears in [Shot 1])", "<Hero> (appears in [Shot 1])", "<Audio 1>"]
+    defaults = [
+        f"fully_preserved - {SCENE}.",
+        "fully_preserved - keep the face, hair, and outfit of the referenced character. "
+        "Ignore the white background.",
+        "fully_preserved - the referenced audio signal and its supplied timing.",
+    ]
+    authored = "reference - retain only the authored details, including the blue backdrop."
+    for job in (h3.LongFormInput, h3.LongFormCutsInput):
+        name = job.__name__
+        for label, payload, expected in (
+            ("character default; scene and audio unchanged", wire, defaults),
+            (
+                "authored retention overrides remain verbatim",
+                {**wire, "references": [
+                    {**ref, "retention-analysis": authored} for ref in references
+                ]},
+                [authored] * 3,
+            ),
+        ):
+            prompt = calls(job, payload)[0][0]
+            retention = prompt.split("retention_analysis:\n", 1)[1].split("\n\n", 1)[0]
+            check(
+                f"{name}: {label}", retention,
+                "\n".join(f"{prefix}: {text}" for prefix, text in zip(labels, expected, strict=True)),
+            )
+
+
 def style() -> None:
     look = "Soft watercolor animation with muted pastel colors."
     kite = [
@@ -423,6 +466,7 @@ async def references() -> None:
 if __name__ == "__main__":
     one_offs()
     long_form()
+    retention_defaults()
     style()
     asyncio.run(references())
     print("H3 prompts: PASS")

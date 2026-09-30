@@ -296,7 +296,7 @@ def _segment_call(
         else:
             definitions.append(f"<{ref.name}> is the {ref.kind} shown in {slot}.")
             preserved = (
-                "the identity and defining visual features of the referenced character"
+                "keep the face, hair, and outfit of the referenced character. Ignore the white background"
                 if ref.kind == "character"
                 else "the architecture, materials and defining features of the referenced environment"
             )
