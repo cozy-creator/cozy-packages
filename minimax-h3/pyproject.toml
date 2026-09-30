@@ -3,7 +3,7 @@ name = "h3-preview-ab"
 version = "0.0.1"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media,minimax-h3]>=0.18.89",
+    "cozy-runtime[media,minimax-h3]==0.18.92+dev.hdb209f884a831dd753c517b5e41995450e624a0301eacf06f417db39aadf35df",
     "cozy-eval>=0.7.3",
     "diffusers>=0.40.0",
     "hf-xet>=1.6.0",
@@ -48,4 +48,5 @@ environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 # qwen-image-2 is this account's own package on the target Tensorhub, never PyPI. Creator
 # writes the `tensorhub` index for the command's Hub and account; lock with `cozy package lock`.
 [tool.uv.sources]
+cozy-runtime = { path = ".benchmark-wheels/cozy_runtime-0.18.92+dev.hdb209f884a831dd753c517b5e41995450e624a0301eacf06f417db39aadf35df-cp312-abi3-manylinux_2_28_x86_64.whl" }
 qwen-image-2 = { index = "tensorhub" }

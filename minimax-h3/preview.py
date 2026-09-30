@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
+import inspect
+import sys
 import json
 import time
 from collections.abc import Iterator
@@ -11,10 +14,13 @@ from dataclasses import asdict
 from typing import Annotated, Literal
 
 import msgspec
+import cozy_runtime
+from cozy_runtime import _build_provenance
 import tensorfs
 import torch
 from cozy_runtime.author import (
     App,
+    Assets,
     AssetBound,
     Context,
     FileAsset,
@@ -34,7 +40,11 @@ from cozy_runtime.author import Config as ModelConfig
 from cozy_runtime.author.sources import download_huggingface, convert_cozytensors
 from cozy_runtime.models.minimax_h3.continuation import plan_continuation
 from cozy_runtime.models.minimax_h3.model import H3TurboBase, H3TurboLoRA, condition_references
-from cozy_runtime.models.minimax_h3.official import NumericalChecks, ScheduleFacts
+from cozy_runtime.models.minimax_h3.official import (
+    NumericalChecks,
+    ScheduleFacts,
+    OfficialH3Pipeline,
+)
 from diffusers.modular_pipelines import PipelineState
 from safetensors.torch import load as load_tensors
 from safetensors.torch import save as save_tensors
@@ -321,7 +331,7 @@ async def prepare_upscaler(
                 raise ValueError(f"upscaler source tensor {key} differs from the reviewed layout")
         order = tuple(sorted(tensors))
         definition = Derivation(
-            sources={"source": structure.source},
+            sources={},
             targets={
                 "upscaler": Target(
                     add={
@@ -486,7 +496,7 @@ async def compare(ctx: Context, *, payload: PairInput, out: Outputs, tel: Teleme
             seed=payload.seed,
             duration_s=payload.duration_s,
         ),
-        assets=payload.reference_images,
+        assets=Assets(payload.reference_images),
     )
     a_lifted = await upscale_latents(payload=UpscaleInput(a_raw), model=checkpoint)
     a = await decode_latents(payload=DecodeInput(a_lifted))
@@ -496,7 +506,7 @@ async def compare(ctx: Context, *, payload: PairInput, out: Outputs, tel: Teleme
         payload=GenerateInput(
             prompt=payload.prompt, canvas="native", seed=payload.seed, duration_s=payload.duration_s
         ),
-        assets=payload.reference_images,
+        assets=Assets(payload.reference_images),
     )
     b = await decode_latents(payload=DecodeInput(b_raw))
     b_wall = time.perf_counter() - b_start
@@ -549,3 +559,33 @@ app.entrypoint(internal=True)(generate_latents)
 app.entrypoint(internal=True)(upscale_latents)
 app.entrypoint(internal=True)(decode_latents)
 app.job(compare, emits_media=True, accelerator=False)
+
+
+class Software(msgspec.Struct):
+    python: str
+    runtime: str
+    runtime_module: str
+    source_wheel_sha256: str
+    tensorfs: str
+    package: str
+    explicit_canvas: bool
+    cuda_initialized: bool
+
+
+def software(ctx: Context) -> Software:
+    """CPU-only readback of the executor's actual selected experimental SDK."""
+    ctx.raise_if_cancelled()
+    parameters = inspect.signature(OfficialH3Pipeline.start_ref2va).parameters
+    return Software(
+        sys.version,
+        importlib.metadata.version("cozy-runtime"),
+        str(cozy_runtime.__file__),
+        getattr(_build_provenance, "SOURCE_WHEEL_SHA256", ""),
+        importlib.metadata.version("tensorfs"),
+        importlib.metadata.version("h3-preview-ab"),
+        "height" in parameters and "width" in parameters,
+        torch.cuda.is_initialized(),
+    )
+
+
+app.job(software, accelerator=False)

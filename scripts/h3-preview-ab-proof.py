@@ -41,6 +41,7 @@ def run(evidence: Path) -> None:
         "decode_latents",
         "prepare_upscaler",
         "compare",
+        "software",
     }
     model_calls = {s["name"]: s for s in interface["entrypoints"]}
     assert set(model_calls) == {"generate_latents", "upscale_latents", "decode_latents"}

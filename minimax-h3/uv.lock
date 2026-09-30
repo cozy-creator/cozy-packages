@@ -123,8 +123,8 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.18.89"
-source = { registry = "https://pypi.org/simple" }
+version = "0.18.92+dev.hdb209f884a831dd753c517b5e41995450e624a0301eacf06f417db39aadf35df"
+source = { path = ".benchmark-wheels/cozy_runtime-0.18.92+dev.hdb209f884a831dd753c517b5e41995450e624a0301eacf06f417db39aadf35df-cp312-abi3-manylinux_2_28_x86_64.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "grpcio" },
@@ -135,10 +135,8 @@ dependencies = [
     { name = "protobuf" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e7/72/3c52dbd742086e149d88c8e563e666df6c1b09751f8e326e70863217de8b/cozy_runtime-0.18.89.tar.gz", hash = "sha256:02a5b497f496fbee2a871af972407402d8af5f40bb893970213350cbc5e9945b", size = 5007307, upload-time = "2026-09-30T00:03:51.648Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/86/61/a6771ac8c784109dd3144cae413e44a4509e0d29679276db0d234cfe13d5/cozy_runtime-0.18.89-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:4af4edc4f3a5b94d2ac16b6d27ef6784a7044cc9c17340c2003bf99bc07a0bde", size = 22054035, upload-time = "2026-09-30T00:03:43.012Z" },
-    { url = "https://files.pythonhosted.org/packages/00/d5/b741ea61443c11543114ff2677e9670497d8ccbcf47a0c440682ff688b36/cozy_runtime-0.18.89-py3-none-any.whl", hash = "sha256:5ad67e411639353cbc454cb66f7a3882217c50b2bd4d70540d635db3b522c417", size = 3398240, upload-time = "2026-09-30T00:03:46.874Z" },
+    { filename = "cozy_runtime-0.18.92+dev.hdb209f884a831dd753c517b5e41995450e624a0301eacf06f417db39aadf35df-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:848113c3e0a7328e4395410d8b2358eea6c9d53853f376be43a4f018b70b60fd" },
 ]
 
 [package.optional-dependencies]
@@ -163,6 +161,40 @@ qwen-image21 = [
     { name = "torchvision" },
     { name = "transformers" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "av", marker = "extra == 'media'", specifier = ">=18.1" },
+    { name = "cozy-eval", marker = "extra == 'assessment'", specifier = ">=0.7" },
+    { name = "cryptography", specifier = ">=45" },
+    { name = "diffusers", marker = "extra == 'corpus'", specifier = ">=0.36" },
+    { name = "diffusers", marker = "extra == 'minimax-h3'", specifier = ">=0.40.0" },
+    { name = "diffusers", marker = "extra == 'qwen-image21'", specifier = ">=0.40.0" },
+    { name = "grpcio", specifier = ">=1.76" },
+    { name = "msgspec", specifier = ">=0.19" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "numpy", marker = "extra == 'minimax-h3'", specifier = ">=1.26" },
+    { name = "numpy", marker = "extra == 'qwen-image21'", specifier = ">=1.26" },
+    { name = "packaging", specifier = ">=24" },
+    { name = "pillow", specifier = ">=12" },
+    { name = "protobuf", specifier = ">=6.31" },
+    { name = "safetensors", marker = "extra == 'minimax-h3'", specifier = ">=0.8.0" },
+    { name = "safetensors", marker = "extra == 'qwen-image21'", specifier = ">=0.8" },
+    { name = "tensorfs", specifier = ">=0.3.78" },
+    { name = "tensorfs", marker = "extra == 'model-execution'", specifier = ">=0.3.78" },
+    { name = "tokenizers", marker = "extra == 'minimax-h3'", specifier = ">=0.23.1" },
+    { name = "tokenizers", marker = "extra == 'qwen-image21'", specifier = ">=0.23.1" },
+    { name = "torch", marker = "extra == 'corpus'", specifier = ">=2.13" },
+    { name = "torch", marker = "extra == 'derive'", specifier = ">=2.13" },
+    { name = "torch", marker = "extra == 'minimax-h3'", specifier = ">=2.13" },
+    { name = "torch", marker = "extra == 'qwen-image21'", specifier = ">=2.13" },
+    { name = "torchvision", marker = "extra == 'minimax-h3'", specifier = ">=0.28" },
+    { name = "torchvision", marker = "extra == 'qwen-image21'", specifier = ">=0.28" },
+    { name = "transformers", marker = "extra == 'corpus'", specifier = ">=4.40" },
+    { name = "transformers", marker = "extra == 'minimax-h3'", specifier = ">=5.16.1" },
+    { name = "transformers", marker = "extra == 'qwen-image21'", specifier = ">=5.17" },
+]
+provides-extras = ["assessment", "corpus", "derive", "media", "minimax-h3", "model-execution", "qwen-image21"]
 
 [[package]]
 name = "cryptography"
@@ -323,6 +355,51 @@ wheels = [
 ]
 
 [[package]]
+name = "h3-preview-ab"
+version = "0.0.1"
+source = { editable = "." }
+dependencies = [
+    { name = "cozy-eval" },
+    { name = "cozy-runtime", extra = ["media", "minimax-h3"] },
+    { name = "diffusers" },
+    { name = "hf-xet" },
+    { name = "msgspec" },
+    { name = "numpy" },
+    { name = "pydantic-core" },
+    { name = "pyyaml" },
+    { name = "qwen-image-2" },
+    { name = "regex" },
+    { name = "safetensors" },
+    { name = "shellingham" },
+    { name = "tensorfs" },
+    { name = "tokenizers" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "transformers" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cozy-eval", specifier = ">=0.7.3" },
+    { name = "cozy-runtime", extras = ["media", "minimax-h3"], path = ".benchmark-wheels/cozy_runtime-0.18.92+dev.hdb209f884a831dd753c517b5e41995450e624a0301eacf06f417db39aadf35df-cp312-abi3-manylinux_2_28_x86_64.whl" },
+    { name = "diffusers", specifier = ">=0.40.0" },
+    { name = "hf-xet", specifier = ">=1.6.0" },
+    { name = "msgspec", specifier = ">=0.19" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pydantic-core", specifier = ">=2.46.4" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "qwen-image-2", specifier = ">=0.2.2", index = "http://127.0.0.1:8819/v1/index/paul/simple/" },
+    { name = "regex", specifier = ">=2026.7.19" },
+    { name = "safetensors", specifier = ">=0.8.0" },
+    { name = "shellingham", specifier = ">=1.5.4" },
+    { name = "tensorfs", specifier = ">=0.3.74" },
+    { name = "tokenizers", specifier = ">=0.23.1" },
+    { name = "torch", specifier = ">=2.14" },
+    { name = "torchvision", specifier = ">=0.29" },
+    { name = "transformers", specifier = ">=5.16.1" },
+]
+
+[[package]]
 name = "hf-xet"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -452,51 +529,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
-]
-
-[[package]]
-name = "minimax-h3"
-version = "1.25.2"
-source = { editable = "." }
-dependencies = [
-    { name = "cozy-eval" },
-    { name = "cozy-runtime", extra = ["media", "minimax-h3"] },
-    { name = "diffusers" },
-    { name = "hf-xet" },
-    { name = "msgspec" },
-    { name = "numpy" },
-    { name = "pydantic-core" },
-    { name = "pyyaml" },
-    { name = "qwen-image-2" },
-    { name = "regex" },
-    { name = "safetensors" },
-    { name = "shellingham" },
-    { name = "tensorfs" },
-    { name = "tokenizers" },
-    { name = "torch" },
-    { name = "torchvision" },
-    { name = "transformers" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cozy-eval", specifier = ">=0.7.3" },
-    { name = "cozy-runtime", extras = ["media", "minimax-h3"], specifier = ">=0.18.89" },
-    { name = "diffusers", specifier = ">=0.40.0" },
-    { name = "hf-xet", specifier = ">=1.6.0" },
-    { name = "msgspec", specifier = ">=0.19" },
-    { name = "numpy", specifier = ">=1.26" },
-    { name = "pydantic-core", specifier = ">=2.46.4" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "qwen-image-2", specifier = ">=0.2.2", index = "https://tensorhub.com/v1/index/fidika/simple/" },
-    { name = "regex", specifier = ">=2026.7.19" },
-    { name = "safetensors", specifier = ">=0.8.0" },
-    { name = "shellingham", specifier = ">=1.5.4" },
-    { name = "tensorfs", specifier = ">=0.3.74" },
-    { name = "tokenizers", specifier = ">=0.23.1" },
-    { name = "torch", specifier = ">=2.14" },
-    { name = "torchvision", specifier = ">=0.29" },
-    { name = "transformers", specifier = ">=5.16.1" },
 ]
 
 [[package]]
@@ -788,8 +820,8 @@ wheels = [
 
 [[package]]
 name = "qwen-image-2"
-version = "0.2.3"
-source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
+version = "0.2.4"
+source = { registry = "http://127.0.0.1:8819/v1/index/paul/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media", "qwen-image21"] },
     { name = "msgspec" },
@@ -797,7 +829,7 @@ dependencies = [
     { name = "pillow" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/files/b22a5f1fade159171c27c581c3e217c05ad8f25470d7e35792626b2a20ff6da4/qwen_image_2-0.2.3-py3-none-any.whl", hash = "sha256:b22a5f1fade159171c27c581c3e217c05ad8f25470d7e35792626b2a20ff6da4" },
+    { url = "http://127.0.0.1:8819/v1/index/paul/files/c67fc2a6cb4b75a45d99c4a4d335e6f9a7e346161b6d517c944690ea73c0f611/qwen_image_2-0.2.4-py3-none-any.whl", hash = "sha256:c67fc2a6cb4b75a45d99c4a4d335e6f9a7e346161b6d517c944690ea73c0f611" },
 ]
 
 [[package]]

@@ -1,0 +1,61 @@
+# Private matched preview experiment
+
+This branch is an experiment, excluded from the public H3 and Runtime releases.
+
+The requested pair uses one exact prompt, seed 2768991793, the same character and
+background PNG bytes, 10 delivered seconds, and the same Ref2VA Turbo 8-step plan:
+
+- A: generate 960×480 completed AV latents; lift video latents to 1536×768 with
+  the pinned LBH/Director learned spatial upscaler; decode through the H3 VAEs.
+- B: generate 1536×768 completed AV latents; decode through the same H3 VAEs.
+
+Both canvases have a 2:1 aspect ratio. Run 1937 used 1344×768; this comparison is
+not presented as a replay at that original canvas. H3 samples 243 frames for a
+10-second request; both arms use the existing zero-prefix delivery plan to return
+240 frames at 24 fps and 320,000 audio samples. A preserves the low-resolution audio
+latents and temporal grid exactly. It does not re-denoise. Native B has the same
+numeric seed, but its larger noise grid changes draws, including later audio RNG.
+
+The upscaler is the pinned FP16 safetensors at HF
+`LBH-123-AI/Minimax_h3_latent_Upscaler@3f941d5d182014dd5c0a5e16330420ee2d4aa0c6`,
+member `minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_fp16.safetensors`.
+Its 690,592,672 bytes have SHA256
+`043e5a48e161610ef6c3ea974645220354d06fa618abca15f76d084812eb55c2`.
+The 322 tensors total 345,280,216 parameters. The copied architecture/normalization
+is from Director 63834b9f8561aa14a6e5289ac3d20dee78bb7d23; both upstream licenses
+are included. The checkpoint model card declares Apache-2.0.
+
+Existing Runtime source operations download the exact carrier and convert it with
+`as-is/1`. A CPU child validates every tensor layout and uses the native source/writer
+capabilities to derive FP32 upscaler weights and config. `Model`, `Loader`, and
+`uses_components` own inference residency. No larger media-input caps, package HTTP,
+manual CUDA weight loading, or new TensorFS source profile is needed.
+
+The exact private Runtime wheel is selected through the local wheel source and an
+exact development-version requirement. It includes public .92 plus the explicit H3
+canvas and retained-CPU-latent decode changes from Runtime PR #1013. Recreate its
+`.benchmark-wheels/` file from that branch's source-derived build receipt before
+locking or capturing this project. Do not substitute the machine's public .92 SDK.
+
+CPU qualification covers upstream geometry, the entire checkpoint meta census,
+bitwise small-network 1.6× parity with Director, managed upscaler scope, retained
+latent/audio custody, actual Runtime writer RPC/TensorFS derivation, all eight
+managed parent/child routes, and real 10-second MP4 encoding with exactly three
+final assets. The GPU model execution in the broker fixture is synthetic; it is
+not a video quality or GPU memory qualification.
+
+The real pair must run through ordinary `cozy`, on the existing Terrence rental,
+only after the release owner confirms its current user workflow has finished,
+the Runtime .92 / CLI .21 handoffs are complete, and these private sources are reviewed.
+Do not interrupt other work or reduce the requested canvas on admission failure.
+Record the actual executor SDK/module and model/kernel receipts before interpreting
+results. Acquisition and loading are separate from handler stages; one ordered pair
+is not a statistically controlled warm-speed measurement.
+
+Only `preview-upscaled.mp4`, `native-768p.mp4`, and `comparison.json` belong in the
+final `~/.cozy/outputs/` directory. Source checkpoints, latents, and diagnostics stay
+in private custody. No public upscaler API or package publication is part of this test.
+
+The private `software` CPU job reports the actual executor SDK/module and whether
+explicit canvas support is present, without initializing CUDA. Run it through the
+same captured package before the GPU pair and retain its ordinary run evidence.
