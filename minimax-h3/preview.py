@@ -53,8 +53,6 @@ from tensorfs.derived import Config, Derivation, Part, Target, Tensor
 from h3 import (
     ReferenceAssets,
     TURBO_STEPS,
-    _DEFAULT_MODEL_LADDER,
-    _DEFAULT_TURBO_LORA_LADDER,
     _finish,
     assets_to_h3_refs,
 )
@@ -64,6 +62,11 @@ from story import encoder_prompt
 app = App()
 
 CANVASES = {"preview": (960, 480), "native": (1536, 768)}
+# The requested pair uses one identical H3 gang on the actual Terrence GPU SKU.
+BENCH_MODEL = [{"gpu": "RTX PRO 6000", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"}]
+BENCH_LORA = [
+    {"gpu": "RTX PRO 6000", "gpus": 4, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"}
+]
 Canvas = Annotated[Literal["preview", "native"], Shape(pixels=CANVASES)]
 Duration = Annotated[Literal[10], Shape(frames={10: 243})]
 LatentFile = Annotated[FileAsset, AssetBound(max_bytes=128 << 20)]
@@ -186,7 +189,7 @@ class GenerateInput(msgspec.Struct, kw_only=True):
     duration_s: Duration = 10
 
 
-@invocable(defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER})
+@invocable(defaults={"base_model": BENCH_MODEL, "turbo_lora": BENCH_LORA})
 async def generate_latents(
     ctx: Context,
     *,
@@ -423,7 +426,7 @@ class Rendered(msgspec.Struct):
     warnings: list[str]
 
 
-@invocable(defaults={"base_model": _DEFAULT_MODEL_LADDER})
+@invocable(defaults={"base_model": BENCH_MODEL})
 async def decode_latents(
     ctx: Context,
     *,

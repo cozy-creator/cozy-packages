@@ -9,6 +9,10 @@ background PNG bytes, 10 delivered seconds, and the same Ref2VA Turbo 8-step pla
   the pinned LBH/Director learned spatial upscaler; decode through the H3 VAEs.
 - B: generate 1536×768 completed AV latents; decode through the same H3 VAEs.
 
+Both H3 arms use the same explicit four-GPU RTX PRO 6000 Blackwell placement.
+The upscaler is a separate single-GPU stage. Check the actual GPU UUIDs and
+attention backend receipts for both H3 arms before comparing timings.
+
 Both canvases have a 2:1 aspect ratio. Run 1937 used 1344×768; this comparison is
 not presented as a replay at that original canvas. H3 samples 243 frames for a
 10-second request; both arms use the existing zero-prefix delivery plan to return
