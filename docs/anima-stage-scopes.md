@@ -7,3 +7,13 @@ This is a scope-only port from private experiment PR365. Public package defaults
 The call-only block adapter preserves upstream metadata, state and implementation. It is installed on the actual constructor block tree; deepcopy execution is tested. Unknown text2image topology refuses before mutation. A returned pipeline object does not grant unscoped weight access: inspected execution reads component metadata only inside the corresponding stage. Existing root device authority still covers ordinary Python between stages.
 
 Source review, matched repeated inference and ordinary end-to-end qualification are required before public release. No merge or publication is authorized by this draft.
+
+## Coherent release dependency
+
+The single original1941/adapter1942 GPU pair ran the private R19 memory Runtime **and** frozen explicit model purity/retry-state declarations. Its denoise timing103.8667→84.1902s, movement110.592→83.325GB and exact RGB match do not qualify this scope-only public-source port independently.
+
+The existing owned worktree `packages/tracker-246-retry-current` contains staged and unstaged Anima/SDXL contract work. This PR does not copy, modify, discard or publish it. Public master Runtime's author API does not yet supply those memory-feature declarations. The coordinator must finalize/review that contract work in a separate PR, coordinate its Runtime dependency, and qualify the exact combined Runtime+package-contract+scope cohort before a memory-package release. Preserve public dependencies and version in this PR rather than silently shipping private-wheel pins.
+
+Combined qualification must include matched repeated original/scoped package runs, unchanged payloads/default CFG/FBC/dtypes/tile modes, output/state/RNG comparisons and OOM/replay accounting, ordinary CLI end-to-end execution, and relevant low-memory/group cases. The observed single pair is a useful candidate signal, not repeatable throughput proof. Scope-only source review may proceed independently; public merge/release remains the coordinator's separate decision.
+
+The application entrypoint request/result schema is unchanged. Generated interface changes only the intended `component_use` method map. The Python Model helper `render` becomes module orchestration `render_request`; repository callers were warm and generate, both migrated. External Python consumers of that helper must be checked before release.
