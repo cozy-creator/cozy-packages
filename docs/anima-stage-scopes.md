@@ -6,7 +6,7 @@ This is a scope-only port from private experiment PR365. Public package defaults
 
 The call-only block adapter preserves upstream metadata, state and implementation. It is installed on the actual constructor block tree; deepcopy execution is tested. Unknown text2image topology refuses before mutation. A returned pipeline object does not grant unscoped weight access: inspected execution reads component metadata only inside the corresponding stage. Existing root device authority still covers ordinary Python between stages.
 
-Source review, matched repeated inference and ordinary end-to-end qualification are required before public release. No merge or publication is authorized by this draft.
+Source review, matched repeated inference and ordinary end-to-end qualification are required before public release. This draft does not establish release qualification; publication remains gated on the combined evidence below.
 
 ## Coherent release dependency
 
