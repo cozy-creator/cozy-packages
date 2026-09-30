@@ -9,7 +9,7 @@ from contextlib import AbstractContextManager
 from enum import Enum, IntEnum
 from pathlib import Path
 from types import TracebackType
-from typing import Annotated, Any, Literal, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple, cast
 
 import cozy_runtime.derive as derive
 import msgspec
@@ -404,7 +404,9 @@ def _text2image_pipeline(device: Any, phases: _Phases, scope_owner: AnimaModel |
         def _execution_device(self) -> Any:
             return device
 
-    blocks = AnimaAutoBlocks().get_workflow("text2image")
+    # Upstream exposes get_workflow dynamically; the real workflow/deepcopy path is
+    # exercised by this experiment's CPU conformance fixtures.
+    blocks = cast(Any, AnimaAutoBlocks()).get_workflow("text2image")
     order = list(blocks.sub_blocks)
     if not {"denoise.denoise", "denoise.text_conditioning"} <= set(order):
         raise RuntimeError(f"Diffusers Anima text2image blocks changed: {order}")
