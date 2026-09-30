@@ -1,0 +1,15 @@
+{
+  "comfy_nodes_path": "/home/fidika/cozy/.worktrees/ComfyUI/memory-benchmark-20260929/nodes.py",
+  "comfy_nodes_sha256": "fe624b0c1b6a3cd124a2214e5700b61337589144c2f0668900a04f8ccc031e38",
+  "controls": {
+    "sdxl": {
+      "commit": "37ff2b8ea76da39b8efed30224d04353d1f5f8e1",
+      "path": "experiments/sdxl-stable-vae"
+    },
+    "anima": {
+      "commit": "0d76083c0a01d8cb33e44d3715f109903d384373",
+      "path": "experiments/anima-stage-scopes"
+    }
+  },
+  "note": "Runtime numerical policy/public source unchanged; private helper input only"
+}

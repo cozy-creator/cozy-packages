@@ -1,0 +1,55 @@
+[project]
+name = "cozy-experiment-anima-shared-noise"
+version = "0.2.17"
+description = "Anima anime text-to-image package for Cozy"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "cozy-runtime[media]==0.18.91+dev.hf88c009e6d0ae5e9498c81d994de8dd8bea33fb1d3c0a66f1576e35dc0789c24",
+    "diffusers>=0.40.0",
+    "hf-xet>=1.6.0",
+    "msgspec>=0.19",
+    "numpy>=2.0",
+    "pyyaml>=6.0.3",
+    "regex>=2026.7.19",
+    "safetensors>=0.8.0",
+    "shellingham>=1.5.4",
+    "tensorfs>=0.3.74",
+    "tokenizers>=0.23.1",
+    "torch==2.14.0+cu130",
+    "torchvision==0.29.0+cu130",
+    "transformers>=5.16.1",
+]
+
+[project.entry-points."cozy.application"]
+default = "anima:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["anima"]
+
+[tool.uv]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[dependency-groups]
+dev = ["mypy>=2.3.1", "ruff>=0.16.4"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["anima"]
+strict = true
+ignore_missing_imports = true
+disallow_untyped_calls = false
+
+[tool.uv.sources]
+cozy-runtime = {path = "/home/fidika/.cozy/outputs/memory-246-inference-20260929/final-combined-r19/bundled/cozy_runtime-0.18.91+dev.hf88c009e6d0ae5e9498c81d994de8dd8bea33fb1d3c0a66f1576e35dc0789c24-cp312-abi3-manylinux_2_28_x86_64.whl"}
+tensorfs = {path = "/home/fidika/.cozy/outputs/memory-246-inference-20260929/final-combined-r19/tensorfs/tensorfs-0.3.78+cozy.r15.20260929.g1e81d356-cp312-abi3-linux_x86_64.whl"}
+torch = {index = "pytorch-cu130"}
+torchvision = {index = "pytorch-cu130"}
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
