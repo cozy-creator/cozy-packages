@@ -290,15 +290,15 @@ def drive(
     audio: bool = False,
     refuse_code: str = "",
     context_frames: int | None = 39,
-    segment_context_frames: tuple[int, ...] | None = None,
+    segment_context_frames: tuple[bool | int | None, ...] | None = None,
     duration_s: int = 5,
     style: str = "",
 ) -> dict[str, Any]:
     root.mkdir()
-    local_windows = segment_context_frames or (0,) * count
+    local_windows = segment_context_frames or (None,) * count
     assert len(local_windows) == count
     windows = [0] + [
-        context_frames if context_frames is not None else local_windows[index]
+        0 if local_windows[index] is False else (22 if context_frames is None else context_frames)
         for index in range(1, count)
     ]
     parent = root.name if request_id is None else request_id
@@ -515,7 +515,7 @@ def drive(
                 "[Shot 1] <Rover> moves across <Bridge>." + (prompt or ""),
                 "duration_s": duration_s,
                 **({"seed": 0} if index == 0 else {}),
-                **({"context_frames": local_windows[index]} if segment_context_frames else {}),
+                **({"context_frames": local_windows[index]} if local_windows[index] is not None else {}),
             }
             for index in range(count)
         ],

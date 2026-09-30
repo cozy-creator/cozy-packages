@@ -3458,18 +3458,25 @@ def arm_interface() -> None:
     )
     check("long-form defaults to turbo", unseeded.mode, "turbo")
     check("long-form has no contradictory standard step default", unseeded.steps, None)
-    check("long-form global context is absent by default", unseeded.context_frames, None)
-    check("motion inheritance defaults off on every segment", package.context_windows(unseeded), [0, 0])
-    for global_frames, expected in ((None, [0, 56, 0, 22]), (0, [0, 0, 0, 0]), (39, [0, 39, 39, 39])):
+    check("long-form preserves the global context default", unseeded.context_frames, 22)
+    check("segments inherit global context except the first", package.context_windows(unseeded), [0, 22])
+    for global_frames, expected in ((None, [0, 22, 0, 22]), (0, [0, 0, 0, 0]), (39, [0, 39, 0, 39])):
         authored: dict[str, Any] = {
-            "segments": [{"prompt": "x", "duration_s": 15, "context_frames": value}
-                         for value in (56, 56, 0, 22)],
+            "segments": [{"prompt": "x", "duration_s": 15,
+                          **({"context_frames": False} if index == 2 else {})}
+                         for index in range(4)],
             "references": [{"name": "Hero", "kind": "character"}],
         }
         if global_frames is not None:
             authored["context_frames"] = global_frames
         resolved = msgspec.convert(authored, type=package.LongFormInput)
-        check(f"global context precedence {global_frames}", package.context_windows(resolved), expected)
+        check(f"global window with a segment opt-out {global_frames}", package.context_windows(resolved), expected)
+    for value in (True, 0, 22, 56):
+        invalid = {"segments": [{"prompt": "x", "duration_s": 5, "context_frames": value}],
+                   "references": [{"name": "Hero", "kind": "character"}]}
+        refusal(f"segment context refuses {value!r}",
+                lambda invalid=invalid: msgspec.convert(invalid, type=package.LongFormInput),
+                "ValidationError")
     check(
         "turbo child has the independently bound base and adapter",
         [slot["class"] for slot in entries["motion_segment_turbo"]["models"]],

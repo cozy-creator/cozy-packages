@@ -42,15 +42,20 @@ def main() -> None:
     )
     assert shortened["frames"] == (15 + 12 + 12) * 24
     for name, global_frames, local_frames in (
-        ("default-off", None, None),
-        ("mixed-cut-resume", None, (0, 56, 0, 22)),
-        ("global-off", 0, (56, 56, 39, 22)),
-        ("global-22", 22, (0, 56, 0, 39)),
-        ("first-has-no-source", None, (56, 0, 39, 0)),
+        ("default-22", None, None),
+        ("mixed-cut-resume", 56, (None, None, False, None)),
+        ("global-off", 0, (None, False, None, None)),
+        ("global-22", 22, (False, None, False, None)),
+        ("first-has-no-source", 39, (None, False, None, False)),
     ):
         proof.drive(
             root / name, continuous=True, count=4, duration_s=15,
             context_frames=global_frames, segment_context_frames=local_frames, audio=True,
+        )
+    for value in (True, 0, 22, 56):
+        proof.drive(
+            root / f"invalid-segment-context-{value}", continuous=True, refuse=True,
+            segment_context_frames=(None, value, None),
         )
     proof.drive(root / "empty-references", continuous=True, bad="empty-references", refuse=True)
     proof.drive(root / "audio", continuous=True, audio=True)

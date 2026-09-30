@@ -1073,9 +1073,13 @@ ContextFrames = Literal[0, 22, 39, 56]
 
 
 class LongFormSegment(ClipInput, kw_only=True):
-    """One segment, optionally continuing the previous segment's audio and video."""
+    """One segment; false disables the global audio/video continuation window."""
 
-    context_frames: ContextFrames = 0
+    context_frames: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.context_frames is not None and self.context_frames is not False:
+            raise ValueError("segment context_frames accepts only false; omit it to inherit the global value")
 
 
 class LongFormInput(msgspec.Struct):
@@ -1086,7 +1090,7 @@ class LongFormInput(msgspec.Struct):
     style: str = ""
     overall_soundscape: str = ""
     non_diegetic_music: str = "N/A"
-    context_frames: ContextFrames | None = None
+    context_frames: ContextFrames = 22
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
 
@@ -1104,11 +1108,9 @@ class LongFormOutput(msgspec.Struct):
 
 
 def context_windows(payload: LongFormInput) -> list[ContextFrames]:
-    """Resolve every edge before work; an explicit global zero overrides local choices."""
+    """Resolve every edge before work; a segment's false disables inherited context."""
     return [
-        0 if index == 0 else (
-            payload.context_frames if payload.context_frames is not None else shot.context_frames
-        )
+        0 if index == 0 or shot.context_frames is False else payload.context_frames
         for index, shot in enumerate(payload.segments)
     ]
 
@@ -1243,7 +1245,7 @@ class MotionInput(msgspec.Struct):
     #: holds more than its seconds say, so a 12 s segment after a 6 s one ran on the 6 s
     #: peak and ran out on GPU 1 (run 1560). Any other value is refused.
     frames: int
-    context_frames: ContextFrames = 0
+    context_frames: ContextFrames = 22
     expected_provenance: RenderProvenance | None = None
     context: MotionContextAsset | None = None
     # Windows a successor may select from this shot's context; empty exports none.
