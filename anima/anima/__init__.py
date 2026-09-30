@@ -11,6 +11,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Annotated, Any, Literal, NamedTuple
 
+import cozy_runtime.author as cozy_author
 import cozy_runtime.derive as derive
 import msgspec
 import torch
@@ -204,6 +205,34 @@ def _tokenizer(path: Path) -> Any:
     )
 
 
+def _declare_vae_retry_state(vae: Any) -> None:
+    """Restore AutoencoderKLQwenImage's encode/decode cache lists by identity.
+
+    Whole calls and individual tiles clear caches before reading them. Causal layers
+    only replace entries with new tensors; previous tensor contents are read-only.
+    Failed-attempt tensors therefore need no copies: restore the original bindings.
+    """
+    declare = cozy_author.retry_state
+    names = ("_conv_num", "_conv_idx", "_feat_map", "_enc_conv_num", "_enc_conv_idx", "_enc_feat_map")
+
+    def save() -> dict[str, tuple[Any, list[Any] | None]]:
+        return {
+            name: (value, list(value) if isinstance(value, list) else None)
+            for name in names if name in vars(vae)
+            for value in (vars(vae)[name],)
+        }
+
+    def restore(state: dict[str, tuple[Any, list[Any] | None]]) -> None:
+        for name in names:
+            vars(vae).pop(name, None)
+        for name, (value, items) in state.items():
+            if items is not None:
+                value[:] = items
+            vars(vae)[name] = value
+
+    declare(vae, save, restore)
+
+
 class AnimaPipeline:
     def __init__(self, config: Any) -> None:
         mapping = config.mapping()
@@ -220,6 +249,16 @@ class AnimaPipeline:
 
         for component in (transformer, text_encoder, text_conditioner, vae):
             component.eval()
+        # Cosmos' uncached forward (including rotary embeddings) only reads module
+        # state and arguments. First-block caching gets a separate request contract
+        # for its stateful hooks and forward replacement below.
+        cozy_author.pure(transformer)
+        cozy_author.pure(text_conditioner)
+        # The modular encoder passes no past_key_values: any KV cache is local
+        # to this call. Dynamic RoPE rewrites buffers and has no purity contract.
+        if getattr(text_encoder.rotary_emb, "rope_type", None) == "default":
+            cozy_author.pure(text_encoder)
+        _declare_vae_retry_state(vae)
         vae.enable_tiling()
         self.scheduler_config = mapping["scheduler"]
         self.tokenizer = _tokenizer(_ROOT / "tokenizer")
@@ -256,7 +295,8 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         there is no attempt to meter, so the phases stay silent."""
         card = GenerateInput(prompt="")
         ctx.raise_if_cancelled()
-        self.render(
+        render_request(
+            self,
             card.quality_prefix,
             card.negative_prompt,
             512,
@@ -270,7 +310,7 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         )
 
     @uses_components("text_encoder", "text_conditioner", "transformer", "vae")
-    def render(
+    def prepare_request(
         self,
         prompt: str,
         negative_prompt: str,
@@ -285,7 +325,7 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
     ) -> Any:
         device = next(self.pipe.components["transformer"].parameters()).device
         generator = torch.Generator(device=device).manual_seed(seed)
-        pipeline: Any = _text2image_pipeline(device, phases)
+        pipeline: Any = _text2image_pipeline(device, phases, self)
         pipeline.register_components(
             **self.pipe.components,
             scheduler=FlowMatchEulerDiscreteScheduler.from_config(self.pipe.scheduler_config),
@@ -298,24 +338,47 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         pipeline.guider._start, pipeline.guider._stop = cfg_interval
         transformer = self.pipe.components["transformer"]
         restore_cache = _apply_first_block_cache(transformer, pipeline.guider, first_block_cache)
-        phases.enter(_ENCODE_PROMPT)
-        try:
-            result = pipeline(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                width=width,
-                height=height,
-                num_inference_steps=steps,
-                generator=generator,
-                output="images",
-                output_type="pt",
-            )
-        finally:
-            restore_cache()
-        return result
+        return pipeline, generator, restore_cache
+
+    @uses_components("text_encoder")
+    def encode_stage(self, block: Any, components: Any, state: Any) -> Any:
+        return block(components, state)
+
+    @uses_components("text_conditioner", "transformer")
+    def condition_stage(self, block: Any, components: Any, state: Any) -> Any:
+        return block(components, state)
+
+    @uses_components("transformer")
+    def denoise_stage(self, block: Any, components: Any, state: Any) -> Any:
+        return block(components, state)
+
+    @uses_components("vae")
+    def decode_stage(self, block: Any, components: Any, state: Any) -> Any:
+        return block(components, state)
 
 
-def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
+def render_request(
+    model: AnimaModel, prompt: str, negative_prompt: str, width: int, height: int,
+    steps: int, guidance: float, cfg_interval: tuple[float, float],
+    first_block_cache: float, seed: int, phases: _Phases,
+) -> Any:
+    pipeline, generator, restore_cache = model.prepare_request(
+        prompt, negative_prompt, width, height, steps, guidance, cfg_interval,
+        first_block_cache, seed, phases,
+    )
+    phases.enter(_ENCODE_PROMPT)
+    try:
+        return pipeline(
+            prompt=prompt, negative_prompt=negative_prompt, width=width, height=height,
+            num_inference_steps=steps, generator=generator, output="images", output_type="pt",
+        )
+    finally:
+        # FBC cleanup only restores Python hook/forward/cache bindings. It must run
+        # even when a failed device cannot admit another component scope.
+        restore_cache()
+
+
+def _text2image_pipeline(device: Any, phases: _Phases, scope_owner: AnimaModel | None = None) -> Any:
     """The text2image pipeline, instrumented on the blocks it will actually run.
 
     `ModularPipeline.blocks` is a property returning a DEEPCOPY, so a hook installed through
@@ -347,6 +410,10 @@ def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
         raise RuntimeError(f"Diffusers Anima text2image blocks changed: {order}")
     blocks.sub_blocks["denoise.denoise"].progress_bar = _progress_bar(phases)
     blocks.sub_blocks.insert("conditioning", Announce(), order.index("denoise.text_conditioning"))
+    if scope_owner is not None:
+        from .stage_scopes import install_scopes
+
+        install_scopes(blocks, scope_owner)
     return RuntimeAnimaPipeline(blocks=blocks)
 
 
@@ -444,7 +511,8 @@ def generate(
             "cfg_interval_start must not exceed cfg_interval_stop", code="cfg_interval"
         )
     with _Phases(tel) as phases:
-        images = model.render(
+        images = render_request(
+            model,
             payload.quality_prefix + payload.prompt,
             payload.negative_prompt,
             width,
@@ -471,6 +539,88 @@ def generate(
     )
 
 
+def _declare_first_block_retry_state(transformer: Any, forward: Any) -> Callable[[], None]:
+    """Own Diffusers FBC's named state, without copying residual tensor storage.
+
+    Cosmos blocks and the FBC hooks only read cached tensors; new residuals replace
+    bindings. The shared manager owns separate cond/uncond entries and the current
+    context. Preserve all of those identities, plus lazy registry traversal caches.
+    """
+    declare = cozy_author.retry_state
+    registries = [
+        module._diffusers_hook for module in transformer.modules()
+        if hasattr(module, "_diffusers_hook")
+    ]
+    allowed = {_FBC_LEADER_BLOCK_HOOK, _FBC_BLOCK_HOOK}
+    if any(set(registry.hooks) - allowed for registry in registries):
+        return lambda: None  # No contract for unrelated third-party cache hooks.
+    leader = transformer.transformer_blocks[0]._diffusers_hook.hooks[_FBC_LEADER_BLOCK_HOOK]
+    manager = leader.state_manager
+    metadata = {
+        id(hook._metadata): hook._metadata
+        for registry in registries for hook in registry.hooks.values()
+    }.values()
+    fields = ("head_block_output", "head_block_residual", "tail_block_residuals", "should_compute")
+    names = (
+        "_cozy_retry_state", "_cozy_retry_tensors", "_cozy_retry_generators",
+        "_cozy_retry_hooks", "_cozy_retry_forwards",
+    )
+    previous = {name: vars(transformer)[name] for name in names if name in vars(transformer)}
+    base = getattr(transformer, "_cozy_retry_state", None)
+
+    def save() -> Any:
+        cache = manager._state_cache
+        return (
+            None if base is None else base[0](),
+            manager._current_context, cache, dict(cache),
+            [(state, tuple(getattr(state, name) for name in fields)) for state in cache.values()],
+            [
+                (registry, "_child_registries_cache" in vars(registry),
+                 getattr(registry, "_child_registries_cache", None))
+                for registry in registries
+            ],
+            [(item, item._cached_parameter_indices) for item in metadata],
+        )
+
+    def restore(state: Any) -> None:
+        underlying, context, cache, entries, states, traversals, parameters = state
+        if base is not None:
+            base[1](underlying)
+        cache.clear()
+        cache.update(entries)
+        manager._state_cache = cache
+        manager._current_context = context
+        for value, items in states:
+            for name, item in zip(fields, items, strict=True):
+                setattr(value, name, item)
+        for registry, existed, value in traversals:
+            if existed:
+                registry._child_registries_cache = value
+            else:
+                vars(registry).pop("_child_registries_cache", None)
+        for item, indices in parameters:
+            item._cached_parameter_indices = indices
+
+    # Claim only the FBC hooks just installed and their rewritten block forwards,
+    # plus our condition wrapper. Never sweep unrelated module hooks/replacements.
+    hooks = tuple(hook for registry in registries for hook in registry.hooks.values())
+    forwards = (forward, *(block.forward for block in transformer.transformer_blocks))
+    declare(
+        transformer, save, restore,
+        tensors=getattr(transformer, "_cozy_retry_tensors", lambda: ()),
+        generators=getattr(transformer, "_cozy_retry_generators", lambda: ()),
+        hooks=(*getattr(transformer, "_cozy_retry_hooks", ()), *hooks),
+        forwards=(*getattr(transformer, "_cozy_retry_forwards", ()), *forwards),
+    )
+
+    def detach() -> None:
+        for name in names:
+            vars(transformer).pop(name, None)
+        vars(transformer).update(previous)
+
+    return detach
+
+
 def _apply_first_block_cache(transformer: Any, guider: Any, threshold: float) -> Callable[[], None]:
     """Attach FBCache hooks for one request; returns the restore. 0.0 attaches nothing.
 
@@ -481,9 +631,27 @@ def _apply_first_block_cache(transformer: Any, guider: Any, threshold: float) ->
     forward in a per-condition `cache_context` keeps the two streams separate. Hooks are
     request-scoped (the HiDiffusion precedent in sdxl): removed in the restore so the
     resident module leaves exactly as it entered.
+
+    Its request contract restores residual-cache bindings and the registry's condition
+    context together. It requires the current explicit Runtime retry contract.
     """
     if threshold <= 0.0:
         return lambda: None
+
+    # Verify originals before installing wrappers. An unknown forward must not be
+    # hidden inside the closure that this request subsequently claims as its own.
+    originals_known = True
+    for module in (transformer, *transformer.transformer_blocks):
+        original = cozy_author.original_forward(module)
+        if not (
+            cozy_author.is_declared_pure(original)
+            or (
+                getattr(original, "__self__", None) is module
+                and getattr(original, "__func__", None) is getattr(type(module), "forward", None)
+            )
+        ):
+            originals_known = False
+            break
 
     try:
         TransformerBlockRegistry.get(CosmosTransformerBlock)
@@ -506,8 +674,13 @@ def _apply_first_block_cache(transformer: Any, guider: Any, threshold: float) ->
             registry._set_context(None)
 
     transformer.forward = forward
+    detach_retry = (
+        _declare_first_block_retry_state(transformer, forward)
+        if originals_known else lambda: None
+    )
 
     def restore() -> None:
+        detach_retry()
         transformer.forward = original_forward
         for block in transformer.transformer_blocks:
             registry = HookRegistry.check_if_exists_or_initialize(block)
@@ -516,7 +689,6 @@ def _apply_first_block_cache(transformer: Any, guider: Any, threshold: float) ->
                     registry.remove_hook(name, recurse=False)
 
     return restore
-
 
 # ------------------------------------------------------------------ the quantize job
 
