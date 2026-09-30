@@ -39,9 +39,12 @@ enums; unsupported objects are refused, not stringified. No semantic normalizati
 used to erase scheduler/model architecture differences in this experiment.
 
 Each tensor readback is at most4MiB: two branches×512tokens×2048channels×two bytes;
-initialF32latent is at most1MiB. Larger/unsupported inputs refuse the diagnostic. Packing
-is CPU-only, at most two temporary bounded buffers; there are noGPUclones or pinned
-pools. The complete record allows at most64MiB cumulative copied bytes and24events,
+initialF32latent is at most1MiB. Larger/unsupported inputs refuse the diagnostic. CUDA noncontiguous and lazy conjugate/negative views are rejected before any
+copy/accounting/allocator query. Torch Copy.cu can otherwise allocate an internal CUDA
+packing temporary even when .contiguous() appears only after .to(cpu). Only bounded
+CPU-source packing remains supported, at most two temporary CPU buffers; no pinned
+pool is created. A later real unsupported CUDA context must refuse this diagnostic,
+not be packed onGPU or silently coerced. The complete record allows at most64MiB cumulative copied bytes and24events,
 not64MiB retained tensors. Every copy has a unique ledger ordinal; the consumer requires
 all ordinals/bytes and unchanged observer-only allocator/OOM/retry counters. CPU/global,
 device and explicit request generator states are read only, never reset to equalize engines.
@@ -66,3 +69,9 @@ Before anyGPU: root+independent review exactfrozen source/consumer, coherent pri
 currentRuntime pins/locks and explicitcustomnodeallowlist, then separately authorized
 fullSDXL1005/Anima1006 pair perengine at8GB. Preserve every original image/error. No
 weightreadback, nativebackendlogs, compile/precision/sampler rescue or extra cells.
+
+The prior17d1468/cd9c22a2 observer and39ace74d assembled cohort were unlaunched and
+remain preserved as superseded evidence. Equal after-copy allocator counters were
+insufficient to exclude a freed CUDA temporary. The corrected guard relies on the
+reviewed contiguous same-dtype Torch copy path; it is not a physicalGPUneutrality test.
+Coherent cohort/plugin snapshots must be regenerated only after exact guard review.

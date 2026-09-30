@@ -112,13 +112,19 @@ class Record:
     def tensor(self, value: Any) -> dict[str, Any]:
         if not isinstance(value, torch.Tensor) or value.is_meta or value.layout != torch.strided:
             raise ValueError("unsupported observed tensor")
+        # Copy.cu can materialize a CUDA packing temporary for strided D2H.
+        # Refuse BEFORE accounting/query/copy rather than hide that allocation.
+        if value.is_conj() or value.is_neg():
+            raise ValueError("unsupported lazy conjugate/negative observed view")
+        if value.device.type == "cuda" and not value.is_contiguous():
+            raise ValueError("unsupported noncontiguous CUDA observation")
         size = value.numel() * value.element_size()
         if size > MAX_TENSOR_BYTES or self.copied + size > MAX_COPIED_BYTES:
             raise ValueError("private observation byte bound exceeded")
         self.copied += size
         self.copy_index += 1
         before = allocator(value.device)
-        # Packing is CPU-only; at most two bounded CPU buffers, noGPUclone.
+        # CUDA source is contiguous/same-dtype; only CPU strided sources may need packing.
         cpu = value.detach().to(device="cpu", copy=True).contiguous()
         raw = cpu.reshape(-1).view(torch.uint8).numpy()
         checksum = hashlib.sha256(memoryview(raw)).hexdigest()

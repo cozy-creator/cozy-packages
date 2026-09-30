@@ -300,3 +300,62 @@ def test_equal_anima_contexts_cannot_fabricate_branch_identity():
         assert not rec.active
     finally:
         o.CURRENT.reset(token)
+
+
+def test_cuda_strided_refuses_before_copy_queries_or_accounting(monkeypatch):
+    class CudaFacade(torch.Tensor):
+        @property
+        def device(self):
+            return torch.device("cuda:0")
+
+        def detach(self):
+            pytest.fail("unsupported CUDA layout reached detach/copy")
+
+        def to(self, *args, **kwargs):
+            pytest.fail("unsupported CUDA layout reached to")
+
+    source = torch.ones(2, 3).T
+    value = torch.Tensor._make_subclass(CudaFacade, source, False)
+    assert not value.is_contiguous() and value.device.type == "cuda"
+    record = o.Record("cozy", "sdxl", 1005)
+    monkeypatch.setattr(o, "allocator", lambda *_: pytest.fail("allocator query before rejection"))
+    with pytest.raises(ValueError, match="noncontiguous CUDA"):
+        record.tensor(value)
+    assert record.copied == record.copy_index == 0
+    assert not torch.cuda.is_initialized()
+
+
+@pytest.mark.parametrize("kind", ["conjugate", "negative"])
+def test_lazy_views_refuse_before_copy_even_when_cpu_contiguous(kind, monkeypatch):
+    value = (
+        torch.ones(3, dtype=torch.complex64).conj()
+        if kind == "conjugate"
+        else torch._neg_view(torch.ones(3))
+    )
+    record = o.Record("cozy", "sdxl", 1005)
+    monkeypatch.setattr(
+        torch.Tensor, "to", lambda *_args, **_kwargs: pytest.fail("lazy view reached copy")
+    )
+    monkeypatch.setattr(o, "allocator", lambda *_: pytest.fail("lazy view reached allocator query"))
+    with pytest.raises(ValueError, match="lazy conjugate/negative"):
+        record.tensor(value)
+    assert record.copied == record.copy_index == 0
+    assert not torch.cuda.is_initialized()
+
+
+def test_cpu_strided_packing_remains_bounded_and_exact():
+    source = torch.arange(24, dtype=torch.float32).reshape(4, 6)[1:, ::2].T
+    record = o.Record("cozy", "sdxl", 1005)
+    actual = record.tensor(source)
+    expected = (
+        __import__("hashlib")
+        .sha256(source.contiguous().view(torch.uint8).numpy().tobytes())
+        .hexdigest()
+    )
+    assert actual["sha256"] == expected
+    assert (
+        actual["stride"] == list(source.stride())
+        and actual["storage_offset"] == source.storage_offset()
+    )
+    assert record.copied == source.numel() * source.element_size()
+    assert not torch.cuda.is_initialized()
