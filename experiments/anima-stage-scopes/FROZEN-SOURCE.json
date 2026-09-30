@@ -20,5 +20,5 @@
     "anima/tokenizer/tokenizer_config.json": "6b589ccd67dac34cfd9e274864e34c819309cec98d99bb76aa1e13faf217d03e",
     "anima/tokenizer/chat_template.jinja": "44d5f08f3f72b837eaad09f13a54c1f9f4eb58d75240334548b7fd52a5437fa5"
   },
-  "scope": "private experiment; frozen source/config preserved as provenance; copied metadata interface is baseline only until regeneration"
+  "scope": "private experiment; frozen source/config preserved as provenance; metadata interface hash records the baseline; experiment interface is regenerated"
 }
