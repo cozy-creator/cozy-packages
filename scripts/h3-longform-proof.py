@@ -41,6 +41,17 @@ def main() -> None:
         root / "frame-shortening", continuous=True, context_frames=56, duration_s=15
     )
     assert shortened["frames"] == (15 + 12 + 12) * 24
+    for name, global_frames, local_frames in (
+        ("default-off", None, None),
+        ("mixed-cut-resume", None, (0, 56, 0, 22)),
+        ("global-off", 0, (56, 56, 39, 22)),
+        ("global-22", 22, (0, 56, 0, 39)),
+        ("first-has-no-source", None, (56, 0, 39, 0)),
+    ):
+        proof.drive(
+            root / name, continuous=True, count=4, duration_s=15,
+            context_frames=global_frames, segment_context_frames=local_frames, audio=True,
+        )
     proof.drive(root / "empty-references", continuous=True, bad="empty-references", refuse=True)
     proof.drive(root / "audio", continuous=True, audio=True)
     proof.drive(

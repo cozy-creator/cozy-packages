@@ -289,11 +289,18 @@ def drive(
     continuous: bool = False,
     audio: bool = False,
     refuse_code: str = "",
-    context_frames: int = 39,
+    context_frames: int | None = 39,
+    segment_context_frames: tuple[int, ...] | None = None,
     duration_s: int = 5,
     style: str = "",
 ) -> dict[str, Any]:
     root.mkdir()
+    local_windows = segment_context_frames or (0,) * count
+    assert len(local_windows) == count
+    windows = [0] + [
+        context_frames if context_frames is not None else local_windows[index]
+        for index in range(1, count)
+    ]
     parent = root.name if request_id is None else request_id
     export = ("motion_segment" if continuous else "cut_segment") + ("_turbo" if turbo else "")
     surface = next(item for item in describe(h3.app) if item.name == export)
@@ -473,10 +480,14 @@ def drive(
 
         answer = project(result.result)
         # Only a shot with a successor exports context: the last one would pay for nothing.
-        successor = continuous and not is_reference and shot_index + 1 < count
+        successor = (
+            continuous and not is_reference and shot_index + 1 < count
+            and windows[shot_index + 1] != 0
+        )
         if continuous and not is_reference:
+            assert wire["payload"].get("context_frames", 0) == windows[shot_index]
             assert wire["payload"].get("next_context_frames", []) == (
-                [context_frames] if successor else []
+                [windows[shot_index + 1]] if successor else []
             )
         assert {item["output_id"] for item in outputs} == (
             {"image"}
@@ -504,6 +515,7 @@ def drive(
                 "[Shot 1] <Rover> moves across <Bridge>." + (prompt or ""),
                 "duration_s": duration_s,
                 **({"seed": 0} if index == 0 else {}),
+                **({"context_frames": local_windows[index]} if segment_context_frames else {}),
             }
             for index in range(count)
         ],
@@ -525,7 +537,7 @@ def drive(
         ],
         "mode": "turbo" if turbo else "standard",
     }
-    if continuous:
+    if continuous and context_frames is not None:
         wire["context_frames"] = context_frames
     if bad == "empty-references":
         wire["references"] = []
@@ -627,7 +639,7 @@ def drive(
         item.label for item in revisions
     ]
     frames = [
-        min(duration_s, (362 - (context_frames if index else 0)) // FPS) * FPS
+        min(duration_s, (362 - windows[index]) // FPS) * FPS
         if continuous else frames_for(duration_s)
         for index in range(delivered)
     ]
@@ -685,10 +697,13 @@ def drive(
     if continuous:
         assert sent[0]["payload"].get("context") is None
         for index, row in enumerate(sent[1:], 1):
-            assert (
-                row["payload"]["context"]
-                == json.loads(answers[index + 1].result)["context"]["digest"]
-            )
+            if windows[index]:
+                assert (
+                    row["payload"]["context"]
+                    == json.loads(answers[index + 1].result)["context"]["digest"]
+                )
+            else:
+                assert row["payload"].get("context") is None
     return {"frames": result.result.delivered_frames, "calls": sent, "events": len(events)}
 
 

@@ -1,7 +1,8 @@
 # Long-form video
 
 A segment is one H3 call. It takes the same fields as `ref2va_turbo`: free-text `prompt`,
-`duration_s` (5–15, required) and optional `seed`. The model only ever sees one segment's
+`duration_s` (5–15, required) and optional `seed`. A `long_form` segment also accepts
+`context_frames` (0, 22, 39 or 56), defaulting to 0. The model only ever sees one segment's
 prompt, so the workflow copies the global information into it.
 
 ## Request
@@ -11,7 +12,8 @@ prompt, so the workflow copies the global information into it.
 - `overall_soundscape`: sound shared by every segment (optional).
 - `non_diegetic_music`: score shared by every segment (default `N/A`).
 - `segments`: the ordered calls.
-- `context_frames` (long_form), `mode` (`turbo` or `standard`) and `steps` (standard only).
+- `context_frames`: optional global override for `long_form`, including 0.
+- `mode` (`turbo` or `standard`) and `steps` (standard only).
 
 Unknown fields are ignored, not refused; a missing required field, such as a misspelled
 `duration_s`, still refuses.
@@ -107,9 +109,20 @@ twelve references in all. An audio-only set is refused.
 cozy run fidika/minimax-h3/long_form --input story.json --await
 ```
 
-`long_form` continues each segment from the previous segment's audio and video. In that
-mode, `context_frames` 22/39/56 allows at most 14/13/12 new seconds after the first
-segment; longer segments are shortened and reported. `long_form_cuts` renders
+Motion continuation in `long_form` is opt-in. When global `context_frames` is absent,
+each segment uses its own value, defaulting to 0. An explicit global value overrides
+every segment, including an explicit global 0. The first segment always uses 0 because
+there is no previous clip.
+
+A value of 0 attaches no previous audio/video context. Ordinary authored character,
+scene and media references still apply; the preceding clip is not turned into another
+reference. This removes motion inheritance, but does not guarantee a visible cut.
+Continuation can resume after an independent segment: values `0, 56, 0, 22` continue
+segment 2 from segment 1, and segment 4 from segment 3. Each segment exports only the
+window its successor requests, and exports none when the next value is 0.
+
+`context_frames` 22/39/56 allows at most 14/13/12 new seconds for that segment;
+0 allows 15 seconds. Longer segments are shortened and reported. `long_form_cuts` renders
 independent segments. Turbo uses eight PDD evaluations, and standard allows 30/40/50
 steps.
 

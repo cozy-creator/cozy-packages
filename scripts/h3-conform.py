@@ -3458,6 +3458,18 @@ def arm_interface() -> None:
     )
     check("long-form defaults to turbo", unseeded.mode, "turbo")
     check("long-form has no contradictory standard step default", unseeded.steps, None)
+    check("long-form global context is absent by default", unseeded.context_frames, None)
+    check("motion inheritance defaults off on every segment", package.context_windows(unseeded), [0, 0])
+    for global_frames, expected in ((None, [0, 56, 0, 22]), (0, [0, 0, 0, 0]), (39, [0, 39, 39, 39])):
+        authored: dict[str, Any] = {
+            "segments": [{"prompt": "x", "duration_s": 15, "context_frames": value}
+                         for value in (56, 56, 0, 22)],
+            "references": [{"name": "Hero", "kind": "character"}],
+        }
+        if global_frames is not None:
+            authored["context_frames"] = global_frames
+        resolved = msgspec.convert(authored, type=package.LongFormInput)
+        check(f"global context precedence {global_frames}", package.context_windows(resolved), expected)
     check(
         "turbo child has the independently bound base and adapter",
         [slot["class"] for slot in entries["motion_segment_turbo"]["models"]],
@@ -3466,13 +3478,19 @@ def arm_interface() -> None:
     for job in ("long_form", "long_form_cuts"):
         segment = next(f for f in jobs[job]["request"]["fields"] if f["name"] == "segments")
         check(
-            f"a {job} segment is a turbo call's request, field for field",
-            [(f["name"], f["type"]) for f in segment["type"]["list"]["fields"]],
+            f"a {job} segment preserves the turbo request fields",
+            [(f["name"], f["type"]) for f in segment["type"]["list"]["fields"]
+             if f["name"] != "context_frames"],
             [
                 (f["name"], f["type"])
                 for f in entries["ref2va_turbo"]["request"]["fields"]
                 if f["name"] != "assets"
             ],
+        )
+        check(
+            f"per-segment motion context belongs only to long_form ({job})",
+            any(f["name"] == "context_frames" for f in segment["type"]["list"]["fields"]),
+            job == "long_form",
         )
     check(
         "long_form request fields",

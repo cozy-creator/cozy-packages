@@ -1069,15 +1069,24 @@ class SegmentOutput(msgspec.Struct):
     provenance: RenderProvenance
 
 
-class LongFormInput(msgspec.Struct):
-    """Fixed references and completed audio/video context for one continuous sequence."""
+ContextFrames = Literal[0, 22, 39, 56]
 
-    segments: Annotated[list[ClipInput], msgspec.Meta(min_length=1)]
+
+class LongFormSegment(ClipInput, kw_only=True):
+    """One segment, optionally continuing the previous segment's audio and video."""
+
+    context_frames: ContextFrames = 0
+
+
+class LongFormInput(msgspec.Struct):
+    """Fixed references with optional completed audio/video context between segments."""
+
+    segments: Annotated[list[LongFormSegment], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=MAX_REFERENCES)]
     style: str = ""
     overall_soundscape: str = ""
     non_diegetic_music: str = "N/A"
-    context_frames: Literal[22, 39, 56] = 22
+    context_frames: ContextFrames | None = None
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
 
@@ -1092,6 +1101,16 @@ class LongFormOutput(msgspec.Struct):
     delivered_frames: int
     fps: int
     warnings: list[str]
+
+
+def context_windows(payload: LongFormInput) -> list[ContextFrames]:
+    """Resolve every edge before work; an explicit global zero overrides local choices."""
+    return [
+        0 if index == 0 else (
+            payload.context_frames if payload.context_frames is not None else shot.context_frames
+        )
+        for index, shot in enumerate(payload.segments)
+    ]
 
 
 def shot_seed(shot: ClipInput, request_id: str, index: int) -> int:
@@ -1224,7 +1243,7 @@ class MotionInput(msgspec.Struct):
     #: holds more than its seconds say, so a 12 s segment after a 6 s one ran on the 6 s
     #: peak and ran out on GPU 1 (run 1560). Any other value is refused.
     frames: int
-    context_frames: Literal[22, 39, 56] = 22
+    context_frames: ContextFrames = 0
     expected_provenance: RenderProvenance | None = None
     context: MotionContextAsset | None = None
     # Windows a successor may select from this shot's context; empty exports none.
@@ -1253,7 +1272,10 @@ def _render_motion(
     )
     compatible(observed, payload.expected_provenance)
     native_provenance = context_provenance(observed)
-    context = None if payload.context is None else decode_context(payload.context.read_bytes())
+    context = (
+        decode_context(payload.context.read_bytes())
+        if payload.context_frames and payload.context is not None else None
+    )
     if context is not None:
         context = context.select(payload.context_frames)
     delivery = plan_continuation(
@@ -1546,7 +1568,7 @@ async def long_form(
     out: Outputs,
     tel: Telemetry,
 ) -> LongFormOutput:
-    """Render continuous segments and join them. Each reference and the video so far are
+    """Render segments with their selected motion context and join them. Each reference and the video so far are
     published as they land; a failed or canceled run keeps them.
 
     Each segment is free text naming references as `<Name>`; see LONG_FORM.md for what
@@ -1566,10 +1588,11 @@ async def long_form(
         else (DEFAULT_STEPS if payload.steps is None else payload.steps)
     )
     calls = segment_calls(payload)
+    windows = context_windows(payload)
     # Motion context shares the native window with new frames. Shorten requested
     # segments to its whole-second budget instead of refusing a valid 5-15s request.
     durations = [
-        min(shot.duration_s, (MAX_FRAMES - (payload.context_frames if index else 0)) // FPS)
+        min(shot.duration_s, (MAX_FRAMES - windows[index]) // FPS)
         for index, shot in enumerate(payload.segments)
     ]
     warnings = [warning for call in calls for warning in call.warnings]
@@ -1577,18 +1600,18 @@ async def long_form(
         if duration != shot.duration_s:
             warning = (
                 f"Segment {index + 1}: shortened from {shot.duration_s}s to {duration}s "
-                f"to fit {payload.context_frames} motion-context frames."
+                f"to fit {windows[index]} motion-context frames."
             )
             warnings.append(warning)
             tel.log(
                 "Adjusted segment duration", shot=index + 1,
                 requested_seconds=shot.duration_s, delivered_seconds=duration,
-                context_frames=payload.context_frames,
+                context_frames=windows[index],
             )
     # Validate every adjusted generation window before creating reference images.
     plans = [
         plan_continuation(
-            duration * FPS, context_frames=payload.context_frames if index else 0
+            duration * FPS, context_frames=windows[index]
         )
         for index, duration in enumerate(durations)
     ]
@@ -1616,6 +1639,7 @@ async def long_form(
             for index, shot in enumerate(payload.segments):
                 ctx.raise_if_cancelled()
                 seed = shot_seed(shot, ctx.request_id, index)
+                next_window = windows[index + 1] if index + 1 < count else 0
                 try:
                     with tel.scope(
                         f"Segment {index + 1} of {count}",
@@ -1639,11 +1663,9 @@ async def long_form(
                             steps=steps,
                             frames=held_frames(plans[index]),
                             expected_provenance=expected,
-                            context=context,
-                            context_frames=payload.context_frames,
-                            next_context_frames=(
-                                (payload.context_frames,) if index + 1 < count else ()
-                            ),
+                            context=context if windows[index] else None,
+                            context_frames=windows[index],
+                            next_context_frames=(next_window,) if next_window else (),
                         )
                         if payload.mode == "turbo":
                             call = motion_segment_turbo(payload=child_payload, assets=assets)  # type: ignore[call-arg]
@@ -1662,7 +1684,7 @@ async def long_form(
                 expected = shot_result.provenance
                 scanning.add(shot_result.video)
                 warnings.extend(shot_result.warnings)
-                context = shot_result.context
+                context = shot_result.context if next_window else None
                 completed_work += render_work[index]
                 if joining is not None:
                     await joining
