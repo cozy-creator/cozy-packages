@@ -13,6 +13,7 @@ import sys
 import time
 import wave
 from dataclasses import asdict
+from fractions import Fraction
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Annotated, Any, Literal, cast
@@ -110,6 +111,11 @@ from story import (  # noqa: E402
 MODEL, CODE, LORA = ("sha256:" + value * 64 for value in ("1", "2", "3"))
 WIDTH, HEIGHT, RATE = 96, 64, 32000
 ROUTES: list[str] = []
+
+
+def video_frame_record(frame: av.VideoFrame) -> tuple[Fraction, str]:
+    assert frame.pts is not None and frame.time_base is not None
+    return frame.pts * frame.time_base, sha(frame.to_ndarray(format="rgb24").tobytes())
 
 
 def sha(raw: bytes) -> str:
@@ -293,6 +299,8 @@ def drive(
     segment_context_frames: tuple[bool | int | None, ...] | None = None,
     duration_s: int = 5,
     style: str = "",
+    music: str = "N/A",
+    segment_music: tuple[str | None, ...] | None = None,
 ) -> dict[str, Any]:
     root.mkdir()
     local_windows = segment_context_frames or (None,) * count
@@ -516,11 +524,13 @@ def drive(
                 "duration_s": duration_s,
                 **({"seed": 0} if index == 0 else {}),
                 **({"context_frames": local_windows[index]} if local_windows[index] is not None else {}),
+                **({"non_diegetic_music": segment_music[index]} if segment_music is not None else {}),
             }
             for index in range(count)
         ],
         "overall_soundscape": "A flowing woodland stream.",
         "style": style,
+        "non_diegetic_music": music,
         "references": [
             {
                 "name": "Rover",
@@ -644,16 +654,43 @@ def drive(
         for index in range(delivered)
     ]
     film = b""
+    previous_packets: list[tuple[Fraction, Fraction, Fraction, bytes]] = []
+    previous_frames: list[tuple[Fraction, str]] = []
     for index, revision in enumerate(revisions):
-        # Live revisions retain an init and fragments. The completed revision is
-        # one indexed MP4, with the same encoded video and decoded timeline.
-        if outcome.terminal == "succeeded" and index + 1 == count:
-            assert len(revision.parts) == 1 and revision.parts[0].duration_us > 0
-        else:
-            assert len(revision.parts) == index + 2 and revision.parts[0].duration_us == 0
+        # Every published .92 revision is an indexed replacement. Its earlier
+        # encoded packets and decoded frames retain their exact content and clock.
+        assert len(revision.parts) == 1 and revision.parts[0].duration_us > 0
         film = b"".join((root / "parent" / part.local).read_bytes() for part in revision.parts)
+        expected_frames = sum(frames[: index + 1])
         with av.open(io.BytesIO(film), mode="r") as container:
-            assert sum(1 for _ in container.decode(video=0)) == sum(frames[: index + 1])
+            stream = container.streams.video[0]
+            assert stream.duration is not None and stream.time_base is not None
+            assert stream.duration * stream.time_base == Fraction(expected_frames, FPS)
+            packets: list[tuple[Fraction, Fraction, Fraction, bytes]] = []
+            for packet in container.demux(video=0):
+                if packet.size:
+                    assert packet.pts is not None and packet.dts is not None
+                    assert packet.time_base is not None and packet.duration is not None
+                    packets.append((packet.pts * packet.time_base, packet.dts * packet.time_base,
+                                    packet.duration * packet.time_base, bytes(packet)))
+        with av.open(io.BytesIO(film), mode="r") as container:
+            decoded = [
+                video_frame_record(frame) for frame in container.decode(video=0)
+            ]
+        assert len(decoded) == expected_frames
+        assert packets[:len(previous_packets)] == previous_packets
+        assert decoded[:len(previous_frames)] == previous_frames
+        previous_packets, previous_frames = packets, decoded
+        # A fresh player can seek to a non-keyframe point in each growing revision.
+        target = min(13, expected_frames - 1)
+        with av.open(io.BytesIO(film), mode="r") as container:
+            stream = container.streams.video[0]
+            time_base = stream.time_base
+            assert time_base is not None
+            container.seek(int(Fraction(target, FPS) / time_base), stream=stream, backward=True)
+            selected_record = next(candidate_record for frame in container.decode(video=0)
+                                   if (candidate_record := video_frame_record(frame))[0] >= Fraction(target, FPS))
+            assert selected_record == decoded[target]
     if cancel >= 0:
         assert result is None and outcome.terminal == "canceled", outcome
         return {}
@@ -677,6 +714,11 @@ def drive(
     assert overall == sorted(overall) and (overall[-1] == 1) == (fail < 0)
     sent = [json.loads(call.payload) for call in calls[2:]]
     assert all("[Shot 1]" in row["payload"]["prompt"] for row in sent)
+    expected_music = []
+    for index in range(len(sent)):
+        selected = segment_music[index] if segment_music is not None else None
+        expected_music.append((music if selected is None else selected).strip() or "N/A")
+    assert [row["payload"]["prompt"].split("non_diegetic_music:\n")[-1].strip() for row in sent] == expected_music
     styled = ["style:\nMuted pastel watercolor." in row["payload"]["prompt"] for row in sent]
     assert styled == [bad == "unknown-fields"] * len(sent), styled
     assert sent[0]["payload"]["seed"] == 0
@@ -737,6 +779,8 @@ def main() -> None:
     drive(root / "long-prompt", prompt="x" * 20000)
     drive(root / "unknown-fields", bad="unknown-fields")
     for continuous in (False, True):
+        drive(root / f"music-{continuous}", continuous=continuous, count=5,
+              music="Gentle strings.", segment_music=(None, "Solo piano.", "N/A", "", "Soft drums."))
         for style_name in ("realistic", "anime", "watercolor"):
             drive(root / f"style-{continuous}-{style_name}", continuous=continuous,
                   style=style_name, count=1)

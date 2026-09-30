@@ -1072,7 +1072,13 @@ class SegmentOutput(msgspec.Struct):
 ContextFrames = Literal[0, 22, 39, 56]
 
 
-class LongFormSegment(ClipInput, kw_only=True):
+class StorySegment(ClipInput, kw_only=True):
+    """One story segment; omitted music inherits the overall score."""
+
+    non_diegetic_music: str | None = None
+
+
+class LongFormSegment(StorySegment, kw_only=True):
     """One segment; false disables the global audio/video continuation window."""
 
     context_frames: bool = True
@@ -1366,7 +1372,7 @@ app.entrypoint(internal=True)(motion_segment_turbo)
 
 
 class LongFormCutsInput(msgspec.Struct):
-    segments: Annotated[list[ClipInput], msgspec.Meta(min_length=1)]
+    segments: Annotated[list[StorySegment], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=MAX_REFERENCES)]
     style: str = ""
     overall_soundscape: str = ""
@@ -1389,6 +1395,7 @@ def segment_calls(payload: LongFormInput | LongFormCutsInput) -> list[SegmentCal
         style=payload.style,
         overall_soundscape=payload.overall_soundscape,
         non_diegetic_music=payload.non_diegetic_music,
+        segment_music=[shot.non_diegetic_music for shot in payload.segments],
     )
 
 

@@ -572,8 +572,13 @@ class Software(msgspec.Struct):
     cuda_initialized: bool
 
 
-def software(ctx: Context) -> Software:
+class SoftwareInput(msgspec.Struct):
+    pass
+
+
+def software(ctx: Context, payload: SoftwareInput) -> Software:
     """CPU-only readback of the executor's actual selected experimental SDK."""
+    del payload
     ctx.raise_if_cancelled()
     parameters = inspect.signature(OfficialH3Pipeline.start_ref2va).parameters
     return Software(

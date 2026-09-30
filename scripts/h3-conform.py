@@ -110,6 +110,7 @@ from cozy_runtime.models.minimax_h3.conditioner import (  # noqa: E402
     build_text_conditioner,
     text_conditioner_config,
 )
+from cozy_runtime.models.minimax_h3.continuation import plan_continuation  # noqa: E402
 from cozy_runtime.models.minimax_h3.official import (  # noqa: E402
     _DIT_COMPONENT,
     FPS,
@@ -3417,8 +3418,8 @@ def arm_interface() -> None:
         ],
     )
     # Run 1560: a 12 s continuation shared a 6 s opener's shape and ran on its peak.
-    opener = package.plan_continuation(6 * package.FPS)
-    follower = package.plan_continuation(12 * package.FPS, context_frames=56)
+    opener = plan_continuation(6 * FPS)
+    follower = plan_continuation(12 * FPS, context_frames=56)
     check(
         "a segment's shape is the frames its DiT holds: window plus conditioning context",
         [
@@ -3493,12 +3494,17 @@ def arm_interface() -> None:
         check(
             f"a {job} segment preserves the turbo request fields",
             [(f["name"], f["type"]) for f in segment["type"]["list"]["fields"]
-             if f["name"] != "context_frames"],
+             if f["name"] not in {"context_frames", "non_diegetic_music"}],
             [
                 (f["name"], f["type"])
                 for f in entries["ref2va_turbo"]["request"]["fields"]
                 if f["name"] != "assets"
             ],
+        )
+        check(
+            f"{job} segments expose optional music overrides",
+            next(f for f in segment["type"]["list"]["fields"] if f["name"] == "non_diegetic_music"),
+            {"name": "non_diegetic_music", "type": {"union": ["null", "str"]}, "wire": "optional"},
         )
         check(
             f"per-segment motion context belongs only to long_form ({job})",

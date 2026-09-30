@@ -1669,6 +1669,50 @@
           "weights"
         ]
       }
+    },
+    {
+      "name": "software",
+      "request": {
+        "fields": []
+      },
+      "result": {
+        "fields": [
+          {
+            "name": "python",
+            "type": "str"
+          },
+          {
+            "name": "runtime",
+            "type": "str"
+          },
+          {
+            "name": "runtime_module",
+            "type": "str"
+          },
+          {
+            "name": "source_wheel_sha256",
+            "type": "str"
+          },
+          {
+            "name": "tensorfs",
+            "type": "str"
+          },
+          {
+            "name": "package",
+            "type": "str"
+          },
+          {
+            "name": "explicit_canvas",
+            "type": "bool"
+          },
+          {
+            "name": "cuda_initialized",
+            "type": "bool"
+          }
+        ]
+      },
+      "publishes": false,
+      "accelerator": false
     }
   ]
 }

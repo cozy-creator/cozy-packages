@@ -168,7 +168,7 @@ def encoder_prompt(task: Task, prompt: str) -> str:
     H3 invents score and speech for audio no section describes. The line takes the task's
     upstream layout: fl2va's single-line fields, ref2va's heading-over-value sections.
     """
-    if "non_diegetic_music" in prompt.casefold():
+    if "non_diegetic_music" in prompt.casefold() or "non_diegetic_music" in _sections(prompt):
         return prompt
     line = "non_diegetic_music: N/A" if task.startswith("fl2va") else "non_diegetic_music:\nN/A"
     return "\n\n".join(filter(None, (prompt.rstrip(), line)))
@@ -192,15 +192,24 @@ def compile_segments(
     style: str = "",
     overall_soundscape: str = "",
     non_diegetic_music: str = "N/A",
+    segment_music: Sequence[str | None] | None = None,
 ) -> list[SegmentCall]:
-    """Each segment's child call: its references, renumbered, and the global sections."""
+    """Each child prompt uses its music override, inline score, or overall score."""
     validate_references(references)
     shared = {
         "style": style.strip(),
         "overall_soundscape": overall_soundscape.strip(),
-        "non_diegetic_music": non_diegetic_music.strip() or "N/A",
     }
-    return [_segment_call(text, references, shared, index) for index, text in enumerate(prompts)]
+    overrides = [None] * len(prompts) if segment_music is None else segment_music
+    calls = []
+    for index, (text, override) in enumerate(zip(prompts, overrides, strict=True)):
+        music = non_diegetic_music if override is None else override
+        text = _fill(
+            text, {"non_diegetic_music": music.strip() or "N/A"},
+            replace_music=override is not None,
+        )
+        calls.append(_segment_call(text, references, shared, index))
+    return calls
 
 
 def _slot(ref: StoryReference) -> str:
@@ -330,11 +339,11 @@ def _sections(text: str) -> dict[str, tuple[int, int, int]]:
     return found
 
 
-def _fill(text: str, additions: dict[str, str]) -> str:
+def _fill(text: str, additions: dict[str, str], *, replace_music: bool = False) -> str:
     """Append each addition inside its section, or add the section in canonical order.
 
     Only these insertions change the text. An `N/A` body gives way to described content;
-    a segment's own style, and its own music over a global `N/A`, are kept.
+    a segment's own style and music are kept unless a structured music override is given.
     """
     additions = {name: additions[name] for name in SECTIONS if additions.get(name)}
     if not text.strip():
@@ -345,7 +354,11 @@ def _fill(text: str, additions: dict[str, str]) -> str:
         if name in found:
             _, start, end = found[name]
             body = text[start:end].strip()
-            if body and (name == "style" or addition.upper() == "N/A"):
+            if body and name == "non_diegetic_music" and replace_music:
+                at = text.index(body, start)
+                edits.append((at, order, at + len(body), addition))
+                continue
+            if body and (name in {"style", "non_diegetic_music"} or addition.upper() == "N/A"):
                 continue
             if body.upper() == "N/A":
                 at = text.index(body, start)

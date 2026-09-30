@@ -11,6 +11,10 @@ prompt, so the workflow copies the global information into it.
 - `style`: look shared by generated reference images and every segment (optional).
 - `overall_soundscape`: sound shared by every segment (optional).
 - `non_diegetic_music`: score shared by every segment (default `N/A`).
+  Each segment may override it with its own `non_diegetic_music` string. Omitted or
+  `null` inherits the shared score; blank or `N/A` requests no score. An explicit
+  segment field replaces an inline music section. Without that field, inline music
+  takes precedence over the shared score. This applies to both long-form composers.
 - `segments`: the ordered calls.
 - `context_frames`: global window for `long_form` (0, 22, 39 or 56; default 22).
 - `mode` (`turbo` or `standard`) and `steps` (standard only).
@@ -55,12 +59,11 @@ case, with `_`, `-` or a space between words.
    reference), `retention_analysis` (one line per attached reference, with the
    `[Shot N]` markers that name it), and the global `style` (when set),
    `overall_soundscape` and `non_diegetic_music`.
-   - If the segment already has one of these sections, the global content is appended
-     inside it.
+   - Existing subject, retention, and soundscape sections gain the global content.
    - If the section is missing, it is added in the order above, under the canonical heading.
-   - A body of `N/A` gives way to described global content.
-   - A global `N/A` never replaces a segment's own music, and a segment's own `style`
-     is kept as written.
+   - A body of `N/A` gives way to described global content in those sections.
+   - A segment's own music and `style` are kept as written, unless its explicit
+     `non_diegetic_music` field replaces the music section.
 4. **Everything else** reaches the model byte for byte.
 
 H3's ref2va needs an image. A segment with no scene and no named character therefore
