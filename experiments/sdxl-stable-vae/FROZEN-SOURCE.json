@@ -1,0 +1,15 @@
+{
+  "source": "/home/fidika/cozy/.worktrees/packages/cozy-memory-interleaved-20260929/benchmarks/cozy_memory_interleaved/cohorts/r19-equal-six/packages/sdxl",
+  "source_sha256": {
+    "metadata/package-interface.json": "7a8ffd9adb48a7d9aaaeabd013668b21cba48dc908407b5276d9d837ac66ed6a",
+    "package.toml": "ddb9b7cba77ce3819f89f9be3f60242ef1d62e8b053b4a69d0932e3a38bb9c19",
+    "pyproject.toml": "91c5b4c515d851b9376fbebbaf8db27791ee71762b17cd069d309a619f49e5b4",
+    "sdxl/__init__.py": "f2e7991c350fa102de3c2dccc91cd2772b54b90f632827c0cf50d0ce7b49380e",
+    "sdxl/capture.py": "ba25feb5b2a315867685c2573ed26327a2334620c59879d759f50626dfeec8b4",
+    "sdxl/clip_merges.txt": "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a",
+    "sdxl/clip_vocab.json": "e089ad92ba36837a0d31433e555c8f45fe601ab5c221d4f607ded32d9f7a4349",
+    "sdxl/operations.py": "ede13b9643fb4703e8e3d4c96018ca15b37d81dd42eb9784f9b1416b3633047b",
+    "uv.lock": "e4053079fc6bc7bbaa585fb7e61d3f863b44c85b877fb852daf0a1f0a271ccbd"
+  },
+  "scope": "private experiment; only persistent successful VAE execution dtype changes author code; unchanged R19 dependency versions/model/input"
+}
