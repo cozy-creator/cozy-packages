@@ -240,10 +240,11 @@ def _hidiffusion_unet_type() -> type[Any]:
                     # so a step that ran out of device memory may run again. Runtimes before
                     # memory v3 have no `pure`: nothing to mark there.
                     mark = getattr(cozy_author, "pure", None)
-                    for handle in self.info["hooks"] if mark is not None else ():
-                        hook = self._forward_pre_hooks.get(handle.id)
-                        if hook is not None:
-                            mark(hook)
+                    if mark is not None:
+                        for handle in self.info["hooks"]:
+                            hook = self._forward_pre_hooks.get(handle.id)
+                            if hook is not None:
+                                mark(hook)
                 else:
                     remove_hidiffusion(self)
                     self.num_upsamplers = self._cozy_base_num_upsamplers
@@ -716,4 +717,3 @@ async def mxfp8(
 
 app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
 app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
-
