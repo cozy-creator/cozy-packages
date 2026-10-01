@@ -12,8 +12,10 @@ from pathlib import Path
 
 
 def main() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    packages = sorted(path.parent.name for path in repository.glob("*/package.toml"))
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("package", choices=("anima", "minimax-h3", "minimax-h3-tools", "sdxl"))
+    parser.add_argument("package", choices=packages)
     parser.add_argument("--tensorhub", type=Path, required=True, help="Tensorhub operator checkout")
     parser.add_argument(
         "--profile", action="append", required=True, help="supported worker profile"
@@ -23,7 +25,6 @@ def main() -> None:
     parser.add_argument("--secrets-dir", type=Path)
     parser.add_argument("--check-only", action="store_true", help="check without publishing")
     args = parser.parse_args()
-    repository = Path(__file__).resolve().parents[1]
     dirty = subprocess.check_output(
         ["git", "status", "--porcelain", "--", args.package], cwd=repository, text=True
     )
