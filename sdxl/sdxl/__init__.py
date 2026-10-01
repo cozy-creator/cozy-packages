@@ -338,7 +338,7 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
             _tokenizer(loader.assets, "tokenizer_2"),
         )
 
-    @uses_components("text_encoder", "text_encoder_2")
+    @uses_components("text_encoder", "text_encoder_2", memoize=True)
     def encode(self, ids: Any, ids_2: Any) -> tuple[Any, Any]:
         """SDXL's two-tower conditioning. ONE method, BOTH encoders — a composite operation
         declares its components together rather than opening two scopes.
