@@ -97,7 +97,9 @@ from msgspec.structs import replace
 
 from assembly import CutJoin, ScanAhead, assemble_video
 from gates import MediaFacts, refuse_before_encode, report_after_encode
-from long_form_state import RenderProvenance, compatible, context_provenance, provenance
+from long_form_state import (
+    RenderProvenance, compatible, compatible_base, context_provenance, provenance,
+)
 from qwen_image_2 import AspectRatio as ReferenceAspectRatio
 from qwen_image_2 import ImageOutput as ReferenceImageOutput
 from qwen_image_2 import Megapixels as ReferenceMegapixels
@@ -1073,9 +1075,10 @@ ContextFrames = Literal[0, 22, 39, 56]
 
 
 class StorySegment(ClipInput, kw_only=True):
-    """One story segment; omitted music inherits the overall score."""
+    """One story segment; false selects standard sampling in a Turbo story."""
 
     non_diegetic_music: str | None = None
+    turbo: bool = True
 
 
 class LongFormSegment(StorySegment, kw_only=True):
@@ -1150,10 +1153,12 @@ CutAssets = Annotated[
 
 class CutInput(StandardClipInput, kw_only=True):
     expected_provenance: RenderProvenance | None = None
+    previous_provenance: RenderProvenance | None = None
 
 
 class CutTurboInput(ClipInput, kw_only=True):
     expected_provenance: RenderProvenance | None = None
+    previous_provenance: RenderProvenance | None = None
 
 
 def _render_cut(
@@ -1171,6 +1176,7 @@ def _render_cut(
         model.checkpoint_ref, "" if turbo_lora is None else turbo_lora.checkpoint_ref
     )
     compatible(observed, payload.expected_provenance)
+    compatible_base(observed, payload.previous_provenance)
     _reference_policy(assets)
     task: Task = "ref2va" if turbo_lora is None else "ref2va_turbo"
     shot = _references_to_video(
@@ -1249,6 +1255,7 @@ class MotionInput(msgspec.Struct):
     frames: int
     context_frames: ContextFrames = 22
     expected_provenance: RenderProvenance | None = None
+    previous_provenance: RenderProvenance | None = None
     context: MotionContextAsset | None = None
     # Windows a successor may select from this shot's context; empty exports none.
     next_context_frames: tuple[Literal[22, 39, 56], ...] = ()
@@ -1275,6 +1282,7 @@ def _render_motion(
         model.checkpoint_ref, "" if turbo_lora is None else turbo_lora.checkpoint_ref
     )
     compatible(observed, payload.expected_provenance)
+    compatible_base(observed, payload.previous_provenance)
     native_provenance = context_provenance(observed)
     context = (
         decode_context(payload.context.read_bytes())
@@ -1318,7 +1326,7 @@ def _render_motion(
         turbo_lora=turbo_lora,
         context=context,
         delivery=delivery,
-        expected_context_provenance=native_provenance,
+        expected_context_provenance=context_provenance(payload.previous_provenance or observed),
         completed=save_completed_context if payload.next_context_frames else None,
     )
     return MotionOutput(
@@ -1379,6 +1387,18 @@ class LongFormCutsInput(msgspec.Struct):
     non_diegetic_music: str = "N/A"
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
+
+
+def segment_sampling(
+    payload: LongFormInput | LongFormCutsInput,
+) -> tuple[list[bool], list[int]]:
+    turbo = [payload.mode == "turbo" and shot.turbo for shot in payload.segments]
+    if any(turbo) and payload.steps is not None:
+        raise InvalidRequest(
+            "turbo fixes eight PDD evaluations; omit steps or select mode=standard",
+            fields=["mode", "steps"],
+        )
+    return turbo, [TURBO_STEPS if selected else payload.steps or DEFAULT_STEPS for selected in turbo]
 
 
 def log_prompt(tel: Telemetry, event: str, prompt: str, **fields: str | int) -> None:
@@ -1461,20 +1481,20 @@ async def long_form_cuts(
     "silently, lips closed" where no one speaks.
     """
     ctx.raise_if_cancelled()
-    if payload.mode == "turbo" and payload.steps is not None:
-        raise InvalidRequest("turbo fixes eight PDD evaluations; omit steps", fields=["steps"])
-    steps = TURBO_STEPS if payload.mode == "turbo" else payload.steps or DEFAULT_STEPS
+    turbo, steps = segment_sampling(payload)
     calls = segment_calls(payload)
     planned_frames = [frames_for(shot.duration_s) for shot in payload.segments]
-    render_work = [frames * steps for frames in planned_frames]
+    render_work = [frames * count for frames, count in zip(planned_frames, steps, strict=True)]
     reference_steps = 40
     reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * reference_steps
     total_work = sum(render_work) + reference_work
-    prefetch(cut_segment_turbo if payload.mode == "turbo" else cut_segment)
+    for sampler_turbo in dict.fromkeys(turbo):
+        prefetch(cut_segment_turbo if sampler_turbo else cut_segment)
     references: list[ImageAsset] = []
     images = await _create_references(ctx, payload.references, tel, out, references, style=payload.style)
     completed_work = reference_work
     expected = None
+    renderers: dict[bool, RenderProvenance] = {}
     warnings = [warning for call in calls for warning in call.warnings]
     count = len(payload.segments)
     cut = CutJoin(decoder, out, ctx.raise_if_cancelled)
@@ -1509,13 +1529,14 @@ async def long_form_cuts(
                             (completed_work + render_work[index]) / total_work,
                         ),
                     ):
-                        if payload.mode == "turbo":
+                        if turbo[index]:
                             result = await cut_segment_turbo(  # type: ignore[call-arg]
                                 payload=CutTurboInput(
                                     prompt=prompt,
                                     seed=seed,
                                     duration_s=shot.duration_s,
-                                    expected_provenance=expected,
+                                    expected_provenance=renderers.get(True),
+                                    previous_provenance=expected,
                                 ),
                                 assets=assets,
                             )
@@ -1524,9 +1545,10 @@ async def long_form_cuts(
                                 payload=CutInput(
                                     prompt=prompt,
                                     seed=seed,
-                                    steps=steps,
+                                    steps=steps[index],
                                     duration_s=shot.duration_s,
-                                    expected_provenance=expected,
+                                    expected_provenance=renderers.get(False),
+                                    previous_provenance=expected,
                                 ),
                                 assets=assets,
                             )
@@ -1536,7 +1558,9 @@ async def long_form_cuts(
                         f"shot {index + 1} of {count} failed ({failure.code}): {str(failure)[:512]}",
                         code="segment_failed",
                     ) from failure
-                compatible(result.provenance, expected)
+                compatible(result.provenance, renderers.get(turbo[index]))
+                compatible_base(result.provenance, expected)
+                renderers[turbo[index]] = result.provenance
                 expected = result.provenance
                 scanning.add(result.video)
                 warnings.extend(result.warnings)
@@ -1582,16 +1606,7 @@ async def long_form(
     "silently, lips closed" where no one speaks.
     """
     ctx.raise_if_cancelled()
-    if payload.mode == "turbo" and payload.steps is not None:
-        raise InvalidRequest(
-            "turbo fixes eight PDD evaluations; omit steps or select mode=standard",
-            fields=["mode", "steps"],
-        )
-    steps = (
-        TURBO_STEPS
-        if payload.mode == "turbo"
-        else (DEFAULT_STEPS if payload.steps is None else payload.steps)
-    )
+    turbo, steps = segment_sampling(payload)
     calls = segment_calls(payload)
     windows = context_windows(payload)
     # Motion context shares the native window with new frames. Shorten requested
@@ -1620,15 +1635,17 @@ async def long_form(
         )
         for index, duration in enumerate(durations)
     ]
-    render_work = [plan.sample_frames * steps for plan in plans]
+    render_work = [plan.sample_frames * count for plan, count in zip(plans, steps, strict=True)]
     reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * 40
     total_work = sum(render_work) + reference_work
-    prefetch(motion_segment_turbo if payload.mode == "turbo" else motion_segment)
+    for sampler_turbo in dict.fromkeys(turbo):
+        prefetch(motion_segment_turbo if sampler_turbo else motion_segment)
     references: list[ImageAsset] = []
     images = await _create_references(ctx, payload.references, tel, out, references, style=payload.style)
     completed_work = reference_work
     context = None
     expected: RenderProvenance | None = None
+    renderers: dict[bool, RenderProvenance] = {}
     count = len(payload.segments)
     cut = CutJoin(decoder, out, ctx.raise_if_cancelled)
     joining: asyncio.Future[None] | None = None
@@ -1665,14 +1682,15 @@ async def long_form(
                             prompt=calls[index].prompt,
                             seed=seed,
                             duration_s=durations[index],
-                            steps=steps,
+                            steps=steps[index],
                             frames=held_frames(plans[index]),
-                            expected_provenance=expected,
+                            expected_provenance=renderers.get(turbo[index]),
+                            previous_provenance=expected,
                             context=context if windows[index] else None,
                             context_frames=windows[index],
                             next_context_frames=(next_window,) if next_window else (),
                         )
-                        if payload.mode == "turbo":
+                        if turbo[index]:
                             call = motion_segment_turbo(payload=child_payload, assets=assets)  # type: ignore[call-arg]
                         else:
                             call = motion_segment(payload=child_payload, assets=assets)  # type: ignore[call-arg]
@@ -1685,7 +1703,9 @@ async def long_form(
                         f"segment {index + 1} of {count} failed ({failure.code}): {str(failure)[:512]}",
                         code="segment_failed",
                     ) from failure
-                compatible(shot_result.provenance, expected)
+                compatible(shot_result.provenance, renderers.get(turbo[index]))
+                compatible_base(shot_result.provenance, expected)
+                renderers[turbo[index]] = shot_result.provenance
                 expected = shot_result.provenance
                 scanning.add(shot_result.video)
                 warnings.extend(shot_result.warnings)
@@ -1710,7 +1730,7 @@ async def long_form(
     tel.log(
         "h3 long-form delivery",
         mode=payload.mode,
-        steps=steps,
+        steps=", ".join(str(count) for count in steps),
         segments=count,
         delivered_frames=delivered_frames,
     )

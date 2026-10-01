@@ -126,7 +126,10 @@ The H3 package exposes both official actions from one model generation. Its norm
 `long_form` defaults to `mode="turbo"`: each shot uses eight PDD evaluations, the
 published FP8-pruned base and the separate PDD-8 adapter. Omit `steps` in turbo mode.
 For standard sampling, select `mode="standard"`; omitted `steps` then means 30,
-with explicit 30/40/50 also supported. The CPU parent renders and assembles remotely,
+with explicit 30/40/50 also supported. In either long-form composer, a segment's
+`turbo` defaults to `true`. Set `turbo: false` for a standard 30-step segment within
+a Turbo story. Global `mode="standard"` takes precedence and keeps every segment
+standard, including segments whose `turbo` is `true`. The CPU parent renders and assembles remotely,
 returning only the joined MP4. Intermediate shot clips stay inside the serving calls. A
 partial delivery includes its playable completed portion.
 Four-GPU placement is chosen when submitting the run, not by the composition function.

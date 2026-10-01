@@ -100,7 +100,7 @@ exec(compile(reference_code, "generated-reference-image-caller", "exec"), refere
 REFERENCE_BINDING = cast(Any, reference_module).__cozy_bindings__["generate_image"]
 sys.path.insert(0, str(ROOT / "minimax-h3"))
 import h3  # noqa: E402
-from long_form_state import RenderProvenance  # noqa: E402
+from long_form_state import RenderProvenance, context_provenance  # noqa: E402
 from story import (  # noqa: E402
     StoryReference,
     compile_segments,
@@ -144,6 +144,8 @@ async def renderer(
     payload: h3.CutInput,
     assets: h3.CutAssets,
     turbo: bool,
+    model_manifest: str = MODEL,
+    adapter_manifest: str = LORA,
     out: Outputs,
     tel: Telemetry,
 ) -> h3.SegmentOutput:
@@ -188,11 +190,11 @@ async def renderer(
             ctx,
             payload,
             assets,
-            cast(Any, SimpleNamespace(checkpoint_ref=MODEL)),
+            cast(Any, SimpleNamespace(checkpoint_ref=model_manifest)),
             out,
             tel,
             steps=8 if turbo else payload.steps,
-            turbo_lora=cast(Any, SimpleNamespace(checkpoint_ref=LORA)) if turbo else None,
+            turbo_lora=cast(Any, SimpleNamespace(checkpoint_ref=adapter_manifest)) if turbo else None,
         )
     finally:
         h3._references_to_video, h3._render_keyframes = original[:2]
@@ -206,18 +208,23 @@ async def motion_renderer(
     payload: h3.MotionInput,
     assets: h3.CutAssets,
     turbo: bool,
+    model_manifest: str = MODEL,
+    adapter_manifest: str = LORA,
     out: Outputs,
     tel: Telemetry,
 ) -> h3.MotionOutput:
+    renderer_provenance = RenderProvenance(model_manifest, adapter_manifest if turbo else "")
+    previous_provenance = context_provenance(payload.previous_provenance or renderer_provenance)
+
     def refs(_ctx: Any, task: str, request: Any, images: Any, *_: Any, **kwargs: Any) -> Any:
         assert task == ("ref2va_turbo" if turbo else "ref2va")
         ROUTES.append(task)
-        assert images and kwargs["expected_context_provenance"] == CODE
+        assert images and kwargs["expected_context_provenance"] == previous_provenance
         present(images, request.prompt)
         context, delivery = kwargs["context"], kwargs["delivery"]
         if context is not None:
             assert context.frame_count == payload.context_frames
-            assert context.provenance == CODE
+            assert context.provenance == previous_provenance
         assert delivery.prefix_frames == (0 if context is None else payload.context_frames)
         tel.step_callback(payload.steps, stage="denoise", overall_range=(0.15, 0.85))(2)
         count = delivery.delivered_frames
@@ -237,7 +244,7 @@ async def motion_renderer(
                     )
                     for frames in payload.next_context_frames
                 },
-                HEIGHT, WIDTH, count, CODE, max(payload.next_context_frames),
+                HEIGHT, WIDTH, count, context_provenance(renderer_provenance), max(payload.next_context_frames),
             )
             kwargs["completed"](tail, rgb)
         else:
@@ -246,17 +253,16 @@ async def motion_renderer(
 
     def export(state: Any, *, frames: Any, windows: Any, provenance: str) -> Any:
         # The delivered frames as landed, and only the windows the successor selects.
-        assert len(frames) == payload.duration_s * FPS and provenance == CODE
+        assert len(frames) == payload.duration_s * FPS and provenance == context_provenance(renderer_provenance)
         assert tuple(windows) == payload.next_context_frames == tuple(state.windows)
         return state
 
     stubbed = cast(Any, h3)
-    original = h3._references_to_video, stubbed.provenance, stubbed.context_provenance
+    original = h3._references_to_video, stubbed.provenance
     h3._references_to_video = cast(Any, refs)
     stubbed.provenance = lambda model, adapter="": RenderProvenance(model, adapter)
-    stubbed.context_provenance = lambda _: CODE
     model = SimpleNamespace(
-        checkpoint_ref=MODEL,
+        checkpoint_ref=model_manifest,
         export_completed_av_tail=export,
     )
     try:
@@ -267,10 +273,10 @@ async def motion_renderer(
             cast(Any, model),
             out,
             tel,
-            turbo_lora=cast(Any, SimpleNamespace(checkpoint_ref=LORA)) if turbo else None,
+            turbo_lora=cast(Any, SimpleNamespace(checkpoint_ref=adapter_manifest)) if turbo else None,
         )
     finally:
-        h3._references_to_video, stubbed.provenance, stubbed.context_provenance = original
+        h3._references_to_video, stubbed.provenance = original
 
 
 CHILD = App()
@@ -301,17 +307,25 @@ def drive(
     style: str = "",
     music: str = "N/A",
     segment_music: tuple[str | None, ...] | None = None,
+    segment_turbo: tuple[bool | int | str | None, ...] | None = None,
+    provenance_change: tuple[int, Literal["base", "adapter"]] | None = None,
 ) -> dict[str, Any]:
     root.mkdir()
     local_windows = segment_context_frames or (None,) * count
     assert len(local_windows) == count
+    local_turbo = segment_turbo or (None,) * count
+    assert len(local_turbo) == count
+    selected_turbo = [turbo and selected is not False for selected in local_turbo]
     windows = [0] + [
         0 if local_windows[index] is False else (22 if context_frames is None else context_frames)
         for index in range(1, count)
     ]
     parent = root.name if request_id is None else request_id
-    export = ("motion_segment" if continuous else "cut_segment") + ("_turbo" if turbo else "")
-    surface = next(item for item in describe(h3.app) if item.name == export)
+    exports = {
+        ("motion_segment" if continuous else "cut_segment") + ("_turbo" if selected else "")
+        for selected in selected_turbo
+    }
+    surfaces = {item.name: item for item in describe(h3.app) if item.name in exports}
     calls: list[ChildCall] = []
     prefetches: list[ModelPrefetch] = []
     events: list[Any] = []
@@ -409,12 +423,18 @@ def drive(
             grants = {}
         else:
             assert completed_references == {0, 1}, "H3 started before every reference settled"
-            for name in ("base_model", "turbo_lora") if turbo else ("model",):
+            shot_turbo = request.export.endswith("_turbo")
+            assert shot_turbo == selected_turbo[shot_index]
+            for name in ("base_model", "turbo_lora") if shot_turbo else ("model",):
                 assert wire.pop(name) is None
             assert "first_frame" not in wire["payload"] and "last_frame" not in wire["payload"]
-            if turbo and not continuous:
+            if shot_turbo and not continuous:
                 wire["payload"]["steps"] = 30
-            wire["turbo"] = turbo
+            elif continuous:
+                assert wire["payload"]["steps"] == (8 if shot_turbo else 30)
+            wire["turbo"] = shot_turbo
+            if provenance_change is not None and shot_index == provenance_change[0]:
+                wire["model_manifest" if provenance_change[1] == "base" else "adapter_manifest"] = "sha256:" + "4" * 64
             grants = {
                 f"assets.{i}.asset": grant(f"assets.{i}.asset", item["asset"], i)
                 for i, item in enumerate(wire["assets"])
@@ -443,7 +463,10 @@ def drive(
                     ),
                 ),
             ).result()
-        assert outcome.terminal == "succeeded", outcome
+        if outcome.terminal != "succeeded":
+            assert provenance_change is not None and shot_index == provenance_change[0], outcome
+            assert outcome.code == "render_provenance", outcome
+            return CallState(ok=False, code=outcome.code, detail=outcome.message)
         assert child_activity and child_activity[-1][1:] == (False, True, True), child_activity
         assert result is not None
         outputs: list[dict[str, Any]] = []
@@ -525,6 +548,7 @@ def drive(
                 **({"seed": 0} if index == 0 else {}),
                 **({"context_frames": local_windows[index]} if local_windows[index] is not None else {}),
                 **({"non_diegetic_music": segment_music[index]} if segment_music is not None else {}),
+                **({"turbo": local_turbo[index]} if local_turbo[index] is not None else {}),
             }
             for index in range(count)
         ],
@@ -596,13 +620,16 @@ def drive(
     broker = _Broker(
         parent,
         {
-            ("h3", export): _CallType(
-                "sha256:" + "5" * 64,
-                "h3",
-                export,
-                cast(type[msgspec.Struct], surface.payload_type),
-                h3.MotionOutput if continuous else h3.SegmentOutput,
-            ),
+            **{
+                ("h3", export): _CallType(
+                    "sha256:" + "5" * 64,
+                    "h3",
+                    export,
+                    cast(type[msgspec.Struct], surface.payload_type),
+                    h3.MotionOutput if continuous else h3.SegmentOutput,
+                )
+                for export, surface in surfaces.items()
+            },
             ("qwen_image_2", "generate_image"): REFERENCE_BINDING,
         },
         exchange,
@@ -632,6 +659,10 @@ def drive(
     if reference_failure:
         assert result is None and outcome.terminal != "succeeded", outcome
         assert len(calls) == 2 and 0 in canceled_children
+        return {}
+    if provenance_change is not None:
+        assert result is None and outcome.code == "segment_failed", outcome
+        assert len(calls) == provenance_change[0] + 3
         return {}
     if refuse:
         # Refused before any reference image, model preparation or render child.
@@ -722,7 +753,7 @@ def drive(
     styled = ["style:\nMuted pastel watercolor." in row["payload"]["prompt"] for row in sent]
     assert styled == [bad == "unknown-fields"] * len(sent), styled
     assert sent[0]["payload"]["seed"] == 0
-    assert len(prefetches) == 1
+    assert len(prefetches) == len(set(selected_turbo))
     # The scene (Bridge) first, then the character the text names and its voice.
     fixed = [json.loads(answers[index].result)["image"]["digest"] for index in (1, 0)]
     fixed += [voice] if audio else []
@@ -779,6 +810,21 @@ def main() -> None:
     drive(root / "long-prompt", prompt="x" * 20000)
     drive(root / "unknown-fields", bad="unknown-fields")
     for continuous in (False, True):
+        drive(root / f"mixed-turbo-{continuous}", continuous=continuous, count=5,
+              segment_turbo=(True, False, True, False, True))
+        drive(root / f"mixed-turbo-no-context-{continuous}", continuous=continuous,
+              segment_turbo=(True, False, True), context_frames=0)
+        drive(root / f"mixed-turbo-cut-{continuous}", continuous=continuous,
+              segment_turbo=(False, True, False), segment_context_frames=(True, False, True))
+        drive(root / f"global-standard-{continuous}", continuous=continuous, count=2,
+              turbo=False, segment_turbo=(True, True))
+        for invalid in ("false", "true", 0, 1):
+            drive(root / f"strict-turbo-{continuous}-{invalid}", continuous=continuous,
+                  count=1, segment_turbo=(invalid,), refuse=True)
+        drive(root / f"mixed-base-refused-{continuous}", continuous=continuous,
+              segment_turbo=(True, False, True), provenance_change=(1, "base"))
+        drive(root / f"mixed-adapter-refused-{continuous}", continuous=continuous,
+              segment_turbo=(True, False, True), provenance_change=(2, "adapter"))
         drive(root / f"music-{continuous}", continuous=continuous, count=5,
               music="Gentle strings.", segment_music=(None, "Solo piano.", "N/A", "", "Soft drums."))
         for style_name in ("realistic", "anime", "watercolor"):

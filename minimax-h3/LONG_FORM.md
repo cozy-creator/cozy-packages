@@ -19,6 +19,30 @@ prompt, so the workflow copies the global information into it.
 - `context_frames`: global window for `long_form` (0, 22, 39 or 56; default 22).
 - `mode` (`turbo` or `standard`) and `steps` (standard only).
 
+Both long-form composers default to Turbo: eight PDD evaluations per segment.
+Each segment accepts a boolean `turbo`, defaulting to `true`. Set `turbo: false`
+for a standard 30-step segment, such as a shot with complex motion. Global
+`mode: standard` takes precedence and makes every segment standard; its optional
+`steps` still selects 30, 40 or 50. Omit global `steps` whenever any segment uses Turbo.
+Strings and numbers are not valid segment `turbo` values.
+
+```yaml
+segments:
+  - duration_s: 6
+    prompt: "<Rover> approaches <Bridge>."
+  - duration_s: 6
+    turbo: false
+    context_frames: false
+    prompt: "<Rover> leaps across the gap at <Bridge>."
+  - duration_s: 6
+    prompt: "<Rover> rolls away from <Bridge>."
+```
+
+`turbo` and `context_frames` are independent. Switching samplers keeps the same
+base checkpoint and ordinary references. When continuation is enabled, the next
+segment receives the completed audio/video context from its actual previous
+segment, including a previous segment rendered with the other sampler.
+
 Unknown fields are ignored, not refused; a missing required field, such as a misspelled
 `duration_s`, still refuses.
 

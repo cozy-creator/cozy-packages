@@ -3414,6 +3414,8 @@ def arm_interface() -> None:
             "request/payload/expected_provenance",
             "request/payload/expected_provenance/union/1/turbo_lora_manifest",
             "request/payload/next_context_frames",
+            "request/payload/previous_provenance",
+            "request/payload/previous_provenance/union/1/turbo_lora_manifest",
             "result/provenance/turbo_lora_manifest",
         ],
     )

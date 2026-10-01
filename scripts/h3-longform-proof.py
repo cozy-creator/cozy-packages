@@ -31,6 +31,12 @@ def main() -> None:
         )
         assert results[str(frames)]["frames"] == 720
     proof.drive(root / "standard", continuous=True, turbo=False)
+    proof.drive(root / "turbo-standard-turbo", continuous=True,
+                segment_turbo=(True, False, True))
+    proof.drive(root / "standard-turbo-standard", continuous=True,
+                segment_turbo=(False, True, False))
+    proof.drive(root / "mixed-cut", continuous=True,
+                segment_turbo=(True, False, True), segment_context_frames=(True, False, True))
     proof.drive(root / "partial", continuous=True, fail=2)
     proof.drive(root / "cancel", continuous=True, cancel=1)
     proof.drive(root / "first-fails", continuous=True, fail=0)
