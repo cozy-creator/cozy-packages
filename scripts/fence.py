@@ -171,6 +171,10 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    ("scripts/qwen-image-2-model-proof.py", "cozy_runtime.author._activity"): (
+        "Observe the executor's cooperative-timing frames around the staged model and its "
+        "pipeline progress adapter. Retire when the author surface exposes the observer."
+    ),
     ("scripts/h3-conform.py", "cozy_runtime.author._attention_scope"): (
         "Read the actual active context in real CPU DiT hooks to verify scope lifetime "
         "and exception restoration. No package serving code reads this private context."

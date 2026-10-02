@@ -173,26 +173,6 @@ class _StagedPipeline(_Pipeline):
         return latents, image_latents
 
 
-def prefix_cache_bytes(transformer: Any, prefix_tokens: int) -> int:
-    """Bytes of the post-RoPE K and V the denoiser caches for every prefix token."""
-    config = transformer.config
-    per_token = int(
-        2 * config.num_attention_heads * config.attention_head_dim * transformer.dtype.itemsize
-    )
-    return int(prefix_tokens) * int(config.num_layers) * per_token
-
-
-def _prefix_cache_fits(
-    transformer: Any, embeds: Any, reference_latents: Any, device: torch.device
-) -> bool:
-    if device.type != "cuda":
-        return True
-    prefix = embeds.shape[1] + (0 if reference_latents is None else reference_latents.shape[1])
-    free, _total = torch.cuda.mem_get_info(device)
-    unused = torch.cuda.memory_reserved(device) - torch.cuda.memory_allocated(device)
-    return bool(prefix_cache_bytes(transformer, prefix) < free + unused)
-
-
 #: Runtime code the encoders read beyond their own bodies: their memo key binds it.
 _ENCODER_CODE = (_StagedPipeline, build_processor)
 
@@ -312,13 +292,10 @@ class QwenImage21Model(Model[QwenImage21Graph]):
         # The prefix KV cache (text, vision and reference tokens, every layer) grows by
         # ~2 GiB per 1 MP reference. It is an exact speedup: when the card cannot hold it,
         # recompute the prefix each step instead, slower but the same image.
-        if _prefix_cache_fits(transformer, embeds, reference_latents, device):
-            try:
-                return run(use_kv_cache=True)
-            except torch.OutOfMemoryError:
-                pass
-            torch.cuda.empty_cache()
-        return run(use_kv_cache=False)
+        try:
+            return run(use_kv_cache=True)
+        except torch.OutOfMemoryError:
+            return run(use_kv_cache=False)
 
     @uses_components("vae")
     def decode(self, latents: Any, *, width: int, height: int) -> Any:

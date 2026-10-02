@@ -7,35 +7,40 @@ owns a fresh Python process, and its activity observer is process state.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import subprocess
 import sys
 import tempfile
+import threading
+import zlib
 from pathlib import Path
 from typing import Any
 
 import torch
+from cozy_runtime.author import Config
+from cozy_runtime.author._activity import event_loop, observing
+from diffusers import FlowMatchEulerDiscreteScheduler, QwenImage21Pipeline
+from tokenizers import Tokenizer, models, pre_tokenizers
+from transformers import (
+    PreTrainedTokenizerFast,
+    Qwen2VLImageProcessor,
+    Qwen3VLProcessor,
+    Qwen3VLVideoProcessor,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "qwen-image-2"))
 
+from qwen_image_2.model import (  # noqa: E402
+    QwenImage21Model,
+    _StagedPipeline,
+    build_processor,
+    build_qwen_image21,
+)
+
 
 def staged(tmp_path: Path) -> None:
-    import base64
-    import zlib
-
-    from diffusers import FlowMatchEulerDiscreteScheduler, QwenImage21Pipeline
-    from tokenizers import Tokenizer, models, pre_tokenizers
-    from transformers import (
-        PreTrainedTokenizerFast,
-        Qwen2VLImageProcessor,
-        Qwen3VLProcessor,
-        Qwen3VLVideoProcessor,
-    )
-
-    from cozy_runtime.author import Config
-    from cozy_runtime.author._activity import observing
-    from qwen_image_2.model import QwenImage21Model, build_processor, build_qwen_image21
-
     config = {
         "transformer": dict(
             patch_size=1,
@@ -227,12 +232,6 @@ def staged(tmp_path: Path) -> None:
 
 
 def progress() -> None:
-    import asyncio
-    import threading
-
-    from cozy_runtime.author._activity import event_loop, observing
-    from qwen_image_2.model import _StagedPipeline
-
     pipeline: Any = object.__new__(_StagedPipeline)
     pipeline.set_progress_bar_config(disable=True)
     for _ in range(2):
