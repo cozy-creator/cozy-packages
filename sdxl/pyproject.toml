@@ -5,10 +5,10 @@
 
 [project]
 name = "sdxl"
-version = "2.4.0"
+version = "2.5.0"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media]>=0.18.67",
+    "cozy-runtime[media]>=0.18.101",
     "diffusers>=0.40.0",
     "hf-xet>=1.6.0",
     "hidiffusion>=0.1.10",
