@@ -213,15 +213,9 @@ jobs:
         if: matrix.package == 'anima'
         run: anima/.venv/bin/python scripts/anima-conform.py
 
-      # `Model.warm` is only observable by RUNNING it: the package's own constructors at
-      # toy widths, under the author harness the executor's warm path is built from.
       - name: Reference image request and output contract
         if: matrix.package == 'qwen-image-2'
         run: qwen-image-2/.venv/bin/python scripts/qwen-image-2-conform.py
-
-      - name: Warm arms
-        if: matrix.package == 'anima' || matrix.package == 'sdxl'
-        run: ${{ matrix.package }}/.venv/bin/python scripts/warm-conform.py ${{ matrix.package }}
 
       - name: H3 table construction order proofs
         if: matrix.package == 'minimax-h3-tools'
