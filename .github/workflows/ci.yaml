@@ -217,6 +217,10 @@ jobs:
         if: matrix.package == 'qwen-image-2'
         run: qwen-image-2/.venv/bin/python scripts/qwen-image-2-conform.py
 
+      - name: Reference image model equals the Diffusers pipeline
+        if: matrix.package == 'qwen-image-2'
+        run: CUDA_VISIBLE_DEVICES='' qwen-image-2/.venv/bin/python scripts/qwen-image-2-model-proof.py
+
       - name: H3 table construction order proofs
         if: matrix.package == 'minimax-h3-tools'
         run: |

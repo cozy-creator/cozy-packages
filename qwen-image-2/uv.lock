@@ -132,15 +132,6 @@ wheels = [
 media = [
     { name = "av" },
 ]
-qwen-image21 = [
-    { name = "diffusers" },
-    { name = "numpy" },
-    { name = "safetensors" },
-    { name = "tokenizers" },
-    { name = "torch" },
-    { name = "torchvision" },
-    { name = "transformers" },
-]
 
 [[package]]
 name = "cryptography"
@@ -238,11 +229,10 @@ nvtx = [
 
 [[package]]
 name = "diffusers"
-version = "0.40.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.41.0.dev0"
+source = { git = "https://github.com/huggingface/diffusers?rev=578c9b2c6636ab2424a0e56186268b83623656b2#578c9b2c6636ab2424a0e56186268b83623656b2" }
 dependencies = [
     { name = "filelock" },
-    { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "importlib-metadata" },
     { name = "numpy" },
@@ -250,10 +240,6 @@ dependencies = [
     { name = "regex" },
     { name = "requests" },
     { name = "safetensors" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/59/32/b9c6a198812e2a7d2c2828a850dba384306f9af285eac23e35e89d5b008a/diffusers-0.40.0.tar.gz", hash = "sha256:49f112ce52ff6d332ab68afec01f79a53e6489b42cb69104444c98b4a2f64af8", size = 4886420, upload-time = "2026-08-20T14:30:40.923Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/db/df/ffb593ebed2a068d2d6be44261283f39a6b809c0fcdfdcafbd448cbeec77/diffusers-0.40.0-py3-none-any.whl", hash = "sha256:5b5da7c3ddb62152fa4afc577f02e050af688c797375c34fb2d01006da3f3541", size = 5911654, upload-time = "2026-08-20T14:30:38.422Z" },
 ]
 
 [[package]]
@@ -703,21 +689,33 @@ wheels = [
 
 [[package]]
 name = "qwen-image-2"
-version = "0.2.5"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
-    { name = "cozy-runtime", extra = ["media", "qwen-image21"] },
+    { name = "cozy-runtime", extra = ["media"] },
+    { name = "diffusers" },
     { name = "msgspec" },
     { name = "numpy" },
     { name = "pillow" },
+    { name = "safetensors" },
+    { name = "tokenizers" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "transformers" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media", "qwen-image21"], specifier = ">=0.18.67" },
+    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.18.67" },
+    { name = "diffusers", git = "https://github.com/huggingface/diffusers?rev=578c9b2c6636ab2424a0e56186268b83623656b2" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=12" },
+    { name = "safetensors", specifier = ">=0.8" },
+    { name = "tokenizers", specifier = ">=0.23.1" },
+    { name = "torch", specifier = ">=2.13" },
+    { name = "torchvision", specifier = ">=0.28" },
+    { name = "transformers", specifier = ">=5.17" },
 ]
 
 [[package]]
