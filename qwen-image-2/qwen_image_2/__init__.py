@@ -18,8 +18,9 @@ from cozy_runtime.author import (
     Shape,
     Telemetry,
 )
-from cozy_runtime.models.qwen_image21 import QwenImage21Model
 from PIL import Image
+
+from .model import QwenImage21Model
 
 app = App()
 Background = Literal["normal", "white"]

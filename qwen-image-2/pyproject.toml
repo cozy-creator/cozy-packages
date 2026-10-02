@@ -1,13 +1,21 @@
 [project]
 name = "qwen-image-2"
-version = "0.2.5"
+version = "0.3.0"
 description = "Cozy image generation and reference editing using Qwen-Image-2.1"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media,qwen-image21]>=0.18.67",
+    # 0.18.101: memoized Model methods, and machines that install a carried wheel.
+    "cozy-runtime[media]>=0.18.101",
+    # Qwen-Image-2.1 is in Diffusers main, not yet in a release.
+    "diffusers @ git+https://github.com/huggingface/diffusers@578c9b2c6636ab2424a0e56186268b83623656b2",
     "msgspec>=0.19",
     "numpy>=1.26",
     "pillow>=12",
+    "safetensors>=0.8",
+    "tokenizers>=0.23.1",
+    "torch>=2.13",
+    "torchvision>=0.28",
+    "transformers>=5.17",
 ]
 
 [project.entry-points."cozy.application"]
@@ -16,6 +24,9 @@ default = "qwen_image_2:app"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["qwen_image_2"]
