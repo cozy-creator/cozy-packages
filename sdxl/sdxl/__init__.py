@@ -29,11 +29,8 @@ What it adds over cr-008b's corpus fixture, which it is otherwise faithful to (i
   * AN OUTPUT-INTEGRITY FLOOR. A decode that produced NaNs, or a flat field with no
     picture in it, is a failure this package reports rather than a PNG it publishes.
 
-Since cr-073 the family's quantization job (`quantize`, se-023) ships here too — a
-package legally mixes entrypoints and jobs, the job's slot is this file's own SdxlModel,
-and `cozy_runtime.derive` owns the quantization math and the tier-1 tripwire. The request
-names the derived lanes it wants ({fp8, mxfp8}); `bf16` is not a lane the job produces —
-the SOURCE is the canonical BF16 cut.
+FP8/MXFP8 lanes come from Runtime's shared `quantize` job with
+`QuantizationPlan(components=("unet",))`; this package defines no quantization.
 
 Code states CAPABILITY; bindings state SELECTION. Nothing here names a repo, release,
 checkpoint or revision — `package.toml` and the deploy binding do.
@@ -46,9 +43,8 @@ import json
 import random
 from enum import Enum, IntEnum
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
-import cozy_runtime.derive as derive
 import msgspec
 import torch
 import cozy_runtime.author as cozy_author
@@ -60,16 +56,12 @@ from cozy_runtime.author import (
     ImageAsset,
     ImageFrame,
     Loader,
-    MemoDistribution,
     Model,
-    ModelArtifact,
     ModelDefault,
     OutputError,
     Outputs,
     Shape,
     Telemetry,
-    WeightsOutput,
-    invocable,
     uses_components,
 )
 from diffusers import AutoencoderKL, EulerDiscreteScheduler, UNet2DConditionModel
@@ -640,80 +632,3 @@ def generate(
         digest=hashlib.sha256(rgb).hexdigest(),
         warnings=warnings,
     )
-
-
-# ------------------------------------------------------------------ the quantize job
-
-
-#: The family's derived UNet encodings by lane (cr-073, se-023). `bf16` is not an output
-#: here: the SOURCE is the canonical BF16 cut, and the lane name stays in the catalog as
-#: that cut. Quantization lives with its serving package — the slot is this file's own
-#: SdxlModel, and `cozy_runtime.derive` owns the math and the tier-1 tripwire.
-_LANE_ENCODINGS: dict[str, str] = {"fp8": "fp8-rowwise/1", "mxfp8": "mxfp8/1"}
-_LANE_BYTES = 16 << 30
-
-Lane = Literal["fp8", "mxfp8"]
-
-
-def _quantize(
-    ctx: Context, tel: Telemetry, source: SdxlModel, lane: Lane, max_relative_frobenius: float | None
-) -> ModelArtifact:
-    return derive.quantize_artifact(
-        source,
-        derive.plan(("unet",), _LANE_ENCODINGS[lane], max_relative_frobenius=max_relative_frobenius),
-        ctx=ctx, tel=tel, output=lane,
-    )
-
-
-# One function per lane: Runtime requires a receipt for EVERY declared weights output. The
-# quantizer checkpoints every encoded tensor, so a re-issued run adopts completed tensors.
-@invocable(
-    memoize=True,
-    memo_version="sdxl-quantize/1",
-    memo_dependencies=(
-        "cozy_runtime.derive.facade",
-        "cozy_runtime.derive.quantization",
-        "cozy_runtime.derive.microscale",
-        "cozy_runtime.derive.safetensors_io",
-        "tensorfs.derived",
-        MemoDistribution("tensorfs"),
-        MemoDistribution("numpy"),
-    ),
-)
-async def fp8(
-    ctx: Context,
-    *,
-    source: SdxlModel,
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """Row-wise FP8 UNet weights from one BF16/F16 source; everything else inherits."""
-    return _quantize(ctx, tel, source, "fp8", max_relative_frobenius)
-
-
-@invocable(
-    memoize=True,
-    memo_version="sdxl-quantize/1",
-    memo_dependencies=(
-        "cozy_runtime.derive.facade",
-        "cozy_runtime.derive.quantization",
-        "cozy_runtime.derive.microscale",
-        "cozy_runtime.derive.safetensors_io",
-        "tensorfs.derived",
-        MemoDistribution("tensorfs"),
-        MemoDistribution("numpy"),
-    ),
-)
-async def mxfp8(
-    ctx: Context,
-    *,
-    source: SdxlModel,
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """MXFP8 UNet weights from one BF16/F16 source; everything else inherits."""
-    return _quantize(ctx, tel, source, "mxfp8", max_relative_frobenius)
-
-
-app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
-app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),), accelerator=False)

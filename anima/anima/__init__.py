@@ -9,9 +9,8 @@ from contextlib import AbstractContextManager
 from enum import Enum, IntEnum
 from pathlib import Path
 from types import TracebackType
-from typing import Annotated, Any, Literal, NamedTuple
+from typing import Annotated, Any, NamedTuple
 
-import cozy_runtime.derive as derive
 import msgspec
 import torch
 from cozy_runtime.author import (
@@ -22,14 +21,11 @@ from cozy_runtime.author import (
     ImageFrame,
     Loader,
     Model,
-    ModelArtifact,
     ModelDefault,
     Outputs,
     Shape,
     Telemetry,
     UnsupportedInput,
-    WeightsOutput,
-    invocable,
     uses_components,
 )
 from diffusers import (
@@ -516,55 +512,3 @@ def _apply_first_block_cache(transformer: Any, guider: Any, threshold: float) ->
                     registry.remove_hook(name, recurse=False)
 
     return restore
-
-
-# ------------------------------------------------------------------ the quantize job
-
-
-#: The family's derived DiT encodings by lane (se-009/cr-086, same shape as sdxl's
-#: se-023 job). `bf16` is not an output: the SOURCE is the canonical BF16 cut. Only the
-#: transformer quantizes — text encoder, conditioner and VAE stay at source precision.
-_LANE_ENCODINGS: dict[str, str] = {"fp8": "fp8-rowwise/1", "mxfp8": "mxfp8/1"}
-_LANE_BYTES = 16 << 30
-
-Lane = Literal["fp8", "mxfp8"]
-
-
-def _quantize(
-    ctx: Context, tel: Telemetry, source: AnimaModel, lane: Lane, max_relative_frobenius: float | None
-) -> ModelArtifact:
-    return derive.quantize_artifact(
-        source,
-        derive.plan(("transformer",), _LANE_ENCODINGS[lane], max_relative_frobenius=max_relative_frobenius),
-        ctx=ctx, tel=tel, output=lane,
-    )
-
-
-# One function per lane: Runtime requires a receipt for EVERY declared weights output. The
-# quantizer checkpoints every encoded tensor, so a re-issued run adopts completed tensors.
-@invocable(memoize=True)
-async def fp8(
-    ctx: Context,
-    *,
-    source: AnimaModel,
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """Row-wise FP8 DiT weights from one BF16/F16 source; everything else inherits."""
-    return _quantize(ctx, tel, source, "fp8", max_relative_frobenius)
-
-
-@invocable(memoize=True)
-async def mxfp8(
-    ctx: Context,
-    *,
-    source: AnimaModel,
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """MXFP8 DiT weights from one BF16/F16 source; everything else inherits."""
-    return _quantize(ctx, tel, source, "mxfp8", max_relative_frobenius)
-
-
-app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
-app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),), accelerator=False)

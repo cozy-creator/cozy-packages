@@ -67,8 +67,8 @@ plain Python lines are not replayed or skipped by a workflow engine.
 ## SDXL quantization assessment (se-042)
 
 The quantization step calls `cozy_runtime.derive.operations.quantize` with the plain
-`sdxl.operations.quantization_plan()` value. Runtime owns the single memoized
-operation; SDXL and Anima helpers select components, and H3 supplies exact geometry
+`QuantizationPlan(components=("unet",))` value. Runtime owns the single memoized
+operation; SDXL and Anima callers select components, and H3 supplies exact geometry
 and canonical-order fingerprints. A caller or unrelated family edit that leaves
 that plan unchanged does not change the shared quantization target.
 
