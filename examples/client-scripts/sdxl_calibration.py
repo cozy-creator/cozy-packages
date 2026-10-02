@@ -24,13 +24,12 @@ from cozy_runtime.author.sources import (
     download_huggingface,
     source_files,
 )
-from cozy_runtime.derive.operations import quantize
+from cozy_runtime.derive.operations import QuantizationPlan, quantize
 from sdxl_assessment_client.calibration import run_control
 from sdxl_assessment_client.control_inputs import load_controls, validate_selection
 from sdxl_assessment_client.control_jobs import scale_unet_x2
 
 from sdxl import generate
-from sdxl.operations import quantization_plan
 
 SPLIT = "calibration"  # held_out uses a separately frozen policy; final inputs are disjoint.
 CASE = "null"  # null, quantized, scale_x2, wrong_object, wrong_color, blur, flat
@@ -62,7 +61,7 @@ async def main(ctx: ScriptContext, *, out: Outputs) -> Tree:
     if CASE == "quantized":
         quantize_call = cast(Callable[..., Awaitable[ModelArtifact]], quantize)
         candidate = await quantize_call(
-            source=reference, plan=quantization_plan(), encoding="fp8-rowwise/1"
+            source=reference, plan=QuantizationPlan(components=("unet",)), encoding="fp8-rowwise/1"
         )
     elif CASE == "scale_x2":
         scale_call = cast(Callable[..., Awaitable[ModelArtifact]], scale_unet_x2)

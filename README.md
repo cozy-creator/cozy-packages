@@ -80,43 +80,25 @@ return to the published function default. Existing valid owner overrides survive
 A Civitai SDXL single file uploads servable: `cozy model upload civitai://<version> <org/model>`.
 TensorFS's routed converter writes the Diffusers constructor's keys in its order (f16), and the
 upload embeds the index, configs and tokenizers of the converter's pinned SDXL base reference.
-`convert_cozytensors` produces the same checkpoint. There is no normalization job; `sdxl/fp8`
-and `sdxl/mxfp8` quantize that checkpoint.
+`convert_cozytensors` produces the same checkpoint. `examples/client-scripts/sdxl_prepare.py`
+quantizes it with Runtime's `quantize` job (below) and uploads each lane.
 
-## Client quantization operations
+## Quantization
 
-The family libraries export `sdxl.operations.quantize`, `anima.operations.quantize`,
-and `h3_tables.operations.quantize`. Each is an awaitable `@invocable(memoize=True)`
-operation that takes one granted full-precision model artifact, an `encoding` of
-`"fp8-rowwise/1"` or `"mxfp8/1"`, and optional `max_relative_frobenius`. It returns one
-`ModelArtifact`. For example, after preparing `original` in a private client script:
+Runtime owns one memoized `quantize` job (`cozy_runtime.derive.operations`). A caller passes
+the source, a `QuantizationPlan` naming the components to encode, and an `encoding` of
+`"fp8-rowwise/1"` or `"mxfp8/1"`:
 
 ```python
-from sdxl.operations import quantize
+from cozy_runtime.derive.operations import QuantizationPlan, quantize
 
-fp8 = await quantize(source=original, encoding="fp8-rowwise/1")
-mxfp8 = await quantize(source=original, encoding="mxfp8/1")
+fp8 = await quantize(source=original, plan=QuantizationPlan(components=("unet",)), encoding="fp8-rowwise/1")
 ```
 
-Completed managed results are independently memoizable. On an unfinished operation,
-native checkpoints preserve complete logical tensor data/scale groups; the kernel
-skips their reads and encoding, and recomputes an incomplete group. Reuse requires
-the same captured implementation/dependencies, source and numerical options. Changed
-parameters or code must not adopt incompatible partial results; cross-request partial
-adoption is governed by Runtime's workspace, not this library.
-
-H3 accepts the existing complete full or AdaLN-pruned BF16 checkpoint contracts. Its
-reviewed 313 selected tensors per DiT are encoded, while all other weights, table
-bytes and configs are inherited at their original precision. FP8 and MXFP8 always
-derive independently from the BF16 source. Measurements remain observations of the
-original execution; resumed missing fidelity measurements remain missing.
-
-The existing SDXL/Anima `quantize` jobs retain their multi-output request/result
-schemas. Their registry names are already occupied, so the new managed export uses
-`quantize-artifact` as its dispatch registration; client Python only calls `quantize`.
-These operations require Runtime's `derive.quantize_artifact` API. Native fixture
-checks establish transformation and interruption behavior, not model quality or new
-GPU numerical qualification.
+SDXL encodes `("unet",)`, Anima `("transformer",)`. H3 uses `h3_tables.operations.quantize`,
+which binds its reviewed geometry and canonical order and preserves source precision; the
+default plan normalizes F32 sources to BF16. Native checkpoints let an interrupted run resume
+from its completed tensor groups.
 
 ## MiniMax H3
 
