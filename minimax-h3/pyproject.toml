@@ -1,9 +1,9 @@
 [project]
 name = "minimax-h3"
-version = "1.25.4"
+version = "1.26.0"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media,minimax-h3]>=0.18.92",
+    "cozy-runtime[media,minimax-h3]>=0.18.101",
     "cozy-eval>=0.7.3",
     "diffusers>=0.40.0",
     "hf-xet>=1.6.0",
@@ -12,7 +12,7 @@ dependencies = [
     "pydantic-core>=2.46.4",
     "pyyaml>=6.0.3",
     "regex>=2026.7.19",
-    "qwen-image-2>=0.2.2",
+    "qwen-image-2>=0.3.0",
     "safetensors>=0.8.0",
     "shellingham>=1.5.4",
     "tensorfs>=0.3.74",
@@ -41,6 +41,9 @@ only-include = [
 
 [tool.uv]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+# qwen-image-2 pins Diffusers at a commit for its own model. H3 only calls it, in the
+# callee's environment, so H3 keeps the released Diffusers its fused plan is qualified on.
+override-dependencies = ["diffusers>=0.40.0,<0.41"]
 
 # qwen-image-2 is this account's own package on the target Tensorhub, never PyPI. Creator
 # writes the `tensorhub` index for the command's Hub and account; lock with `cozy package lock`.

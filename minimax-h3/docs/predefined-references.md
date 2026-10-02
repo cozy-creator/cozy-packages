@@ -38,7 +38,7 @@ Reference: https://github.com/MiniMax-AI/MiniMax-H3/blob/main/skills/h3-prompt-w
 
 ## Qualification and dependencies
 
-H3 declares `qwen-image-2>=0.2.0` from the `tensorhub` index: the publishing
+H3 declares `qwen-image-2>=0.3.0` from the `tensorhub` index: the publishing
 account's own package on the target Hub, with no PyPI or local-checkout fallback.
 Creator writes that index for the command's Hub and account. `cozy package lock`
 pins the version, and each publication rebinds the lock to its target account's
