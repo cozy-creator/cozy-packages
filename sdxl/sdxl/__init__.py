@@ -29,8 +29,8 @@ What it adds over cr-008b's corpus fixture, which it is otherwise faithful to (i
   * AN OUTPUT-INTEGRITY FLOOR. A decode that produced NaNs, or a flat field with no
     picture in it, is a failure this package reports rather than a PNG it publishes.
 
-FP8/MXFP8 lanes come from Runtime's shared `quantize` job with
-`QuantizationPlan(components=("unet",))`; this package defines no quantization.
+The `fp8` and `mxfp8` jobs state this family's quantization recipe (the UNet) and call
+`cozy_runtime.derive`, which owns the encodings.
 
 Code states CAPABILITY; bindings state SELECTION. Nothing here names a repo, release,
 checkpoint or revision — `package.toml` and the deploy binding do.
@@ -45,6 +45,7 @@ from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Annotated, Any
 
+import cozy_runtime.derive as derive
 import msgspec
 import torch
 import cozy_runtime.author as cozy_author
@@ -56,12 +57,16 @@ from cozy_runtime.author import (
     ImageAsset,
     ImageFrame,
     Loader,
+    MemoDistribution,
     Model,
+    ModelArtifact,
     ModelDefault,
     OutputError,
     Outputs,
     Shape,
     Telemetry,
+    WeightsOutput,
+    invocable,
     uses_components,
 )
 from diffusers import AutoencoderKL, EulerDiscreteScheduler, UNet2DConditionModel
@@ -632,3 +637,55 @@ def generate(
         digest=hashlib.sha256(rgb).hexdigest(),
         warnings=warnings,
     )
+
+
+# ------------------------------------------------------------------ quantized lanes
+
+# The SDXL recipe: encode the UNet's GEMM weights; every other component inherits
+# unchanged. `cozy model quantize <model> --fp8|--mxfp8` runs the job whose weights output is
+# that lane. `cozy_runtime.derive` owns the encodings and the round-trip tripwire.
+_LANE_BYTES = 16 << 30
+_QUANTIZER = (  # the Runtime code and native libraries that decide a lane's bytes
+    "cozy_runtime.derive.facade",
+    "cozy_runtime.derive.quantization",
+    "cozy_runtime.derive.microscale",
+    "cozy_runtime.derive.safetensors_io",
+    "tensorfs.derived",
+    MemoDistribution("tensorfs"),
+    MemoDistribution("numpy"),
+)
+
+
+def _quantize(
+    ctx: Context, tel: Telemetry, source: SdxlModel, lane: str, encoding: str, tripwire: float | None
+) -> ModelArtifact:
+    plan = derive.plan(("unet",), encoding, max_relative_frobenius=tripwire)
+    return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output=lane)
+
+
+@invocable(memoize=True, memo_dependencies=_QUANTIZER)
+async def fp8(
+    ctx: Context,
+    *,
+    source: SdxlModel,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """Row-wise FP8 UNet weights from one BF16/F16 source; everything else inherits."""
+    return _quantize(ctx, tel, source, "fp8", "fp8-rowwise/1", max_relative_frobenius)
+
+
+@invocable(memoize=True, memo_dependencies=_QUANTIZER)
+async def mxfp8(
+    ctx: Context,
+    *,
+    source: SdxlModel,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """MXFP8 UNet weights from one BF16/F16 source; everything else inherits."""
+    return _quantize(ctx, tel, source, "mxfp8", "mxfp8/1", max_relative_frobenius)
+
+
+app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
+app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),), accelerator=False)

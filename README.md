@@ -14,7 +14,7 @@ dependencies or qualifying a worker image.
 | path | responsibility |
 |---|---|
 | `minimax-h3/` | MiniMax H3 dual-task package; the owner's hub binding selects FULL or AdaLN-pruned weights |
-| `sdxl/` | SDXL text-to-image package plus the family's lane-selecting quantize job (se-008, cr-073, se-023) |
+| `sdxl/` | SDXL text-to-image package plus the family's `fp8`/`mxfp8` quantizer jobs (se-008, cr-073, se-023) |
 | `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
 | `minimax-h3-tools/` | H3 timestep-table and structural precompute jobs (cr-071) |
 | `qwen-image-2/` | Qwen-Image-2.1 reference image generation; optional white background and native Runtime execution (research model licence) |
@@ -80,25 +80,31 @@ return to the published function default. Existing valid owner overrides survive
 A Civitai SDXL single file uploads servable: `cozy model upload civitai://<version> <org/model>`.
 TensorFS's routed converter writes the Diffusers constructor's keys in its order (f16), and the
 upload embeds the index, configs and tokenizers of the converter's pinned SDXL base reference.
-`convert_cozytensors` produces the same checkpoint. `examples/client-scripts/sdxl_prepare.py`
-quantizes it with Runtime's `quantize` job (below) and uploads each lane.
+`convert_cozytensors` produces the same checkpoint. `cozy model quantize` (below) writes its
+quantized lanes.
 
 ## Quantization
 
-Runtime owns one memoized `quantize` job (`cozy_runtime.derive.operations`). A caller passes
-the source, a `QuantizationPlan` naming the components to encode, and an `encoding` of
-`"fp8-rowwise/1"` or `"mxfp8/1"`:
+Each family package owns its quantization recipe; `cozy_runtime.derive` owns the encodings
+(`fp8-rowwise/1`, `mxfp8/1`), the checkpoint transaction and the round-trip tripwire. A
+quantizer is a job that takes the family's model and declares one weights output named for the
+lane it writes:
 
 ```python
-from cozy_runtime.derive.operations import QuantizationPlan, quantize
+@invocable(memoize=True, memo_dependencies=_QUANTIZER)
+async def fp8(ctx: Context, *, source: SdxlModel, max_relative_frobenius: float | None = None, tel: Telemetry) -> ModelArtifact:
+    plan = derive.plan(("unet",), "fp8-rowwise/1", max_relative_frobenius=max_relative_frobenius)
+    return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output="fp8")
 
-fp8 = await quantize(source=original, plan=QuantizationPlan(components=("unet",)), encoding="fp8-rowwise/1")
+app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=16 << 30),), accelerator=False)
 ```
 
-SDXL encodes `("unet",)`, Anima `("transformer",)`. H3 uses `h3_tables.operations.quantize`,
-which binds its reviewed geometry and canonical order and preserves source precision; the
-default plan normalizes F32 sources to BF16. Native checkpoints let an interrupted run resume
-from its completed tensor groups.
+`cozy model quantize <model> --fp8` (or `--mxfp8`) finds that job by its output name and runs
+it on the machine holding the checkpoint; `cozy run <package>/fp8 <model> <org/model>` is the
+same run. SDXL encodes the UNet's block-aligned rank-2 weights, Anima its transformer's; every
+other component inherits unchanged. H3 uses `h3_tables.operations.quantize`, which binds its
+reviewed geometry and canonical order and preserves source precision. Native checkpoints let
+an interrupted run resume from its completed tensor groups.
 
 ## MiniMax H3
 
