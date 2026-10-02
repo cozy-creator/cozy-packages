@@ -97,6 +97,9 @@ class QwenImage21Graph:
                     dtype=torch.float32
                 ),
             }
+        # The pipeline reads hidden states only, so the 1.24 GB language-model head is not
+        # built; Runtime skips its stored weight.
+        self.components["text_encoder"].lm_head = torch.nn.Identity()
         self.scheduler_config = _section(mapping["scheduler"], "scheduler")
         self.processor_config = _section(mapping.get("processor", {}), "processor")
 
@@ -134,23 +137,6 @@ def build_processor(config: Mapping[str, Any]) -> Any:
         video_processor=Qwen3VLVideoProcessor(**dict(config["video_processor"])),
         chat_template=config["chat_template"],
     )
-
-
-class _HiddenStates:
-    """The text encoder as the pipeline calls it, without the language-model head.
-
-    The pipeline reads only `hidden_states`; calling the inner model skips the
-    151,936-wide logits projection over every prompt and vision token.
-    """
-
-    def __init__(self, encoder: Any) -> None:
-        self._encoder = encoder
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._encoder, name)
-
-    def __call__(self, **kwargs: Any) -> Any:
-        return self._encoder.model(**kwargs)
 
 
 class _StagedPipeline(_Pipeline):
@@ -208,7 +194,7 @@ def _prefix_cache_fits(
 
 
 #: Runtime code the encoders read beyond their own bodies: their memo key binds it.
-_ENCODER_CODE = (_StagedPipeline, _HiddenStates, build_processor)
+_ENCODER_CODE = (_StagedPipeline, build_processor)
 
 
 class QwenImage21Model(Model[QwenImage21Graph]):
@@ -220,9 +206,8 @@ class QwenImage21Model(Model[QwenImage21Graph]):
         self.processor = build_processor(self.graph.processor_config)
 
     def _pipeline(self) -> _StagedPipeline:
-        components = self.graph.components
         return _StagedPipeline(
-            **{**components, "text_encoder": _HiddenStates(components["text_encoder"])},
+            **self.graph.components,
             processor=self.processor,
             scheduler=FlowMatchEulerDiscreteScheduler.from_config(self.graph.scheduler_config),
         )
