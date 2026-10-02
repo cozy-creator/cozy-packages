@@ -10,14 +10,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import io
 import json
 import struct
 import sys
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import redirect_stderr
 from dataclasses import replace
 from fractions import Fraction
 from functools import partial
@@ -57,10 +55,8 @@ from cozy_runtime.author.fakes import (
     fake_media_decoder,
     fake_outputs,
     fake_telemetry,
-    warm_with_fakes,
 )
 from cozy_runtime.internal.derive import derive
-from cozy_runtime.internal.residency import ResidencyRefusal
 from diffusers import (
     AutoencoderKLMiniMaxH3,
     AutoencoderKLMiniMaxH3Audio,
@@ -112,7 +108,6 @@ from cozy_runtime.models.minimax_h3.conditioner import (  # noqa: E402
 )
 from cozy_runtime.models.minimax_h3.continuation import plan_continuation  # noqa: E402
 from cozy_runtime.models.minimax_h3.official import (  # noqa: E402
-    _DIT_COMPONENT,
     FPS,
     MAX_CONDITIONER_VISION_TOKENS,
     MAX_DURATION,
@@ -3634,170 +3629,6 @@ def tiny_dit() -> Any:
     ).eval()
 
 
-#: The refusal an 80 GB H100 SXM raised on `warm_ref2va` at 2026-09-08T03:41Z, verbatim
-#: (requests req-1dca4b32cd6d6fea0385e67b, req-3bd12813ad65770c728b918d): the fill parked
-#: `ref2va_dit`, and re-staging it wants the component's FILL PEAK — its logical tree and
-#: its encoded payload at once — beside a resident `fl2va_dit` nothing may evict.
-PARKED_DIT_SHORTFALL = ResidencyRefusal(
-    "device_shortfall",
-    "warm_ref2va() declares component 'ref2va_dit' requiring 61237622220 B at admission "
-    "(21105997260 B of weights, 0 B of forward headroom, including overlapping fill "
-    "storage); 52054843392 B are allocatable (11895177216 B driver-free of 85017493504 B) "
-    "with ['audio_vae', 'fl2va_dit', 'video_vae'] resident, short by 9182778828 B. Every "
-    "evictable component was already freed, so this is a capacity fact, not an allocation "
-    "to retry",
-    {
-        "resource": "vram",
-        "scope": "component_use",
-        "needed_bytes": 61237622220,
-        "available_bytes": 52054843392,
-        "evidence_class": "measured",
-        "request_shape": "warm_ref2va",
-    },
-)
-
-
-class ShortfallPlane:
-    """A residency plane that admits every declared set except one, the way Runtime does.
-
-    `ComponentResidency` reads the driver through `torch.cuda.mem_get_info` on every
-    admission, so the plane itself cannot run on the CPU this driver proves on. What is
-    real is everything the fix turns on: the exception CLASS Runtime raises, its typed
-    `device_shortfall` code, the verbatim detail the card produced, and the real
-    `@uses_components` scope that calls `admit` before the method body exists.
-    """
-
-    def __init__(self, refuse: str, refusal: ResidencyRefusal) -> None:
-        self.refuse = refuse
-        self.refusal = refusal
-        self.admitted: list[str] = []
-        self.released: list[str] = []
-
-    def admit(self, method: str, components: tuple[str, ...]) -> None:
-        self.admitted.append(method)
-        if self.refuse in components:
-            raise self.refusal
-
-    def release(self, method: str, components: tuple[str, ...]) -> None:
-        self.released.append(method)
-
-
-def warm_under(plane: ShortfallPlane) -> tuple[Any, str]:
-    """Warm a fresh H3 construction under `plane`, returning the model and its stderr."""
-    pipe = meta_h3_pipeline()
-    for component in _DIT_COMPONENT.values():
-        pipe.components[component] = tiny_dit()
-    model = package.H3Model.for_test(pipe=pipe)
-    object.__setattr__(model, "_cozy_residency", plane)
-    recorded = io.StringIO()
-    with redirect_stderr(recorded):
-        warm_with_fakes(model)
-    return model, recorded.getvalue()
-
-
-def arm_warm() -> None:
-    """`Model.warm` (#708) runs one dry DiT forward per entrypoint and nothing else.
-
-    Executed, not asserted about: the real `warm` body, the real Diffusers forward at toy
-    widths, and the executor's own warm Context (`warm_with_fakes`). The dry step is what
-    pays the fused glue's first launches on a pod (h3a-015); an H3 warm case is NOT a
-    generation (h3a-018 #709).
-    """
-    print("\n== warm: one dry DiT forward per entrypoint ==")
-    pipe = meta_h3_pipeline()
-    packed: dict[str, list[tuple[int, int, int]]] = {}
-    for task, component in _DIT_COMPONENT.items():
-        dit = tiny_dit()
-        rows = packed.setdefault(task, [])
-
-        def hook(_module: Any, _args: Any, kwargs: Any, _out: Any, rows: Any = rows) -> None:
-            rows.append(
-                (
-                    int(kwargs["hidden_states"].shape[1]),
-                    int(kwargs["position_ids"].shape[0]),
-                    int(kwargs["timestep"].shape[0]),
-                )
-            )
-
-        dit.register_forward_hook(hook, with_kwargs=True)
-        pipe.components[component] = dit
-    model = package.H3Model.for_test(pipe=pipe)
-    ctx = warm_with_fakes(model)
-    check("warm ran without an attempt", ctx.request_id, "")
-    check(
-        "scopes: one per entrypoint DiT",
-        [call.method for call in model.harness.calls],
-        ["warm_fl2va", "warm_ref2va"],
-    )
-    check("both entrypoint DiTs leased", model.harness.components(), ("fl2va_dit", "ref2va_dit"))
-    for name, rows in packed.items():
-        check(f"{name} dry forward (video rows, packed rows, timesteps)", rows, [(8, 24, 2)])
-
-    # The AdaLN-pruned structure REFUSES a (timestep, modality) pair its plan never
-    # tabulated, so the dry step's noise levels are a contract, not a convenience: the
-    # same widths carrying the canonical plan's own table layout must accept it.
-    pruned = meta_h3_pipeline()
-    for task, component in _DIT_COMPONENT.items():
-        timesteps, block_keys = canonical_timestep_plan(cast(Any, task)).table_layout()
-        pruned.components[component] = AdaLNPrunedMiniMaxH3Transformer.from_official_config(
-            dict(tiny_dit().config), table_timesteps=timesteps, table_block_keys=block_keys
-        ).eval()
-    warm_with_fakes(package.H3Model.for_test(pipe=pruned))
-    observe("the AdaLN-pruned tables accept the dry step's timestep/modality pairs")
-    refusal(
-        "an unplanned timestep is the pruned table's refusal",
-        lambda: pruned.components["fl2va_dit"].time_proj.rows(torch.tensor([-1.0])),
-        "artifact_config",
-    )
-
-    cancelled = package.H3Model.for_test(pipe=meta_h3_pipeline())
-    try:
-        warm_with_fakes(cancelled, cancelled=True)
-    except Cancelled:
-        check("a cancelled fill refuses before any scope", cancelled.harness.calls, [])
-    else:
-        fail("a cancelled fill refuses", "warm returned")
-
-    # A DiT THE FILL PARKED. Warming is offered per entrypoint, and a card that cannot
-    # admit the second one refuses typed; the construction still serves both entrypoints,
-    # so a shortfall here must not fault the placement (se-046).
-    print("\n== warm: a parked DiT is skipped, not a construction failure ==")
-    plane = ShortfallPlane("ref2va_dit", PARKED_DIT_SHORTFALL)
-    model, recorded = warm_under(plane)
-    check("both entrypoint DiTs were offered", plane.admitted, ["warm_fl2va", "warm_ref2va"])
-    check(
-        "only the admitted scope opened",
-        [call.method for call in model.harness.calls],
-        ["warm_fl2va"],
-    )
-    check("the admitted DiT was warmed and released", plane.released, ["warm_fl2va"])
-    check(
-        "the non-application is recorded with the runtime's own numbers",
-        [
-            "warm_ref2va not applied" in recorded,
-            "device_shortfall" in recorded,
-            "9182778828 B" in recorded,
-        ],
-        [True, True, True],
-    )
-    observe("recorded", recorded.strip()[:200])
-    refusal(
-        "a poisoned residency plane still fails the construction",
-        lambda: warm_under(
-            ShortfallPlane(
-                "fl2va_dit",
-                ResidencyRefusal("residency_poisoned", "the plane latched a mid-stage failure"),
-            )
-        ),
-        "residency_poisoned",
-    )
-    red(
-        "device_shortfall is the code the tolerated refusal carries",
-        PARKED_DIT_SHORTFALL.code,
-        "residency_poisoned",
-    )
-
-
 # --- PDD-8 turbo -------------------------------------------------------------------------
 # The reference (`minimax_h3_pdd.py`, alibaba-pai/MiniMax-H3-Acc-LoRAs rev 335001fb) is the
 # oracle: its LoRA wrapper, its 32-interval head bank and its per-step plan, transcribed
@@ -4774,7 +4605,6 @@ ARMS = {
     "vae-tiles": arm_vae_tiles,
     "rgb8-handoff": arm_rgb8_handoff,
     "interface": arm_interface,
-    "warm": arm_warm,
 }
 
 

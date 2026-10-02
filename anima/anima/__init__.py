@@ -251,25 +251,6 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
     def load(self, loader: Loader) -> None:
         self.pipe = loader.construct(AnimaPipeline, factory=build_pipeline)
 
-    def warm(self, ctx: Context) -> None:
-        """One 512px, one-step render at the card's defaults, so no request pays a
-        first-call cost. The runtime calls it once per fill, before the placement serves;
-        there is no attempt to meter, so the phases stay silent."""
-        card = GenerateInput(prompt="")
-        ctx.raise_if_cancelled()
-        self.render(
-            card.quality_prefix,
-            card.negative_prompt,
-            512,
-            512,
-            1,
-            card.guidance,
-            (card.cfg_interval_start, card.cfg_interval_stop),
-            card.first_block_cache,
-            card.seed,
-            _Phases(),
-        )
-
     @uses_components("text_encoder", "text_conditioner", "transformer", "vae")
     def render(
         self,
@@ -356,7 +337,7 @@ class _Phases:
 
     `pipeline(...)` runs text encoding, conditioning, denoise and decode behind a single
     call, so the brackets are opened and closed by the blocks themselves rather than by
-    `with` statements around them. Without a `tel` — `warm` has no attempt — it is silent.
+    `with` statements around them. Without a `tel` it is silent.
     """
 
     def __init__(self, tel: Telemetry | None = None) -> None:
