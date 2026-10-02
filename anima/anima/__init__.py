@@ -11,6 +11,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Annotated, Any, NamedTuple
 
+import cozy_runtime.derive as derive
 import msgspec
 import torch
 from cozy_runtime.author import (
@@ -20,12 +21,16 @@ from cozy_runtime.author import (
     ImageAsset,
     ImageFrame,
     Loader,
+    MemoDistribution,
     Model,
+    ModelArtifact,
     ModelDefault,
     Outputs,
     Shape,
     Telemetry,
     UnsupportedInput,
+    WeightsOutput,
+    invocable,
     uses_components,
 )
 from diffusers import (
@@ -512,3 +517,55 @@ def _apply_first_block_cache(transformer: Any, guider: Any, threshold: float) ->
                     registry.remove_hook(name, recurse=False)
 
     return restore
+
+
+# ------------------------------------------------------------------ quantized lanes
+
+# The Anima recipe: encode the DiT's GEMM weights; every other component inherits
+# unchanged. `cozy model quantize <model> --fp8|--mxfp8` runs the job whose weights output is
+# that lane. `cozy_runtime.derive` owns the encodings and the round-trip tripwire.
+_LANE_BYTES = 16 << 30
+_QUANTIZER = (  # the Runtime code and native libraries that decide a lane's bytes
+    "cozy_runtime.derive.facade",
+    "cozy_runtime.derive.quantization",
+    "cozy_runtime.derive.microscale",
+    "cozy_runtime.derive.safetensors_io",
+    "tensorfs.derived",
+    MemoDistribution("tensorfs"),
+    MemoDistribution("numpy"),
+)
+
+
+def _quantize(
+    ctx: Context, tel: Telemetry, source: AnimaModel, lane: str, encoding: str, tripwire: float | None
+) -> ModelArtifact:
+    plan = derive.plan(("transformer",), encoding, max_relative_frobenius=tripwire)
+    return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output=lane)
+
+
+@invocable(memoize=True, memo_dependencies=_QUANTIZER)
+async def fp8(
+    ctx: Context,
+    *,
+    source: AnimaModel,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """Row-wise FP8 DiT weights from one BF16/F16 source; everything else inherits."""
+    return _quantize(ctx, tel, source, "fp8", "fp8-rowwise/1", max_relative_frobenius)
+
+
+@invocable(memoize=True, memo_dependencies=_QUANTIZER)
+async def mxfp8(
+    ctx: Context,
+    *,
+    source: AnimaModel,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """MXFP8 DiT weights from one BF16/F16 source; everything else inherits."""
+    return _quantize(ctx, tel, source, "mxfp8", "mxfp8/1", max_relative_frobenius)
+
+
+app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
+app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
