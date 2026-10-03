@@ -37,7 +37,6 @@ from diffusers import (
     AnimaAutoBlocks,
     AnimaModularPipeline,
     AnimaTextConditioner,
-    AutoencoderKLQwenImage,
     CosmosTransformer3DModel,
     FlowMatchEulerDiscreteScheduler,
 )
@@ -53,6 +52,8 @@ from diffusers.models.transformers.transformer_cosmos import CosmosTransformerBl
 from diffusers.modular_pipelines import ModularPipelineBlocks
 from transformers import PreTrainedTokenizerFast, Qwen3Config, Qwen3Model
 from transformers import initialization as transformer_init
+
+from anima.vae import anima_vae
 
 app = App()
 _MODULE_ROOT = Path(__file__).resolve().parent
@@ -73,8 +74,7 @@ class Megapixels(IntEnum):
     Tier 2 is the 1536-class (~2.3 MP) the model is meant to be run at and this
     package's default; tier 1 trades resolution for speed. Denoise attention is full
     (no windowing), so time and VRAM scale roughly linearly with area — tier 1 costs
-    about half of tier 2. The VAE always tiles. Every bucket is a multiple of the
-    pipeline's 16-px stride.
+    about half of tier 2. Every bucket is a multiple of the pipeline's 16-px stride.
     """
 
     MP1 = 1
@@ -217,11 +217,10 @@ class AnimaPipeline:
             text_conditioner = AnimaTextConditioner.from_config(
                 mapping["text_conditioner"]
             ).to(torch.bfloat16)
-            vae = AutoencoderKLQwenImage.from_config(mapping["vae"]).to(torch.bfloat16)
+            vae = anima_vae(mapping["vae"]).to(torch.bfloat16)
 
         for component in (transformer, text_encoder, text_conditioner, vae):
             component.eval()
-        vae.enable_tiling()
         self.scheduler_config = mapping["scheduler"]
         self.tokenizer = _tokenizer(_ROOT / "tokenizer")
         self.t5_tokenizer = _tokenizer(_ROOT / "t5_tokenizer")

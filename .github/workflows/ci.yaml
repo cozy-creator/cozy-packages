@@ -213,6 +213,10 @@ jobs:
         if: matrix.package == 'anima'
         run: anima/.venv/bin/python scripts/anima-conform.py
 
+      - name: Anima VAE decodes what Diffusers decodes
+        if: matrix.package == 'anima'
+        run: CUDA_VISIBLE_DEVICES='' anima/.venv/bin/python scripts/anima-vae-proof.py
+
       - name: Reference image request and output contract
         if: matrix.package == 'qwen-image-2'
         run: qwen-image-2/.venv/bin/python scripts/qwen-image-2-conform.py
