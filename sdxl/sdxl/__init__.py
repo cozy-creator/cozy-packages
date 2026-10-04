@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import random
 from enum import Enum, IntEnum
 from pathlib import Path
@@ -50,6 +51,7 @@ import msgspec
 import torch
 import cozy_runtime.author as cozy_author
 from cozy_runtime.author import (
+    AdapterCompatibility,
     App,
     AssetBound,
     ConformanceError,
@@ -325,6 +327,15 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
     is the runtime's staging ladder — which has nothing to stage if every method declares
     everything.
     """
+
+    #: Caller LoRAs on the UNet and both text towers, at any strength. Ingest normalizes
+    #: kohya and Diffusers SDXL LoRAs to PEFT keys; the Runtime bakes them into the weights,
+    #: or computes them per step when a request says `lora_mode: per_step`.
+    __adapter_compatibility__ = (
+        AdapterCompatibility(
+            "lora", "", ("unet", "text_encoder", "text_encoder_2"), -math.inf, math.inf
+        ),
+    )
 
     pipe: SdxlPipeline
     tokenizers: tuple[Any, Any]
