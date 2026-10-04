@@ -52,6 +52,7 @@ from diffusers.hooks.first_block_cache import (
 from diffusers.hooks.hooks import HookRegistry
 from diffusers.models.transformers.transformer_cosmos import CosmosTransformerBlock
 from diffusers.modular_pipelines import ModularPipelineBlocks
+from diffusers.modular_pipelines.anima.decoders import AnimaVaeDecoderStep
 from diffusers.modular_pipelines.anima.denoise import AnimaLoopBeforeDenoiser
 from transformers import PreTrainedTokenizerFast, Qwen3Config, Qwen3Model
 from transformers import initialization as transformer_init
@@ -210,16 +211,32 @@ class _Fp32Guidance(ClassifierFreeGuidance):
 class _Fp32Timestep(AnimaLoopBeforeDenoiser):
     def __call__(self, components: Any, block_state: Any, i: int, t: Any) -> Any:
         components, block_state = super().__call__(components, block_state, i, t)
-        block_state.timestep = t.expand(block_state.latents.shape[0]).float() / components.scheduler.config.num_train_timesteps
+        block_state.timestep = (
+            t.expand(block_state.latents.shape[0]).float()
+            / components.scheduler.config.num_train_timesteps
+        )
         return components, block_state
+
+
+class _Fp32VaeDecoder(AnimaVaeDecoderStep):
+    @torch.no_grad()
+    def __call__(self, components: Any, state: Any) -> Any:
+        block = self.get_block_state(state)
+        vae = components.vae
+        latents = block.latents.float()
+        shape = (1, vae.config.z_dim, 1, 1, 1)
+        mean = latents.new_tensor(vae.config.latents_mean).view(shape)
+        std = latents.new_tensor(vae.config.latents_std).view(shape)
+        inputs = (latents * std + mean).to(vae.dtype)
+        block.images = vae.decode(inputs, return_dict=False)[0][:, :, 0].float()
+        self.set_block_state(state, block)
+        return components, state
 
 
 def _tokenizer(path: Path) -> Any:
     config = json.loads((path / "tokenizer_config.json").read_text())
     config.pop("tokenizer_class", None)
-    return PreTrainedTokenizerFast(
-        tokenizer_file=str(path / "tokenizer.json"), **config
-    )
+    return PreTrainedTokenizerFast(tokenizer_file=str(path / "tokenizer.json"), **config)
 
 
 class AnimaPipeline:
@@ -231,9 +248,9 @@ class AnimaPipeline:
             )
             text_encoder: Any = Qwen3Model(Qwen3Config(**mapping["text_encoder"]))
             text_encoder.to(dtype=torch.bfloat16)
-            text_conditioner = AnimaTextConditioner.from_config(
-                mapping["text_conditioner"]
-            ).to(torch.bfloat16)
+            text_conditioner = AnimaTextConditioner.from_config(mapping["text_conditioner"]).to(
+                torch.bfloat16
+            )
             vae = AutoencoderKLQwenImage.from_config(mapping["vae"]).to(torch.bfloat16)
 
         for component in (transformer, text_encoder, text_conditioner, vae):
@@ -323,6 +340,7 @@ def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
     defect (se-026). `blocks=` hands the pipeline the object it keeps, and the identity is
     the fix: `scripts/anima-conform.py` executes Diffusers' own loop driver against it.
     """
+
     class Announce(ModularPipelineBlocks):
         """A weightless block whose only effect is to advance the meter."""
 
@@ -343,10 +361,11 @@ def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
 
     blocks = AnimaAutoBlocks().get_workflow("text2image")
     order = list(blocks.sub_blocks)
-    if not {"denoise.denoise", "denoise.text_conditioning"} <= set(order):
+    if not {"denoise.denoise", "denoise.text_conditioning", "decode.decode"} <= set(order):
         raise RuntimeError(f"Diffusers Anima text2image blocks changed: {order}")
     blocks.sub_blocks["denoise.denoise"].progress_bar = _progress_bar(phases)
     blocks.sub_blocks["denoise.denoise"].sub_blocks["before_denoiser"] = _Fp32Timestep()
+    blocks.sub_blocks["decode.decode"] = _Fp32VaeDecoder()
     blocks.sub_blocks.insert("conditioning", Announce(), order.index("denoise.text_conditioning"))
     return RuntimeAnimaPipeline(blocks=blocks)
 
@@ -537,7 +556,12 @@ _QUANTIZER = (  # the Runtime code and native libraries that decide a lane's byt
 
 
 def _quantize(
-    ctx: Context, tel: Telemetry, source: AnimaModel, lane: str, encoding: str, tripwire: float | None
+    ctx: Context,
+    tel: Telemetry,
+    source: AnimaModel,
+    lane: str,
+    encoding: str,
+    tripwire: float | None,
 ) -> ModelArtifact:
     plan = derive.plan(("transformer",), encoding, max_relative_frobenius=tripwire)
     return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output=lane)
@@ -567,5 +591,12 @@ async def mxfp8(
     return _quantize(ctx, tel, source, "mxfp8", "mxfp8/1", max_relative_frobenius)
 
 
-app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
-app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
+app.job(
+    fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False
+)
+app.job(
+    mxfp8,
+    name="mxfp8",
+    weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),),
+    accelerator=False,
+)

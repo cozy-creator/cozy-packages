@@ -22,8 +22,9 @@ from diffusers import (
 )
 from diffusers.guiders import ClassifierFreeGuidance
 from diffusers.models.embeddings import Timesteps
-from diffusers.modular_pipelines.anima.denoise import AnimaLoopBeforeDenoiser
 from diffusers.modular_pipelines import ModularPipelineBlocks
+from diffusers.modular_pipelines.anima.decoders import AnimaVaeDecoderStep
+from diffusers.modular_pipelines.anima.denoise import AnimaLoopBeforeDenoiser
 
 
 def symbols(source, names, scope):
@@ -41,7 +42,7 @@ def main():
     p.add_argument("--anima-config", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
     args = p.parse_args()
-    torch.set_num_threads(2)
+    torch.set_num_threads(1)
     root = Path(__file__).resolve().parents[1]
     sources = {
         name: (root / name).read_text()
@@ -62,9 +63,14 @@ def main():
         "Any": Any,
         "ClassifierFreeGuidance": ClassifierFreeGuidance,
         "AnimaLoopBeforeDenoiser": AnimaLoopBeforeDenoiser,
+        "AnimaVaeDecoderStep": AnimaVaeDecoderStep,
     }
     symbols(sources["sdxl/sdxl/__init__.py"], ["_initial_noise_scale"], scope)
-    symbols(sources["anima/anima/__init__.py"], ["_Fp32Guidance", "_Fp32Timestep"], scope)
+    symbols(
+        sources["anima/anima/__init__.py"],
+        ["_Fp32Guidance", "_Fp32Timestep", "_Fp32VaeDecoder"],
+        scope,
+    )
     symbols(
         sources["comfy/model_sampling.py"],
         [
@@ -106,6 +112,10 @@ def main():
 
         def forward(self, latents, *args, **kwargs):
             assert latents.dtype == torch.float16
+            assert kwargs["encoder_hidden_states"].dtype == torch.float16
+            assert all(
+                value.dtype == torch.float16 for value in kwargs["added_cond_kwargs"].values()
+            )
             return SimpleNamespace(sample=latents)
 
     probe = SimpleNamespace(pipe=SimpleNamespace(components={"unet": InputProbe()}))
@@ -113,9 +123,9 @@ def main():
         probe,
         torch.ones((2, 4, 2, 2), dtype=torch.float32),
         torch.tensor(999.0),
-        None,
-        None,
-        None,
+        torch.ones((2, 8, 32), dtype=torch.float32),
+        torch.ones((2, 32), dtype=torch.float32),
+        torch.ones((2, 6), dtype=torch.float32),
         0,
         20,
         False,
@@ -137,6 +147,7 @@ def main():
     pipeline = scope["_text2image_pipeline"](torch.device("cpu"), SimpleNamespace())
     before = pipeline.blocks.sub_blocks["denoise.denoise"].sub_blocks["before_denoiser"]
     assert isinstance(before, scope["_Fp32Timestep"])
+    assert isinstance(pipeline.blocks.sub_blocks["decode.decode"], scope["_Fp32VaeDecoder"])
     pipeline.register_components(guider=scope["_Fp32Guidance"]())
     assert isinstance(pipeline.guider, ClassifierFreeGuidance)
     results.append({"check": "production_anima_block_assembly", "fp32_timestep_and_guidance": True})
@@ -191,6 +202,7 @@ def main():
         scheduler.set_timesteps(steps)
         assert float((scheduler.sigmas - comfy_sigmas).abs().max()) <= 1e-5
         if model == "sdxl":
+            assert torch.equal(scheduler.timesteps, sampling.timestep(comfy_sigmas[:-1]).float())
             for sigmas in (
                 scheduler.sigmas,
                 torch.tensor([model_sigma_max, 0]),

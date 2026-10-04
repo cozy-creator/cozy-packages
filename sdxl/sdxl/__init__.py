@@ -215,6 +215,7 @@ class ImageOutput(msgspec.Struct):
 
 def _hidiffusion_unet_type() -> type[Any]:
     """The patched UNet owner, imported only when Runtime constructs the model."""
+
     class HiDiffusionUNet(UNet2DConditionModel):
         """Select and reset the request's denoising implementation before step zero."""
 
@@ -261,6 +262,8 @@ def _hidiffusion_unet_type() -> type[Any]:
 class SdxlPipeline:
     """The four constructed component roots, built from the artifact's immutable config.
 
+    Representative fp16 source inventory, before CLIP compute expansion:
+
         text_encoder     196 destinations   0.229 GiB   CLIPTextModel (ViT-L text tower)
         text_encoder_2   517 destinations   1.294 GiB   CLIPTextModelWithProjection (bigG)
         unet            1680 destinations   4.782 GiB   UNet2DConditionModel
@@ -268,8 +271,8 @@ class SdxlPipeline:
                         ────────────────────────────
                         2641 destinations   6.461 GiB
 
-    Construction declares fp16 logical destinations. Plain weights fill those
-    destinations; the runtime may replace supported UNet linear leaves with native
+    Construction declares fp32 CLIP and fp16 UNet/VAE destinations. Plain weights
+    fill those destinations; the runtime may replace supported UNet linear leaves with native
     encoded implementations when the checkpoint carries FP8 weights.
     """
 
@@ -283,11 +286,11 @@ class SdxlPipeline:
         with transformer_init.no_init_weights():
             self.components: dict[str, Any] = {
                 "text_encoder": CLIPTextModel(CLIPTextConfig(**text_encoder)).to(
-                    torch.float16  # type: ignore[arg-type]
+                    torch.float32  # type: ignore[arg-type]
                 ),
-                "text_encoder_2": CLIPTextModelWithProjection(
-                    CLIPTextConfig(**text_encoder_2)
-                ).to(torch.float16),  # type: ignore[arg-type]
+                "text_encoder_2": CLIPTextModelWithProjection(CLIPTextConfig(**text_encoder_2)).to(
+                    torch.float32
+                ),  # type: ignore[arg-type]
                 "unet": unet_type.from_config(mapping["unet"]).to(torch.float16),
                 "vae": AutoencoderKL.from_config(mapping["vae"]).to(  # type: ignore[no-untyped-call]
                     torch.float16
@@ -383,7 +386,10 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
         hidiffusion: bool,
     ) -> Any:
         unet = self.pipe.components["unet"]
-        latents = latents.to(dtype=next(unet.parameters()).dtype)
+        dtype = next(unet.parameters()).dtype
+        latents, prompt, text_embeds, time_ids = (
+            value.to(dtype=dtype) for value in (latents, prompt, text_embeds, time_ids)
+        )
         if step == 0:
             unet.begin_denoise_request(total_steps, hidiffusion)
         with torch.inference_mode():
@@ -397,6 +403,7 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
     @uses_components("vae")
     def decode(self, latents: Any) -> Any:
         vae = self.pipe.components["vae"]
+        latents = latents.float() / self.pipe.vae_scale
         tiled = int(latents.shape[-2]) * int(latents.shape[-1]) * 64 > _UNTILED_DECODE_PIXELS
         if tiled:
             vae.enable_tiling()
@@ -405,13 +412,17 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
         if upcast:
             # The SDXL VAE overflows fp16. bf16 has fp32's range: 48 dB PSNR to fp32 on the
             # 1024px fox (run 1642), ~0.5 s faster on an RTX 4070 Laptop.
-            native_bf16 = latents.is_cuda and torch.cuda.is_bf16_supported(including_emulation=False)
+            native_bf16 = latents.is_cuda and torch.cuda.is_bf16_supported(
+                including_emulation=False
+            )
             wide = torch.bfloat16 if native_bf16 else torch.float32
             vae.to(dtype=wide)
             latents = latents.to(dtype=wide)
+        else:
+            latents = latents.to(dtype=original_dtype)
         try:
             with torch.inference_mode():
-                return vae.decode(latents / self.pipe.vae_scale).sample
+                return vae.decode(latents).sample
         finally:
             if upcast:
                 vae.to(dtype=original_dtype)
@@ -549,13 +560,15 @@ def generate(
     model_sigma_max = float(scheduler.sigmas.max())
     scheduler.set_timesteps(steps, device=device)
     generator = torch.Generator(device="cpu").manual_seed(payload.seed)
-    latents = (
-        torch.randn(
-            1, 4, height // 8, width // 8, generator=generator, device="cpu",
-            dtype=torch.float32,
-        ).to(device)
-        * _initial_noise_scale(scheduler.sigmas, model_sigma_max).to(device)
-    )
+    latents = torch.randn(
+        1,
+        4,
+        height // 8,
+        width // 8,
+        generator=generator,
+        device="cpu",
+        dtype=torch.float32,
+    ).to(device) * _initial_noise_scale(scheduler.sigmas, model_sigma_max).to(device)
     # SDXL's micro-conditioning: (original_h, original_w, crop_top, crop_left, target_h,
     # target_w). The bucket IS the original size — these fine-tunes were trained on it.
     time_ids = torch.tensor(
@@ -600,7 +613,12 @@ def generate(
     with tel.stage("decode", overall_range=(0.90, 0.98)):
         image = model.decode(latents)
     tel.metric("image_absmax", _finite(torch, image))
-    pixels = ((image / 2 + 0.5).clamp(0, 1)[0] * 255).to(torch.uint8).permute(1, 2, 0).contiguous()
+    pixels = (
+        (((image.float() + 1) / 2).clamp(0, 1)[0] * 255)
+        .to(torch.uint8)
+        .permute(1, 2, 0)
+        .contiguous()
+    )
     _integrity(torch, image, pixels, tel)
 
     rgb = bytes(pixels.cpu().numpy().tobytes())
@@ -639,7 +657,12 @@ _QUANTIZER = (  # the Runtime code and native libraries that decide a lane's byt
 
 
 def _quantize(
-    ctx: Context, tel: Telemetry, source: SdxlModel, lane: str, encoding: str, tripwire: float | None
+    ctx: Context,
+    tel: Telemetry,
+    source: SdxlModel,
+    lane: str,
+    encoding: str,
+    tripwire: float | None,
 ) -> ModelArtifact:
     plan = derive.plan(("unet",), encoding, max_relative_frobenius=tripwire)
     return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output=lane)
@@ -669,5 +692,12 @@ async def mxfp8(
     return _quantize(ctx, tel, source, "mxfp8", "mxfp8/1", max_relative_frobenius)
 
 
-app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
-app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
+app.job(
+    fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False
+)
+app.job(
+    mxfp8,
+    name="mxfp8",
+    weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),),
+    accelerator=False,
+)
