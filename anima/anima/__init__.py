@@ -41,6 +41,7 @@ from diffusers import (
     CosmosTransformer3DModel,
     FlowMatchEulerDiscreteScheduler,
 )
+from diffusers.guiders import ClassifierFreeGuidance
 from diffusers.hooks._helpers import TransformerBlockMetadata, TransformerBlockRegistry
 from diffusers.hooks.first_block_cache import (
     _FBC_BLOCK_HOOK,
@@ -51,6 +52,7 @@ from diffusers.hooks.first_block_cache import (
 from diffusers.hooks.hooks import HookRegistry
 from diffusers.models.transformers.transformer_cosmos import CosmosTransformerBlock
 from diffusers.modular_pipelines import ModularPipelineBlocks
+from diffusers.modular_pipelines.anima.denoise import AnimaLoopBeforeDenoiser
 from transformers import PreTrainedTokenizerFast, Qwen3Config, Qwen3Model
 from transformers import initialization as transformer_init
 
@@ -195,6 +197,21 @@ class ImageOutput(msgspec.Struct):
     steps: int
     guidance: float
     digest: str
+    numerical_policy: str = "cpu-noise-fp32-euler/1"
+
+
+class _Fp32Guidance(ClassifierFreeGuidance):
+    def forward(self, pred_cond: Any, pred_uncond: Any = None) -> Any:
+        return super().forward(
+            pred_cond.float(), None if pred_uncond is None else pred_uncond.float()
+        )
+
+
+class _Fp32Timestep(AnimaLoopBeforeDenoiser):
+    def __call__(self, components: Any, block_state: Any, i: int, t: Any) -> Any:
+        components, block_state = super().__call__(components, block_state, i, t)
+        block_state.timestep = t.expand(block_state.latents.shape[0]).float() / components.scheduler.config.num_train_timesteps
+        return components, block_state
 
 
 def _tokenizer(path: Path) -> Any:
@@ -266,13 +283,14 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         phases: _Phases,
     ) -> Any:
         device = next(self.pipe.components["transformer"].parameters()).device
-        generator = torch.Generator(device=device).manual_seed(seed)
+        generator = torch.Generator(device="cpu").manual_seed(seed)
         pipeline: Any = _text2image_pipeline(device, phases)
         pipeline.register_components(
             **self.pipe.components,
             scheduler=FlowMatchEulerDiscreteScheduler.from_config(self.pipe.scheduler_config),
             tokenizer=self.pipe.tokenizer,
             t5_tokenizer=self.pipe.t5_tokenizer,
+            guider=_Fp32Guidance(),
         )
         pipeline.guider.guidance_scale = guidance
         # Diffusers 0.40 stores the interval on private attrs set by BaseGuidance.__init__;
@@ -328,6 +346,7 @@ def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
     if not {"denoise.denoise", "denoise.text_conditioning"} <= set(order):
         raise RuntimeError(f"Diffusers Anima text2image blocks changed: {order}")
     blocks.sub_blocks["denoise.denoise"].progress_bar = _progress_bar(phases)
+    blocks.sub_blocks["denoise.denoise"].sub_blocks["before_denoiser"] = _Fp32Timestep()
     blocks.sub_blocks.insert("conditioning", Announce(), order.index("denoise.text_conditioning"))
     return RuntimeAnimaPipeline(blocks=blocks)
 

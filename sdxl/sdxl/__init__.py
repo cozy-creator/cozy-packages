@@ -41,20 +41,18 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import random
 from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Annotated, Any
 
+import cozy_runtime.author as cozy_author
 import cozy_runtime.derive as derive
 import msgspec
 import torch
-import cozy_runtime.author as cozy_author
 from cozy_runtime.author import (
     AdapterCompatibility,
     App,
     AssetBound,
-    ConformanceError,
     Context,
     ImageAsset,
     ImageFrame,
@@ -209,6 +207,7 @@ class ImageOutput(msgspec.Struct):
     not over one step."""
     warnings: list[str]
     """Explicit choices that ran although they are known to hurt the picture."""
+    numerical_policy: str = "cpu-noise-fp32-euler/1"
 
 
 # ------------------------------------------------------------------ the model
@@ -384,6 +383,7 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
         hidiffusion: bool,
     ) -> Any:
         unet = self.pipe.components["unet"]
+        latents = latents.to(dtype=next(unet.parameters()).dtype)
         if step == 0:
             unet.begin_denoise_request(total_steps, hidiffusion)
         with torch.inference_mode():
@@ -497,20 +497,11 @@ def _integrity(torch: Any, image: Any, pixels: Any, tel: Telemetry) -> None:
     tel.metric("image_spread", round(float(pixels.to(torch.float32).std()), 4))
 
 
-def _request_generator(torch: Any, source: object, *, device: Any) -> Any:
-    """Adapt Runtime's public request generator to a device-placed torch generator.
-
-    `view.generator` is a `random.Random` while the runtime is weightless and a
-    `torch.Generator` once real fills exist; both spellings resolve here.
-    """
-    if isinstance(source, torch.Generator):
-        return source
-    if not isinstance(source, random.Random):
-        raise ConformanceError(
-            f"request generator has unsupported type {type(source).__name__}",
-            code="artifact_config",
-        )
-    return torch.Generator(device=device).manual_seed(source.getrandbits(63))
+def _initial_noise_scale(sigmas: Any, model_sigma_max: float) -> Any:
+    """EPS uses variance-preserving scaling only at the model's maximum sigma."""
+    sigma = sigmas[0]
+    maximum = math.isclose(float(sigma), model_sigma_max, rel_tol=1e-5)
+    return (1 + sigma.square()).sqrt() if maximum or sigma > model_sigma_max else sigma
 
 
 @app.entrypoint
@@ -522,7 +513,6 @@ def generate(
     tel: Telemetry,
 ) -> ImageOutput:
     """One text-to-image generation: tokenize, encode, denoise, decode, encode a PNG."""
-    view = model.for_request(ctx, seed=payload.seed)
     width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
     steps = payload.steps
     above_native = payload.megapixels is not Megapixels.MP1
@@ -556,14 +546,15 @@ def generate(
     scheduler = EulerDiscreteScheduler.from_config(  # type: ignore[no-untyped-call]
         model.pipe.scheduler_config
     )
+    model_sigma_max = float(scheduler.sigmas.max())
     scheduler.set_timesteps(steps, device=device)
-    generator = _request_generator(torch, view.generator, device=device)
+    generator = torch.Generator(device="cpu").manual_seed(payload.seed)
     latents = (
         torch.randn(
-            1, 4, height // 8, width // 8, generator=generator, device=device,
-            dtype=torch.float16,
-        )
-        * scheduler.init_noise_sigma
+            1, 4, height // 8, width // 8, generator=generator, device="cpu",
+            dtype=torch.float32,
+        ).to(device)
+        * _initial_noise_scale(scheduler.sigmas, model_sigma_max).to(device)
     )
     # SDXL's micro-conditioning: (original_h, original_w, crop_top, crop_left, target_h,
     # target_w). The bucket IS the original size — these fine-tunes were trained on it.
@@ -596,7 +587,7 @@ def generate(
                     index,
                     steps,
                     hidiffusion_applied,
-                )
+                ).float()
                 if classifier_free:
                     uncond, cond = noise.chunk(2)
                     noise = uncond + payload.guidance * (cond - uncond)
