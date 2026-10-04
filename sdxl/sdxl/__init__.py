@@ -329,8 +329,8 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
     """
 
     #: Caller LoRAs on the UNet and both text towers, at any strength. Ingest normalizes
-    #: kohya and Diffusers SDXL LoRAs to PEFT keys; the Runtime applies each update per step
-    #: or bakes it into the resident weights.
+    #: kohya and Diffusers SDXL LoRAs to PEFT keys; the Runtime bakes them into the weights,
+    #: or computes them per step when a request says `lora_mode: per_step`.
     __adapter_compatibility__ = (
         AdapterCompatibility(
             "lora", "", ("unet", "text_encoder", "text_encoder_2"), -math.inf, math.inf
