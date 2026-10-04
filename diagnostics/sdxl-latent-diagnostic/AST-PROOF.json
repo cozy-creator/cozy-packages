@@ -1,0 +1,35 @@
+{
+  "evidence_class": "SOURCE/CPU structuralcomparison",
+  "unchanged_original_function_and_method_AST": [
+    "Txt2ImgInput.__post_init__",
+    "_hidiffusion_unet_type",
+    "SdxlPipeline.__init__",
+    "warmup",
+    "build_pipeline",
+    "SdxlModel.load",
+    "SdxlModel.warm",
+    "SdxlModel.encode",
+    "SdxlModel.denoise",
+    "SdxlModel.decode",
+    "_finite",
+    "_tokenizer",
+    "_tokenize",
+    "_ids",
+    "_integrity",
+    "_request_generator",
+    "_quantize",
+    "fp8",
+    "mxfp8"
+  ],
+  "changed_original_symbols": [
+    "ImageOutput addslatents/metadata",
+    "generate addspredecodeCPUartifact andobservationaldecoderhook; tokenizer/conditioning/scheduler/denoisecode unchanged"
+  ],
+  "added_symbol": [
+    "SdxlModel.decode_saved_latent",
+    "DecodeInput",
+    "DecodeOutput",
+    "decode_latents"
+  ],
+  "not_inference_or_quality_proof": true
+}

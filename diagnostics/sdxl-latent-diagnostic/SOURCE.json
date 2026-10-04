@@ -1,0 +1,27 @@
+{
+  "origin": "actualinstalledsdxl2.4.0onilulu/ec300577",
+  "archive_sha256": "2ac5cb65dc72469da5493f71d9bf5675970a6c6638da72ea189ce37752413b2f",
+  "original_files": [
+    {
+      "path": "__init__.py",
+      "sha256": "f4c6f63303df72913ca49ab3a33a08b841dafb3c5993fcebf7ed35a7b801e8b8",
+      "bytes": 31936
+    },
+    {
+      "path": "operations.py",
+      "sha256": "ede13b9643fb4703e8e3d4c96018ca15b37d81dd42eb9784f9b1416b3633047b",
+      "bytes": 1041
+    },
+    {
+      "path": "clip_merges.txt",
+      "sha256": "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a",
+      "bytes": 524619
+    },
+    {
+      "path": "clip_vocab.json",
+      "sha256": "e089ad92ba36837a0d31433e555c8f45fe601ab5c221d4f607ded32d9f7a4349",
+      "bytes": 1059962
+    }
+  ],
+  "diagnostic_changes": "boundedpre-decode latent output, decoderinputshape observation, independent explicitdecodeoperation; originalmath/requestunchanged"
+}

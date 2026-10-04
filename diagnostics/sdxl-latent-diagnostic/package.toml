@@ -1,0 +1,2 @@
+[application]
+object = "sdxl_latent_diagnostic:app"
