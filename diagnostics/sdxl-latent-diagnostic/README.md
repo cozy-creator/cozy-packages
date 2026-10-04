@@ -23,6 +23,9 @@ decode on an adequate-memory owned worker and must show full128-square decoder
 input plus untiled native mode. `tiled512` explicitly calls stock tiled_decode
 with512-sample/64-latent tiles. No decoder is rerun after failure, no denoise is
 repeated by these operations, and no request or saved latent is resized.
+The declared input allows unspecified MIME because ordinary generic FileAsset
+inspection currently reports an empty media type; its file kind,131072-byte
+bound and exact saved SHA remain mandatory. The producer declares octet-stream.
 
 Reviewable execution plan, before any GPU launch:
 

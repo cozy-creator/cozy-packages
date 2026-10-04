@@ -708,7 +708,7 @@ def generate(
 
 
 class DecodeInput(msgspec.Struct, forbid_unknown_fields=True):
-    latents: Annotated[FileAsset, AssetBound(max_bytes=131072, media_types=("application/octet-stream",))]
+    latents: Annotated[FileAsset, AssetBound(max_bytes=131072)]
     latent_sha256: str
     mode: Literal["untiled", "tiled512"]
 
