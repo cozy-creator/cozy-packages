@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from diffusers import AnimaModularPipeline
-from diffusers.modular_pipelines import PipelineState
+from diffusers import AnimaModularPipeline, ClassifierFreeGuidance, CosmosTransformer3DModel
+from diffusers.modular_pipelines import BlockState, PipelineState
+from diffusers.modular_pipelines.anima.denoise import AnimaLoopDenoiser
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "anima"))
@@ -79,9 +80,9 @@ class Recorder:
         return f"{frame.stage} {round((frame.overall_fraction or 0) * 100)}%"
 
 
-def pipeline(recorder: Recorder) -> Any:
+def pipeline(recorder: Recorder, batched: bool = False) -> Any:
     """The package's own builder, on the CPU, with no components registered."""
-    return package._text2image_pipeline(torch.device("cpu"), recorder.phases)
+    return package._text2image_pipeline(torch.device("cpu"), recorder.phases, batched)
 
 
 def loop_state(loop: Any, steps: int) -> Any:
@@ -253,7 +254,57 @@ def arm_block_order() -> None:
     )
 
 
+def arm_batched_cfg() -> None:
+    """C4: in a small pool every transformer forward streams the whole transformer, so CFG
+    as one batch halves a step's copies. The package's batched denoiser, against Diffusers'
+    own sequential one on a small random fp32 Cosmos transformer: one forward of batch 2
+    inside the CFG interval, cond alone outside it, and the same noise prediction."""
+    torch.manual_seed(3)
+    transformer = CosmosTransformer3DModel(
+        num_attention_heads=2,
+        attention_head_dim=16,
+        num_layers=2,
+        text_embed_dim=24,
+        adaln_lora_dim=8,
+        max_size=(4, 16, 16),
+        rope_scale=(1.0, 4.0, 4.0),
+        extra_pos_embed_type=None,
+    ).eval()
+    batches: list[int] = []
+    transformer.register_forward_pre_hook(
+        lambda module, args, kwargs: batches.append(kwargs["hidden_states"].shape[0]),
+        with_kwargs=True,
+    )
+    built = pipeline(Recorder(), batched=True)
+    denoiser = built._blocks.sub_blocks["denoise.denoise"].sub_blocks["denoiser"]
+    check("the batched pipeline runs the batched denoiser", type(denoiser).__name__, "_BatchedDenoiser")
+    stock = AnimaLoopDenoiser({"encoder_hidden_states": ("prompt_embeds", "negative_prompt_embeds")})
+    guider = ClassifierFreeGuidance(guidance_scale=4.5, start=0.15, stop=0.7)
+    components = types.SimpleNamespace(guider=guider, transformer=transformer)
+    state = BlockState(
+        num_inference_steps=10,
+        latent_model_input=torch.randn(1, 16, 1, 12, 10),
+        timestep=torch.tensor([0.4]),
+        padding_mask=torch.zeros(1, 1, 96, 80),
+        dtype=torch.float32,
+        prompt_embeds=torch.randn(1, 7, 24),
+        negative_prompt_embeds=torch.randn(1, 7, 24),
+    )
+    worst, shapes = 0.0, []
+    for step in range(10):
+        before = len(batches)
+        denoiser(components, state, step, torch.tensor(400.0))
+        batched = state.noise_pred
+        shapes.append(batches[before:])
+        stock(components, state, step, torch.tensor(400.0))
+        worst = max(worst, (batched - state.noise_pred).abs().max().item())
+    check("one batch-2 forward inside the interval, cond alone outside", shapes, [[1]] + [[2]] * 6 + [[1]] * 3)
+    check("batched and sequential CFG agree to fp32 rounding", worst <= 1e-5, True)
+    print(f"         max abs difference {worst:.2e}")
+
+
 ARMS = {
+    "batched": arm_batched_cfg,
     "ladder": arm_ladder,
     "brackets": arm_phase_brackets,
     "denoise": arm_denoise_loop_reports,
