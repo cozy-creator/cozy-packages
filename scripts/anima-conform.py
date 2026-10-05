@@ -303,7 +303,58 @@ def arm_batched_cfg() -> None:
     print(f"         max abs difference {worst:.2e}")
 
 
+def arm_attention() -> None:
+    """Diffusers' Cosmos attention repeats K and V by a ratio of head dims that is always 1,
+    a whole copy of each per call. The package's processor makes none and computes the same
+    bits as Diffusers' own on a small random Cosmos transformer, in both its attentions."""
+    torch.manual_seed(5)
+
+    def small() -> Any:
+        return CosmosTransformer3DModel(
+            num_attention_heads=2,
+            attention_head_dim=16,
+            num_layers=2,
+            text_embed_dim=24,
+            adaln_lora_dim=8,
+            max_size=(4, 16, 16),
+            rope_scale=(1.0, 4.0, 4.0),
+            extra_pos_embed_type=None,
+        ).eval()
+
+    stock = small()
+    ours = small()
+    ours.load_state_dict(stock.state_dict())
+    for block in ours.transformer_blocks:
+        for attention in (block.attn1, block.attn2):
+            attention.set_processor(package._AttnProcessor())
+    inputs = {
+        "hidden_states": torch.randn(2, 16, 1, 12, 10),
+        "timestep": torch.tensor([0.4, 0.4]),
+        "encoder_hidden_states": torch.randn(2, 7, 24),
+        "padding_mask": torch.zeros(1, 1, 96, 80),
+        "return_dict": False,
+    }
+
+    class Count(torch.overrides.TorchFunctionMode):
+        calls = 0
+
+        def __torch_function__(
+            self, func: Any, types: Any, args: Any = (), kwargs: Any = None
+        ) -> Any:
+            if getattr(func, "__name__", "") == "repeat_interleave":
+                Count.calls += 1
+            return func(*args, **(kwargs or {}))
+
+    with torch.no_grad():
+        expected = stock(**inputs)[0]
+        with Count():
+            got = ours(**inputs)[0]
+    check("no K/V copy in either attention", Count.calls, 0)
+    check("the same bits as Diffusers' processor", torch.equal(got, expected), True)
+
+
 ARMS = {
+    "attention": arm_attention,
     "batched": arm_batched_cfg,
     "ladder": arm_ladder,
     "brackets": arm_phase_brackets,

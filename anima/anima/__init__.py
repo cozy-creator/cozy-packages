@@ -49,7 +49,12 @@ from diffusers.hooks.first_block_cache import (
     apply_first_block_cache,
 )
 from diffusers.hooks.hooks import HookRegistry
-from diffusers.models.transformers.transformer_cosmos import CosmosTransformerBlock
+from diffusers.models.attention_dispatch import dispatch_attention_fn
+from diffusers.models.embeddings import apply_rotary_emb
+from diffusers.models.transformers.transformer_cosmos import (
+    CosmosAttnProcessor2_0,
+    CosmosTransformerBlock,
+)
 from diffusers.modular_pipelines import ModularPipelineBlocks
 from diffusers.modular_pipelines.anima.denoise import AnimaLoopDenoiser
 from transformers import PreTrainedTokenizerFast, Qwen3Config, Qwen3Model
@@ -220,6 +225,10 @@ class AnimaPipeline:
             ).to(torch.bfloat16)
             vae = AutoencoderKLQwenImage.from_config(mapping["vae"]).to(torch.bfloat16)
 
+        for block in transformer.transformer_blocks:
+            for attention in (block.attn1, block.attn2):
+                if type(attention.processor) is CosmosAttnProcessor2_0:
+                    attention.set_processor(_AttnProcessor())
         for component in (transformer, text_encoder, text_conditioner, vae):
             component.eval()
         vae.enable_tiling()
@@ -336,6 +345,45 @@ def _text2image_pipeline(device: Any, phases: _Phases, batched: bool) -> Any:
         loop.sub_blocks["denoiser"] = _BatchedDenoiser()
     blocks.sub_blocks.insert("conditioning", Announce(), order.index("denoise.text_conditioning"))
     return RuntimeAnimaPipeline(blocks=blocks)
+
+
+class _AttnProcessor(CosmosAttnProcessor2_0):
+    """Diffusers' Cosmos attention without its grouped-query step. Diffusers repeats K and V
+    by the ratio of query to key head *dims* (`size(3)`), which is 1 in every Cosmos model:
+    `repeat_interleave(1)` still copies both whole, four copies per block per step (huaisang,
+    rtx-4070-super: 3360 of them, 0.35 s of a 30-step render, most of Anima's gap to
+    ComfyUI, which has no such copy). The same math otherwise, op for op."""
+
+    def __call__(
+        self,
+        attn: Any,
+        hidden_states: torch.Tensor,
+        encoder_hidden_states: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        image_rotary_emb: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+        query = attn.to_q(hidden_states).unflatten(2, (attn.heads, -1)).transpose(1, 2)
+        key = attn.to_k(encoder_hidden_states).unflatten(2, (attn.heads, -1)).transpose(1, 2)
+        value = attn.to_v(encoder_hidden_states).unflatten(2, (attn.heads, -1)).transpose(1, 2)
+        query, key = attn.norm_q(query), attn.norm_k(key)
+        if image_rotary_emb is not None:
+            query = apply_rotary_emb(query, image_rotary_emb, use_real=True, use_real_unbind_dim=-2)
+            key = apply_rotary_emb(key, image_rotary_emb, use_real=True, use_real_unbind_dim=-2)
+        if key.size(3) != query.size(3):  # never in a Cosmos model; Diffusers' step if it is
+            key = key.repeat_interleave(query.size(3) // key.size(3), dim=3)
+            value = value.repeat_interleave(query.size(3) // value.size(3), dim=3)
+        hidden_states = dispatch_attention_fn(
+            query.transpose(1, 2),
+            key.transpose(1, 2),
+            value.transpose(1, 2),
+            attn_mask=attention_mask,
+            dropout_p=0.0,
+            is_causal=False,
+        )
+        hidden_states = hidden_states.flatten(2, 3).type_as(query)
+        return attn.to_out[1](attn.to_out[0](hidden_states))
 
 
 class _BatchedDenoiser(AnimaLoopDenoiser):
