@@ -46,13 +46,8 @@ may contain exact versions. Do not remove those identities from lockfiles.
 Refresh the complete resolution with uv when changing dependencies. Check the
 installed closure, not only direct requirements or a top-level import. Record
 the exact package release, Runtime version, Python/native stack, selected wheel
-versions and hashes, and image digest used for qualification. Mutable `latest`
+versions and hashes, and the image digest it ran on. Mutable `latest`
 tags and the package author's laptop are insufficient release evidence.
-
-Build worker images with current compatible stable dependencies. Review their
-full installed inventory, remove unnecessary build-only tools from serving
-images, and check their own dependency consistency. An image's inventory check
-does not establish whether an arbitrary package can prepare its own environment.
 
 ## Required regression evidence
 
