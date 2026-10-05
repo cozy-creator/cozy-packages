@@ -1,34 +1,15 @@
 # First-party package releases
 
-Publish first-party packages through the checked release command:
+Publish a first-party package from a committed snapshot of its source:
 
 ```sh
-uv run --no-project python scripts/publish-package.py minimax-h3 \
-  --tensorhub ../tensorhub \
-  --dotenv ../tensorhub/.env \
-  --profile torch2.14.0-cu130-cp312-linux-x86 \
-  --check-only
+uv run --no-project python scripts/publish-package.py minimax-h3
 ```
 
-Run this from the packages checkout after committing the package source and
-lockfile. `--tensorhub` points at the Tensorhub operator checkout that supplies
-the active worker-image records. `--dotenv` is a local path to that checkout's
-operator environment; keep the file outside version control and never copy its
-values into release notes or issue reports. The current CUDA worker profile is
-`torch2.14.0-cu130-cp312-linux-x86`.
-
-The preflight builds an immutable snapshot and checks its authored Runtime
-requirements against the active normal and private worker images. A missing
-image or incompatible Runtime API stops this first-party release preflight. The
-check does not prove that the package's full dependency environment installs or
-executes. Complete the
-[dependency qualification checklist](DEPENDENCIES.md) as well. Baked application
-dependencies are a reuse optimization; a version mismatch must be resolved in
-the package's isolated environment rather than treated as a global image limit.
-After the read-only preflight passes, rerun the same command without
-`--check-only` to publish the committed snapshot through the ordinary Creator
-CLI. The Tensorhub operator checkout supplies the read-only image check; its
-normal configuration flags select the environment being released to.
+It refuses uncommitted package changes, then runs `cozy package publish` on a
+`git archive` of HEAD. Complete the [dependency qualification checklist](DEPENDENCIES.md)
+first. Worker images are OS/CUDA/PyTorch bases named by tag; the CLI updates the
+machine, Runtime and TensorFS at runtime, so a package never waits on an image.
 
 ## One source, every Hub and account
 
@@ -68,13 +49,10 @@ tested versions in `uv.lock`; compatibility declarations must admit patch update
 When a package starts using a new Runtime API:
 
 1. Release and verify Runtime, including its public wheel artifacts.
-2. Build and qualify the supported worker images with that Runtime, then promote
-   their immutable image records. Keep existing rentals and cached work intact.
-3. Set the package's minimum Runtime version to the oldest version that supplies
+2. Set the package's minimum Runtime version to the oldest version that supplies
    the APIs it actually uses, relock, and run package conformance.
-4. Run the checked publication command above. Repeat `--profile` for every
-   supported image profile.
-5. Install the published release with the local Creator CLI and verify its input
+3. Publish with the command above.
+4. Install the published release with the local Creator CLI and verify its input
    and callable interface. Include execution qualification appropriate to the change.
 
 Private development or custom-image packages can still use `cozy package publish`
@@ -99,6 +77,5 @@ The progressive proof checks immutable live fragments, copied video packets,
 decoded media, final duration, and seeks between keyframes. Rendering in these
 proofs is synthetic; the checks validate workflow, custody, and codec behavior.
 
-Publication still requires the checked worker-image preflight above with Runtime
-0.18.89 or newer on each supported profile. Publish the same frozen H3 wheel to
-each Hub; each account's dependency index must resolve the committed versions.
+Publish the same frozen H3 source to each Hub; each account's dependency index must
+resolve the committed versions.
