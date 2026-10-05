@@ -51,6 +51,7 @@ from diffusers.hooks.first_block_cache import (
 from diffusers.hooks.hooks import HookRegistry
 from diffusers.models.transformers.transformer_cosmos import CosmosTransformerBlock
 from diffusers.modular_pipelines import ModularPipelineBlocks
+from diffusers.modular_pipelines.anima.denoise import AnimaLoopDenoiser
 from transformers import PreTrainedTokenizerFast, Qwen3Config, Qwen3Model
 from transformers import initialization as transformer_init
 
@@ -175,7 +176,7 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     #: First-block cache (cr-086 arm 2, FBCache): when the first transformer block's
     #: residual moves less than this threshold between steps, the remaining 27 blocks are
     #: skipped and the cached tail residual is reused. Cond and uncond passes keep separate
-    #: cache states under this package's sequential batch-1 CFG.
+    #: cache states, so a request with it on runs CFG as two batch-1 forwards.
     #:
     #: DEFAULT OFF, deliberately (se-026, 2026-09-03). Measured at 0.075 rather than assumed:
     #: it extrapolates 44% of forwards, and against the same seed it consistently smooths
@@ -264,10 +265,11 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         first_block_cache: float,
         seed: int,
         phases: _Phases,
+        batched: bool,
     ) -> Any:
         device = next(self.pipe.components["transformer"].parameters()).device
         generator = torch.Generator(device=device).manual_seed(seed)
-        pipeline: Any = _text2image_pipeline(device, phases)
+        pipeline: Any = _text2image_pipeline(device, phases, batched)
         pipeline.register_components(
             **self.pipe.components,
             scheduler=FlowMatchEulerDiscreteScheduler.from_config(self.pipe.scheduler_config),
@@ -297,8 +299,9 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         return result
 
 
-def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
-    """The text2image pipeline, instrumented on the blocks it will actually run.
+def _text2image_pipeline(device: Any, phases: _Phases, batched: bool) -> Any:
+    """The text2image pipeline, instrumented on the blocks it will actually run, its CFG
+    conditions in one forward when `batched`.
 
     `ModularPipeline.blocks` is a property returning a DEEPCOPY, so a hook installed through
     it is thrown away and the meter never moves — the whole of the frozen `conditioning 0%`
@@ -327,9 +330,50 @@ def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
     order = list(blocks.sub_blocks)
     if not {"denoise.denoise", "denoise.text_conditioning"} <= set(order):
         raise RuntimeError(f"Diffusers Anima text2image blocks changed: {order}")
-    blocks.sub_blocks["denoise.denoise"].progress_bar = _progress_bar(phases)
+    loop = blocks.sub_blocks["denoise.denoise"]
+    loop.progress_bar = _progress_bar(phases)
+    if batched:
+        loop.sub_blocks["denoiser"] = _BatchedDenoiser()
     blocks.sub_blocks.insert("conditioning", Announce(), order.index("denoise.text_conditioning"))
     return RuntimeAnimaPipeline(blocks=blocks)
+
+
+class _BatchedDenoiser(AnimaLoopDenoiser):
+    """Diffusers' Anima denoiser with the guider's conditions as one batch: one transformer
+    forward per step instead of one per condition. In a small pool every forward streams the
+    whole transformer through the card, so this halves a CFG step's copies (C4 of the
+    small-pool analysis). Inside the CFG interval cond and uncond run together; outside it
+    the guider asks for cond alone, and Diffusers' own step runs."""
+
+    def __init__(self) -> None:
+        super().__init__({"encoder_hidden_states": ("prompt_embeds", "negative_prompt_embeds")})
+
+    @torch.no_grad()
+    def __call__(self, components: Any, block_state: Any, i: int, t: torch.Tensor) -> Any:
+        guider, transformer = components.guider, components.transformer
+        guider.set_state(step=i, num_inference_steps=block_state.num_inference_steps, timestep=t)
+        if guider.num_conditions == 1:
+            return super().__call__(components, block_state, i, t)
+        batches = guider.prepare_inputs_from_block_state(block_state, self._guider_input_fields)
+        for _ in batches:
+            guider.prepare_models(transformer)
+        conditions = {
+            key: torch.cat([getattr(batch, key) for batch in batches]).to(block_state.dtype)
+            for key in self._guider_input_fields
+        }
+        count = len(batches)
+        predictions = transformer(
+            hidden_states=torch.cat([block_state.latent_model_input] * count),
+            timestep=torch.cat([block_state.timestep] * count),
+            padding_mask=block_state.padding_mask,
+            return_dict=False,
+            **conditions,
+        )[0]
+        for batch, prediction in zip(batches, predictions.chunk(count), strict=True):
+            batch.noise_pred = prediction
+            guider.cleanup_models(transformer)
+        block_state.noise_pred = guider(batches)[0]
+        return components, block_state
 
 
 class _Phases:
@@ -425,6 +469,12 @@ def generate(
         raise UnsupportedInput(
             "cfg_interval_start must not exceed cfg_interval_stop", code="cfg_interval"
         )
+    # One forward for both CFG conditions when the stage has room for two (counting weights
+    # the runtime may unmap, as ComfyUI does), else two. Decided before the stage, for the
+    # whole request; FBCache keeps a cache per condition, so it runs them apart. A request
+    # with no uncond pass asks nothing: its peak is one item's.
+    guided = payload.guidance > 1.0 and payload.cfg_interval_start < payload.cfg_interval_stop
+    batched = guided and payload.first_block_cache <= 0.0 and model.batch_fits("render")
     with _Phases(tel) as phases:
         images = model.render(
             payload.quality_prefix + payload.prompt,
@@ -437,6 +487,7 @@ def generate(
             payload.first_block_cache,
             payload.seed,
             phases,
+            batched,
         )
         # Still `decoding`: the pipeline left that bracket open and the host copy below is
         # the tail of the same work.
@@ -457,8 +508,8 @@ def _apply_first_block_cache(transformer: Any, guider: Any, threshold: float) ->
     """Attach FBCache hooks for one request; returns the restore. 0.0 attaches nothing.
 
     Diffusers ships `apply_first_block_cache` but its registry does not know
-    `CosmosTransformerBlock` — the one-line registration below is the whole shim. Under
-    this package's sequential batch-1 CFG the cond and uncond forwards would otherwise
+    `CosmosTransformerBlock` — the one-line registration below is the whole shim. With it on,
+    CFG runs as two batch-1 forwards, and the cond and uncond forwards would otherwise
     share one residual cache and compare cond against uncond; wrapping the transformer
     forward in a per-condition `cache_context` keeps the two streams separate. Hooks are
     request-scoped (the HiDiffusion precedent in sdxl): removed in the restore so the
