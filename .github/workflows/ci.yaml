@@ -129,6 +129,11 @@ jobs:
       - name: The H3 environment owns a compatible native dependency cohort
         run: minimax-h3/.venv/bin/python scripts/torch_family.py
 
+      # A callee runs in its caller's environment: every `name @ url` a dependency declares
+      # (qwen-image-2's Diffusers commit) must be what this lock installs.
+      - name: Every direct-reference requirement is installed as declared
+        run: minimax-h3/.venv/bin/python scripts/direct_requirements.py
+
       - name: Arms
         run: minimax-h3/.venv/bin/python scripts/h3-conform.py
 
