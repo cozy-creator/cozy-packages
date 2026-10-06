@@ -137,15 +137,10 @@ Creator-supplied assets. Run
 `scripts/order-proof.py` to recheck their closed census and
 `../../proofs/producer-callable.py` to validate the generated graph-free descriptor.
 
-Two proofs cover the lane catalogue, neither needing a GPU, a rental or one weight byte.
-`scripts/lane-proof.py` rebuilds the exact five-component source structure from this
+`scripts/lane-proof.py` covers the lane catalogue without a GPU, a rental or one weight byte. It rebuilds the exact five-component source structure from this
 package's own 638-row contract and the banked upstream safetensors HEADERS, then checks
 every lane's declaration, the selection each treatment resolves to on the real components,
-and every refusal. `../../scripts/h3-lane-store-proof.py` mints a tiny synthetic source in
-a real TensorFS store, derives three lanes through the real Runtime `WeightsSink`, and
-reads the committed headers back to prove that an untreated component keeps the source's
-exact stored objects in every lane — the property that decides whether a per-component lane
-is affordable at all.
+and every refusal.
 
 The result preserves the Runtime quantizer's existing weight measurements in
 `weight_fidelity_this_run`, a list of rows naming output slot, component, the treatment that
@@ -178,13 +173,6 @@ continues to consume a checkpoint with only the original five components.
 
 The row-label parser is Runtime's `cozy_runtime.models.minimax_h3.table_layout`;
 the producer imports it rather than keeping a copy.
-
-`scripts/h3-turbo-store-proof.py` verifies native inheritance, cancellation, replay,
-and component contents. With the pinned upstream `minimax_h3_pdd.py` supplied as an
-argument under the H3 environment, it also loads the emitted tensors into the serving
-overlay constructor and compares stored modulation tables and all eight output heads
-against the actual upstream adapter over Diffusers. These are CPU construction and
-numerical checks. They do not measure GPU speed, audio, or video quality.
 
 
 The tensor-only serving hooks require Runtime's preservation of hooks during encoded

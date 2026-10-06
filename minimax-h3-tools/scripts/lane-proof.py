@@ -10,11 +10,6 @@ this proof checks what each lane replaces, what it leaves inherited by reference
 declared output ceilings are the ones the shipped descriptor publishes, that a treatment
 selects exactly the rows the acceleration lanes ruled on, and every refusal.
 
-The sibling `../../scripts/h3-lane-store-proof.py` proves the same recipes move the right
-BYTES and, crucially, that an untreated component keeps the source's exact stored objects
-in every lane. That one needs a real store and the real Runtime weights host, so it lives
-with the repo's other drivers rather than inside the package.
-
 Run: .venv/bin/python scripts/lane-proof.py
 """
 

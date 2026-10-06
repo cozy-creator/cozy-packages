@@ -51,14 +51,6 @@ implementation and generated caller interface. The source implementation takes
 injected execution arguments; its installed caller exposes the flat
 `prompt`, `aspect_ratio`, `megapixels`, `steps`, `seed` and `background` parameters used here.
 
-`scripts/h3-cuts-proof.py` compiles that caller from the actual qwen-image-2
-package interface, then exercises Runtime's real broker, generated result types,
-media codecs and custody checks with synthetic renderers. It checks reference
-concurrent submission, reverse-completion identity/order, sibling cancellation, independent Ref2VA routing, ten cuts without a shot-count cap,
-bounded assembly, two public assets, stable seeds, preflight refusal, cancellation
-and partial delivery. This is a CPU composition proof, not Qwen/H3 inference,
-package-index transport, or visual-quality qualification.
-
 The `long_form` API uses this same mixed reference resolver and completed AV context,
 with no shot-count cap. See [LONG_FORM.md](../LONG_FORM.md) for JSON filenames,
 free-text segment prompts and the sections the workflow adds.
