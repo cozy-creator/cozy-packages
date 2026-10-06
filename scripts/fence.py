@@ -197,43 +197,6 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
     ("scripts/h3-turbo-cp-proof.py", "cozy_runtime.internal.parallel"): (
         "Verify actual PDD hooks and component scopes under Runtime's Ulysses installation. "
     ),
-    ("scripts/h3-turbo-store-proof.py", "cozy_runtime.author._model"): (
-        "Bind native source manifests for the overlay integration proof. "
-    ),
-    ("scripts/h3-cuts-proof.py", "cozy_runtime.internal"): (
-        "Compile the committed Qwen interface into Runtime's actual managed caller; "
-        "retire with a public generated-caller fixture."
-    ),
-    ("scripts/h3-cuts-proof.py", "cozy_runtime.internal.worker"): (
-        "Grant every H3 result through Runtime's own child-admission path "
-        "(`machine_byte_results.paths`); retire with a public result-admission check."
-    ),
-    ("scripts/h3-cuts-proof.py", "cozy_runtime.author._calls"): (
-        "Qualify cuts through Runtime's real broker; retire with a public child-call harness."
-    ),
-    ("scripts/h3-cuts-proof.py", "cozy_runtime.author._executor_requests"): (
-        "Answer the broker's typed durable requests as a fake worker; retire with a public "
-        "child-call harness."
-    ),
-    ("scripts/h3-cuts-proof.py", "cozy_runtime.author._assets"): (
-        "Issue verified synthetic reference grants; retire with a public child-call harness."
-    ),
-    ("scripts/h3-cuts-proof.py", "cozy_runtime.author._services"): (
-        "Observe scoped child progress and settle the final parent image; retire with a "
-        "public settled-output fixture."
-    ),
-    ("scripts/h3-cuts-proof.py", "cozy_runtime.author._codec"): (
-        "Project real encoded child outputs under exact SHA-256 grants; retire with a "
-        "public host projection fixture."
-    ),
-    ("scripts/h3-adaln-binding-proof.py", "cozy_runtime.author._model"): (
-        "Native/broker qualification driver exercises the real Runtime boundary; retire when a "
-        "public native invocation harness owns this fixture seam. "
-    ),
-    ("scripts/h3-adaln-resume-proof.py", "cozy_runtime.author._model"): (
-        "Native/broker qualification driver exercises the real Runtime boundary; retire when a "
-        "public native invocation harness owns this fixture seam. "
-    ),
     ("scripts/h3-adaln-interface-proof.py", "cozy_runtime.author._executor_requests"): (
         "Answer the broker's typed child calls as a fake worker; retire with a public "
         "child-call harness."
@@ -253,27 +216,6 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "spelling is `cozy-model-contract-proof`, which today derives only inside a receipt- "
         "selected sandboxed build seat and has no in-process entry point for one synthetic "
         "model. Retire this entry when it grows one. "
-    ),
-    ("scripts/native_execution_fixture.py", "cozy_runtime.author._executor_requests"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
-    ),
-    ("scripts/native_execution_fixture.py", "cozy_runtime.internal.seam"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
-    ),
-    ("scripts/native_execution_fixture.py", "cozy_runtime.internal.weights_writer"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
-    ),
-    ("scripts/native_execution_fixture.py", "cozy_runtime.internal.worker.grants"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
-    ),
-    ("scripts/native_execution_fixture.py", "cozy_runtime.internal.worker.weights"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
-    ),
-    ("scripts/native_execution_fixture.py", "cozy_runtime.internal.worker.workspace"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
-    ),
-    ("scripts/native_execution_fixture.py", "cozy_runtime.protocol"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
     ),
 }
 
