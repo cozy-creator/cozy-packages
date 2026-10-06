@@ -673,6 +673,8 @@ def drive(
         assert not calls and not prefetches, (calls, prefetches)
         assert not refuse_code or outcome.code == refuse_code, outcome
         return {}
+    if fail < 0 and cancel < 0:
+        assert outcome.terminal == "succeeded", outcome
     # Each generated reference is published as it lands, the video after every segment.
     shown = [item for item in record.published if item.output == "references"]
     assert [item.label for item in shown] == ["Reference: Bridge", "Reference: Rover"], shown
