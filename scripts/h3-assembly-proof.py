@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Real codec and native custody proof; synthetic pictures are not H3 inference."""
+"""Real codec proof; synthetic pictures are not H3 inference. Custody of the files is the
+machine's (Runtime 0.19 ships a plane-only TensorFS without a Store), so it is not proved here."""
 
 from __future__ import annotations
 
@@ -14,7 +15,6 @@ from typing import Any
 
 import av
 import numpy as np
-import tensorfs
 from cozy_runtime.author import (
     App,
     Context,
@@ -120,26 +120,7 @@ def sha(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
-def retain_files(store: tensorfs.Store, label: str, files: dict[str, Path]) -> str:
-    entries = [
-        {
-            "path": name,
-            "kind": "file",
-            "blob": {"sha256": sha(path.read_bytes())[7:], "length": path.stat().st_size},
-        }
-        for name, path in sorted(files.items())
-    ]
-    raw = json.dumps({"entries": entries}, sort_keys=True, separators=(",", ":")).encode()
-    owner, reader = sha((label + ":producer").encode()), sha((label + ":reader").encode())
-    root = store.import_tree(owner, raw, sorted(files.items()))
-    store.retain_tree_root(owner, reader)
-    store.release_tree_root(owner)
-    tensorfs.gc(store.root)
-    assert store.tree_root(owner)["released"]  # type: ignore[index]
-    return root["manifest_digest"]
-
-
-def fixtures(root: Path, store: tensorfs.Store) -> dict[str, Path]:
+def fixtures(root: Path) -> dict[str, Path]:
     source = root / "source"
     source.mkdir()
     files = {}
@@ -167,12 +148,7 @@ def fixtures(root: Path, store: tensorfs.Store) -> dict[str, Path]:
         path = source / name
         path.write_bytes(encoded_audio.read_bytes())
         files[name] = path
-    manifest = retain_files(store, "inputs", files)
-    for path in files.values():
-        path.unlink()
-    destination = root / "native-inputs"
-    store.checkout(manifest, destination, symlink=False)
-    return {name: destination / name for name in files}
+    return files
 
 
 def execute(
@@ -239,8 +215,7 @@ def execute(
 def main() -> None:
     root = Path(sys.argv[1]).resolve()
     root.mkdir(parents=True, exist_ok=False)
-    store = tensorfs.Store.init(root / "tensorfs")
-    files = fixtures(root, store)
+    files = fixtures(root)
     unchanged_gain_bytes()
     evidence = []
     for count in (1, 2, 4, 8):
@@ -257,15 +232,9 @@ def main() -> None:
         assert response.replay_frames_removed == count - 1
         assert response.submitted_audio_samples == round(expected * RATE / FPS)
         assert abs(response.av_endpoint_delta_samples) <= response.audio_codec_frame_samples
-        path = work / "delivered.mp4"
-        path.write_bytes(response.video.read_bytes())
-        manifest = retain_files(store, f"output-{count}", {"video.mp4": path})
-        digest = sha(path.read_bytes())
-        path.unlink()
-        destination = work / "after-gc"
-        store.checkout(manifest, destination, symlink=False)
-        recovered = destination / "video.mp4"
-        assert sha(recovered.read_bytes()) == digest
+        recovered = work / "delivered.mp4"
+        recovered.write_bytes(response.video.read_bytes())
+        digest = sha(recovered.read_bytes())
         with av.open(str(recovered)) as container:
             stream = container.streams.video[0]
             assert stream.codec_context.name == "h264"
@@ -277,7 +246,6 @@ def main() -> None:
                 "seconds": expected / FPS,
                 "audio_samples": response.submitted_audio_samples,
                 "endpoint_delta_samples": response.av_endpoint_delta_samples,
-                "native_manifest": manifest,
                 "video_digest": digest,
                 "scan_ahead_preserves_video_bytes": True,
                 "scan_audio_windows_bounded": True,
@@ -331,7 +299,7 @@ def main() -> None:
         )
         + "\n"
     )
-    print("H3 assembly codec/native proof passed; no H3 model was loaded")
+    print("H3 assembly codec proof passed; no H3 model was loaded")
 
 
 if __name__ == "__main__":

@@ -141,6 +141,7 @@ from cozy_runtime.models.minimax_h3.official import (  # noqa: E402
     timestep_plan_digest,
     validate_reference_policy,
 )
+from cozy_runtime.models.minimax_h3 import turbo as turbo_module  # noqa: E402
 from cozy_runtime.models.minimax_h3.table_layout import TableLayout  # noqa: E402
 from cozy_runtime.models.minimax_h3.turbo import (  # noqa: E402
     ATTENTION_KWARG,
@@ -3959,8 +3960,10 @@ class _GemmRows(TorchDispatchMode):  # type: ignore[misc]
         self.strides: list[tuple[int, int]] = []
 
     def __torch_dispatch__(self, func: Any, types: Any, args: Any = (), kwargs: Any = None) -> Any:
-        if func in (torch.ops.aten.addmm.default, torch.ops.aten.mm.default):
-            operand = args[1] if func == torch.ops.aten.addmm.default else args[0]
+        # addmm_ too: from Runtime 0.19 the LoRA up projection adds into its output in place
+        fused = (torch.ops.aten.addmm.default, torch.ops.aten.addmm_.default)
+        if func in (*fused, torch.ops.aten.mm.default):
+            operand = args[1] if func in fused else args[0]
             self.rows.append(int(operand.shape[0]))
             self.strides.append((int(operand.stride(0)), int(operand.stride(1))))
         return func(*args, **(kwargs or {}))
@@ -3988,6 +3991,9 @@ class _Allocations(TorchDispatchMode):  # type: ignore[misc]
 def arm_turbo_lora() -> None:
     print("\n== PDD-8: the low-rank update accumulates in place ==")
     rows, width, out_features, rank = 20_000, 64, 48, 8
+    # The Runtime's fixed GEMM row count: 256 through 0.18.x, 4096 from 0.19 (cozy-machine #26:
+    # 256-row chunks cost 7.6% of a dense step on an RTX PRO 6000).
+    chunk = turbo_module._LORA_ROW_CHUNK
     torch.manual_seed(3)
     factors = LoRAFactors(width, out_features, rank, 1.0)
     with torch.no_grad():
@@ -3996,23 +4002,34 @@ def arm_turbo_lora() -> None:
     x = torch.randn(1, rows, width).bfloat16()
     base = torch.randn(1, rows, out_features).bfloat16()
     down, up = factors.lora_down, factors.lora_up
-    expected = base + F.linear(F.linear(x, down), up)
+    # From 0.19 the up projection adds into the base output (addmm: one rounding, of the sum);
+    # through 0.18 the update was rounded to BF16 first, then the sum. Either stays within half
+    # a BF16 step (2**-8 relative) of the update and of the sum, of the FP32 result.
+    low = F.linear(x, down.bfloat16())
+    update = low.float() @ up.float().t()
+    exact = base.float() + update
     out = base.clone()
     with _Allocations(x, out, factors.lora_down, factors.lora_up) as allocations:
         factors.accumulate(x, out)
+    bound = 2**-8 * (update.abs() + exact.abs()) + 2**-12
     check(
-        "bf16 operand: the update preserves the reference rounding",
-        torch.equal(out, expected),
+        "bf16 operand: the update is within BF16 rounding of the FP32 sum",
+        bool(((out.float() - exact).abs() <= bound).all()),
+        True,
+    )
+    red(
+        "an update dropped or doubled is far outside that rounding",
+        bool(((base.float() - exact).abs() <= bound).all()),
         True,
     )
     check(
-        "bf16 operand: every transient is bounded to 256 rows",
-        max(allocations.sizes) <= 256 * max(width, out_features),
+        "bf16 operand: every transient is bounded to one chunk of rows",
+        max(allocations.sizes) <= chunk * max(width, out_features),
         True,
     )
     red(
         "a materialised [rows, out] update would be larger",
-        rows * out_features <= rows * rank,
+        rows * out_features <= chunk * max(width, out_features),
         True,
     )
 
@@ -4038,8 +4055,8 @@ def arm_turbo_lora() -> None:
     check("LoRA input layout does not change values", torch.equal(out, canonical), True)
     check("LoRA tiles use row-major operands", set(operations.strides), {(width, 1), (rank, 1)})
     check(
-        "canonicalizing LoRA input layout still bounds every transient to 256 rows",
-        max(allocations.sizes) <= 256 * max(width, out_features),
+        "canonicalizing LoRA input layout still bounds every transient to one chunk of rows",
+        max(allocations.sizes) <= chunk * max(width, out_features),
         True,
     )
 
