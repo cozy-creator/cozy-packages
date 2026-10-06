@@ -53,7 +53,7 @@ from cozy_runtime.author._executor_requests import (
 )
 from cozy_runtime.author._services import ProgressFrame
 from cozy_runtime.internal import interface_wheel, package_interface, static_interface
-from cozy_runtime.internal.worker import machine_byte_results
+from cozy_runtime.internal.executor import _assets_at
 from cozy_runtime.models.minimax_h3.continuation import AVContext
 from cozy_runtime.models.minimax_h3.official import FPS, MAX_CONDITIONER_VISION_TOKENS, frames_for
 
@@ -510,6 +510,9 @@ def drive(
             return item
 
         answer = project(result.result)
+        assert {row["output_id"] for row in _assets_at(answer, "")} == {
+            row["output_id"] for row in outputs
+        }
         # Only a shot with a successor exports context: the last one would pay for nothing.
         successor = (
             continuous and not is_reference and shot_index + 1 < count
@@ -670,6 +673,8 @@ def drive(
         assert not calls and not prefetches, (calls, prefetches)
         assert not refuse_code or outcome.code == refuse_code, outcome
         return {}
+    if fail < 0 and cancel < 0:
+        assert outcome.terminal == "succeeded", outcome
     # Each generated reference is published as it lands, the video after every segment.
     shown = [item for item in record.published if item.output == "references"]
     assert [item.label for item in shown] == ["Reference: Bridge", "Reference: Rover"], shown
@@ -780,18 +785,9 @@ def drive(
     return {"frames": result.result.delivered_frames, "calls": sent, "events": len(events)}
 
 
-def admissible_results() -> None:
-    """Runtime grants native result outputs by fixed field path at child admission."""
-    built = static_interface.build(ROOT / "minimax-h3")
-    interface = json.loads(package_interface.canonical_bytes(built))
-    for entry in [*interface["entrypoints"], *interface["jobs"]]:
-        list(machine_byte_results.paths(entry["result"]))
-
-
 def main() -> None:
     root = Path(sys.argv[1]).resolve()
     root.mkdir(parents=True)
-    admissible_results()
     results = {
         "fixed": drive(root / "fixed"),
         "standard": drive(root / "standard", turbo=False, count=2),

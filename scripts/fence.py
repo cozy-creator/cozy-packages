@@ -204,9 +204,8 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "Compile the committed Qwen interface into Runtime's actual managed caller; "
         "retire with a public generated-caller fixture."
     ),
-    ("scripts/h3-cuts-proof.py", "cozy_runtime.internal.worker"): (
-        "Grant every H3 result through Runtime's own child-admission path "
-        "(`machine_byte_results.paths`); retire with a public result-admission check."
+    ("scripts/h3-cuts-proof.py", "cozy_runtime.internal.executor"): (
+        "Check serialized proof replies with the current executor's result-asset traversal. "
     ),
     ("scripts/h3-cuts-proof.py", "cozy_runtime.author._calls"): (
         "Qualify cuts through Runtime's real broker; retire with a public child-call harness."
@@ -255,25 +254,13 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "model. Retire this entry when it grows one. "
     ),
     ("scripts/native_execution_fixture.py", "cozy_runtime.author._executor_requests"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
+        "Exercise actual native TensorFS and descriptor framing; retire with a public native fixture. "
     ),
     ("scripts/native_execution_fixture.py", "cozy_runtime.internal.seam"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
+        "Exercise actual native TensorFS and descriptor framing; retire with a public native fixture. "
     ),
     ("scripts/native_execution_fixture.py", "cozy_runtime.internal.weights_writer"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
-    ),
-    ("scripts/native_execution_fixture.py", "cozy_runtime.internal.worker.grants"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
-    ),
-    ("scripts/native_execution_fixture.py", "cozy_runtime.internal.worker.weights"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
-    ),
-    ("scripts/native_execution_fixture.py", "cozy_runtime.internal.worker.workspace"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
-    ),
-    ("scripts/native_execution_fixture.py", "cozy_runtime.protocol"): (
-        "Exercise the actual worker journal and descriptors; retire with a public native fixture. "
+        "Exercise actual native TensorFS and descriptor framing; retire with a public native fixture. "
     ),
 }
 
