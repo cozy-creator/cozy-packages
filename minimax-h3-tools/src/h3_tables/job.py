@@ -548,7 +548,7 @@ def _produce_lanes(
         "full": _full_order(sections, current.rows),
         "adaln-pruned": current.rows,
     }
-    receipts: dict[str, dict[str, Any]] = {}
+    receipts: dict[str, Mapping[str, object]] = {}
     source_bytes = new_bytes = reused = computed = 0
     quant_request = ArtifactQuantizationRequest(max_relative_frobenius=max_relative_frobenius)
 
@@ -823,7 +823,7 @@ async def retable(
         row for row in order.rows if row[0] in bank_targets and row[1] in bank_targets[row[0]].add
     )
     source_bytes = written = 0
-    receipts: dict[str, dict[str, Any]] = {}
+    receipts: dict[str, Mapping[str, object]] = {}
     with ExitStack() as stack:
         bank = stack.enter_context(
             ctx.output("tables").open(
