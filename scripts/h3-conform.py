@@ -3190,9 +3190,10 @@ def arm_interface() -> None:
     entries = {entry["name"]: entry for entry in interface["entrypoints"]}
     surfaces = {surface.name: surface for surface in describe(package.app)}
     check(
-        "official actions, turbo functions and the model-bearing segments",
+        "official actions, turbo functions, the model-bearing segments and encode_text",
         set(entries),
         {
+            "encode_text",
             "fl2va",
             "ref2va",
             "fl2va_turbo",
@@ -3216,7 +3217,7 @@ def arm_interface() -> None:
     check(
         "public serving functions exclude chain implementation details",
         {name for name, entry in entries.items() if not entry.get("internal", False)},
-        {"fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo"},
+        {"fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo", "encode_text"},
     )
     check(
         "six workflows over four tasks",

@@ -56,7 +56,7 @@ COMPONENTS = ("fl2va_dit", "ref2va_dit", "text_encoder", "video_vae", "audio_vae
 DIT_PLAN_COMPONENT = "dit"
 
 #: The two DiTs quantize through the package-owned reviewed plan
-#: (``cozy_runtime.derive.h3-dit-quantization-plan.json``), never the generic structural
+#: (``assets/h3-dit-quantization-plan.json``), never the generic structural
 #: selector: their AdaLN table rows are rank-2 bf16 tensors whose keys end in `.weight`
 #: too, and a shape rule would happily encode them.
 DIT_COMPONENTS = frozenset(TARGET_COMPONENT.values())
@@ -204,6 +204,9 @@ TEXT_ENCODER_KEEP: tuple[str, ...] = (
     ),
 )
 
+_TEXT_ENCODER_FP8 = Treatment(encode="fp8-rowwise/1", keep=TEXT_ENCODER_KEEP)
+_TEXT_ENCODER_MXFP8 = Treatment(encode="mxfp8/1", keep=TEXT_ENCODER_KEEP)
+
 #: The video VAE's stored form is NOT a lane choice, so it is not authored per row.
 #:
 #: `MiniMaxH3VideoDecodeStep` decodes inside `torch.autocast(float16)`, so the decoder's
@@ -256,26 +259,23 @@ def lane_treatments(lane: Lane) -> Mapping[str, Treatment]:
 #: `WeightsOutput`, its byte ceiling, its targets and its writers from this mapping, so
 #: there is no second list of names to keep in step.
 #:
-#: The two rows the acceleration lanes are converging on are deliberately absent until
-#: their owners land them, because each is one line and each names a format this producer
-#: must not pick for them. When they land they are, respectively,
+#: The quantized lanes encode both DiTs and the text conditioner's 350 decoder linears
+#: (`TEXT_ENCODER_KEEP` stays bf16): 2026-10-09, the conditioner at fp8 drifted 0.1 % in mean
+#: cosine on the served encoder and kept 15 s A/B renders equivalent (progress/h3-te-fp8-20261009).
+#: The video VAE's encoding is still open with its conversion lane (h3a-027), and would be
 #:
-#:     "fp8-vae-adaln-pruned": Lane("adaln-pruned", {**_both_dits(_DIT_FP8),
-#:         "video_vae": Treatment(cast="f16", encode="fp8-rowwise/1")}),
-#:     "fp8-te-adaln-pruned": Lane("adaln-pruned", {**_both_dits(_DIT_FP8),
-#:         "text_encoder": Treatment(encode="fp8-rowwise/1", keep=TEXT_ENCODER_KEEP)}),
-#:
-#: The video VAE's fp32→fp16-versus-bf16 question is still open with the VAE conversion
-#: lane (h3a-027 §7 recommends the cast FIRST and the 217 decoder linears second, and the
-#: serving package must construct the VAE at the stored dtype before either can be served
-#: — `_keep_in_fp32_modules` pins it to fp32 today, so an f16 lane refuses at fit). The
-#: conditioner's is settled: h3a-028 ruled fp8-rowwise/1 with `TEXT_ENCODER_KEEP`, never
-#: int8 (proto-001 candidate H failed on flicker) and never mxfp8.
+#:     "video_vae": Treatment(cast="f16", encode="fp8-rowwise/1")
 LANES: Mapping[str, Lane] = {
     "bf16-full": Lane("full"),
     "bf16-pruned": Lane("adaln-pruned"),
-    "fp8-pruned": Lane("adaln-pruned", _both_dits(_DIT_FP8)),
-    "mxfp8-pruned": Lane("adaln-pruned", _both_dits(_DIT_MXFP8)),
+    "fp8-pruned": Lane(
+        "adaln-pruned",
+        {**_both_dits(_DIT_FP8), "text_encoder": _TEXT_ENCODER_FP8},
+    ),
+    "mxfp8-pruned": Lane(
+        "adaln-pruned",
+        {**_both_dits(_DIT_MXFP8), "text_encoder": _TEXT_ENCODER_MXFP8},
+    ),
 }
 
 

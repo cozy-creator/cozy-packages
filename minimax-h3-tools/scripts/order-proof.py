@@ -133,6 +133,8 @@ def _targets_of(
             dit_plan=quantization,
         )
         for component, treatment in lane.components.items()
+        # This proof owns the DiT order; lane-proof owns the conditioner's selection.
+        if component in dits.components
     }
     return _lane_targets(lane, sections, tables, full_targets, selections)
 

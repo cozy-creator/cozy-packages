@@ -1,0 +1,23 @@
+{
+ "prompts": [
+  "A cat sleeps on a sunny windowsill.",
+  "Extreme close-up of an elderly fisherman's weathered face at dawn. Deep wrinkles, grey stubble, pale blue eyes that slowly narrow as he squints into the wind; a single tear of sea spray runs down his cheek. He whispers, \"She's coming back today.\"",
+  "A parkour runner sprints across Hong Kong rooftops at dusk, vaults an air-conditioning unit, dives into a forward roll and leaps a three-metre gap between buildings while the handheld camera whips to follow; pigeons scatter and laundry lines snap in the wind.",
+  "A rainy Tokyo alley at night. A red neon sign reads \"OPEN 24 HOURS\" above a noodle stall, and a chalkboard menu lists \"Shoyu Ramen ¥850\", \"Gyoza ¥420\" and \"Draft Beer ¥500\" in neat white handwriting. A delivery scooter with the number 47 on its box splashes past a yellow \"STOP\" marking painted on the asphalt.",
+  "Hand-painted watercolour animation in the style of a 1980s Japanese fantasy film: a girl in a green cloak rides a giant fluffy grey creature over rolling hills, soft pastel clouds, visible paper texture and gentle brush strokes; whimsical flute music.",
+  "Stop-motion claymation: a grumpy orange clay robot tries to bake a cake, flour puffs in jerky twelve-frames-per-second bursts, fingerprints visible in the plasticine.",
+  "一位身穿红色旗袍的女子在雨夜的上海外滩撑着油纸伞缓缓走过，霓虹灯倒映在湿漉漉的石板路上，远处传来黄浦江上的汽笛声。",
+  "桜の花びらが舞う春の坂道を、制服姿の少女が自転車で駆け下りる。風に髪がなびき、彼女は笑いながら「遅刻しちゃう！」と叫ぶ。",
+  "Un viejo guitarrista toca flamenco en una plaza de Sevilla al atardecer; las palomas levantan el vuelo y una bailarina con vestido rojo gira sobre los adoquines.",
+  "A stadium scoreboard shows HOME 3 - AWAY 2 at 89:59; the clock ticks to 90:00 and the crowd of 60,000 erupts as confetti falls.",
+  "A news anchor in a navy suit sits at a glass desk and says clearly: \"Good evening. Tonight, scientists in Geneva confirmed the discovery of a new particle.\" Behind her a screen shows a spinning blue globe.",
+  "subject_definitions: Mira, a 30-year-old astronaut with short black hair, freckles and a scuffed white EVA suit with a red mission patch reading ARES-7; Kobi, a small four-legged maintenance robot with one round amber eye.\nscene: The interior of a cramped Martian habitat during a dust storm. Orange light filters through a round porthole, dust hisses against the hull, cables hang from the ceiling and a cracked tablet on the table flickers with the words \"O2 RESERVE 14%\".\naction: Mira pulls off her helmet, breathes hard, wipes sweat from her forehead and kneels beside Kobi, who beeps twice and projects a small holographic map of the valley onto the floor. She traces a route with her finger, frowns, then smiles slowly.\ncamera: slow push-in from a low angle, then a rack focus from the hologram to her face; 35mm anamorphic, shallow depth of field, gentle handheld sway.\ndialogue: Mira says quietly, \"Okay, Kobi. If the storm breaks at dawn, we walk north.\" Kobi answers with three rising beeps.\noverall_soundscape: wind roaring outside, metal creaking, the hum of the life-support fans, faint electronic chirps."
+ ],
+ "hidden_states": [
+  1,
+  10,
+  25,
+  40,
+  50
+ ]
+}
