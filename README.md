@@ -125,11 +125,17 @@ Four-GPU placement is chosen when submitting the run, not by the composition fun
 The `fl2va_turbo` and `ref2va_turbo` functions take two independent model slots:
 `base_model: H3TurboBase` holds an AdaLN-pruned five-root checkpoint, and
 `turbo_lora: H3TurboLoRA` holds only `fl2va_turbo` and `ref2va_turbo`. Both
-checkpoints are selected explicitly and must have matching DiT configurations;
-the turbo functions have no model defaults.
+checkpoints must have matching DiT configurations. The package's hardware ladders
+select the FP8-pruned base and PDD-8 adapter by default; callers can select other
+compatible model bindings explicitly.
 Each sampling scope holds its base DiT and separate overlay together. LoRA hooks
 are installed during construction, before Runtime chooses fusion or Ulysses
 execution. All three model classes declare degrees 2 and 4.
+
+Runtime also owns the [hardware-aware H3 attention policy](minimax-h3/docs/attention-defaults.md).
+Turbo preserves four dense plus four sparse evaluations; regular 30-step sampling
+preserves ten dense plus twenty sparse evaluations when a sparse backend is selected.
+Explicit CLI attention pins take precedence.
 
 H3 1.14.3 requires Runtime 0.16.7 or newer for restoration and residency reporting
 across these model slots, retained derived-buffer aliases, and exact Python-patch
