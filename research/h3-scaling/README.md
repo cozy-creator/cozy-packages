@@ -76,3 +76,11 @@ Its A/B input selector is for visual review only. One/four/eight-GPU playback ca
 aligned, slowed and viewed beside Comfy. Comfy's baseline remains the initial
 selection; qualified variants remain separately selectable. Format validation is
 explicitly separate from the user's visual and audio quality decision.
+
+## Transport comparison
+
+The [transport recipe](transport/README.md) captures otherwise unchanged
+four-H100 Turbo packages with direct-peer or host-shared-memory NCCL transport.
+It retains actual-route validation, ordinary CLI submission, and passive NVLink
+counter analysis with explicit sampling bounds. The recipe never rents or resets
+a worker; the operator controls those lifecycle boundaries.
