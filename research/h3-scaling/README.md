@@ -45,7 +45,13 @@ Kitchen INT8 Sol recipe. The shared-QKV producer is single-GPU only. H100 defaul
 remain BF16 Sol; its dense reference is selected from the ready Sage/FA3/SDPA
 preferences and must be recorded from the actual run, not assumed.
 
-Only the DiT is sequence parallel. Sampling and the audio/video VAEs remain on the
-leader, so a fourfold DiT improvement does not imply a fourfold full-video speedup.
+The DiT is sequence parallel. The video VAE also distributes independent temporal
+clips over the group's ranks through `author.spread`; the leader restores temporal
+order and performs the cross-fades and output handling. Spatial tile batches stay
+fixed at 28. Sampling and audio decode remain on the leader. Older H3Model and
+context-parallel module prose saying both VAEs stay on the leader is stale.
+
 H3 has 56 attention heads: degree 4 assigns 14 heads/rank and degree 8 assigns 7.
-Eight-rank source support and CPU tests are not yet an eight-GPU benchmark result.
+The current campaign's run 5125 produced a full 362-frame video on eight actual
+RTX 5090 ranks, with the expected hybrid recipe and 4+4 counts on every rank.
+This is video and execution evidence; quality still needs the user's review.
