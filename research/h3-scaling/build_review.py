@@ -76,7 +76,7 @@ def main() -> None:
                 "execution_seconds": data["server_execution_seconds"],
                 "timing_boundary": "Comfy server execution; observer transfer excluded",
                 "attention": "Kitchen INT8 dense + Kitchen INT8 Sol",
-                "text_encoder": "BF16 storage; FP16 compute", "capture": data["case"]},
+                "text_encoder": "Official BF16 checkpoint; loader reports FP16", "capture": data["case"]},
                video, receipt, data["video"]["sha256"])
 
     inputs = []
@@ -89,12 +89,14 @@ def main() -> None:
                           "audio_hz": 32000, "audio_channels": 2},
              "review_status": "Human quality review pending for these new multi-GPU outputs",
              "inputs": inputs, "artifacts": artifacts,
+             "skipped_configurations": [{"hardware": "h100", "degree": 8,
+                                         "reason": "Skipped at the user's request"}],
              "comfy_ledger": relative(ledger_path) if ledger_path.exists() else None,
              "comfy_ledger_updated_unix_s": ledger.get("updated_unix_s"),
              "comfy_scope_exceptions": ledger.get("scope_exceptions", []),
              "notes": ["Prompt and seed match between configurations for each selected input.",
                        "Input labels identify review samples, not distinct benchmark configurations.",
-                       "Cozy uses the current rc.3 FP8 text encoder; Comfy stores BF16 text weights and logs FP16 compute.",
+                       "Cozy uses the current rc.3 FP8 text encoder. Comfy loads the official BF16 checkpoint; its loader reports FP16, which alone does not prove every operand's compute dtype.",
                        "Multi-GPU Sage3/Kitchen uses current-call materialized attention; it differs from the previously reviewed single-GPU producer path.",
                        "Video/audio format and hash checks passed. They do not establish perceptual quality or equivalence.",
                        "Only validated timed captures appear. Missing Comfy cells remain placeholders until generated.",

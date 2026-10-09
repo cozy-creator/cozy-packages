@@ -29,7 +29,7 @@
 <main>
   <h1>MiniMax H3 · Multi-GPU review</h1>
   <p class="intro">Compare the original 15-second videos with matching prompts and seeds. Switch hardware, sampling mode, and input; play configurations together or inspect one at full resolution.</p>
-  <div class="notice"><strong>New quality review.</strong> These multi-GPU outputs use Cozy’s current FP8 text encoder and materialized attention path. Previous approval of the single-GPU videos does not establish quality or equivalence here. Format checks have passed; visual and audio quality are yours to judge.</div>
+  <div class="notice"><strong>Your quality review:</strong> compare motion, fine detail, and audio in these new outputs. Use the shared playback controls to inspect them together.</div>
   <div class="filters">
     <label>Hardware<select id="hardware"><option value="rtx5090">RTX 5090</option><option value="h100">H100 SXM 80 GB</option></select></label>
     <label>Sampling<select id="mode"><option value="turbo">Turbo · 8 steps · 4 dense + 4 sparse</option><option value="regular">Regular · 30 steps · 10 dense + 20 sparse</option></select></label>
@@ -37,6 +37,7 @@
     <label>Compare<select id="comparison"><option value="scaling">Cozy: 4 GPUs ↔ 8 GPUs</option><option value="engines4">4 GPUs: Cozy ↔ ComfyUI</option><option value="engines8">8 GPUs: Cozy ↔ ComfyUI</option><option value="all">All four configurations</option></select></label>
     <label>Comfy configuration<select id="variant"><option value="baseline">Baseline</option></select></label>
   </div>
+  <p class="subtle" id="availability-note" hidden>8× H100 was skipped at your request.</p>
   <div class="transport">
     <button class="primary" id="play">Play together</button><button id="pause">Pause</button><button id="restart">Restart</button>
     <input id="seek" type="range" min="0" max="15.083333" step="0.01" value="0" aria-label="Seek all videos"><span id="time" class="time">0.00 / 15.08s</span>
@@ -59,6 +60,7 @@
   function render() {
     videos.forEach(v=>v.pause()); videos=[]; $('videos').replaceChildren(); $('seek').value=0; $('time').textContent='0.00 / 15.08s';
     const c=current(), layouts={scaling:[['Cozy',4],['Cozy',8]],engines4:[['Cozy',4],['ComfyUI',4]],engines8:[['Cozy',8],['ComfyUI',8]],all:[['Cozy',4],['ComfyUI',4],['Cozy',8],['ComfyUI',8]]};
+    $('availability-note').hidden=c.hardware!=='h100';for(const option of $('comparison').options)option.disabled=c.hardware==='h100'&&option.value!=='engines4';
     $('audio').replaceChildren(new Option('Muted','none'));
     for(const [engine,degree] of layouts[$('comparison').value]) {
       const entries=candidates(engine,degree), a=entries.at(-1), card=el('article'), head=el('div',undefined,'card-head'), title=el('div');
@@ -76,7 +78,7 @@
     if(videos[0]) { const master=videos[0];master.addEventListener('timeupdate',()=>{if(videos[0]!==master)return;const t=master.currentTime;$('seek').value=t;$('time').textContent=`${t.toFixed(2)} / 15.08s`;}); }
     const input=data.inputs.find(i=>i.repetition===c.repetition);$('prompt-label').textContent=`${input.label} · seed ${input.seed} · full prompt`;$('prompt-text').textContent=input.prompt;
     $('times').replaceChildren();
-    for(const degree of [4,8]) for(const engine of ['Cozy','ComfyUI']) {
+    for(const degree of (c.hardware==='h100'?[4]:[4,8])) for(const engine of ['Cozy','ComfyUI']) {
       const rows=candidates(engine,degree,false), unique=new Map(rows.map(r=>[r.repetition,r]));const used=[...unique.values()], tr=el('tr');
       tr.append(el('td',String(degree)),el('td',engine+(engine==='ComfyUI'?` · ${$('variant').value}`:'')),el('td',`${used.length} / 2`),el('td',used.length===2?format(used.reduce((s,a)=>s+a.execution_seconds,0)/2):'Pending'));$('times').append(tr);
     }
