@@ -27,14 +27,16 @@ launch checks; older Runtime releases can retain their previous policy.
 
 | Hardware and placement | Preferred implementation |
 | --- | --- |
-| SM120, one GPU, including RTX 5090 | Sage3 FP4 dense + Kitchen INT8 Sol with shared QKV production |
-| SM120, multiple GPUs | Head-local Sage3 FP4 dense + Kitchen INT8 Sol through Ulysses |
-| Other supported NVIDIA GPUs | Kitchen INT8 dense + Kitchen INT8 Sol; shared QKV production on one GPU, head-local attention with multiple GPUs |
+| Supported SM120/121 Blackwell, one GPU, including RTX 5090 | Sage3 FP4 dense + Kitchen INT8 Sol with shared QKV production |
+| Supported SM120/121 Blackwell, multiple GPUs | Head-local Sage3 FP4 dense + Kitchen INT8 Sol through Ulysses |
+| H100, RTX 4090, Ampere, and other devices | Existing Runtime attention preferences remain unchanged pending matched benchmarks |
 
-Sage3's current FP4 kernel supports SM120. A Blackwell family name alone is not
-enough: B200/SM100 must use another supported implementation. Kitchen availability
-also depends on the installed kernels and device; unsupported devices retain the
-existing supported fallback chain instead of receiving an unsupported pin.
+Runtime promotes the hybrid only when the actual device, attention site, degree,
+and companion kernels admit it. The package adds no GPU-name switch. A Blackwell
+family name alone is not enough: B200/SM100 retains its existing policy. Expanded
+Kitchen INT8 routes remain explicit candidates on other supported NVIDIA GPUs;
+they do not become universal defaults without matched measurements. Unsupported
+devices retain the existing supported fallback chain.
 
 The single-5090 Turbo matrix qualifies that measured route. It does not establish
 multi-GPU, regular 30-step, or other-device performance for this promotion.
