@@ -1451,14 +1451,17 @@ async def _create_references(
         ctx.raise_if_cancelled()
         # Concurrent child progress has no ordered overall range. Runtime owns
         # GPU admission; this CPU composer submits at most nine independent calls.
+        # A character sheet's three panels share a wide 2 MP canvas: the face close-up and
+        # each full-body view keep about as many pixels as H3's 1024 px short edge reads.
+        sheet = reference.kind == "character"
         with tel.scope(f"Creating reference {reference.name}"):
             result = await reference_generator(
                 prompt=image_prompt(reference, style),
-                aspect_ratio=ReferenceAspectRatio.SQUARE,
-                megapixels=ReferenceMegapixels.MP1,
+                aspect_ratio=ReferenceAspectRatio.WIDE if sheet else ReferenceAspectRatio.SQUARE,
+                megapixels=ReferenceMegapixels.MP2 if sheet else ReferenceMegapixels.MP1,
                 steps=reference_steps,
                 seed=reference_seed(reference, ctx.request_id),
-                background="white" if reference.kind == "character" else "normal",
+                background="white" if sheet else "normal",
             )
         # Each generated reference is shown the moment it exists.
         out.publish("references", result.image, label=f"Reference: {reference.name}")
