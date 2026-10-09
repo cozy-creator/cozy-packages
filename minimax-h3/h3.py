@@ -807,6 +807,11 @@ _DEFAULT_TURBO_LORA_LADDER: list[dict[str, str | int]] = [
 ]
 
 
+#: The components each task runs. A machine downloads these first and the rest behind the
+#: run, so a pod's first request pays for one DiT, not two.
+_FL2VA = ("text_encoder", "fl2va_dit", "video_vae", "audio_vae")
+_REF2VA = ("text_encoder", "ref2va_dit", "video_vae", "audio_vae")
+
 #: `encode_text` stages the text encoder alone, which every card holds on one GPU.
 _ENCODE_TEXT_LADDER: list[dict[str, str | int]] = [
     {"gpu": "H100", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
@@ -815,10 +820,12 @@ _ENCODE_TEXT_LADDER: list[dict[str, str | int]] = [
     {"gpu": "RTX PRO 6000", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
     {"gpu": "5090", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
 ]
-app.entrypoint(defaults={"model": _ENCODE_TEXT_LADDER})(encode_text)
+app.entrypoint(defaults={"model": _ENCODE_TEXT_LADDER}, components={"model": ("text_encoder",)})(
+    encode_text
+)
 
 
-@app.entrypoint(defaults={"model": _DEFAULT_MODEL_LADDER})
+@app.entrypoint(defaults={"model": _DEFAULT_MODEL_LADDER}, components={"model": _FL2VA})
 def fl2va(
     ctx: Context,
     payload: StandardClipInput,
@@ -831,7 +838,8 @@ def fl2va(
 
 
 @app.entrypoint(
-    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER}
+    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
+    components={"base_model": _FL2VA, "turbo_lora": ("fl2va_turbo",)},
 )
 def fl2va_turbo(
     ctx: Context,
@@ -856,7 +864,11 @@ def fl2va_turbo(
     )
 
 
-@app.entrypoint(preflight=preflight_reference_media, defaults={"model": _DEFAULT_MODEL_LADDER})
+@app.entrypoint(
+    preflight=preflight_reference_media,
+    defaults={"model": _DEFAULT_MODEL_LADDER},
+    components={"model": _REF2VA},
+)
 def ref2va(
     ctx: Context,
     payload: StandardClipInput,
@@ -875,6 +887,7 @@ def ref2va(
 @app.entrypoint(
     preflight=preflight_reference_media_turbo,
     defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
+    components={"base_model": _REF2VA, "turbo_lora": ("ref2va_turbo",)},
 )
 def ref2va_turbo(
     ctx: Context,
@@ -1220,7 +1233,7 @@ def _render_cut(
     return SegmentOutput(shot.video, list(shot.warnings), observed)
 
 
-@invocable(defaults={"model": _DEFAULT_MODEL_LADDER})
+@invocable(defaults={"model": _DEFAULT_MODEL_LADDER}, components={"model": _REF2VA})
 async def cut_segment(
     ctx: Context,
     *,
@@ -1237,7 +1250,8 @@ async def cut_segment(
     defaults={
         "base_model": _DEFAULT_MODEL_LADDER,
         "turbo_lora": _DEFAULT_TURBO_LORA_LADDER,
-    }
+    },
+    components={"base_model": _REF2VA, "turbo_lora": ("ref2va_turbo",)},
 )
 async def cut_segment_turbo(
     ctx: Context,
@@ -1365,7 +1379,7 @@ def _render_motion(
     )
 
 
-@invocable(defaults={"model": _DEFAULT_MODEL_LADDER})
+@invocable(defaults={"model": _DEFAULT_MODEL_LADDER}, components={"model": _REF2VA})
 async def motion_segment(
     ctx: Context,
     *,
@@ -1384,7 +1398,8 @@ async def motion_segment(
     defaults={
         "base_model": _DEFAULT_MODEL_LADDER,
         "turbo_lora": _DEFAULT_TURBO_LORA_LADDER,
-    }
+    },
+    components={"base_model": _REF2VA, "turbo_lora": ("ref2va_turbo",)},
 )
 async def motion_segment_turbo(
     ctx: Context,

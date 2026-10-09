@@ -1,9 +1,9 @@
 [project]
 name = "minimax-h3"
-version = "1.26.4"
+version = "1.27.0"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media,minimax-h3]>=0.18.101",
+    "cozy-runtime[media,minimax-h3]>=0.21.8",
     "cozy-eval>=0.7.3",
     # MiniMax-H3 and Qwen-Image-2.1 share one Diffusers: the commit qwen-image-2 pins, since
     # QwenImage21Pipeline is in Diffusers main, not yet in a release.
