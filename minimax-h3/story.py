@@ -105,10 +105,13 @@ def image_prompt(reference: StoryReference, style: str = "") -> str:
     if reference.kind == "character":
         parts.append(
             "Generate exactly one image: a character design sheet on a plain white background. "
-            "Within this single image, place two full-body views of the same character side "
-            "by side: the front view on the left and the back view on the right. Show the "
-            "entire character in each view, in a natural neutral pose. Keep the character's "
-            "appearance, proportions and clothing consistent across both views."
+            "Within this single image, arrange three clearly separated views of the same "
+            "character: a full-body front view on the left, a full-body back view in the "
+            "center, and a large close-up portrait of the face on the right. Show the entire "
+            "character in both full-body views, in a natural neutral pose. Make the face "
+            "close-up large and sharp, with clear facial details: eyes, nose, mouth and "
+            "distinctive identifying features. Keep the character's appearance, proportions "
+            "and clothing consistent across all three views."
         )
     else:
         parts.append(

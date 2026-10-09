@@ -109,14 +109,16 @@ often non-English speech. Prevent it in the text:
 ## References and execution
 
 Each character reference uses one Qwen Image 2.1 call and returns exactly one image.
-That image is a character design sheet: a full-body front view on the left and back
-view on the right, together on one plain white canvas, with consistent appearance,
-proportions and clothing. The authored character description is included verbatim
-apart from surrounding whitespace.
+That image is a character design sheet: a full-body front view on the left, a full-body
+back view in the center, and a large, sharp face close-up on the right, together on one
+plain white canvas. The close-up requests clear eyes, nose, mouth and distinctive
+identifying features. Appearance, proportions and clothing stay consistent across all
+three views. Scene/background references keep their environment-only prompt. The authored
+character description is included verbatim apart from surrounding whitespace.
 
 The global `style` text also reaches every Qwen character and scene reference
 request. For example, `style: realistic` guides both reference images and H3 video
-segments. The front/back layout does not prescribe an art style: references follow
+segments. The character-sheet layout does not prescribe an art style: references follow
 the explicitly requested style, default to a realistic photographic look when no
 style is specified, and use anime styling only when explicitly requested.
 
