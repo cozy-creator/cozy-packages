@@ -1,6 +1,6 @@
 [project]
 name = "minimax-h3"
-version = "1.26.3"
+version = "1.26.4"
 requires-python = ">=3.12"
 dependencies = [
     "cozy-runtime[media,minimax-h3]>=0.18.101",
@@ -41,6 +41,7 @@ only-include = [
     "h3.py",
     "long_form_state.py",
     "story.py",
+    "text_states.py",
     "timestep-plans",
 ]
 

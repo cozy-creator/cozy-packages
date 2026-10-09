@@ -135,11 +135,12 @@ _check_table_budget(MAX_TABLE_BYTES)
 #: import, so the two cannot drift; only the spelling is duplicated.
 MAX_VIDEO_VAE_BYTES = 12 << 30
 MAX_TEXT_ENCODER_BYTES = 56 << 30
+MAX_QUANTIZED_LANE_BYTES = MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES + MAX_TEXT_ENCODER_BYTES
 LANE_OUTPUTS = (
     WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES + MAX_VIDEO_VAE_BYTES),
     WeightsOutput("bf16-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),
-    WeightsOutput("fp8-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
-    WeightsOutput("mxfp8-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
+    WeightsOutput("fp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),
+    WeightsOutput("mxfp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),
 )
 LaneName = Literal["bf16-full", "bf16-pruned", "fp8-pruned", "mxfp8-pruned"]
 
@@ -715,27 +716,25 @@ app.job(
 app.job(
     fp8_pruned,
     name="fp8-pruned",
-    weights=(WeightsOutput("fp8-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),),
+    weights=(WeightsOutput("fp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),),
 )
 app.job(
     mxfp8_pruned,
     name="mxfp8-pruned",
     weights=(
-        WeightsOutput("mxfp8-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
+        WeightsOutput("mxfp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),
     ),
 )
 
 
-#: `cozy model quantize <H3 checkpoint> --fp8|--mxfp8`: the H3 recipe over an AdaLN-pruned
-#: checkpoint. Both DiTs encode through the reviewed plan and the text conditioner's 350
-#: decoder-layer linears through the structural selection minus `TEXT_ENCODER_KEEP`
-#: (embeddings and the vision tower stay bf16). A recipe component the source still holds
+#: `cozy model quantize <H3 checkpoint> --fp8|--mxfp8`: the quantized lanes' recipe over an
+#: AdaLN-pruned checkpoint. Both DiTs encode through the reviewed plan and the text
+#: conditioner's 350 decoder-layer linears through the structural selection minus
+#: `TEXT_ENCODER_KEEP` (embeddings and the vision tower stay bf16). A recipe component the source still holds
 #: plain is encoded; one that already carries this encoding is inherited; one carrying
 #: another encoding refuses. Every other tensor, config and component inherits by reference.
 QUANTIZER_RECIPE: Mapping[str, tuple[str, ...]] = {
-    "fl2va_dit": (),
-    "ref2va_dit": (),
-    "text_encoder": _lanes.TEXT_ENCODER_KEEP,
+    component: treatment.keep for component, treatment in LANES["fp8-pruned"].components.items()
 }
 QUANTIZER_SPECS = {"fp8-rowwise/1": FP8_SPEC, "mxfp8/1": MXFP8_SPEC}
 #: Both DiTs and the conditioner at most; the transaction's own accounting is exact.

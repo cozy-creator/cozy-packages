@@ -168,7 +168,7 @@ def arm_census() -> None:
     if set(table_rows.values()) != {51}:
         _fail(f"table additions are {table_rows}, expected 51 rows per task")
 
-    inherited_everywhere = {"text_encoder", "video_vae", "audio_vae"}
+    inherited_everywhere = {"video_vae", "audio_vae"}
     for name, lane in lanes.LANES.items():
         targets = _targets(lane, granted)
         if set(targets) != set(lanes.COMPONENTS):
@@ -180,12 +180,15 @@ def arm_census() -> None:
         }
         if untouched != inherited_everywhere:
             _fail(f"{name} rewrites a shared component: {sorted(inherited_everywhere - untouched)}")
+        conditioner = len(targets["text_encoder"].add)
+        if conditioner != (350 if lane.components else 0):
+            _fail(f"{name} encodes {conditioner} conditioner rows, expected 350 or none")
         dit = targets["fl2va_dit"]
         added = len(dit.add)
         replaced = len(dit.drop)
         print(
             f"  {name:<20} modulation={lane.modulation:<13} "
-            f"fl2va_dit +{added} -{replaced}  shared inherited by reference"
+            f"fl2va_dit +{added} -{replaced}  text_encoder +{len(targets['text_encoder'].add)}"
         )
         if lane.modulation == "full":
             if added or replaced != 1:
@@ -199,18 +202,17 @@ def arm_census() -> None:
                     f"expected +{51 + encoded} -{1 + 106 + encoded}"
                 )
 
-    # The four shipped lanes must be byte-identical declarations to what they always were:
-    # the ceilings the descriptor publishes are derived from the catalogue, not typed twice.
+    # The ceilings the descriptor publishes are derived from the catalogue, not typed twice.
     ceilings = {output.name: output.max_new_bytes for output in job.LANE_OUTPUTS}
     shipped = {
         "bf16-full": 12884967424,
         "bf16-pruned": 15032516608,
-        "fp8-pruned": 83751993344,
-        "mxfp8-pruned": 83751993344,
+        "fp8-pruned": 83751993344 + (56 << 30),
+        "mxfp8-pruned": 83751993344 + (56 << 30),
     }
     if ceilings != shipped:
         _fail(f"lane ceilings changed: {ceilings}")
-    print(f"  lane output ceilings unchanged from the shipped descriptor: {shipped}")
+    print(f"  lane output ceilings: {shipped}")
 
     _component_selection(granted)
     _refusals(granted)

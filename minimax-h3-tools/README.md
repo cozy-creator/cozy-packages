@@ -15,7 +15,7 @@ ingested or already fetched the input, its objects are in the pod Store and noth
 |---|---|---|---|
 | `bf16-full` | a full-precision H3 checkpoint: the converted `MiniMaxAI/MiniMax-H3` release or a `bf16-full` lane | `bf16-full` | source-only rows dropped, video VAE decode operands f16 |
 | `bf16-pruned` | same | `bf16-pruned` | AdaLN tables replace the 106 modulation rows per DiT; CUDA |
-| `fp8-pruned` | same | `fp8-pruned` | tables + both DiTs `fp8-rowwise/1`; CUDA; every serving rung |
+| `fp8-pruned` | same | `fp8-pruned` | tables + both DiTs and the conditioner's 350 decoder linears `fp8-rowwise/1`; CUDA; every serving rung |
 | `mxfp8-pruned` | same | `mxfp8-pruned` | grandfathered; native only on sm120 |
 | `turbo-lora` | the converted `alibaba-pai/MiniMax-H3-Acc-LoRAs` release (one fl2va and one ref2va component) | `pdd8` | `model.base=<full-precision H3>`; reads its modulation weights and heads only |
 | `retable` | an AdaLN-pruned lane | `adaln-pruned`, `tables` | `model.full=<full-precision H3>`; recomputes tables only |
@@ -66,8 +66,8 @@ of the community licence, which is a reviewed act rather than a caller choice.
 |---|---|---|
 | `bf16-full` | full | none — every component inherited |
 | `bf16-pruned` | AdaLN-pruned | none |
-| `fp8-pruned` | AdaLN-pruned | both DiTs `fp8-rowwise/1` |
-| `mxfp8-pruned` | AdaLN-pruned | both DiTs `mxfp8/1` |
+| `fp8-pruned` | AdaLN-pruned | both DiTs and the conditioner's decoder linears `fp8-rowwise/1` |
+| `mxfp8-pruned` | AdaLN-pruned | both DiTs and the conditioner's decoder linears `mxfp8/1` |
 
 A component a lane does not name is **inherited by reference**: TensorFS copies its tensor
 metadata and ObjectRefs unchanged through the zero-read/zero-hash inherit gate, so the

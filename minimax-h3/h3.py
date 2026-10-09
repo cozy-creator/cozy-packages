@@ -113,6 +113,7 @@ from story import (
     reference_seed,
     resolve_reference_images,
 )
+from text_states import encode_text
 
 app = App()
 
@@ -774,19 +775,19 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
 
 
 _DEFAULT_MODEL_LADDER: list[dict[str, str | int]] = [
-    {"gpu": "H100", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"},
-    {"gpu": "H100", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"},
-    {"gpu": "H200", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"},
-    {"gpu": "H200", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"},
-    {"gpu": "H200", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"},
-    {"gpu": "B200", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"},
-    {"gpu": "B200", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"},
-    {"gpu": "B200", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"},
-    {"gpu": "RTX PRO 6000", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"},
-    {"gpu": "RTX PRO 6000", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"},
-    {"gpu": "RTX PRO 6000", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"},
-    {"gpu": "5090", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"},
-    {"gpu": "5090", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.2/fp8-pruned"},
+    {"gpu": "H100", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "H100", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "H200", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "H200", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "H200", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "B200", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "B200", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "B200", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "RTX PRO 6000", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "RTX PRO 6000", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "RTX PRO 6000", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "5090", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "5090", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
 ]
 
 _DEFAULT_TURBO_LORA_LADDER: list[dict[str, str | int]] = [
@@ -804,6 +805,17 @@ _DEFAULT_TURBO_LORA_LADDER: list[dict[str, str | int]] = [
     {"gpu": "5090", "gpus": 1, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
     {"gpu": "5090", "gpus": 4, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
 ]
+
+
+#: `encode_text` stages the text encoder alone, which every card holds on one GPU.
+_ENCODE_TEXT_LADDER: list[dict[str, str | int]] = [
+    {"gpu": "H100", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "H200", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "B200", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "RTX PRO 6000", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+    {"gpu": "5090", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
+]
+app.entrypoint(defaults={"model": _ENCODE_TEXT_LADDER})(encode_text)
 
 
 @app.entrypoint(defaults={"model": _DEFAULT_MODEL_LADDER})
