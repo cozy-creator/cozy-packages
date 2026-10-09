@@ -23,6 +23,13 @@ account index. The script preserves the original model references:
 - `minimax-h3@1.0.0-rc.3/fp8-pruned`
 - `minimax-h3-turbo-lora@1.0.0-audit.1/pdd8`
 
+The current rc.3 base differs from the prior rc.2 campaign: 350 text-encoder
+decoder weights now use rowwise FP8. Header comparison proves both DiTs and both
+VAEs retain exactly the same tensor descriptors and content hashes; only those
+350 text-encoder rows change. Comfy's prepared default uses its BF16 text encoder.
+Report this precision difference and retain fresh quality videos; the older
+attention quality approval does not establish approval of the new text encoder.
+
 Invoke the local directory through ordinary `cozy run`, with an existing rental
 and a unique idempotency key. The input is the full 15-second request. Turbo uses
 8 steps (4 initial dense, 4 sparse); regular uses 30 (10 dense, 20 sparse).
