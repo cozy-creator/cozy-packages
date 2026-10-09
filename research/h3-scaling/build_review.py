@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,6 +17,8 @@ def main() -> None:
     review = campaign / "review"
     review.mkdir(exist_ok=True)
     artifacts = []
+    posters = review / "posters"
+    posters.mkdir(exist_ok=True)
 
     def relative(path: Path) -> str:
         path.resolve().relative_to(campaign)
@@ -25,8 +28,14 @@ def main() -> None:
         actual = hashlib.sha256(video.read_bytes()).hexdigest()
         if actual != expected.removeprefix("sha256:"):
             raise ValueError(f"video hash changed: {video}")
+        poster = posters / f"{actual}.jpg"
+        if not poster.exists():
+            subprocess.run(["ffmpeg", "-v", "error", "-threads", "2", "-ss", "1",
+                            "-i", str(video), "-frames:v", "1", "-vf", "scale=672:-2",
+                            "-q:v", "4", "-an", "-threads", "2", str(poster)],
+                           capture_output=True, check=True)
         row.update(video=relative(video), validation=relative(validation), sha256=actual,
-                   bytes=video.stat().st_size)
+                   bytes=video.stat().st_size, poster=relative(poster))
         artifacts.append(row)
 
     for hardware, directory, degrees in (("rtx5090", "rtx5090-8", (4, 8)),
@@ -51,28 +60,24 @@ def main() -> None:
                                           else "SageAttention dense + BF16 Sol"),
                             "text_encoder": "FP8 rowwise"}, video, receipt, data["video_sha256"])
 
-    captures = campaign / "comfy" / "captures"
-    for receipt in sorted(captures.rglob("validation.json")) if captures.exists() else ():
-        try:
-            data = json.loads(receipt.read_text())
-        except json.JSONDecodeError:
-            continue  # An in-progress receipt is not qualified evidence.
+    ledger_path = campaign / "comfy" / "results-ledger.json"
+    ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {}
+    for data in ledger.get("cases", []):
         if data.get("qualified") is not True or data.get("role") != "timed":
             continue
+        receipt = Path(data["validation_file"])
         video = Path(data["video"]["path"])
         if not video.exists():
             continue
-        relative_name = str(video.relative_to(receipt.parent))
-        file = next(f for f in data["files"] if f["name"] == relative_name)
-        append({"hardware": data["gpu"], "degree": data["degree"],
+        append({"hardware": data["gpu"], "degree": data["gpu_count"],
                 "mode": "turbo" if data["steps"] == 8 else "regular", "steps": data["steps"],
-                "engine": "ComfyUI", "variant": data.get("variant", "baseline"),
+                "engine": "ComfyUI", "variant": data["configuration"],
                 "repetition": data["repetition"], "run": data["prompt_id"],
                 "execution_seconds": data["server_execution_seconds"],
                 "timing_boundary": "Comfy server execution; observer transfer excluded",
                 "attention": "Kitchen INT8 dense + Kitchen INT8 Sol",
-                "text_encoder": "BF16", "capture": str(receipt.parent.relative_to(captures))},
-               video, receipt, file["sha256"])
+                "text_encoder": "BF16 storage; FP16 compute", "capture": data["case"]},
+               video, receipt, data["video"]["sha256"])
 
     inputs = []
     for repetition, label in ((1, "A · Fighting"), (2, "B · Racing")):
@@ -84,9 +89,12 @@ def main() -> None:
                           "audio_hz": 32000, "audio_channels": 2},
              "review_status": "Human quality review pending for these new multi-GPU outputs",
              "inputs": inputs, "artifacts": artifacts,
+             "comfy_ledger": relative(ledger_path) if ledger_path.exists() else None,
+             "comfy_ledger_updated_unix_s": ledger.get("updated_unix_s"),
+             "comfy_scope_exceptions": ledger.get("scope_exceptions", []),
              "notes": ["Prompt and seed match between configurations for each selected input.",
                        "Input labels identify review samples, not distinct benchmark configurations.",
-                       "Cozy uses the current rc.3 FP8 text encoder; Comfy uses BF16 text encoding.",
+                       "Cozy uses the current rc.3 FP8 text encoder; Comfy stores BF16 text weights and logs FP16 compute.",
                        "Multi-GPU Sage3/Kitchen uses current-call materialized attention; it differs from the previously reviewed single-GPU producer path.",
                        "Video/audio format and hash checks passed. They do not establish perceptual quality or equivalence.",
                        "Only validated timed captures appear. Missing Comfy cells remain placeholders until generated.",

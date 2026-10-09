@@ -65,7 +65,7 @@
       title.append(el('h2',`${degree}× ${c.hardware==='rtx5090'?'RTX 5090':'H100'}`),el('span',`${engine} · ${engine==='Cozy'?'current defaults':$('variant').selectedOptions[0].text}`,'engine')); head.append(title);
       if(a) { const t=el('div',format(a.execution_seconds),'duration');t.append(el('small','this timed capture'));head.append(t); } card.append(head);
       if(a) {
-        const v=el('video');v.src=a.video;v.controls=true;v.preload='metadata';v.muted=true;v.playsInline=true;v.playbackRate=Number($('speed').value);v.setAttribute('aria-label',`${engine} ${degree} GPUs input ${c.repetition}`);v.dataset.audioKey=`${engine}-${degree}`;videos.push(v);card.append(v);
+        const v=el('video');v.src=a.video;v.poster=a.poster;v.controls=true;v.preload='metadata';v.muted=true;v.playsInline=true;v.playbackRate=Number($('speed').value);v.setAttribute('aria-label',`${engine} ${degree} GPUs input ${c.repetition}`);v.dataset.audioKey=`${engine}-${degree}`;videos.push(v);card.append(v);
         $('audio').add(new Option(`${engine} · ${degree} GPUs`,v.dataset.audioKey));
         const meta=el('div',undefined,'meta');meta.append(el('div',a.attention),el('div',`Text encoder: ${a.text_encoder} · 362 frames · 1344×768 · 24 fps · stereo 32 kHz`));
         const download=el('a','Open original video');download.href=a.video;download.target='_blank';download.rel='noopener';meta.append(download);

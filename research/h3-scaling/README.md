@@ -60,10 +60,11 @@ This is video and execution evidence; quality still needs the user's review.
 
 `python research/h3-scaling/build_review.py /absolute/campaign` writes
 `review/index.html`, a relative-path artifact index and its browser script. It
-indexes validated timed native RTX 5090/H100 captures and qualified Comfy captures
-as they arrive, verifies their video hashes, and never copies media. Regenerate it
-after new Comfy receipts land. Failed, partial and warmup captures stay out of the
-timed comparison.
+indexes validated timed native RTX 5090/H100 captures and qualified timed entries
+from `comfy/results-ledger.json`, verifies their video hashes, and never copies
+videos. Small posters are extracted from the originals without altering them.
+Regenerate it after the Comfy ledger changes. Failed, partial and warmup captures
+stay out of the timed comparison.
 
 The gallery groups timing rows by hardware, GPU count, sampling mode and engine.
 Its A/B input selector is for visual review only. Four/eight-GPU playback can be
