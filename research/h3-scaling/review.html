@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiniMax H3 · Multi-GPU video review</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; background:#11151b; color:#edf1f5; }
+  * { box-sizing:border-box; } body { margin:0; } main { max-width:1600px; margin:auto; padding:32px 28px 56px; }
+  h1 { font-size:clamp(24px,3vw,38px); margin:0 0 8px; letter-spacing:-.035em; } h2 { font-size:18px; margin:0; }
+  p { line-height:1.55; } .intro { color:#bdc8d5; margin:0 0 22px; max-width:1050px; }
+  .notice { border-left:3px solid #e5b75d; background:#25231d; padding:12px 16px; color:#e8d9b8; font-size:14px; }
+  .filters,.transport { display:flex; gap:14px; flex-wrap:wrap; align-items:end; margin:22px 0; }
+  label { display:grid; gap:7px; font-size:12px; font-weight:650; color:#afbccb; }
+  select,button { background:#202834; color:#f3f6fa; border:1px solid #465364; border-radius:7px; padding:10px 12px; font:inherit; }
+  button { cursor:pointer; font-size:14px; } button:hover { background:#303c4b; } .primary { background:#26665d; border-color:#42877e; }
+  .transport { padding:14px; background:#1b222c; border-radius:10px; align-items:center; margin:16px 0; }
+  .transport label { display:flex; align-items:center; gap:8px; } input[type=range] { flex:1; min-width:130px; accent-color:#5cbaaa; }
+  .time { min-width:88px; font-size:13px; font-variant-numeric:tabular-nums; color:#afbccb; }
+  .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; } article { border:1px solid #354150; border-radius:11px; overflow:hidden; background:#1a212a; }
+  .card-head { display:flex; justify-content:space-between; gap:12px; padding:15px 17px; align-items:center; } .engine { font-size:12px; color:#91d0c3; }
+  .duration { font-variant-numeric:tabular-nums; font-size:18px; font-weight:650; text-align:right; white-space:nowrap; } .duration small { display:block; font-size:10px; font-weight:400; color:#a6b4c4; }
+  video { display:block; width:100%; aspect-ratio:7/4; background:#050608; } .empty { display:grid; place-content:center; text-align:center; aspect-ratio:7/4; background:#151b23; color:#8899ac; padding:24px; }
+  .meta { padding:14px 17px; color:#b7c4d3; font-size:12px; line-height:1.6; } .meta a { display:inline-block; margin:9px 15px 0 0; } a { color:#8ad6c6; text-underline-offset:3px; }
+  .subtle { color:#98a9bc; font-size:13px; } .prompt { margin:20px 0; background:#19212a; border-radius:8px; padding:13px 16px; } summary { cursor:pointer; font-size:13px; }
+  table { width:100%; border-collapse:collapse; margin:14px 0; font-size:14px; } th,td { text-align:left; padding:11px 13px; border-bottom:1px solid #334050; } th { color:#aab9c9; font-size:12px; } td:last-child { font-variant-numeric:tabular-nums; }
+  .footer { border-top:1px solid #354150; padding-top:20px; margin-top:30px; } .footer li { margin:8px 0; }
+  @media(max-width:800px) { main { padding:22px 14px; } .grid { grid-template-columns:1fr; } .filters label { flex:1 1 42%; } select { max-width:100%; } }
+</style>
+<main>
+  <h1>MiniMax H3 · Multi-GPU review</h1>
+  <p class="intro">Compare the original 15-second videos with matching prompts and seeds. Switch hardware, sampling mode, and input; play configurations together or inspect one at full resolution.</p>
+  <div class="notice"><strong>New quality review.</strong> These multi-GPU outputs use Cozy’s current FP8 text encoder and materialized attention path. Previous approval of the single-GPU videos does not establish quality or equivalence here. Format checks have passed; visual and audio quality are yours to judge.</div>
+  <div class="filters">
+    <label>Hardware<select id="hardware"><option value="rtx5090">RTX 5090</option><option value="h100">H100 SXM 80 GB</option></select></label>
+    <label>Sampling<select id="mode"><option value="turbo">Turbo · 8 steps · 4 dense + 4 sparse</option><option value="regular">Regular · 30 steps · 10 dense + 20 sparse</option></select></label>
+    <label>Review input<select id="input"><option value="1">A · Fighting · seed 581204</option><option value="2">B · Racing · seed 581205</option></select></label>
+    <label>Compare<select id="comparison"><option value="scaling">Cozy: 4 GPUs ↔ 8 GPUs</option><option value="engines4">4 GPUs: Cozy ↔ ComfyUI</option><option value="engines8">8 GPUs: Cozy ↔ ComfyUI</option><option value="all">All four configurations</option></select></label>
+    <label>Comfy configuration<select id="variant"><option value="baseline">Baseline</option></select></label>
+  </div>
+  <div class="transport">
+    <button class="primary" id="play">Play together</button><button id="pause">Pause</button><button id="restart">Restart</button>
+    <input id="seek" type="range" min="0" max="15.083333" step="0.01" value="0" aria-label="Seek all videos"><span id="time" class="time">0.00 / 15.08s</span>
+    <label>Speed<select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label>
+    <label>Audio<select id="audio"><option value="none">Muted</option></select></label>
+  </div>
+  <p class="subtle" id="playback-note">Playback starts on a shared time; individual video controls remain available. Select one audio source to avoid overlapping sound.</p>
+  <section id="videos" class="grid" aria-label="Comparison videos"></section>
+  <details class="prompt"><summary id="prompt-label">Prompt and seed</summary><p id="prompt-text" class="subtle"></p></details>
+  <section style="margin-top:28px"><h2>Configuration timing</h2><p class="subtle">Mean of the two validated timed inputs for this hardware and sampling mode. Warmups and artifact transfer are excluded. Input labels above are review choices, not benchmark configurations.</p><table><thead><tr><th>GPUs</th><th>Engine / configuration</th><th>Timed runs</th><th>Mean generation</th></tr></thead><tbody id="times"></tbody></table></section>
+  <div class="footer subtle"><h2>Review notes</h2><ul id="notes"></ul><p><a href="artifact-index.json">Machine-readable artifact index</a> · <span id="updated"></span></p></div>
+</main>
+<script src="artifact-index.js"></script>
+<script>
+  const data=window.BENCHMARK_ARTIFACTS, $=id=>document.getElementById(id); let videos=[];
+  const format=s=>`${Math.floor(s/60)}m ${(s%60).toFixed(2).padStart(5,'0')}s`;
+  function el(tag,text,cls) { const n=document.createElement(tag); if(text!==undefined)n.textContent=text; if(cls)n.className=cls; return n; }
+  function current() { return {hardware:$('hardware').value,mode:$('mode').value,repetition:Number($('input').value)}; }
+  function candidates(engine,degree,includeInput=true) { const c=current(); return data.artifacts.filter(a=>a.hardware===c.hardware&&a.mode===c.mode&&a.engine===engine&&a.degree===degree&&(!includeInput||a.repetition===c.repetition)&&(engine!=='ComfyUI'||a.variant===$('variant').value)); }
+  function render() {
+    videos.forEach(v=>v.pause()); videos=[]; $('videos').replaceChildren(); $('seek').value=0; $('time').textContent='0.00 / 15.08s';
+    const c=current(), layouts={scaling:[['Cozy',4],['Cozy',8]],engines4:[['Cozy',4],['ComfyUI',4]],engines8:[['Cozy',8],['ComfyUI',8]],all:[['Cozy',4],['ComfyUI',4],['Cozy',8],['ComfyUI',8]]};
+    $('audio').replaceChildren(new Option('Muted','none'));
+    for(const [engine,degree] of layouts[$('comparison').value]) {
+      const entries=candidates(engine,degree), a=entries.at(-1), card=el('article'), head=el('div',undefined,'card-head'), title=el('div');
+      title.append(el('h2',`${degree}× ${c.hardware==='rtx5090'?'RTX 5090':'H100'}`),el('span',`${engine} · ${engine==='Cozy'?'current defaults':$('variant').selectedOptions[0].text}`,'engine')); head.append(title);
+      if(a) { const t=el('div',format(a.execution_seconds),'duration');t.append(el('small','this timed capture'));head.append(t); } card.append(head);
+      if(a) {
+        const v=el('video');v.src=a.video;v.controls=true;v.preload='metadata';v.muted=true;v.playsInline=true;v.playbackRate=Number($('speed').value);v.setAttribute('aria-label',`${engine} ${degree} GPUs input ${c.repetition}`);v.dataset.audioKey=`${engine}-${degree}`;videos.push(v);card.append(v);
+        $('audio').add(new Option(`${engine} · ${degree} GPUs`,v.dataset.audioKey));
+        const meta=el('div',undefined,'meta');meta.append(el('div',a.attention),el('div',`Text encoder: ${a.text_encoder} · 362 frames · 1344×768 · 24 fps · stereo 32 kHz`));
+        const download=el('a','Open original video');download.href=a.video;download.target='_blank';download.rel='noopener';meta.append(download);
+        const receipt=el('a','Validation receipt');receipt.href=a.validation;receipt.target='_blank';receipt.rel='noopener';meta.append(receipt);card.append(meta);
+      } else { card.append(el('div','No validated timed video is available for this configuration yet.','empty')); }
+      $('videos').append(card);
+    }
+    if(videos[0]) { const master=videos[0];master.addEventListener('timeupdate',()=>{if(videos[0]!==master)return;const t=master.currentTime;$('seek').value=t;$('time').textContent=`${t.toFixed(2)} / 15.08s`;}); }
+    const input=data.inputs.find(i=>i.repetition===c.repetition);$('prompt-label').textContent=`${input.label} · seed ${input.seed} · full prompt`;$('prompt-text').textContent=input.prompt;
+    $('times').replaceChildren();
+    for(const degree of [4,8]) for(const engine of ['Cozy','ComfyUI']) {
+      const rows=candidates(engine,degree,false), unique=new Map(rows.map(r=>[r.repetition,r]));const used=[...unique.values()], tr=el('tr');
+      tr.append(el('td',String(degree)),el('td',engine+(engine==='ComfyUI'?` · ${$('variant').value}`:'')),el('td',`${used.length} / 2`),el('td',used.length===2?format(used.reduce((s,a)=>s+a.execution_seconds,0)/2):'Pending'));$('times').append(tr);
+    }
+  }
+  const variants=[...new Set(['baseline',...data.artifacts.filter(a=>a.engine==='ComfyUI').map(a=>a.variant)])];$('variant').replaceChildren(...variants.map(v=>new Option(v==='baseline'?'Baseline':v==='vramcache'?'VRAM cache':v,v)));
+  for(const id of ['mode','input','comparison','variant']) $(id).addEventListener('change',render);
+  $('hardware').addEventListener('change',()=>{$('comparison').value=$('hardware').value==='h100'?'engines4':'scaling';render();});
+  $('play').addEventListener('click',async()=>{const t=videos[0]?.currentTime||0;for(const v of videos){v.currentTime=t;v.playbackRate=Number($('speed').value);}const results=await Promise.allSettled(videos.map(v=>v.play()));if(results.some(r=>r.status==='rejected'))$('playback-note').textContent='One player could not start; use its video controls or open the original file.';});
+  $('pause').addEventListener('click',()=>videos.forEach(v=>v.pause()));$('restart').addEventListener('click',()=>videos.forEach(v=>{v.pause();v.currentTime=0;}));
+  $('seek').addEventListener('input',()=>{for(const v of videos)v.currentTime=Number($('seek').value);});
+  $('speed').addEventListener('change',()=>videos.forEach(v=>v.playbackRate=Number($('speed').value)));
+  $('audio').addEventListener('change',()=>videos.forEach(v=>v.muted=v.dataset.audioKey!==$('audio').value));
+  $('notes').replaceChildren(...data.notes.map(t=>el('li',t)));$('updated').textContent=`Index updated ${new Date(data.generated_at).toLocaleString()}`;render();
+</script>
+</html>

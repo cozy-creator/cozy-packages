@@ -55,3 +55,18 @@ H3 has 56 attention heads: degree 4 assigns 14 heads/rank and degree 8 assigns 7
 The current campaign's run 5125 produced a full 362-frame video on eight actual
 RTX 5090 ranks, with the expected hybrid recipe and 4+4 counts on every rank.
 This is video and execution evidence; quality still needs the user's review.
+
+## Review gallery
+
+`python research/h3-scaling/build_review.py /absolute/campaign` writes
+`review/index.html`, a relative-path artifact index and its browser script. It
+indexes validated timed native RTX 5090/H100 captures and qualified Comfy captures
+as they arrive, verifies their video hashes, and never copies media. Regenerate it
+after new Comfy receipts land. Failed, partial and warmup captures stay out of the
+timed comparison.
+
+The gallery groups timing rows by hardware, GPU count, sampling mode and engine.
+Its A/B input selector is for visual review only. Four/eight-GPU playback can be
+aligned, slowed and viewed beside Comfy. Comfy's baseline remains the initial
+selection; qualified variants remain separately selectable. Format validation is
+explicitly separate from the user's visual and audio quality decision.
