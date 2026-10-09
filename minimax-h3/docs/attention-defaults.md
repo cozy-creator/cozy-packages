@@ -22,24 +22,28 @@ experiment; it is not the new default.
 ## Hardware support
 
 The default promotion is implemented in [Runtime PR1263](https://github.com/cozy-creator/cozy-runtime/pull/1263).
-The intended order below is subject to Runtime's actual capability, build, and
-launch checks; older Runtime releases can retain their previous policy.
+The default requires both SM120/121 and a compatible reviewed Linux Kitchen wheel.
+Runtime checks the wheel's Python, ABI, and platform tags as well as the device,
+attention site, degree, and companion kernels. Older Runtime releases can retain
+their previous policy.
 
 | Hardware and placement | Preferred implementation |
 | --- | --- |
-| Supported SM120/121 Blackwell, one GPU, including RTX 5090 | Sage3 FP4 dense + Kitchen INT8 Sol with shared QKV production |
-| Supported SM120/121 Blackwell, multiple GPUs | Head-local Sage3 FP4 dense + Kitchen INT8 Sol through Ulysses |
+| SM120/121 with the compatible reviewed Linux wheel, one GPU, including RTX 5090 | Sage3 FP4 dense + Kitchen INT8 Sol with shared QKV production |
+| SM120/121 with the compatible reviewed Linux wheel, multiple GPUs | Head-local Sage3 FP4 dense + Kitchen INT8 Sol through Ulysses |
 | H100, RTX 4090, Ampere, and other devices | Existing Runtime attention preferences remain unchanged pending matched benchmarks |
 
-Runtime promotes the hybrid only when the actual device, attention site, degree,
-and companion kernels admit it. The package adds no GPU-name switch. A Blackwell
-family name alone is not enough: B200/SM100 retains its existing policy. Expanded
-Kitchen INT8 routes remain explicit candidates on other supported NVIDIA GPUs;
-they do not become universal defaults without matched measurements. Unsupported
-devices retain the existing supported fallback chain.
+The package adds no GPU-name switch. A Blackwell family name alone is not enough:
+B200/SM100 retains its existing policy, as do platforms without a compatible
+reviewed wheel. Those platforms do not gain a new H3 preference for the hybrid.
+Explicit kernel pins remain available subject to their own capability and build
+checks. Expanded Kitchen INT8 routes do not become universal defaults without
+matched measurements.
 
-The single-5090 Turbo matrix qualifies that measured route. It does not establish
-multi-GPU, regular 30-step, or other-device performance for this promotion.
+The single-5090 Turbo matrix qualifies that measured route. Current-candidate
+ordinary CLI runs also verified automatic Turbo selection, restoration after a
+Kitchen override, and regular 30-step sampling with ten dense plus twenty sparse
+steps. These checks do not establish multi-GPU or other-device performance.
 
 ## Explicit overrides
 
