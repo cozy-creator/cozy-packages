@@ -1,8 +1,8 @@
-# H3 four- and eight-GPU benchmark captures
+# H3 one-, four- and eight-GPU benchmark captures
 
 `prepare.py` makes local H3 packages from this checkout. The original functions,
 weights, geometry and sampling schedules are unchanged. Each capture's base and
-Turbo LoRA ladders have only one width (4 or 8), for H100 and RTX 5090. This matters
+Turbo LoRA ladders have only one width (1, 4 or 8), for H100 and RTX 5090. This matters
 on an eight-card machine: the shipping ladder currently stops at four cards.
 
 The captures pin Runtime 0.22.0. They do not publish a package or change the user's
@@ -22,6 +22,11 @@ account index. The script preserves the original model references:
 
 - `minimax-h3@1.0.0-rc.3/fp8-pruned`
 - `minimax-h3-turbo-lora@1.0.0-audit.1/pdd8`
+
+Use `--degrees 1` to add only the same-host one-GPU control without touching
+existing four/eight-GPU captures. Its base and LoRA rungs both request one GPU;
+Runtime selects the single-GPU producer default automatically. Lock and describe
+both `fl2va_turbo` and `fl2va` before assigning the existing rental's GPU 0.
 
 The current rc.3 base differs from the prior rc.2 campaign: 350 text-encoder
 decoder weights now use rowwise FP8. Header comparison proves both DiTs and both
@@ -67,7 +72,7 @@ Regenerate it after the Comfy ledger changes. Failed, partial and warmup capture
 stay out of the timed comparison.
 
 The gallery groups timing rows by hardware, GPU count, sampling mode and engine.
-Its A/B input selector is for visual review only. Four/eight-GPU playback can be
+Its A/B input selector is for visual review only. One/four/eight-GPU playback can be
 aligned, slowed and viewed beside Comfy. Comfy's baseline remains the initial
 selection; qualified variants remain separately selectable. Format validation is
 explicitly separate from the user's visual and audio quality decision.

@@ -1,4 +1,4 @@
-"""Capture current H3 with an exact four- or eight-GPU model ladder.
+"""Capture current H3 with an exact one-, four- or eight-GPU model ladder.
 
 Only deployment metadata changes: the H3 callable and sampling math stay intact.
 Run `cozy package lock` and `cozy run ... --describe` on each emitted directory.
@@ -22,6 +22,8 @@ def main() -> None:
     parser.add_argument("output", type=Path)
     parser.add_argument("--account-index", required=True,
                         help="The account_index returned by cozy package lock for the selected Hub")
+    parser.add_argument("--degrees", type=int, nargs="+", choices=(1, 4, 8), default=(1, 4, 8),
+                        help="Only generate these exact widths; existing captures are never replaced")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     source = root / "minimax-h3"
@@ -35,7 +37,9 @@ def main() -> None:
              and isinstance(node.target, ast.Name) and node.target.id in targets]
     assert len(nodes) == len(targets)
     source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-    for degree in (4, 8):
+    if len(set(args.degrees)) != len(args.degrees):
+        parser.error("degrees must be unique")
+    for degree in args.degrees:
         dest = args.output / f"package-degree-{degree}"
         if dest.exists():
             raise FileExistsError(dest)
@@ -58,6 +62,7 @@ def main() -> None:
         # generated ladder would misrepresent degree8 as a degree4 capture.
         (dest / "metadata" / "package-interface.json").unlink()
         proof = {"source_sha": source_sha, "source": str(source), "degree": degree,
+                 "generator_sha256": sha(Path(__file__)),
                  "base_lane": targets["_DEFAULT_MODEL_LADDER"],
                  "turbo_lora_lane": targets["_DEFAULT_TURBO_LORA_LADDER"],
                  "source_files": {str(p.relative_to(source)): sha(p) for p in source.rglob("*") if p.is_file()},

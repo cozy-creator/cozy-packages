@@ -38,7 +38,7 @@ def main() -> None:
                    bytes=video.stat().st_size, poster=relative(poster))
         artifacts.append(row)
 
-    for hardware, directory, degrees in (("rtx5090", "rtx5090-8", (4, 8)),
+    for hardware, directory, degrees in (("rtx5090", "rtx5090-8", (1, 4, 8)),
                                          ("h100", "h100-4", (4,))):
         for degree in degrees:
             for mode, steps in (("turbo", 8), ("regular", 30)):
@@ -58,6 +58,9 @@ def main() -> None:
                             "timing_boundary": "Recorded worker execution; transfer excluded",
                             "attention": ("Sage3 NVFP4 dense + Kitchen INT8 Sol" if hardware == "rtx5090"
                                           else "SageAttention dense + BF16 Sol"),
+                            "attention_path": ("single-GPU shared-QKV producer" if hardware == "rtx5090" and degree == 1
+                                               else "materialized head-local" if hardware == "rtx5090"
+                                               else "BF16 Sol"),
                             "text_encoder": "FP8 rowwise"}, video, receipt, data["video_sha256"])
 
     ledger_path = campaign / "comfy" / "results-ledger.json"
@@ -87,8 +90,9 @@ def main() -> None:
     index = {"generated_at": datetime.now(timezone.utc).isoformat(),
              "geometry": {"frames": 362, "width": 1344, "height": 768, "fps": 24,
                           "audio_hz": 32000, "audio_channels": 2},
-             "review_status": "Human quality review pending for these new multi-GPU outputs",
+             "review_status": "Human quality review pending for these new outputs",
              "inputs": inputs, "artifacts": artifacts,
+             "planned_gpu_degrees": {"rtx5090": [1, 4, 8], "h100": [4]},
              "skipped_configurations": [{"hardware": "h100", "degree": 8,
                                          "reason": "Skipped at the user's request"}],
              "comfy_ledger": relative(ledger_path) if ledger_path.exists() else None,
@@ -97,7 +101,7 @@ def main() -> None:
              "notes": ["Prompt and seed match between configurations for each selected input.",
                        "Input labels identify review samples, not distinct benchmark configurations.",
                        "Cozy uses the current rc.3 FP8 text encoder. Comfy loads the official BF16 checkpoint; its loader reports FP16, which alone does not prove every operand's compute dtype.",
-                       "Multi-GPU Sage3/Kitchen uses current-call materialized attention; it differs from the previously reviewed single-GPU producer path.",
+                       "Single-GPU defaults use the shared-QKV producer; multi-GPU defaults use current-call materialized attention. These are different implementation paths.",
                        "Video/audio format and hash checks passed. They do not establish perceptual quality or equivalence.",
                        "Only validated timed captures appear. Missing Comfy cells remain placeholders until generated.",
                        "Baseline Comfy is primary until the benchmark owner selects a qualified alternative."]}
