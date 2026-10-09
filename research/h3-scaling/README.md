@@ -34,6 +34,10 @@ VAEs retain exactly the same tensor descriptors and content hashes; only those
 350 text-encoder rows change. Comfy's prepared default uses its BF16 text encoder.
 Report this precision difference and retain fresh quality videos; the older
 attention quality approval does not establish approval of the new text encoder.
+The submitted prompts also pass through each application's own normalization:
+native H3 appends `\n\nnon_diegetic_music: N/A` when that field is absent, while
+the pinned Comfy node tokenizes the submitted text directly. Disclose this
+conditioning difference; matching submitted text is not identical encoder text.
 
 Invoke the local directory through ordinary `cozy run`, with an existing rental
 and a unique idempotency key. The input is the full 15-second request. Turbo uses
