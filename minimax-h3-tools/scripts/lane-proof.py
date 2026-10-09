@@ -365,8 +365,83 @@ def _refusals(granted: dict[str, SourceInspection]) -> None:
     )
 
 
+def _pruned_source(dit_spec: str | None) -> SourceInspection:
+    """One AdaLN-pruned lane's structure: DiT plan keys plain or carrying `dit_spec`."""
+    granted = full_source_structures()
+    sections = parse_production_config(job._asset("model-config.json"))
+    tables = job._table_additions(sections)
+    plan = prepare_quantization(h3_quantization_plan())
+    encoded = {tensor.key for tensor in plan.tensors}
+    components: dict[str, dict[str, Tensor]] = {}
+    for task, section in job.SOURCE_SECTION.items():
+        component = job.TARGET_COMPONENT[task]
+        removed = set(job.removed_keys(job.H3Topology.from_config(sections[section])))
+        rows = {
+            key: tensor
+            for key, tensor in granted["dits"].components[component].items()
+            if key not in removed and key != "rope.inv_freq"
+        }
+        rows.update(tables[task])
+        if dit_spec is not None:
+            for key in encoded:
+                rows[key] = Tensor(
+                    "bf16", rows[key].shape, dit_spec, {"data": Part("u8", rows[key].shape)}
+                )
+        components[component] = rows
+    dropped = set(source_full_targets()["text_encoder"].drop)
+    components["text_encoder"] = {
+        key: tensor
+        for key, tensor in granted["shared"].components["text_encoder"].items()
+        if key not in dropped
+    }
+    for component in ("video_vae", "audio_vae"):
+        components[component] = dict(granted["shared"].components[component])
+    return SourceInspection(Source("sha256:" + "00" * 32, 0), components, {"model": b"{}"})
+
+
+def arm_quantizer() -> None:
+    """`cozy model quantize --fp8|--mxfp8`: what H3's recipe encodes on each lane it is given."""
+    print("\narm B — the fp8/mxfp8 quantizer over pruned lanes")
+    cases = (
+        ("bf16-pruned --fp8", None, "fp8-rowwise/1", [313, 313, 350]),
+        ("fp8-pruned --fp8", job.FP8_SPEC, "fp8-rowwise/1", [350]),
+        ("mxfp8-pruned --mxfp8", job.MXFP8_SPEC, "mxfp8/1", [350]),
+    )
+    for name, spec, encoding, expected in cases:
+        selections = job._quantizer_selections(_pruned_source(spec), encoding)  # type: ignore[arg-type]
+        counts = [len(selection.encoded) for selection in selections]
+        if counts != expected or selections[-1].component != "text_encoder":
+            _fail(f"{name} encodes {counts}, expected {expected}")
+        print(f"  {name:<22} encodes {', '.join(s.component for s in selections)} {counts}")
+    te = job._quantizer_selections(_pruned_source(job.FP8_SPEC), "fp8-rowwise/1")[0]
+    if any(".layers." not in key for key in te.encoded) or set(te.encoded) & set(
+        lanes.TEXT_ENCODER_KEEP
+    ):
+        _fail("the conditioner selection reached outside layers.{0..49}")
+    _refuses(
+        "--mxfp8 over an fp8 DiT",
+        "h3_quantize_mixed",
+        lambda: job._quantizer_selections(_pruned_source(job.FP8_SPEC), "mxfp8/1"),
+    )
+    _refuses(
+        "a full-modulation source",
+        "h3_quantize_unpruned",
+        lambda: job._quantizer_selections(full_source_structures()["dits"], "fp8-rowwise/1"),
+    )
+    source = _pruned_source(job.FP8_SPEC)
+    te_rows = source.components["text_encoder"]
+    for key in te.encoded:
+        te_rows[key] = Tensor("bf16", te_rows[key].shape, job.FP8_SPEC, {})
+    _refuses(
+        "a lane whose recipe is already fp8",
+        "h3_quantize_nothing",
+        lambda: job._quantizer_selections(source, "fp8-rowwise/1"),
+    )
+
+
 def main() -> None:
     arm_census()
+    arm_quantizer()
     print("\nlane-proof green")
 
 

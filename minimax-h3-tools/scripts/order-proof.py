@@ -247,6 +247,8 @@ def main() -> None:
         "select-adaln-weights",
         "retable-adaln",
         "turbo-lora",
+        "fp8",
+        "mxfp8",
     }:
         raise RuntimeError(f"package callables changed: {sorted(jobs)}")
     for lane in lane_recipes.LANES:
