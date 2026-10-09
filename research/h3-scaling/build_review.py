@@ -53,6 +53,7 @@ def main() -> None:
                     video = Path(data.get("video_path", folder / "outputs" / f"{data['run']}-video.mp4"))
                     append({"hardware": hardware, "degree": degree, "mode": mode,
                             "steps": steps, "engine": "Cozy", "variant": "default",
+                            "cohort": "baseline", "host": "Zabuza" if hardware == "rtx5090" else "Sanger",
                             "repetition": repetition, "run": data["run"],
                             "execution_seconds": data["execution_ms"] / 1000,
                             "timing_boundary": "Recorded worker execution; transfer excluded",
@@ -62,6 +63,24 @@ def main() -> None:
                                                else "materialized head-local" if hardware == "rtx5090"
                                                else "BF16 Sol"),
                             "text_encoder": "FP8 rowwise"}, video, receipt, data["video_sha256"])
+
+    for transport in ("peer", "host"):
+        for repetition in (1, 2):
+            folder = campaign / "h100-transport-4" / f"native-{transport}" / f"timed-{repetition}"
+            receipt = folder / "validation.json"
+            if not receipt.exists():
+                continue
+            data = json.loads(receipt.read_text())
+            if data.get("validation") != "pass" or data.get("timing_role") != "timed":
+                continue
+            append({"hardware": "h100", "degree": 4, "mode": "turbo", "steps": 8,
+                    "engine": "Cozy", "variant": f"transport-{transport}",
+                    "cohort": "transport", "host": "Miranjo", "repetition": repetition,
+                    "run": data["number"], "execution_seconds": data["execution_ms"] / 1000,
+                    "timing_boundary": "Recorded worker execution; transfer excluded",
+                    "attention": "SageAttention dense + BF16 Sol", "attention_path": "BF16 Sol",
+                    "text_encoder": "FP8 rowwise"}, Path(data["video_path"]), receipt,
+                   data["video_sha256"])
 
     ledger_path = campaign / "comfy" / "results-ledger.json"
     ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {}
@@ -75,6 +94,8 @@ def main() -> None:
         append({"hardware": data["gpu"], "degree": data["gpu_count"],
                 "mode": "turbo" if data["steps"] == 8 else "regular", "steps": data["steps"],
                 "engine": "ComfyUI", "variant": data["configuration"],
+                "cohort": "transport" if data["configuration"].startswith("transport-") else "baseline",
+                "host": "Miranjo" if data["configuration"].startswith("transport-") else "Zabuza" if data["gpu"] == "rtx5090" else "Sanger",
                 "repetition": data["repetition"], "run": data["prompt_id"],
                 "execution_seconds": data["server_execution_seconds"],
                 "timing_boundary": "Comfy server execution; observer transfer excluded",
@@ -100,6 +121,8 @@ def main() -> None:
              "comfy_scope_exceptions": ledger.get("scope_exceptions", []),
              "notes": ["Prompt and seed match between configurations for each selected input.",
                        "Input labels identify review samples, not distinct benchmark configurations.",
+                       "The H100 baseline uses Sanger. The separate four-H100 transport study uses Miranjo; its direct-peer and host-memory rows are never averaged with Sanger.",
+                       "Native transport controls all NCCL group traffic; Comfy transport controls its DiT block exchanges. They have different scopes.",
                        "Cozy uses the current rc.3 FP8 text encoder. Comfy loads the official BF16 checkpoint; its loader reports FP16, which alone does not prove every operand's compute dtype.",
                        "Single-GPU defaults use the shared-QKV producer; multi-GPU defaults use current-call materialized attention. These are different implementation paths.",
                        "Video/audio format and hash checks passed. They do not establish perceptual quality or equivalence.",

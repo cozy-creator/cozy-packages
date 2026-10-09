@@ -77,6 +77,11 @@ aligned, slowed and viewed beside Comfy. Comfy's baseline remains the initial
 selection; qualified variants remain separately selectable. Format validation is
 explicitly separate from the user's visual and audio quality decision.
 
+The Miranjo four-H100 transport study is a separate gallery selection from the
+Sanger baseline. Its peer and host-memory videos can be compared within either
+engine or across engines on Miranjo. Timing means always stay within one host,
+sampling configuration, engine and transport mode.
+
 ## Transport comparison
 
 The [transport recipe](transport/README.md) captures otherwise unchanged
