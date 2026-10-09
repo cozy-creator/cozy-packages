@@ -134,6 +134,7 @@ _check_table_budget(MAX_TABLE_BYTES)
 #: guessing. The catalogue is still the authority — the equality below is checked at
 #: import, so the two cannot drift; only the spelling is duplicated.
 MAX_VIDEO_VAE_BYTES = 12 << 30
+MAX_TEXT_ENCODER_BYTES = 56 << 30
 LANE_OUTPUTS = (
     WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES + MAX_VIDEO_VAE_BYTES),
     WeightsOutput("bf16-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),
@@ -144,11 +145,15 @@ LaneName = Literal["bf16-full", "bf16-pruned", "fp8-pruned", "mxfp8-pruned"]
 
 
 def _check_lane_outputs() -> None:
-    if COMPONENT_MAX_NEW_BYTES["video_vae"] != MAX_VIDEO_VAE_BYTES:
-        raise ValueError(
-            f"the declared video VAE bound {MAX_VIDEO_VAE_BYTES} is not the catalogue's "
-            f"{COMPONENT_MAX_NEW_BYTES['video_vae']}"
-        )
+    for component, declared_bytes in (
+        ("video_vae", MAX_VIDEO_VAE_BYTES),
+        ("text_encoder", MAX_TEXT_ENCODER_BYTES),
+    ):
+        if COMPONENT_MAX_NEW_BYTES[component] != declared_bytes:
+            raise ValueError(
+                f"the declared {component} bound {declared_bytes} is not the catalogue's "
+                f"{COMPONENT_MAX_NEW_BYTES[component]}"
+            )
     declared = {output.name: output.max_new_bytes for output in LANE_OUTPUTS}
     if set(declared) != set(LANES) or set(get_args(LaneName)) != set(LANES):
         raise ValueError(
@@ -718,6 +723,162 @@ app.job(
     weights=(
         WeightsOutput("mxfp8-pruned", max_new_bytes=MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES),
     ),
+)
+
+
+#: `cozy model quantize <H3 checkpoint> --fp8|--mxfp8`: the H3 recipe over an AdaLN-pruned
+#: checkpoint. Both DiTs encode through the reviewed plan and the text conditioner's 350
+#: decoder-layer linears through the structural selection minus `TEXT_ENCODER_KEEP`
+#: (embeddings and the vision tower stay bf16). A recipe component the source still holds
+#: plain is encoded; one that already carries this encoding is inherited; one carrying
+#: another encoding refuses. Every other tensor, config and component inherits by reference.
+QUANTIZER_RECIPE: Mapping[str, tuple[str, ...]] = {
+    "fl2va_dit": (),
+    "ref2va_dit": (),
+    "text_encoder": _lanes.TEXT_ENCODER_KEEP,
+}
+QUANTIZER_SPECS = {"fp8-rowwise/1": FP8_SPEC, "mxfp8/1": MXFP8_SPEC}
+#: Both DiTs and the conditioner at most; the transaction's own accounting is exact.
+MAX_QUANTIZER_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_TEXT_ENCODER_BYTES
+
+
+def _quantizer_selections(
+    structure: SourceInspection, encoding: _lanes.Encoding
+) -> list[Selection]:
+    """The recipe's components this source still holds plain, resolved for `encoding`."""
+    sections = parse_production_config(_asset("model-config.json"))
+    for task, section in SOURCE_SECTION.items():
+        component = TARGET_COMPONENT[task]
+        if set(removed_keys(H3Topology.from_config(sections[section]))) & set(
+            structure.components.get(component, {})
+        ):
+            raise UnsupportedInput(
+                f"{component} still carries its AdaLN modulation rows; quantize an AdaLN-pruned "
+                "lane (bf16-pruned, fp8-pruned or mxfp8-pruned)",
+                code="h3_quantize_unpruned",
+            )
+    dit_plan = prepare_quantization(h3_quantization_plan())
+    selections = []
+    for component, keep in QUANTIZER_RECIPE.items():
+        encodings = {tensor.encoding for tensor in structure.components.get(component, {}).values()}
+        if QUANTIZER_SPECS[encoding] in encodings:
+            continue
+        foreign = encodings - {PLAIN_SPEC}
+        if foreign:
+            raise UnsupportedInput(
+                f"{component} already carries another encoding ({sorted(foreign)}); quantize "
+                f"a lane whose {component} is plain or already {encoding}",
+                code="h3_quantize_mixed",
+            )
+        selections.append(
+            _lanes.select(
+                component,
+                _lanes.Treatment(encode=encoding, keep=keep),
+                structure,
+                dit_plan=dit_plan,
+            )
+        )
+    if not selections:
+        raise UnsupportedInput(
+            f"every component of H3's recipe already carries {encoding}",
+            code="h3_quantize_nothing",
+        )
+    return selections
+
+
+def _quantize_lane(
+    ctx: Context,
+    tel: Telemetry,
+    source: H3FullTransformer,
+    lane: str,
+    encoding: _lanes.Encoding,
+    max_relative_frobenius: float | None,
+) -> ModelArtifact:
+    structure = inspection(ctx, source)
+    if set(structure.components) != set(_lanes.COMPONENTS):
+        raise UnsupportedInput(
+            f"source components are {sorted(structure.components)}, not H3's five",
+            code="h3_quantize_source",
+        )
+    selections = _quantizer_selections(structure, encoding)
+    targets = {
+        component: Target(source="source", source_component=component)
+        for component in structure.components
+    }
+    for selection in selections:
+        targets[selection.component] = _lanes.apply(targets[selection.component], selection)
+    declaration = Derivation(
+        sources={"source": structure.source},
+        targets=targets,
+        configs={
+            name: Config("copy", source="source", source_config=name)
+            for name in structure.configs
+        },
+        order=[(component, key) for component, rows in structure.components.items() for key in rows],
+    )
+    request = ArtifactQuantizationRequest(max_relative_frobenius=max_relative_frobenius)
+    with ctx.output(lane).open(declaration) as transaction:
+        if transaction.receipt is not None:
+            return ctx.adopt_model(transaction.receipt)
+        for selection in selections:
+            with tel.stage(f"{lane}-{selection.component}"):
+                stats = _treat(transaction, ctx, tel, request, selection=selection, source="source")
+            tel.log(
+                "weight fidelity",
+                level="info",
+                output_slot=lane,
+                component=selection.component,
+                treatment=selection.treatment.describe(),
+                encoded_keys=stats.encoded_keys,
+                reused_keys=stats.reused_keys,
+                saturated_elements=stats.saturated_elements,
+                worst_relative_frobenius=stats.worst_relative_frobenius,
+                new_bytes=stats.new_bytes_written,
+            )
+        tel.log(
+            "h3 quantize",
+            lane=lane,
+            encoded=",".join(selection.component for selection in selections),
+            inherited=",".join(sorted(set(QUANTIZER_RECIPE) - {s.component for s in selections})),
+        )
+        return ctx.adopt_model(transaction.commit())
+
+
+@invocable(memoize=True, memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
+async def fp8(
+    ctx: Context,
+    *,
+    source: H3FullTransformer,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """H3's recipe at row-wise FP8 (`fp8-rowwise/1`): DiTs and text-conditioner linears."""
+    return _quantize_lane(ctx, tel, source, "fp8", "fp8-rowwise/1", max_relative_frobenius)
+
+
+@invocable(memoize=True, memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
+async def mxfp8(
+    ctx: Context,
+    *,
+    source: H3FullTransformer,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """H3's recipe at block-scaled MXFP8 (`mxfp8/1`; native on sm120, dequantized elsewhere)."""
+    return _quantize_lane(ctx, tel, source, "mxfp8", "mxfp8/1", max_relative_frobenius)
+
+
+app.job(
+    fp8,
+    name="fp8",
+    weights=(WeightsOutput("fp8", max_new_bytes=MAX_QUANTIZER_BYTES),),
+    accelerator=False,
+)
+app.job(
+    mxfp8,
+    name="mxfp8",
+    weights=(WeightsOutput("mxfp8", max_new_bytes=MAX_QUANTIZER_BYTES),),
+    accelerator=False,
 )
 
 

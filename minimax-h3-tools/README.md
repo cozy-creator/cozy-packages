@@ -19,6 +19,12 @@ ingested or already fetched the input, its objects are in the pod Store and noth
 | `mxfp8-pruned` | same | `mxfp8-pruned` | grandfathered; native only on sm120 |
 | `turbo-lora` | the converted `alibaba-pai/MiniMax-H3-Acc-LoRAs` release (one fl2va and one ref2va component) | `pdd8` | `model.base=<full-precision H3>`; reads its modulation weights and heads only |
 | `retable` | an AdaLN-pruned lane | `adaln-pruned`, `tables` | `model.full=<full-precision H3>`; recomputes tables only |
+| `fp8`, `mxfp8` | an AdaLN-pruned lane | `fp8`, `mxfp8` | `cozy model quantize`; H3's recipe: both DiTs and the text conditioner's 350 decoder linears, encoding what is still plain; CPU |
+
+`cozy model quantize <org>/minimax-h3@<release>/<pruned lane> --fp8|--mxfp8 --rental=NAME` runs
+`fp8`/`mxfp8`. The conditioner keeps `embed_tokens` and its vision tower at bf16
+(`lanes.TEXT_ENCODER_KEEP`); a component already carrying the requested encoding is inherited
+and one carrying the other encoding refuses, so `fp8-pruned --fp8` encodes only the conditioner.
 
 Runtime requires a receipt for every declared weights output, so each lane is its own
 function. Until Runtime-owned jobs accept a destination, `examples/client-scripts/h3_lanes.py`
