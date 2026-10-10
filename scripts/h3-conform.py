@@ -3199,9 +3199,7 @@ def arm_interface() -> None:
             "fl2va_turbo",
             "ref2va_turbo",
             "cut_segment",
-            "cut_segment_turbo",
             "motion_segment",
-            "motion_segment_turbo",
         },
     )
     check(
@@ -3209,9 +3207,7 @@ def arm_interface() -> None:
         {name for name, entry in entries.items() if entry.get("internal", False)},
         {
             "cut_segment",
-            "cut_segment_turbo",
             "motion_segment",
-            "motion_segment_turbo",
         },
     )
     check(
@@ -3381,9 +3377,15 @@ def arm_interface() -> None:
     # render. A model slot here would make one attempt hold eight shots.
     check("long_form declares no model slot", "models" in jobs["long_form"], False)
     check(
-        "motion_segment holds the H3 model for exactly one shot",
-        entries["motion_segment"]["models"][0]["class"],
-        "H3Model",
+        "every segment, turbo or standard, holds one turbo-capable base and its adapter",
+        {
+            name: [slot["class"] for slot in entries[name]["models"]]
+            for name in ("cut_segment", "motion_segment")
+        },
+        {
+            "cut_segment": ["H3TurboBase", "H3TurboLoRA"],
+            "motion_segment": ["H3TurboBase", "H3TurboLoRA"],
+        },
     )
     check(
         "motion_segment is child-callable by its exact module and export",
@@ -3429,14 +3431,37 @@ def arm_interface() -> None:
                         seed=1,
                         duration_s=seconds,
                         steps=package.TURBO_STEPS,
+                        turbo=True,
                         frames=package.held_frames(plan),
                     )
                 ).values
             )
             for seconds, plan in ((6, opener), (12, follower))
         ],
-        [{"frames": 158, "steps": 8}, {"frames": 345 + 56, "steps": 8}],
+        [
+            {"frames": 158, "steps": 8},
+            {"frames": 345 if hasattr(follower, "held_frames") else 345 + 56, "steps": 8},
+        ],
     )
+    adapter = object()
+
+    def sampled(turbo: bool, steps: int) -> object:
+        segment = package.MotionInput(
+            prompt="x", seed=1, duration_s=6, steps=steps, turbo=turbo, frames=158
+        )
+        return package._sampling(segment, adapter)  # type: ignore[arg-type]
+
+    check(
+        "one construction samples turbo with its adapter and standard with none",
+        [sampled(True, package.TURBO_STEPS) is adapter, sampled(False, 30)],
+        [True, None],
+    )
+    for selected, evaluations in ((True, 30), (False, package.TURBO_STEPS)):
+        refusal(
+            f"turbo={selected} refuses {evaluations} steps",
+            partial(sampled, selected, evaluations),
+            "invalid_request",
+        )
     segment_fields = next(
         field for field in jobs["long_form"]["request"]["fields"] if field["name"] == "segments"
     )["type"]["list"]["fields"]
@@ -3514,11 +3539,6 @@ def arm_interface() -> None:
         refusal(f"segment context refuses {value!r}",
                 partial(msgspec.convert, invalid, type=package.LongFormInput),
                 "ValidationError")
-    check(
-        "turbo child has the independently bound base and adapter",
-        [slot["class"] for slot in entries["motion_segment_turbo"]["models"]],
-        ["H3TurboBase", "H3TurboLoRA"],
-    )
     for job in ("long_form", "long_form_cuts"):
         segment = next(f for f in jobs[job]["request"]["fields"] if f["name"] == "segments")
         check(

@@ -28,7 +28,7 @@ from h3 import (
     _create_references,
     app,
     held_frames,
-    motion_segment_turbo,
+    motion_segment,
 )
 from story import StoryReference as StoryReference
 from story import compile_segments
@@ -71,12 +71,13 @@ async def compare(
         Assets[Mixed]([images[ref.name] for ref in call.references]) for call in calls
     )
     started = time.monotonic()
-    first = await motion_segment_turbo(  # type: ignore[call-arg]
+    first = await motion_segment(  # type: ignore[call-arg]
         payload=MotionInput(
             prompt=calls[0].prompt,
             seed=seed,
             duration_s=10,
             steps=8,
+            turbo=True,
             frames=held_frames(plans[0]),
             next_context_frames=(22, 39, 56),
         ),
@@ -94,12 +95,13 @@ async def compare(
     for plan in plans[1:]:
         ctx.raise_if_cancelled()
         started = time.monotonic()
-        following = await motion_segment_turbo(  # type: ignore[call-arg]
+        following = await motion_segment(  # type: ignore[call-arg]
             payload=MotionInput(
                 prompt=calls[1].prompt,
                 seed=seed + 1,
                 duration_s=10,
                 steps=8,
+                turbo=True,
                 frames=held_frames(plan),
                 context_frames=plan.prefix_frames,  # type: ignore[arg-type]
                 context=first.context,

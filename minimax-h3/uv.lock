@@ -442,7 +442,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.27.1"
+version = "1.27.2"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-eval" },
@@ -812,7 +812,7 @@ dependencies = [
     { name = "transformers" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/files/61bd8e93a4cb4b56127115dda87aee267008cc0b52bd59321fc12e522f6c3628/qwen_image_2-0.3.0-py3-none-any.whl", hash = "sha256:61bd8e93a4cb4b56127115dda87aee267008cc0b52bd59321fc12e522f6c3628" },
+    { url = "https://tensorhub.com/v1/index/fidika/qwen-image-2/0.3.0/qwen_image_2-0.3.0-py3-none-any.whl", hash = "sha256:61bd8e93a4cb4b56127115dda87aee267008cc0b52bd59321fc12e522f6c3628" },
 ]
 
 [[package]]
