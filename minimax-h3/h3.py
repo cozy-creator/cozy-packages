@@ -1278,6 +1278,20 @@ def held_frames(plan: ContinuationPlan) -> int:
     return held
 
 
+def segment_seconds(window: int) -> int:
+    """The longest whole-second segment whose DiT holds at most `MAX_FRAMES` (the 15-second
+    window) with `window` motion-context frames: 15, 12, 11 and 9 s for 0, 22, 39 and 56."""
+
+    def fits(seconds: int) -> bool:
+        try:
+            plan = plan_continuation(seconds * FPS, context_frames=window)
+        except InvalidRequest:
+            return False
+        return held_frames(plan) <= MAX_FRAMES
+
+    return max(seconds for seconds in range(MIN_DURATION_S, MAX_DURATION_S + 1) if fits(seconds))
+
+
 class MotionInput(msgspec.Struct):
     prompt: str
     seed: int
@@ -1328,6 +1342,12 @@ def _render_motion(
     delivery = plan_continuation(
         payload.duration_s * FPS, context_frames=0 if context is None else payload.context_frames
     )
+    if held_frames(delivery) > MAX_FRAMES:
+        raise InvalidRequest(
+            f"a {payload.duration_s} s segment with {payload.context_frames} context frames holds "
+            f"{held_frames(delivery)} frames; a segment holds at most {MAX_FRAMES}",
+            fields=["payload.duration_s"],
+        )
     if payload.frames != held_frames(delivery):
         raise InvalidRequest(
             f"a {payload.duration_s} s segment with this context holds "
@@ -1616,10 +1636,10 @@ async def long_form(
     turbo, steps = segment_sampling(payload)
     calls = segment_calls(payload)
     windows = context_windows(payload)
-    # Motion context shares the native window with new frames. Shorten requested
-    # segments to its whole-second budget instead of refusing a valid 5-15s request.
+    # A segment's DiT holds its window and the motion context, at most the 15-second window
+    # (owner, 2026-10-10). Shorten requested segments to that budget instead of refusing.
     durations = [
-        min(shot.duration_s, (MAX_FRAMES - windows[index]) // FPS)
+        min(shot.duration_s, segment_seconds(windows[index]))
         for index, shot in enumerate(payload.segments)
     ]
     warnings = [warning for call in calls for warning in call.warnings]

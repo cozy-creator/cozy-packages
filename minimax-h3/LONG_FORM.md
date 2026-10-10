@@ -151,7 +151,8 @@ set to `context_frames: false`, segment 2 continues from segment 1, segment 3 re
 previous context, and segment 4 continues from segment 3. Each segment exports only the
 window its successor needs, and exports none when that successor opts out or the global value is 0.
 
-`context_frames` 22/39/56 allows at most 14/13/12 new seconds for that segment;
+A segment's DiT holds its window plus the context, at most 362 frames (15 s), so
+`context_frames` 22/39/56 allows at most 12/11/9 new seconds for that segment;
 0 allows 15 seconds. Longer segments are shortened and reported. `long_form_cuts` renders
 independent segments. Turbo uses eight PDD evaluations, and standard allows 30/40/50
 steps.

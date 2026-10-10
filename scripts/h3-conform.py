@@ -3420,7 +3420,7 @@ def arm_interface() -> None:
     )
     # Run 1560: a 12 s continuation shared a 6 s opener's shape and ran on its peak.
     opener = plan_continuation(6 * FPS)
-    follower = plan_continuation(12 * FPS, context_frames=56)
+    follower = plan_continuation(9 * FPS, context_frames=56)
     check(
         "a segment's shape is the frames its DiT holds: window plus conditioning context",
         [
@@ -3436,12 +3436,14 @@ def arm_interface() -> None:
                     )
                 ).values
             )
-            for seconds, plan in ((6, opener), (12, follower))
+            for seconds, plan in ((6, opener), (9, follower))
         ],
-        [
-            {"frames": 158, "steps": 8},
-            {"frames": 345 if hasattr(follower, "held_frames") else 345 + 56, "steps": 8},
-        ],
+        [{"frames": 158, "steps": 8}, {"frames": 277 + 56, "steps": 8}],
+    )
+    check(
+        "a segment holds at most the 15-second window, context included",
+        {window: package.segment_seconds(window) for window in (0, 22, 39, 56)},
+        {0: 15, 22: 12, 39: 11, 56: 9},
     )
     adapter = object()
 
