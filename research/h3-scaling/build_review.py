@@ -8,6 +8,8 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from build_kernel_review import link_kernel_study
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -132,6 +134,7 @@ def main() -> None:
     (review / "artifact-index.json").write_text(json.dumps(index, indent=2) + "\n")
     (review / "artifact-index.js").write_text("window.BENCHMARK_ARTIFACTS = " + json.dumps(index).replace("</", "<\\/") + ";\n")
     (review / "index.html").write_text(Path(__file__).with_name("review.html").read_text())
+    link_kernel_study(review)
     print(json.dumps({"gallery": str(review / "index.html"), "artifacts": len(artifacts),
                       "native": sum(a["engine"] == "Cozy" for a in artifacts),
                       "comfy": sum(a["engine"] == "ComfyUI" for a in artifacts)}))

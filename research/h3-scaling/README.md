@@ -86,6 +86,32 @@ Sanger baseline. Its peer and host-memory videos can be compared within either
 engine or across engines on Miranjo. Timing means always stay within one host,
 sampling configuration, engine and transport mode.
 
+### Attention kernel comparison
+
+The earlier single-5090 quality matrix is a separate study: four attention
+recipes × two schedules (4 dense + 4 Sol or all 8 dense) × two matched inputs.
+It used a different host, 575 W power limit, Runtime, and experimental linear
+implementation from the scaling campaign. Its timings must stay within that
+study; it does not provide an H100 kernel comparison.
+
+Build a separate `review/kernels.html` from the archived benchmark table and the
+original kernel review index:
+
+```sh
+python research/h3-scaling/build_kernel_review.py \
+  --archive /absolute/tensorhub/docs/benchmarks/data/minimax-h3-2026-10-09.json \
+  --source-index /absolute/quality-matrix-20261009/review/index.json \
+  --output /absolute/campaign/review
+```
+
+The builder checks all 16 matrix identities, original video/input hashes,
+recorded timings, complete pairs, and video/audio metadata with `ffprobe`.
+Earlier full-decode validation records remain linked. It embeds the data for
+direct `file://` use, links the original videos without copying or modifying
+them, and adds navigation to an existing scaling gallery without rebuilding it.
+Later scaling-gallery rebuilds retain that link when `kernels.html` exists.
+Neither generator performs inference or assumes perceptual quality equivalence.
+
 ## Transport comparison
 
 The [transport recipe](transport/README.md) captures otherwise unchanged
