@@ -1272,8 +1272,10 @@ SegmentSeconds = Annotated[int, msgspec.Meta(ge=MIN_DURATION_S, le=MAX_DURATION_
 
 
 def held_frames(plan: ContinuationPlan) -> int:
-    """The frames a segment's DiT holds: its sampled window and the context it conditions on."""
-    return plan.sample_frames + plan.prefix_frames
+    """The frames a segment's DiT holds, as its Runtime states them: one window whose head is the
+    frozen context, or (a Runtime that predates `held_frames`) the window plus a context copy."""
+    held: int = getattr(plan, "held_frames", plan.sample_frames + plan.prefix_frames)
+    return held
 
 
 class MotionInput(msgspec.Struct):

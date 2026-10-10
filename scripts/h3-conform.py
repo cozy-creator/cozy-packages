@@ -3438,7 +3438,10 @@ def arm_interface() -> None:
             )
             for seconds, plan in ((6, opener), (12, follower))
         ],
-        [{"frames": 158, "steps": 8}, {"frames": 345 + 56, "steps": 8}],
+        [
+            {"frames": 158, "steps": 8},
+            {"frames": 345 if hasattr(follower, "held_frames") else 345 + 56, "steps": 8},
+        ],
     )
     adapter = object()
 
