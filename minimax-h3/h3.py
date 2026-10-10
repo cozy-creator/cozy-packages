@@ -1190,19 +1190,27 @@ CutAssets = Annotated[
 ]
 
 
-class CutInput(StandardClipInput, kw_only=True):
+class CutInput(ClipInput, kw_only=True):
+    steps: int
+    turbo: bool
     expected_provenance: RenderProvenance | None = None
     previous_provenance: RenderProvenance | None = None
 
 
-class CutTurboInput(ClipInput, kw_only=True):
-    expected_provenance: RenderProvenance | None = None
-    previous_provenance: RenderProvenance | None = None
+def _sampling(payload: CutInput | MotionInput, turbo_lora: H3TurboLoRA) -> H3TurboLoRA | None:
+    """The segment's sampler over the one shared construction: the PDD adapter, or none."""
+    if payload.turbo:
+        if payload.steps != TURBO_STEPS:
+            raise InvalidRequest("turbo segments require eight PDD evaluations")
+        return turbo_lora
+    if payload.steps not in SUPPORTED_STEPS:
+        raise InvalidRequest("standard segments require 30, 40 or 50 steps")
+    return None
 
 
 def _render_cut(
     ctx: Context,
-    payload: CutInput | CutTurboInput,
+    payload: CutInput,
     assets: CutAssets,
     model: H3Model,
     out: Outputs,
@@ -1233,43 +1241,27 @@ def _render_cut(
     return SegmentOutput(shot.video, list(shot.warnings), observed)
 
 
-@invocable(defaults={"model": _DEFAULT_MODEL_LADDER}, components={"model": _REF2VA})
+# Every segment, turbo or standard, runs on ONE turbo-capable construction: a story that
+# mixes samplers holds one resident H3, never two that evict each other between segments.
+@invocable(
+    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
+    components={"base_model": _REF2VA, "turbo_lora": ("ref2va_turbo",)},
+)
 async def cut_segment(
     ctx: Context,
     *,
     payload: CutInput,
-    assets: CutAssets,
-    model: H3Model,
-    out: Outputs,
-    tel: Telemetry,
-) -> SegmentOutput:
-    return _render_cut(ctx, payload, assets, model, out, tel, steps=payload.steps)
-
-
-@invocable(
-    defaults={
-        "base_model": _DEFAULT_MODEL_LADDER,
-        "turbo_lora": _DEFAULT_TURBO_LORA_LADDER,
-    },
-    components={"base_model": _REF2VA, "turbo_lora": ("ref2va_turbo",)},
-)
-async def cut_segment_turbo(
-    ctx: Context,
-    *,
-    payload: CutTurboInput,
     assets: CutAssets,
     base_model: H3TurboBase,
     turbo_lora: H3TurboLoRA,
     out: Outputs,
     tel: Telemetry,
 ) -> SegmentOutput:
-    return _render_cut(
-        ctx, payload, assets, base_model, out, tel, steps=TURBO_STEPS, turbo_lora=turbo_lora
-    )
+    lora = _sampling(payload, turbo_lora)
+    return _render_cut(ctx, payload, assets, base_model, out, tel, steps=payload.steps, turbo_lora=lora)
 
 
 app.entrypoint(internal=True)(cut_segment)
-app.entrypoint(internal=True)(cut_segment_turbo)
 
 
 MotionContextAsset = Annotated[
@@ -1289,6 +1281,7 @@ class MotionInput(msgspec.Struct):
     seed: int
     duration_s: SegmentSeconds
     steps: int
+    turbo: bool
     #: `held_frames` of this segment: the shape Runtime banks its memory by. A continuation
     #: holds more than its seconds say, so a 12 s segment after a 6 s one ran on the 6 s
     #: peak and ran out on GPU 1 (run 1560). Any other value is refused.
@@ -1379,29 +1372,11 @@ def _render_motion(
     )
 
 
-@invocable(defaults={"model": _DEFAULT_MODEL_LADDER}, components={"model": _REF2VA})
-async def motion_segment(
-    ctx: Context,
-    *,
-    payload: MotionInput,
-    assets: CutAssets,
-    model: H3Model,
-    out: Outputs,
-    tel: Telemetry,
-) -> MotionOutput:
-    if payload.steps not in (30, 40, 50):
-        raise InvalidRequest("standard motion segments require 30, 40 or 50 steps")
-    return _render_motion(ctx, payload, assets, model, out, tel)
-
-
 @invocable(
-    defaults={
-        "base_model": _DEFAULT_MODEL_LADDER,
-        "turbo_lora": _DEFAULT_TURBO_LORA_LADDER,
-    },
+    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
     components={"base_model": _REF2VA, "turbo_lora": ("ref2va_turbo",)},
 )
-async def motion_segment_turbo(
+async def motion_segment(
     ctx: Context,
     *,
     payload: MotionInput,
@@ -1411,13 +1386,11 @@ async def motion_segment_turbo(
     out: Outputs,
     tel: Telemetry,
 ) -> MotionOutput:
-    if payload.steps != TURBO_STEPS:
-        raise InvalidRequest("turbo motion segments require eight PDD evaluations")
-    return _render_motion(ctx, payload, assets, base_model, out, tel, turbo_lora=turbo_lora)
+    lora = _sampling(payload, turbo_lora)
+    return _render_motion(ctx, payload, assets, base_model, out, tel, turbo_lora=lora)
 
 
 app.entrypoint(internal=True)(motion_segment)
-app.entrypoint(internal=True)(motion_segment_turbo)
 
 
 class LongFormCutsInput(msgspec.Struct):
@@ -1532,8 +1505,7 @@ async def long_form_cuts(
     reference_steps = 40
     reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * reference_steps
     total_work = sum(render_work) + reference_work
-    for sampler_turbo in dict.fromkeys(turbo):
-        prefetch(cut_segment_turbo if sampler_turbo else cut_segment)
+    prefetch(cut_segment)
     references: list[ImageAsset] = []
     images = await _create_references(ctx, payload.references, tel, out, references, style=payload.style)
     completed_work = reference_work
@@ -1573,29 +1545,18 @@ async def long_form_cuts(
                             (completed_work + render_work[index]) / total_work,
                         ),
                     ):
-                        if turbo[index]:
-                            result = await cut_segment_turbo(  # type: ignore[call-arg]
-                                payload=CutTurboInput(
-                                    prompt=prompt,
-                                    seed=seed,
-                                    duration_s=shot.duration_s,
-                                    expected_provenance=renderers.get(True),
-                                    previous_provenance=expected,
-                                ),
-                                assets=assets,
-                            )
-                        else:
-                            result = await cut_segment(  # type: ignore[call-arg]
-                                payload=CutInput(
-                                    prompt=prompt,
-                                    seed=seed,
-                                    steps=steps[index],
-                                    duration_s=shot.duration_s,
-                                    expected_provenance=renderers.get(False),
-                                    previous_provenance=expected,
-                                ),
-                                assets=assets,
-                            )
+                        result = await cut_segment(  # type: ignore[call-arg]
+                            payload=CutInput(
+                                prompt=prompt,
+                                seed=seed,
+                                steps=steps[index],
+                                turbo=turbo[index],
+                                duration_s=shot.duration_s,
+                                expected_provenance=renderers.get(turbo[index]),
+                                previous_provenance=expected,
+                            ),
+                            assets=assets,
+                        )
                 except ChildCallError as failure:
                     ctx.raise_if_cancelled()
                     raise OutputError(
@@ -1682,8 +1643,7 @@ async def long_form(
     render_work = [plan.sample_frames * count for plan, count in zip(plans, steps, strict=True)]
     reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * 40
     total_work = sum(render_work) + reference_work
-    for sampler_turbo in dict.fromkeys(turbo):
-        prefetch(motion_segment_turbo if sampler_turbo else motion_segment)
+    prefetch(motion_segment)
     references: list[ImageAsset] = []
     images = await _create_references(ctx, payload.references, tel, out, references, style=payload.style)
     completed_work = reference_work
@@ -1727,6 +1687,7 @@ async def long_form(
                             seed=seed,
                             duration_s=durations[index],
                             steps=steps[index],
+                            turbo=turbo[index],
                             frames=held_frames(plans[index]),
                             expected_provenance=renderers.get(turbo[index]),
                             previous_provenance=expected,
@@ -1734,12 +1695,10 @@ async def long_form(
                             context_frames=windows[index],
                             next_context_frames=(next_window,) if next_window else (),
                         )
-                        if turbo[index]:
-                            call = motion_segment_turbo(payload=child_payload, assets=assets)  # type: ignore[call-arg]
-                        else:
-                            call = motion_segment(payload=child_payload, assets=assets)  # type: ignore[call-arg]
                         # The previous segment joins in a thread while this one renders.
-                        shot_result = await call
+                        shot_result = await motion_segment(  # type: ignore[call-arg]
+                            payload=child_payload, assets=assets
+                        )
                 except ChildCallError as failure:
                     # Concurrent caller cancellation must not become a successful partial result.
                     ctx.raise_if_cancelled()
