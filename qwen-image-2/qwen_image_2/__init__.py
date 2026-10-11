@@ -14,6 +14,7 @@ from cozy_runtime.author import (
     Context,
     ImageAsset,
     MediaDecoder,
+    Memoize,
     Outputs,
     Shape,
     Telemetry,
@@ -149,7 +150,10 @@ def rgb_image(decoded: Any) -> Image.Image:
     return image
 
 
-@app.entrypoint(defaults={"model": [{"gpu": "*", "gpus": 1, "lane": "reference-image@0.1.0/original"}]})
+@app.entrypoint(
+    defaults={"model": [{"gpu": "*", "gpus": 1, "lane": "reference-image@0.1.0/original"}]},
+    memoize=Memoize(requires=["seed"]),
+)
 def generate_image(
     ctx: Context,
     payload: GenerateInput,

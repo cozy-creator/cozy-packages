@@ -60,6 +60,7 @@ from cozy_runtime.author import (
     ImageFrame,
     Loader,
     MemoDistribution,
+    Memoize,
     Model,
     ModelArtifact,
     ModelDefault,
@@ -513,7 +514,7 @@ def _request_generator(torch: Any, source: object, *, device: Any) -> Any:
     return torch.Generator(device=device).manual_seed(source.getrandbits(63))
 
 
-@app.entrypoint
+@app.entrypoint(memoize=Memoize(requires=["seed"]))
 def generate(
     ctx: Context,
     payload: Txt2ImgInput,

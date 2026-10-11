@@ -40,6 +40,7 @@ from cozy_runtime.author import (
     ImagePreparation,
     InvalidRequest,
     MediaDecoder,
+    Memoize,
     Mixed,
     OutputError,
     Outputs,
@@ -825,7 +826,11 @@ app.entrypoint(defaults={"model": _ENCODE_TEXT_LADDER}, components={"model": ("t
 )
 
 
-@app.entrypoint(defaults={"model": _DEFAULT_MODEL_LADDER}, components={"model": _FL2VA})
+@app.entrypoint(
+    defaults={"model": _DEFAULT_MODEL_LADDER},
+    components={"model": _FL2VA},
+    memoize=Memoize(requires=["seed"]),
+)
 def fl2va(
     ctx: Context,
     payload: StandardClipInput,
@@ -840,6 +845,7 @@ def fl2va(
 @app.entrypoint(
     defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
     components={"base_model": _FL2VA, "turbo_lora": ("fl2va_turbo",)},
+    memoize=Memoize(requires=["seed"]),
 )
 def fl2va_turbo(
     ctx: Context,
@@ -868,6 +874,7 @@ def fl2va_turbo(
     preflight=preflight_reference_media,
     defaults={"model": _DEFAULT_MODEL_LADDER},
     components={"model": _REF2VA},
+    memoize=Memoize(requires=["seed"]),
 )
 def ref2va(
     ctx: Context,
@@ -888,6 +895,7 @@ def ref2va(
     preflight=preflight_reference_media_turbo,
     defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
     components={"base_model": _REF2VA, "turbo_lora": ("ref2va_turbo",)},
+    memoize=Memoize(requires=["seed"]),
 )
 def ref2va_turbo(
     ctx: Context,
@@ -1092,7 +1100,7 @@ def _references_to_video(
 
 # --- long-form composition -------------------------------------------------------------
 # `long_form` is a CPU composition job. Runtime runs an ordinary serving child for each
-# shot and owns its intermediate bytes. Inference is not memoized.
+# shot and owns its intermediate bytes. Its segments are not memoized.
 # Only encoded asset handles cross the loop. Assembly decodes one bounded event at a time.
 
 class SegmentOutput(msgspec.Struct):
