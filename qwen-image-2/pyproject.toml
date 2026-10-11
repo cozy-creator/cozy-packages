@@ -1,11 +1,11 @@
 [project]
 name = "qwen-image-2"
-version = "0.3.0"
+version = "0.4.0"
 description = "Cozy image generation and reference editing using Qwen-Image-2.1"
 requires-python = ">=3.12"
 dependencies = [
     # 0.18.101: memoized Model methods, and machines that install a carried wheel.
-    "cozy-runtime[media]>=0.18.101",
+    "cozy-runtime[media]>=0.23.22",
     # Qwen-Image-2.1 is in Diffusers main, not yet in a release.
     "diffusers @ git+https://github.com/huggingface/diffusers@578c9b2c6636ab2424a0e56186268b83623656b2",
     "msgspec>=0.19",

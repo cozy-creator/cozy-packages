@@ -22,6 +22,7 @@ from cozy_runtime.author import (
     ImageFrame,
     Loader,
     MemoDistribution,
+    Memoize,
     Model,
     ModelArtifact,
     ModelDefault,
@@ -454,7 +455,7 @@ def _progress_bar(phases: _Phases) -> Callable[..., _DenoiseProgress]:
     return progress_bar
 
 
-@app.entrypoint
+@app.entrypoint(memoize=Memoize(requires=["seed"]))
 def generate(
     ctx: Context,
     payload: GenerateInput,
