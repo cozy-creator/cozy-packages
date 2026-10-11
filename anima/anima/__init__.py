@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from enum import Enum, IntEnum
@@ -187,7 +188,8 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     #: It survives only when `cfg_interval` happens to be narrowing the live cache states,
     #: and a default that works only because another default masks it is not a default.
     first_block_cache: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.0
-    seed: int = 1005
+    #: Given, the request is memoized; omitted, the package draws one and reports it.
+    seed: int | None = None
 
 
 class ImageOutput(msgspec.Struct):
@@ -197,6 +199,8 @@ class ImageOutput(msgspec.Struct):
     steps: int
     guidance: float
     digest: str
+    seed: int
+    """The request's seed, else the one drawn for it."""
 
 
 def _tokenizer(path: Path) -> Any:
@@ -466,6 +470,7 @@ def generate(
     """Generate one native-resolution Anima image."""
     width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
     steps = payload.steps
+    seed = payload.seed if payload.seed is not None else secrets.randbits(53)
     if payload.cfg_interval_start > payload.cfg_interval_stop:
         raise UnsupportedInput(
             "cfg_interval_start must not exceed cfg_interval_stop", code="cfg_interval"
@@ -486,7 +491,7 @@ def generate(
             payload.guidance,
             (payload.cfg_interval_start, payload.cfg_interval_stop),
             payload.first_block_cache,
-            payload.seed,
+            seed,
             phases,
             batched,
         )
@@ -501,7 +506,7 @@ def generate(
         phases.enter(_SAVE)
         asset = out.save_image(ImageFrame(width, height, rgb), format="webp")
     return ImageOutput(
-        asset, width, height, steps, payload.guidance, hashlib.sha256(rgb).hexdigest()
+        asset, width, height, steps, payload.guidance, hashlib.sha256(rgb).hexdigest(), seed
     )
 
 
