@@ -797,7 +797,7 @@ wheels = [
 
 [[package]]
 name = "qwen-image-2"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -812,7 +812,7 @@ dependencies = [
     { name = "transformers" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/qwen-image-2/0.3.0/qwen_image_2-0.3.0-py3-none-any.whl", hash = "sha256:61bd8e93a4cb4b56127115dda87aee267008cc0b52bd59321fc12e522f6c3628" },
+    { url = "https://tensorhub.com/v1/index/fidika/qwen-image-2/0.4.0/qwen_image_2-0.4.0-py3-none-any.whl", hash = "sha256:22296ae8f7c77d6636e6c903453ba4a5058688ebf5723ab13ba5f3c46d44e981" },
 ]
 
 [[package]]

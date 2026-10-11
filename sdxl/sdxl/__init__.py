@@ -42,6 +42,7 @@ import hashlib
 import json
 import math
 import random
+import secrets
 from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Annotated, Any
@@ -181,7 +182,8 @@ class Txt2ImgInput(msgspec.Struct):
     #: before the handler runs — the handler sees `int`, never `int | None`.
     steps: Annotated[ModelDefault[int], msgspec.Meta(ge=1, le=50)] = 20
     guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=0.0, le=20.0)] = 7.0
-    seed: int = 1005
+    #: Given, the request is memoized; omitted, the package draws one and reports it.
+    seed: int | None = None
 
     def __post_init__(self) -> None:
         if (self.aspect_ratio, self.megapixels) not in _BUCKETS:
@@ -210,6 +212,8 @@ class ImageOutput(msgspec.Struct):
     not over one step."""
     warnings: list[str]
     """Explicit choices that ran although they are known to hurt the picture."""
+    seed: int
+    """The request's seed, else the one drawn for it."""
 
 
 # ------------------------------------------------------------------ the model
@@ -523,7 +527,8 @@ def generate(
     tel: Telemetry,
 ) -> ImageOutput:
     """One text-to-image generation: tokenize, encode, denoise, decode, encode a PNG."""
-    view = model.for_request(ctx, seed=payload.seed)
+    seed = payload.seed if payload.seed is not None else secrets.randbits(53)
+    view = model.for_request(ctx, seed=seed)
     width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
     steps = payload.steps
     above_native = payload.megapixels is not Megapixels.MP1
@@ -582,7 +587,7 @@ def generate(
     # HiDiffusion's window-attention shift uses torch's CPU RNG. Isolate and seed it from
     # the request so a canceled or concurrent history cannot change this request's output.
     with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(payload.seed)
+        torch.manual_seed(seed)
         with tel.stage("denoise", overall_range=(0.10, 0.90)):
             for index, timestep in enumerate(scheduler.timesteps):
                 ctx.raise_if_cancelled()
@@ -628,6 +633,7 @@ def generate(
         hidiffusion_applied=hidiffusion_applied,
         digest=hashlib.sha256(rgb).hexdigest(),
         warnings=warnings,
+        seed=seed,
     )
 
 
