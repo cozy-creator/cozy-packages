@@ -107,14 +107,7 @@ from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate_image as generate_reference
 from birefnet import RemoveBackgroundOutput
 from birefnet import remove_background
-try:
-    # Optional until the JoyCaption weights are published.  The package deliberately
-    # fails closed when its model lane is unavailable; importing H3 must remain possible
-    # for callers that provide already-prepared references.
-    from joycaption import CaptionImagesOutput, caption_images
-except ImportError:  # pragma: no cover - exercised in the normal H3 image
-    CaptionImagesOutput = None  # type: ignore[assignment,misc]
-    caption_images = None  # type: ignore[assignment]
+from character_describer import CaptionImagesOutput, caption_images
 from h3_latent_upscaler import UpscaleOutput as LatentUpscaleOutput
 from h3_latent_upscaler import upscale as upscale_latents
 from seedvr2 import Resolution as RestorationResolution
@@ -164,19 +157,6 @@ def _label_references(references: Sequence[StoryReference]) -> list[tuple[StoryR
             pictures += 1
             labeled.append((reference, f"Picture {pictures}"))
     return labeled
-
-
-class ReferenceRenderInput(RenderInput, kw_only=True):
-    """Direct ref2va request using the same named references as ``long_form``."""
-
-    references: list[StoryReference] | None = None
-    style: str = ""
-    prepare_references: bool = False
-    caption_references: bool = False
-
-
-class ReferenceStandardRenderInput(ReferenceRenderInput, kw_only=True):
-    steps: Steps = DEFAULT_STEPS
 
 
 KeyframeAssets = Annotated[Assets[Image], AssetLimits(images=2)]
@@ -254,6 +234,19 @@ class RenderInput(ClipInput, kw_only=True):
 
 
 class StandardRenderInput(RenderInput, kw_only=True):
+    steps: Steps = DEFAULT_STEPS
+
+
+class ReferenceRenderInput(RenderInput, kw_only=True):
+    """Direct ref2va request using the same named references as ``long_form``."""
+
+    references: list[StoryReference] | None = None
+    style: str = ""
+    prepare_references: bool = False
+    caption_references: bool = False
+
+
+class ReferenceStandardRenderInput(ReferenceRenderInput, kw_only=True):
     steps: Steps = DEFAULT_STEPS
 
 
@@ -1197,7 +1190,7 @@ async def _direct_reference_assets(
     assets: ReferenceAssets | None,
     out: Outputs,
     tel: Telemetry,
-) -> ReferenceAssets | None:
+) -> tuple[ReferenceRenderInput, ReferenceAssets | None]:
     """Resolve named references once for a direct call.
 
     ``assets`` is the prepared handoff used by long-form children.  When named
@@ -1205,7 +1198,9 @@ async def _direct_reference_assets(
     same labeled mixed asset list that a long-form segment receives.
     """
     if payload.references is None:
-        return assets
+        return payload, assets
+    if assets is not None and len(assets):
+        raise InvalidRequest("supply named references or prepared assets, not both", fields=["references", "assets"])
     if not payload.references:
         raise InvalidRequest("references must contain at least one item", fields=["references"])
     from story import validate_references
@@ -1218,26 +1213,29 @@ async def _direct_reference_assets(
         tel,
         out,
         prepared,
-        style=payload.style if hasattr(payload, "style") else "",
+        style=payload.style,
         prepare_characters=payload.prepare_references,
         caption_references=payload.caption_references,
     )
-    return Assets[Mixed]([
+    call = compile_segments([payload.prompt], payload.references, style=payload.style)[0]
+    for warning in call.warnings:
+        tel.log("Reference prompt", level="warning", warning=warning)
+    return replace(payload, prompt=call.prompt), Assets[Mixed]([
         images[ref.name].with_label(label)
-        for ref, label in _label_references(payload.references)
+        for ref, label in _label_references(call.references)
     ])
 
 
 async def ref2va(ctx: Context, payload: ReferenceStandardRenderInput, out: Outputs, tel: Telemetry,
                  assets: ReferenceAssets | None = None) -> RenderOutput:
-    resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
-    return await _render_workflow(ctx, payload, resolved, out, tel, task="ref2va", steps=payload.steps)
+    request, resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
+    return await _render_workflow(ctx, request, resolved, out, tel, task="ref2va", steps=payload.steps)
 
 
 async def ref2va_turbo(ctx: Context, payload: ReferenceRenderInput, out: Outputs, tel: Telemetry,
                        assets: ReferenceAssets | None = None) -> RenderOutput:
-    resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
-    return await _render_workflow(ctx, payload, resolved, out, tel, task="ref2va_turbo", steps=None)
+    request, resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
+    return await _render_workflow(ctx, request, resolved, out, tel, task="ref2va_turbo", steps=None)
 
 
 app.job(fl2va, emits_media=True, accelerator=False)
@@ -1556,6 +1554,8 @@ class LongFormInput(msgspec.Struct):
     context_frames: ContextFrames = 22
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
+    prepare_references: bool = True
+    caption_references: bool = True
 
 
 class LongFormOutput(msgspec.Struct):
@@ -1822,6 +1822,8 @@ class LongFormCutsInput(msgspec.Struct):
     non_diegetic_music: str = "N/A"
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
+    prepare_references: bool = True
+    caption_references: bool = True
 
 
 def segment_sampling(
@@ -1871,28 +1873,30 @@ async def _create_references(
     reference_generator = cast(Callable[..., Awaitable[ReferenceImageOutput]], generate_reference)
     background_remover = cast(Callable[..., Awaitable[RemoveBackgroundOutput]], remove_background)
 
-    if caption_references:
-        if caption_images is None:
-            raise InvalidRequest(
-                "caption_references requires the optional joycaption package and published model",
-                fields=["caption_references"], code="caption_unavailable",
-            )
-        supplied = [ref.image for ref in references if ref.kind == "character" and ref.image is not None]
-        if supplied:
-            try:
-                caption_result = cast(Callable[..., Awaitable[CaptionImagesOutput]], caption_images)
-                result = await caption_result(images=supplied)
-            except (RuntimeError, ChildCallError) as exc:
-                raise InvalidRequest(
-                    f"identity captioning is unavailable: {str(exc)[:256]}",
-                    fields=["caption_references"], code="caption_unavailable",
-                ) from exc
-            for caption in result.captions:
-                tel.log("h3 character identity caption", index=caption.index, chars=len(caption.text))
+    async def describe_characters() -> None:
+        supplied = [
+            ref for ref in references
+            if ref.kind == "character" and ref.image is not None and not ref.description.strip()
+            and (ref.caption if ref.caption is not None else caption_references)
+        ]
+        if not supplied:
+            return
+        caption_result = cast(Callable[..., Awaitable[CaptionImagesOutput]], caption_images)
+        with tel.scope("Describing character identities"):
+            result = await caption_result(images=[ref.image for ref in supplied])
+        if sorted(c.index for c in result.captions) != list(range(len(supplied))):
+            raise OutputError("character captions do not match the supplied images", code="caption_integrity")
+        for caption in result.captions:
+            if not caption.text.strip():
+                raise OutputError("character caption is empty", code="caption_integrity")
+            supplied[caption.index].description = caption.text.strip()
+            tel.log("h3 character identity caption", index=caption.index, chars=len(caption.text))
 
     async def prepare_character(reference: StoryReference) -> ImageAsset:
         ctx.raise_if_cancelled()
         assert reference.image is not None
+        if not (reference.remove_background if reference.remove_background is not None else prepare_characters):
+            return reference.image
         with tel.scope(f"Removing background from {reference.name}"):
             result = await background_remover(image=reference.image)
         out.publish("references", result.image, label=f"Reference: {reference.name}")
@@ -1920,9 +1924,12 @@ async def _create_references(
         shown.append(result.image)
         return result.image
 
-    images = await resolve_reference_images(
-        references, create_reference, prepare_character if prepare_characters else None
-    )
+    # Both child families are submitted now; the scheduler controls GPU admission.
+    # Cancel the sibling if preparation fails so no abandoned child remains running.
+    async with asyncio.TaskGroup() as group:
+        prepared = group.create_task(resolve_reference_images(references, create_reference, prepare_character))
+        group.create_task(describe_characters())
+    images = prepared.result()
     for reference in references:
         ctx.raise_if_cancelled()
         tel.log(
@@ -1931,6 +1938,7 @@ async def _create_references(
             reference_kind=reference.kind,
             source=("audio" if reference.kind == "audio" else
                     ("background-removed" if reference.image is not None and reference.kind == "character"
+                     and (reference.remove_background if reference.remove_background is not None else prepare_characters)
                      else "attached" if reference.image is not None else "generated")),
             digest=images[reference.name].digest,
         )
@@ -1962,7 +1970,11 @@ async def long_form_cuts(
     total_work = sum(render_work) + reference_work
     prefetch(cut_segment)
     references: list[ImageAsset] = []
-    images = await _create_references(ctx, payload.references, tel, out, references, style=payload.style)
+    images = await _create_references(
+        ctx, payload.references, tel, out, references, style=payload.style,
+        prepare_characters=payload.prepare_references, caption_references=payload.caption_references,
+    )
+    calls = segment_calls(payload)
     completed_work = reference_work
     expected = None
     warnings = [warning for call in calls for warning in call.warnings]
@@ -2097,7 +2109,11 @@ async def long_form(
     total_work = sum(render_work) + reference_work
     prefetch(motion_segment)
     references: list[ImageAsset] = []
-    images = await _create_references(ctx, payload.references, tel, out, references, style=payload.style)
+    images = await _create_references(
+        ctx, payload.references, tel, out, references, style=payload.style,
+        prepare_characters=payload.prepare_references, caption_references=payload.caption_references,
+    )
+    calls = segment_calls(payload)
     completed_work = reference_work
     context = None
     expected: RenderProvenance | None = None

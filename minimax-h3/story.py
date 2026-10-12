@@ -55,6 +55,8 @@ class StoryReference(msgspec.Struct):
         AssetBound(max_bytes=256 << 20, max_decoded_bytes=2 << 30),
     ] = None
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
+    remove_background: bool | None = None
+    caption: bool | None = None
 
     def __post_init__(self) -> None:
         # Prompts quote the name as <name>: any text reads as a name once its brackets and
