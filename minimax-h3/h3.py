@@ -1248,8 +1248,7 @@ def _render_cut(
     return SegmentOutput(shot.video, list(shot.warnings), observed)
 
 
-# Every segment, turbo or standard, runs on ONE turbo-capable construction: a story that
-# mixes samplers holds one resident H3, never two that evict each other between segments.
+# Both sampling modes use one turbo-capable construction, reused by every segment.
 @invocable(
     defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
     components={"base_model": _REF2VA, "turbo_lora": ("ref2va_turbo",)},
