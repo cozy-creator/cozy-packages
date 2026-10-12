@@ -1,4 +1,5 @@
 """Restore videos with SeedVR2 while retaining their presentation clock and soundtrack."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -12,8 +13,17 @@ import torch
 from PIL import Image
 from torchvision.transforms import functional as vision
 from cozy_runtime.author import (
-    App, AssetBound, Context, DecodedAudioChunk, DecodedMediaHeader, DecodedVideoFrame,
-    MediaDecoder, Outputs, Telemetry, VideoAsset, WeightsOutput,
+    App,
+    AssetBound,
+    Context,
+    DecodedAudioChunk,
+    DecodedMediaHeader,
+    DecodedVideoFrame,
+    MediaDecoder,
+    Outputs,
+    Telemetry,
+    VideoAsset,
+    WeightsOutput,
 )
 from .model import RestorationModel
 from .normalize import normalize
@@ -45,8 +55,14 @@ class UpscaleOutput(msgspec.Struct):
     defaults={"model": [{"gpu": "*", "gpus": 1, "lane": "seedvr2@0.1.0/original"}]},
     memoize=True,
 )
-def upscale(ctx: Context, payload: UpscaleInput, model: RestorationModel,
-            decoder: MediaDecoder, out: Outputs, tel: Telemetry) -> UpscaleOutput:
+def upscale(
+    ctx: Context,
+    payload: UpscaleInput,
+    model: RestorationModel,
+    decoder: MediaDecoder,
+    out: Outputs,
+    tel: Telemetry,
+) -> UpscaleOutput:
     # 17-frame windows overlap by five frames (12 new frames / three VAE steps).
     # Keep only one window and its tail; the media writer streams the completed frames.
     window, overlap = 17, 5
@@ -68,9 +84,13 @@ def upscale(ctx: Context, payload: UpscaleInput, model: RestorationModel,
                 restored = model.restore(frames, width, height, payload.seed)
             if tail:
                 previous = torch.stack([vision.to_tensor(frame).permute(1, 2, 0) for frame in tail])
-                current = torch.stack([vision.to_tensor(frame).permute(1, 2, 0) for frame in restored[:overlap]])
+                current = torch.stack(
+                    [vision.to_tensor(frame).permute(1, 2, 0) for frame in restored[:overlap]]
+                )
                 blended = blend_overlapping_frames(previous, current, len(tail))
-                restored[:len(tail)] = [vision.to_pil_image(frame.permute(2, 0, 1)) for frame in blended]
+                restored[: len(tail)] = [
+                    vision.to_pil_image(frame.permute(2, 0, 1)) for frame in blended
+                ]
             emit = len(restored) if last else len(restored) - overlap
             for original, image in zip(pending[:emit], restored[:emit], strict=True):
                 count += 1
@@ -86,8 +106,8 @@ def upscale(ctx: Context, payload: UpscaleInput, model: RestorationModel,
                         raise ValueError("SeedVR2 requires a video stream")
                     edge = int(payload.resolution.value[:-1])
                     scale = edge / min(event.video.width, event.video.height)
-                    width = 16 * round(event.video.width * scale / 16)
-                    height = 16 * round(event.video.height * scale / 16)
+                    width = 2 * round(event.video.width * scale / 2)
+                    height = 2 * round(event.video.height * scale / 2)
                     fps = float(event.video.nominal_frame_rate or Fraction(24))
                     yield replace(event, video=replace(event.video, width=width, height=height))
                 elif isinstance(event, DecodedVideoFrame):

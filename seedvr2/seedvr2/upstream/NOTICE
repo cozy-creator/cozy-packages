@@ -4,4 +4,5 @@ Variable-length PyTorch SDPA adapter: numz/ComfyUI-SeedVR2_VideoUpscaler 4490bd1
 https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler
 Changes: namespace relocation; Apex norms replaced with standard LayerNorm/RMSNorm;
 SDPA selected; checkpoint loading and model movement removed from inference runner;
-single Runtime-selected GPU; fixed upstream conditioning tensors retained as package data.
+single Runtime-selected GPU. Fixed upstream conditioning tensors are admitted by the
+normalize job from an explicit input Tree into a managed native conditioning component.
