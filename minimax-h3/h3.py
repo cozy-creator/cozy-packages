@@ -122,6 +122,7 @@ from story import (
     image_prompt,
     reference_seed,
     resolve_reference_images,
+    validate_references,
 )
 from text_states import encode_text
 from upscale_options import OUTPUT_SIZES, REFINEMENT_SIZES, Resolution, UpscaleMethod
@@ -143,6 +144,13 @@ ReferenceAssets = Annotated[
     ),
     ImagePreparation(max_edge=8192, max_pixels=16_777_216),
     msgspec.Meta(min_length=1),
+]
+
+DirectReferenceAssets = Annotated[
+    Assets[Mixed],
+    AssetLimits(images=MAX_IMAGE_REFERENCES, videos=MAX_VIDEO_REFERENCES,
+                audio=MAX_AUDIO_REFERENCES, total=MAX_REFERENCES),
+    ImagePreparation(max_edge=8192, max_pixels=16_777_216),
 ]
 
 
@@ -282,6 +290,7 @@ class RenderOutput(msgspec.Struct):
     video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",), max_bytes=1 << 30)]
     originals: Annotated[list[VideoAsset], AssetBound(media_types=("video/mp4",), max_bytes=1 << 30)]
     warnings: list[str]
+    references: list[ImageAsset] = msgspec.field(default_factory=list)
 
 
 class RefineInput(msgspec.Struct):
@@ -1190,7 +1199,7 @@ async def _direct_reference_assets(
     assets: ReferenceAssets | None,
     out: Outputs,
     tel: Telemetry,
-) -> tuple[ReferenceRenderInput, ReferenceAssets | None]:
+) -> tuple[ReferenceRenderInput, ReferenceAssets | None, list[ImageAsset]]:
     """Resolve named references once for a direct call.
 
     ``assets`` is the prepared handoff used by long-form children.  When named
@@ -1198,13 +1207,13 @@ async def _direct_reference_assets(
     same labeled mixed asset list that a long-form segment receives.
     """
     if payload.references is None:
-        return payload, assets
+        if assets is None or not len(assets):
+            raise InvalidRequest("ref2va requires named references or prepared assets", fields=["references", "assets"])
+        return payload, assets, []
     if assets is not None and len(assets):
         raise InvalidRequest("supply named references or prepared assets, not both", fields=["references", "assets"])
     if not payload.references:
         raise InvalidRequest("references must contain at least one item", fields=["references"])
-    from story import validate_references
-
     validate_references(payload.references)
     prepared: list[ImageAsset] = []
     images = await _create_references(
@@ -1223,19 +1232,21 @@ async def _direct_reference_assets(
     return replace(payload, prompt=call.prompt), Assets[Mixed]([
         images[ref.name].with_label(label)
         for ref, label in _label_references(call.references)
-    ])
+    ]), prepared
 
 
 async def ref2va(ctx: Context, payload: ReferenceStandardRenderInput, out: Outputs, tel: Telemetry,
-                 assets: ReferenceAssets | None = None) -> RenderOutput:
-    request, resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
-    return await _render_workflow(ctx, request, resolved, out, tel, task="ref2va", steps=payload.steps)
+                 assets: DirectReferenceAssets) -> RenderOutput:
+    request, resolved, references = await _direct_reference_assets(ctx, payload, assets, out, tel)
+    result = await _render_workflow(ctx, request, resolved, out, tel, task="ref2va", steps=payload.steps)
+    return replace(result, references=references)
 
 
 async def ref2va_turbo(ctx: Context, payload: ReferenceRenderInput, out: Outputs, tel: Telemetry,
-                       assets: ReferenceAssets | None = None) -> RenderOutput:
-    request, resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
-    return await _render_workflow(ctx, request, resolved, out, tel, task="ref2va_turbo", steps=None)
+                       assets: DirectReferenceAssets) -> RenderOutput:
+    request, resolved, references = await _direct_reference_assets(ctx, payload, assets, out, tel)
+    result = await _render_workflow(ctx, request, resolved, out, tel, task="ref2va_turbo", steps=None)
+    return replace(result, references=references)
 
 
 app.job(fl2va, emits_media=True, accelerator=False)

@@ -14,7 +14,7 @@ on:
       packages:
         description: JSON list of package environments to qualify
         type: string
-        default: '["anima","birefnet","h3-latent-upscaler","seedvr2","sdxl","minimax-h3-tools","qwen-image-2"]'
+        default: '["anima","birefnet","character-describer","h3-latent-upscaler","seedvr2","sdxl","minimax-h3-tools","qwen-image-2"]'
       h3:
         description: Run H3 deterministic conformance
         type: boolean
@@ -65,7 +65,7 @@ jobs:
       - name: Lint
         run: >-
           uv run --no-project ruff check --select E9,F,B --ignore F401
-          anima/ birefnet/ h3-latent-upscaler/ seedvr2/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ qwen-image-2/ examples/
+          anima/ birefnet/ character-describer/ h3-latent-upscaler/ seedvr2/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ qwen-image-2/ examples/
 
       - name: Types
         run: uv run --no-project mypy
@@ -75,15 +75,15 @@ jobs:
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          scripts/bind-account-index.sh "${{ inputs.account_index }}" anima birefnet h3-latent-upscaler seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2
-          for package in anima birefnet h3-latent-upscaler seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2; do
+          scripts/bind-account-index.sh "${{ inputs.account_index }}" anima birefnet character-describer h3-latent-upscaler seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2
+          for package in anima birefnet character-describer h3-latent-upscaler seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2; do
             uv lock --check --project "$package"
           done
 
       - name: Every package builds a wheel
         run: |
           mkdir -p dist/packages
-          for package in anima birefnet h3-latent-upscaler seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2; do
+          for package in anima birefnet character-describer h3-latent-upscaler seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done

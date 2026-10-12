@@ -3,9 +3,13 @@
 Direct `ref2va` and `ref2va_turbo` calls also accept the long-form `references`
 syntax. A reference with an `image` is passed through as supplied by default;
 `prepare_references: true` runs BiRefNet for supplied character images, and
-`caption_references: true` additionally requests the optional identity-only
-JoyCaption child. JoyCaption is not published yet, so requesting captions fails
-closed with `caption_unavailable` until its verified model lane is available.
+`caption_references: true` uses the Qwen3-VL character descriptor to fill missing
+character descriptions with one sentence about identity, appearance, clothing and
+items. It excludes the background and never replaces an authored description.
+Per-character `remove_background` and `caption` override the corresponding global
+default. Long-form defaults both global options to true and prepares references once;
+its prepared segment calls do not repeat either operation. Captions and background
+removal are submitted concurrently, with GPU admission controlled by the scheduler.
 Descriptions without images are generated once with Qwen Image 2.1. The resolved
 assets are then handed to the H3 child, so preprocessing is not repeated.
 
