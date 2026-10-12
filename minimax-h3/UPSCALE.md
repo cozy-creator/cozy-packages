@@ -1,5 +1,27 @@
 # Higher-resolution H3 video
 
+Direct `ref2va` and `ref2va_turbo` calls also accept the long-form `references`
+syntax. A reference with an `image` is passed through as supplied by default;
+`prepare_references: true` runs BiRefNet for supplied character images, and
+`caption_references: true` additionally requests the optional identity-only
+JoyCaption child. JoyCaption is not published yet, so requesting captions fails
+closed with `caption_unavailable` until its verified model lane is available.
+Descriptions without images are generated once with Qwen Image 2.1. The resolved
+assets are then handed to the H3 child, so preprocessing is not repeated.
+
+```json
+{
+  "prompt": "<Rover> waves in a bright studio.",
+  "duration_s": 6,
+  "references": [
+    {"name": "Rover", "kind": "character", "image": "./rover.png"},
+    {"name": "Studio", "kind": "scene", "description": "A bright studio."}
+  ],
+  "prepare_references": true,
+  "caption_references": false
+}
+```
+
 FL2VA and Ref2VA, including their Turbo variants, accept `resolution` as a closed enum:
 `768p`, `1080p`, `1440p`, or `2160p` (4K UHD). The default remains the original 1344×768
 output. Higher tiers deliver 1920×1080, 2560×1440, or 3840×2160 with aspect-preserving
