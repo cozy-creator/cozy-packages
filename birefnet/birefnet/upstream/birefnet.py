@@ -164,7 +164,8 @@ import torch
 import torch.nn as nn
 from functools import partial
 
-from timm.layers import DropPath, to_2tuple, trunc_normal_
+from timm.layers import DropPath, to_2tuple
+from torch.nn.init import trunc_normal_
 
 
 import math
@@ -606,7 +607,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 import numpy as np
-from timm.layers import DropPath, to_2tuple, trunc_normal_
+from timm.layers import DropPath, to_2tuple
+from torch.nn.init import trunc_normal_
 
 # from config import Config
 

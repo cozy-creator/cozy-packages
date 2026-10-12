@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import torch
 from PIL import Image
 from torchvision import transforms
@@ -45,4 +47,5 @@ class BackgroundRemovalModel(Model[BiRefNetGraph]):
         with torch.inference_mode():
             pixels = prepare(image).unsqueeze(0).to(device=device, dtype=torch.float16)
             probability = model(pixels)[-1].sigmoid().float().cpu()[0].squeeze(0)
-        return transforms.ToPILImage()(probability).resize(image.size, Image.Resampling.BILINEAR)
+        mask = cast(Image.Image, transforms.ToPILImage()(probability))
+        return mask.resize(image.size, Image.Resampling.BILINEAR)

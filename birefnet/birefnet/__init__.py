@@ -7,11 +7,15 @@ from typing import Annotated
 import msgspec
 from PIL import Image
 
-from cozy_runtime.author import App, AssetBound, Context, ImageAsset, MediaDecoder, Outputs, Telemetry
+from cozy_runtime.author import (
+    App, AssetBound, Context, ImageAsset, MediaDecoder, Outputs, Telemetry, WeightsOutput,
+)
 
 from .model import BackgroundRemovalModel
+from .normalize import normalize
 
 app = App()
+app.job(normalize, weights=(WeightsOutput("model", max_new_bytes=1 << 20),), accelerator=False)
 
 
 class RemoveBackgroundInput(msgspec.Struct):
@@ -56,6 +60,7 @@ def remove_background(
     ctx.raise_if_cancelled()
     with tel.stage("reading reference", overall_range=(0.0, 0.1)):
         image = decoder.value(payload.image)
+        assert isinstance(image, Image.Image)
     with tel.stage("removing background", overall_range=(0.1, 0.9)):
         mask = model.mask(image)
     ctx.raise_if_cancelled()
