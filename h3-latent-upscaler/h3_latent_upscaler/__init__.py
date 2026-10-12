@@ -11,6 +11,7 @@ from cozy_runtime.author import (
     AssetBound,
     Context,
     FileAsset,
+    InvalidRequest,
     Outputs,
     Telemetry,
     WeightsOutput,
@@ -24,7 +25,8 @@ app = App()
 app.job(normalize, weights=(WeightsOutput("model", max_new_bytes=1 << 20),), accelerator=False)
 
 LatentAsset = Annotated[
-    FileAsset, AssetBound(max_bytes=2 << 30, media_types=("application/octet-stream",))
+    FileAsset,
+    AssetBound(max_bytes=2 << 30, media_types=("application/octet-stream",)),
 ]
 
 
@@ -50,6 +52,10 @@ def upscale(
     from cozy_runtime.models.minimax_h3.refinement import decode_latents, encode_latents
 
     ctx.raise_if_cancelled()
+    if payload.height * payload.width > 16_777_216:
+        raise InvalidRequest(
+            "target exceeds the H3 latent carrier canvas limit", code="h3_refinement"
+        )
     with tel.stage("reading H3 latents", overall_range=(0.0, 0.1)):
         value = decode_latents(payload.latents.read_bytes())
     height, width = payload.height // 16, payload.width // 16
