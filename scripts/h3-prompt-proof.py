@@ -500,12 +500,18 @@ async def references() -> None:
         return prepared
 
     scene = StoryReference("Scene", "scene", image=supplied)
+    voice = AudioAsset("sha256:" + "d" * 64)
+    audio = StoryReference("Voice", "audio", audio=voice)
+    missing_character = StoryReference("Courier", "character", "An adult courier in red.")
     made.clear()
-    cleaned = await resolve_reference_images([hero, scene, depot], generate, prepare_character)
+    cleaned = await resolve_reference_images(
+        [hero, scene, depot, missing_character, audio], generate, prepare_character,
+    )
     check("only supplied characters lose their background",
           (cleaned["Hero"] is prepared, cleaned["Scene"] is supplied,
-           cleaned["Depot"] is generated, removed, made),
-          (True, True, True, ["Hero"], ["Depot"]))
+           cleaned["Depot"] is generated, cleaned["Courier"] is generated,
+           cleaned["Voice"] is voice, removed, made),
+          (True, True, True, True, True, ["Hero"], ["Depot", "Courier"]))
     # Run 1559: names as people type them normalise; only an invisible or duplicate name refuses.
     typed = request(
         list[StoryReference],

@@ -28,6 +28,11 @@ The top-level `mode` applies to every segment. `mode: standard` uses 30 steps by
 default; its optional `steps` selects 30, 40 or 50. Omit `steps` with `mode: turbo`.
 There is no per-segment sampling override.
 
+Omit CLI `--gpus` for this workflow: each model then uses its supported GPU count.
+BiRefNet uses one GPU; H3 can still use all eight on a supported eight-GPU machine.
+An explicit `--gpus=N` applies to every GPU child, so a value greater than one
+cannot serve BiRefNet's single-GPU operation.
+
 ```yaml
 mode: turbo
 segments:
@@ -108,7 +113,7 @@ often non-English speech. Prevent it in the text:
 
 ## References and execution
 
-Each character reference uses one Qwen Image 2.1 call and returns exactly one image.
+Each generated character reference uses one Qwen Image 2.1 call and returns exactly one image.
 That image is a 16:9, 2 MP character design sheet on one plain white canvas, in three
 panels: a full-body front view, a full-body back view, and a neutral front-facing
 head-and-shoulders close-up that gives H3 the face in detail. Appearance, proportions
