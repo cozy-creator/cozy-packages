@@ -1,12 +1,13 @@
 [project]
 name = "h3-latent-upscaler"
-version = "0.1.0"
+version = "0.1.1"
 description = "Learned spatial upscaling for normalized MiniMax H3 video latents"
 requires-python = ">=3.12"
 dependencies = [
     "cozy-runtime[model-execution]>=0.23.24",
     "einops>=0.8",
     "msgspec>=0.19",
+    "safetensors>=0.8.0",
     "tensorfs>=0.6.1",
     "torch>=2.14",
 ]
