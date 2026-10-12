@@ -124,8 +124,11 @@ def image_prompt(reference: StoryReference, style: str = "") -> str:
         )
     else:
         parts.append(
-            "An environment reference image showing the architecture, materials and defining "
-            "features of the location, without people, labels or panels."
+            "Generate an empty environment reference image showing only the architecture, "
+            "materials, lighting and defining features of the location. Absolutely no people, "
+            "characters, human figures, faces, bodies, crowds, pedestrians, silhouettes or "
+            "human-like subjects may appear anywhere in the image. Do not include labels, "
+            "text, panels or character references."
         )
     parts.append(
         "Follow the visual style explicitly requested in the description or style section. "

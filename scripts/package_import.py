@@ -24,6 +24,12 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 #: package directory -> (module to import, compiled peers that must load beside it)
 PACKAGES = {
+    "h3-latent-upscaler": (
+        "h3_latent_upscaler", ("torch", "einops", "tensorfs"),
+    ),
+    "seedvr2": (
+        "seedvr2", ("torch", "torchvision", "torchvision.ops", "diffusers", "tensorfs", "av"),
+    ),
     "birefnet": (
         "birefnet",
         ("torch", "torchvision", "torchvision.ops", "transformers", "timm", "kornia", "tensorfs"),

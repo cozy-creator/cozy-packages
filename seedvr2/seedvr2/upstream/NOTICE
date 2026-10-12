@@ -1,0 +1,10 @@
+SeedVR2 architecture and inference: ByteDance-Seed/SeedVR e4de8c24441a67e1b7df56abea10645059bb1185 (Apache-2.0).
+https://github.com/ByteDance-Seed/SeedVR
+Variable-length PyTorch SDPA adapter: numz/ComfyUI-SeedVR2_VideoUpscaler 4490bd1f482e026674543386bb2a4d176da245b9 (Apache-2.0).
+https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler
+Changes: namespace relocation; Apex norms replaced with standard LayerNorm/RMSNorm;
+SDPA selected; checkpoint loading and model movement removed from inference runner;
+single Runtime-selected GPU. Fixed upstream conditioning tensors are admitted by the
+normalize job from an explicit input Tree into a managed native conditioning component.
+Unused upstream device/process-group initialization and legacy state-dict loading
+overrides were removed; Runtime owns those actions. Patch imports moved to module scope.
