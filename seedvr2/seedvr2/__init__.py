@@ -77,9 +77,13 @@ def upscale(
         def restore(last: bool) -> Iterator[DecodedVideoFrame]:
             nonlocal tail, count, pending
             ctx.raise_if_cancelled()
-            frames = [Image.frombytes("RGB", (f.width, f.height), f.rgb) for f in pending]
-            with tel.stage("restoring video window"):
-                restored = model.restore(frames, width, height, payload.seed)
+            if last and len(pending) == len(tail):
+                restored = tail
+                tail = []
+            else:
+                frames = [Image.frombytes("RGB", (f.width, f.height), f.rgb) for f in pending]
+                with tel.stage("restoring video window"):
+                    restored = model.restore(frames, width, height, payload.seed)
             if tail:
                 previous = torch.stack([vision.to_tensor(frame).permute(1, 2, 0) for frame in tail])
                 current = torch.stack(

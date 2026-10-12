@@ -128,6 +128,8 @@ class RestorationModel(Model[Graph]):
         runner.vae.set_causal_slicing(split_size=4, memory_device="same")
         runner.vae.set_memory_limit(conv_max_mem=0.5, norm_max_mem=0.5)
         runner.configure_diffusion()
+        if not frames:
+            raise ValueError("SeedVR2 restoration needs at least one frame")
         padded = frames + [frames[-1]] * ((1 - len(frames)) % 4)
         canvas = ((width + 15) // 16 * 16, (height + 15) // 16 * 16)
         left, top = (canvas[0] - width) // 2, (canvas[1] - height) // 2
@@ -155,6 +157,8 @@ class RestorationModel(Model[Graph]):
             ]
             with torch.autocast(device.type, dtype=torch.bfloat16):
                 sample = runner.inference(noises, conditions, [positive], [negative])[0]
+            if sample.ndim == 3:
+                sample = sample.unsqueeze(1)
             sample = (
                 sample[:, : len(frames)]
                 .permute(1, 0, 2, 3)
