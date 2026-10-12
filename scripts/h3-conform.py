@@ -3188,32 +3188,29 @@ def arm_interface() -> None:
     interface_path = H3 / "metadata" / "package-interface.json"
     interface = json.loads(interface_path.read_text())
     entries = {entry["name"]: entry for entry in interface["entrypoints"]}
+    workflows = {entry["name"]: entry for entry in interface["jobs"]}
     surfaces = {surface.name: surface for surface in describe(package.app)}
     check(
         "official actions, turbo functions, the model-bearing segments and encode_text",
         set(entries),
         {
             "encode_text",
-            "fl2va",
-            "ref2va",
-            "fl2va_turbo",
-            "ref2va_turbo",
-            "cut_segment",
-            "motion_segment",
+            "generate_fl2va", "generate_ref2va", "generate_fl2va_turbo", "generate_ref2va_turbo",
+            "refine_fl2va", "refine_ref2va", "cut_segment", "motion_segment",
         },
     )
     check(
-        "only chained renderers are internal",
+        "GPU stages remain internal to their CPU workflows",
         {name for name, entry in entries.items() if entry.get("internal", False)},
         {
-            "cut_segment",
-            "motion_segment",
+            "generate_fl2va", "generate_ref2va", "generate_fl2va_turbo", "generate_ref2va_turbo",
+            "refine_fl2va", "refine_ref2va", "cut_segment", "motion_segment",
         },
     )
     check(
         "public serving functions exclude chain implementation details",
         {name for name, entry in entries.items() if not entry.get("internal", False)},
-        {"fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo", "encode_text"},
+        {"encode_text"},
     )
     check(
         "six workflows over four tasks",
@@ -3237,12 +3234,17 @@ def arm_interface() -> None:
         ),
     }
     for name, (fields, _leased) in expected.items():
-        entry = entries[name]
+        entry = workflows[name]
+        child = entries["generate_" + name]
         check(
             f"{name} request fields",
             [field["name"] for field in entry["request"]["fields"]],
-            fields,
+            fields[:3] + ["resolution", "upscale_method"] + fields[3:],
         )
+        check(f"{name} resolution is a closed enum",
+              next(f["type"] for f in entry["request"]["fields"] if f["name"] == "resolution"),
+              {"literal": ["1080p", "1440p", "2160p", "768p"]})
+        check(f"{name} has no GPU model slot on its CPU workflow", "models" in entry, False)
         if name.endswith("_turbo"):
             check(
                 f"{name} has no steps on its wire: the plan fixes {package.TURBO_STEPS}",
@@ -3268,7 +3270,7 @@ def arm_interface() -> None:
                 duration["type"],
                 duration["constraints"],
                 duration.get("wire", "required"),
-                "request/duration_s" in entry["invocable"]["defaults"],
+                "default" in duration,
             ),
             ("int", {"ge": min(DURATIONS), "le": max(DURATIONS)}, "required", False),
         )
@@ -3305,7 +3307,7 @@ def arm_interface() -> None:
             },
         )
         turbo = name.endswith("_turbo")
-        models = entry["models"]
+        models = child["models"]
         trunk = name.removesuffix("_turbo")
         if turbo:
             check(f"{name} has separately bound base and LoRA models", len(models), 2)
@@ -3351,7 +3353,7 @@ def arm_interface() -> None:
         check(
             f"{name} exact customer result fields",
             [field["name"] for field in entry["result"]["fields"]],
-            ["video", "warnings"],
+            ["video", "originals", "warnings"],
         )
     for wire in (package.ClipInput,):
         check(
@@ -3371,7 +3373,8 @@ def arm_interface() -> None:
     check(
         "composition and assembly are CPU jobs",
         set(jobs),
-        {"long_form", "long_form_cuts", "assemble_video"},
+        {"long_form", "long_form_cuts", "assemble_video", "fl2va", "fl2va_turbo",
+         "ref2va", "ref2va_turbo", "compare_fl2va_upscalers", "compare_ref2va_upscalers"},
     )
     # The one property decision #601 turns on: the composer holds NO device while its shots
     # render. A model slot here would make one attempt hold eight shots.
@@ -3538,8 +3541,8 @@ def arm_interface() -> None:
              if f["name"] not in {"context_frames", "non_diegetic_music"}],
             [
                 (f["name"], f["type"])
-                for f in entries["ref2va_turbo"]["request"]["fields"]
-                if f["name"] != "assets"
+                for f in workflows["ref2va_turbo"]["request"]["fields"]
+                if f["name"] not in {"assets", "resolution", "upscale_method"}
             ],
         )
         check(
@@ -3599,24 +3602,24 @@ def arm_interface() -> None:
     check("H3 permits Runtime encoded linear leaves", package.H3Model.__encoded_leaves__, "accept")
     check(
         "reference files bind to the explicit Assets parameter",
-        entries["ref2va"]["assets"]["parameter"],
+        workflows["ref2va"]["assets"]["parameter"],
         "assets",
     )
     check(
         "reference collection admits only the three H3 media kinds",
-        {kind["kind"] for kind in entries["ref2va"]["assets"]["kinds"]},
+        {kind["kind"] for kind in workflows["ref2va"]["assets"]["kinds"]},
         {"image", "video", "audio"},
     )
     check(
         "keyframe endpoint uses the same explicit Assets input",
-        entries["fl2va"]["assets"]["parameter"],
+        workflows["fl2va"]["assets"]["parameter"],
         "assets",
     )
     check(
         "keyframe collection permits at most two images",
         next(
             field["constraints"]
-            for field in entries["fl2va"]["request"]["fields"]
+            for field in workflows["fl2va"]["request"]["fields"]
             if field["name"] == "assets"
         ),
         {"max_length": 2},

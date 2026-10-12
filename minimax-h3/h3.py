@@ -1154,8 +1154,9 @@ class UpscaleComparisonInput(ClipInput, kw_only=True):
 
 class UpscaleComparisonOutput(msgspec.Struct):
     original: Annotated[VideoAsset, AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
-    h3_latent: Annotated[VideoAsset, AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
-    seedvr2: Annotated[VideoAsset, AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
+    h3_latent: Annotated[list[VideoAsset], AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
+    seedvr2: Annotated[list[VideoAsset], AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
+    errors: list[str]
 
 
 async def _compare_upscalers(
@@ -1181,17 +1182,27 @@ async def _compare_upscalers(
     with tel.scope("Generating shared original 768p video"):
         source = await generate(payload=request, assets=assets)
     out.publish("original", source.video, label="Original 768p")
-    latent = await _upscale_generation(
-        ctx, source, payload.resolution, UpscaleMethod.H3_LATENT, task=trunk,
-        seed=payload.seed, frames=frames_for(payload.duration_s), tel=tel,
-    )
-    out.publish("h3_latent", latent.video, label=f"H3 latent refinement {payload.resolution.value}")
-    restored = await _upscale_generation(
-        ctx, source, payload.resolution, UpscaleMethod.SEEDVR2, task=trunk,
-        seed=payload.seed, frames=frames_for(payload.duration_s), tel=tel,
-    )
+    videos: dict[UpscaleMethod, list[VideoAsset]] = {}
+    errors = []
+    for method in (UpscaleMethod.H3_LATENT, UpscaleMethod.SEEDVR2):
+        videos[method] = []
+        try:
+            result = await _upscale_generation(
+                ctx, source, payload.resolution, method, task=trunk,
+                seed=payload.seed, frames=frames_for(payload.duration_s), tel=tel,
+            )
+        except ChildCallError as failure:
+            ctx.raise_if_cancelled()
+            error = f"{method.value}: {failure.code}: {str(failure)[:512]}"
+            errors.append(error)
+            tel.log("Upscale comparison failed", level="warning", method=method.value, error=error)
+        else:
+            videos[method].append(result.video)
+            out.publish(method.value, result.video, label=f"{method.value} {payload.resolution.value}")
     ctx.release_gpus()
-    return UpscaleComparisonOutput(source.video, latent.video, restored.video)
+    return UpscaleComparisonOutput(
+        source.video, videos[UpscaleMethod.H3_LATENT], videos[UpscaleMethod.SEEDVR2], errors
+    )
 
 
 async def compare_fl2va_upscalers(
