@@ -20,6 +20,7 @@ from cozy_runtime.author import (
     DecodedVideoFrame,
     MediaDecoder,
     Outputs,
+    Shape,
     Telemetry,
     VideoAsset,
     WeightsOutput,
@@ -38,9 +39,16 @@ class Resolution(StrEnum):
     UHD = "2160p"
 
 
+_RESOLUTIONS: dict[Resolution, tuple[int, int]] = {
+    Resolution.HD: (1920, 1080),
+    Resolution.QHD: (2560, 1440),
+    Resolution.UHD: (3840, 2160),
+}
+
+
 class UpscaleInput(msgspec.Struct):
     video: Annotated[VideoAsset, AssetBound(max_bytes=1 << 30, max_decoded_bytes=2 << 30)]
-    resolution: Resolution = Resolution.HD
+    resolution: Annotated[Resolution, Shape(pixels=_RESOLUTIONS)] = Resolution.HD
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] = 42
     aspect_ratio: Literal["source", "16:9"] = "source"
 
@@ -55,11 +63,8 @@ def output_sizes(
     width: int, height: int, edge: int, aspect_ratio: Literal["source", "16:9"]
 ) -> tuple[tuple[int, int], tuple[int, int]]:
     """Restore at the fitted size; the encoder receives the requested even-sized canvas."""
-    if aspect_ratio == "16:9":
-        canvas = (edge * 16 // 9, edge)
-        scale = min(canvas[0] / width, canvas[1] / height)
-    else:
-        scale = edge / min(width, height)
+    canvas = (edge * 16 // 9, edge)
+    scale = min(canvas[0] / width, canvas[1] / height)
     restored = (max(2, 2 * round(width * scale / 2)), max(2, 2 * round(height * scale / 2)))
     return restored, canvas if aspect_ratio == "16:9" else restored
 

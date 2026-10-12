@@ -6,3 +6,5 @@ Changes: namespace relocation; Apex norms replaced with standard LayerNorm/RMSNo
 SDPA selected; checkpoint loading and model movement removed from inference runner;
 single Runtime-selected GPU. Fixed upstream conditioning tensors are admitted by the
 normalize job from an explicit input Tree into a managed native conditioning component.
+Unused upstream device/process-group initialization and legacy state-dict loading
+overrides were removed; Runtime owns those actions. Patch imports moved to module scope.

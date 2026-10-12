@@ -30,7 +30,7 @@ cozy model upload 'hf://numz/SeedVR2_comfyUI@09ced71023636e9bc8cdf9cdecfb2625d1e
 cozy run ./seedvr2/normalize model.dit=paul/seedvr2-dit-raw#sha256:DIT_CHECKPOINT model.vae=paul/seedvr2-vae-raw#sha256:VAE_CHECKPOINT conditioning=conditioning --input-tree conditioning=/path/to/upstream/constants --upload-to=paul/seedvr2 --tensorhub local --await
 ```
 
-Resolution sets the short edge and preserves aspect ratio. Internally, padding
+Resolution defines the maximum 16:9 canvas; source-aspect output fits inside it. Internally, padding
 meets the model's 16-pixel grid and is cropped from the result. Audio is decoded
 and re-encoded by Runtime with its source clock; it is not copied byte-for-byte.
 Seventeen-frame windows share five frames and use upstream temporal blending.
