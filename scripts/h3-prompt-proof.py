@@ -22,6 +22,7 @@ import h3
 from story import (
     StoryReference,
     encoder_prompt,
+    image_prompt,
     resolve_reference_images,
     validate_references,
 )
@@ -490,6 +491,9 @@ async def references() -> None:
         return generated
 
     check("a supplied image is reused", await resolve_reference_images([hero], generate), {"Hero": supplied})
+    scene_prompt = image_prompt(StoryReference("Depot", "scene", "A wet train platform."))
+    for forbidden in ("no people", "no human figures", "no silhouettes", "no human-like subjects"):
+        check(f"scene generation explicitly excludes {forbidden}", forbidden in scene_prompt.lower(), True)
     mixed = await resolve_reference_images([hero, depot], generate)
     check("only the missing image is generated", (mixed["Depot"] is generated, made), (True, ["Depot"]))
     prepared = ImageAsset("sha256:" + "c" * 64)
