@@ -7,9 +7,9 @@ The H3 package owns the follow-up refinement and video decode.
 
 The upstream ComfyUI node normalizes raw VAE latents first. Diffusers H3 latents are
 already normalized with those same per-channel mean/std values; this adapter calls
-the network directly and returns normalized CPU float32 latents. Temporal chunking
-uses the upstream 32-row chunks with overlap blending; it is not claimed numerically
-identical to a full-context forward.
+the network directly and returns normalized CPU float32 latents. Full temporal context is the default. Optional temporal chunking uses the upstream
+32-row chunks with overlap blending; it is not numerically identical to a full-context
+forward because GroupNorm and temporal convolutions see different windows.
 
 Code: MIT, upstream revision `40316cf008b2fd8663263270669eb4da23f89d2c`.
 Weights: Apache-2.0, Hugging Face revision `3f941d5d182014dd5c0a5e16330420ee2d4aa0c6`.

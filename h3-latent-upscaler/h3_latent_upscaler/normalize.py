@@ -23,7 +23,7 @@ async def normalize(ctx: Context, *, source: Source) -> ModelArtifact:
     capability = ctx.tensorfs_source(source)
     inspection = capability.inspect()
     with torch.device("meta"):
-        expected = LatentResizer3D().eval().bfloat16().state_dict()
+        expected = LatentResizer3D().eval().bfloat16().state_dict()  # type: ignore[no-untyped-call]
     tensors = inspection.components.get("model", {})
     if set(inspection.components) != {"model"} or set(tensors) != set(expected):
         raise ValueError("source keys differ from the H3 latent upscaler 3D Conv v1")
@@ -37,8 +37,10 @@ async def normalize(ctx: Context, *, source: Source) -> ModelArtifact:
         targets={"model": Target(source="source", source_component="model")},
         configs={"model": Config("add")},
         order=tuple(("model", key) for key in expected),
-        files={name: attribution.joinpath(name).read_bytes()
-               for name in ("LICENSE", "WEIGHTS-LICENSE", "NOTICE")},
+        files={
+            name: attribution.joinpath(name).read_bytes()
+            for name in ("LICENSE", "WEIGHTS-LICENSE", "NOTICE")
+        },
     )
     with ctx.output("model").open(definition) as transaction:
         if transaction.receipt is not None:

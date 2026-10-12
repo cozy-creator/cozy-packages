@@ -16,7 +16,7 @@ class UpscalerGraph:
     def __init__(self, config: Config) -> None:
         if config.mapping().get("architecture") != ARCHITECTURE:
             raise ValueError("the latent upscaler requires its normalized 3D Conv v1 checkpoint")
-        self.components = {"model": LatentResizer3D().eval().bfloat16()}
+        self.components = {"model": LatentResizer3D().eval().bfloat16()}  # type: ignore[no-untyped-call]
 
 
 def build_upscaler(config: Config) -> UpscalerGraph:
@@ -31,7 +31,7 @@ class H3LatentUpscaler(Model[UpscalerGraph]):
 
     @uses_components("model")
     def upscale(
-        self, video: torch.Tensor, *, height: int, width: int, temporal_chunking: bool = True
+        self, video: torch.Tensor, *, height: int, width: int, temporal_chunking: bool = False
     ) -> torch.Tensor:
         """Return CPU float32 normalized Bx24xTxHxW; audio and time are unchanged.
 
@@ -53,7 +53,9 @@ class H3LatentUpscaler(Model[UpscalerGraph]):
         scale = (height / in_height + width / in_width) / 2.0
         with torch.inference_mode():
             result = model(
-                video.to(device=device, dtype=torch.bfloat16), scale=scale,
-                target_size=(video.shape[2], height, width), enable_chunking=temporal_chunking,
+                video.to(device=device, dtype=torch.bfloat16),
+                scale=scale,
+                target_size=(video.shape[2], height, width),
+                enable_chunking=temporal_chunking,
             )
             return cast(torch.Tensor, result.float().cpu())
