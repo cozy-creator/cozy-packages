@@ -74,16 +74,25 @@ def reference_seed(reference: StoryReference, request_id: str) -> int:
 async def resolve_reference_images(
     references: Sequence[StoryReference],
     generate: Callable[[StoryReference], Awaitable[ImageAsset]],
+    prepare_character: Callable[[StoryReference], Awaitable[ImageAsset]] | None = None,
 ) -> dict[str, ImageAsset | AudioAsset]:
-    """Reuse granted handles and generate only missing images, draining failed siblings."""
+    """Prepare supplied characters, reuse scenes/audio, and generate missing images once."""
     images: dict[str, ImageAsset | AudioAsset] = {}
     for ref in references:
         supplied = ref.audio if ref.kind == "audio" else ref.image
         if supplied is not None:
             images[ref.name] = supplied
-    pending = [ref for ref in references if ref.kind != "audio" and ref.image is None]
+    pending = [
+        ref for ref in references
+        if ref.kind != "audio" and (
+            ref.image is None or ref.kind == "character" and prepare_character is not None
+        )
+    ]
 
     async def one(reference: StoryReference) -> ImageAsset:
+        if reference.image is not None:
+            assert prepare_character is not None
+            return await prepare_character(reference)
         return await generate(reference)
 
     tasks = [asyncio.create_task(one(reference)) for reference in pending]

@@ -8,6 +8,10 @@ prompt, so the workflow copies the global information into it.
 ## Request
 
 - `references`: characters, scenes and audio, shared by every segment.
+  A supplied character image is processed once with BiRefNet to remove its background,
+  then composited onto white before H3 receives it. The prepared image appears in the
+  reference outputs and is reused for every segment. Supplied scene images and audio
+  are used as supplied. References generated from descriptions keep their existing path.
 - `style`: look shared by generated reference images and every segment (optional).
 - `overall_soundscape`: sound shared by every segment (optional).
 - `non_diegetic_music`: score shared by every segment (default `N/A`).

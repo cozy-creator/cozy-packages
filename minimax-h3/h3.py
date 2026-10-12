@@ -105,6 +105,8 @@ from qwen_image_2 import AspectRatio as ReferenceAspectRatio
 from qwen_image_2 import ImageOutput as ReferenceImageOutput
 from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate_image as generate_reference
+from birefnet import RemoveBackgroundOutput
+from birefnet import remove_background
 from story import (
     SegmentCall,
     StoryReference,
@@ -1455,6 +1457,16 @@ async def _create_references(
     # Managed dependencies install an asynchronous flat caller for the source
     # entrypoint, whose own annotations describe its injected implementation.
     reference_generator = cast(Callable[..., Awaitable[ReferenceImageOutput]], generate_reference)
+    background_remover = cast(Callable[..., Awaitable[RemoveBackgroundOutput]], remove_background)
+
+    async def prepare_character(reference: StoryReference) -> ImageAsset:
+        ctx.raise_if_cancelled()
+        assert reference.image is not None
+        with tel.scope(f"Removing background from {reference.name}"):
+            result = await background_remover(image=reference.image)
+        out.publish("references", result.image, label=f"Reference: {reference.name}")
+        shown.append(result.image)
+        return result.image
 
     async def create_reference(reference: StoryReference) -> ImageAsset:
         ctx.raise_if_cancelled()
@@ -1477,7 +1489,7 @@ async def _create_references(
         shown.append(result.image)
         return result.image
 
-    images = await resolve_reference_images(references, create_reference)
+    images = await resolve_reference_images(references, create_reference, prepare_character)
     for reference in references:
         ctx.raise_if_cancelled()
         tel.log(
@@ -1485,7 +1497,8 @@ async def _create_references(
             subject=reference.name,
             reference_kind=reference.kind,
             source=("audio" if reference.kind == "audio" else
-                    ("attached" if reference.image is not None else "generated")),
+                    ("background-removed" if reference.image is not None and reference.kind == "character"
+                     else "attached" if reference.image is not None else "generated")),
             digest=images[reference.name].digest,
         )
     return images
