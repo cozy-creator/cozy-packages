@@ -413,17 +413,19 @@ class SPDistForward:
     ):
         self.name = name
         self.comm_shape = comm_shape
-        if device:
-            self.device = device
-        else:
-            self.device = get_device()
+        # Resolve the default device only when a sequence-parallel group is
+        # actually used.  This helper is instantiated while importing the
+        # model graph, including for the CPU-only normalize job; resolving
+        # ``cuda.current_device()`` here makes discovery fail before any
+        # inference work can run.
+        self.device = device
 
     def __call__(self, inputs) -> Any:
         group = get_sequence_parallel_group()
         if not group:
             yield inputs
         else:
-            device = self.device
+            device = self.device if self.device is not None else get_device()
             sp_world = get_sequence_parallel_world_size()
             sp_rank = get_sequence_parallel_rank()
             for local_step in range(sp_world):
