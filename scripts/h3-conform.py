@@ -3482,37 +3482,28 @@ def arm_interface() -> None:
         [None, None],
     )
     check("long-form defaults to turbo", unseeded.mode, "turbo")
-    check("segment turbo defaults to true", [s.turbo for s in unseeded.segments], [True, True])
-    check("default segments use eight evaluations", package.segment_sampling(unseeded), ([True, True], [8, 8]))
-    for encoding in ("json", "yaml"):
-        decoder = msgspec.json.decode if encoding == "json" else msgspec.yaml.decode
-        for value in (True, False, "true", "false", 0, 1, None):
-            data = (
-                json.dumps({"prompt": "x", "duration_s": 5, "turbo": value}).encode()
-                if encoding == "json"
-                else f"prompt: x\nduration_s: 5\nturbo: {json.dumps(value)}\n".encode()
-            )
-            if type(value) is bool:
-                check(f"{encoding} segment accepts exact boolean {value}",
-                      decoder(data, type=package.LongFormSegment).turbo, value)
-            else:
-                refusal(f"{encoding} segment turbo refuses {value!r}",
-                        partial(decoder, data, type=package.LongFormSegment), "ValidationError")
-    mixed = msgspec.json.decode(
-        b'{"segments":[{"prompt":"x","duration_s":5},'
-        b'{"prompt":"y","duration_s":5,"turbo":false},'
-        b'{"prompt":"z","duration_s":5,"turbo":true}],'
-        b'"references":[{"name":"Hero","kind":"character"}]}',
-        type=package.LongFormInput,
-    )
-    check("mixed segments use 8/30/8 evaluations", package.segment_sampling(mixed),
-          ([True, False, True], [8, 30, 8]))
-    mixed.mode = "standard"
-    check("global standard takes precedence over segment flags", package.segment_sampling(mixed),
-          ([False, False, False], [30, 30, 30]))
-    mixed.steps = 40
-    check("global standard preserves its authored step count", package.segment_sampling(mixed),
-          ([False, False, False], [40, 40, 40]))
+    check("default segments use eight evaluations", package.segment_sampling(unseeded), (True, 8))
+    for job in (package.LongFormInput, package.LongFormCutsInput):
+        for encoding in (msgspec.json, msgspec.yaml):
+            authored = {
+                "segments": [{"prompt": "x", "duration_s": 5, "turbo": value}
+                             for value in (True, False)],
+                "references": [{"name": "Hero", "kind": "character"}],
+            }
+            request = encoding.decode(encoding.encode(authored), type=job)
+            label = f"{job.__name__} {encoding.__name__}"
+            check(f"{label} removed segment flags cannot override global turbo",
+                  package.segment_sampling(request), (True, 8))
+            request.steps = 30
+            refusal(f"{label} turbo refuses explicit steps",
+                    partial(package.segment_sampling, request), "invalid_request")
+            request.mode = "standard"
+            request.steps = None
+            check(f"{label} global standard applies to every segment",
+                  package.segment_sampling(request), (False, 30))
+            request.steps = 40
+            check(f"{label} global standard preserves its authored step count",
+                  package.segment_sampling(request), (False, 40))
     check("long-form has no contradictory standard step default", unseeded.steps, None)
     check("long-form preserves the global context default", unseeded.context_frames, 22)
     check("segment context defaults to true", [s.context_frames for s in unseeded.segments], [True, True])
@@ -3544,7 +3535,7 @@ def arm_interface() -> None:
         check(
             f"a {job} segment preserves the turbo request fields",
             [(f["name"], f["type"]) for f in segment["type"]["list"]["fields"]
-             if f["name"] not in {"context_frames", "non_diegetic_music", "turbo"}],
+             if f["name"] not in {"context_frames", "non_diegetic_music"}],
             [
                 (f["name"], f["type"])
                 for f in entries["ref2va_turbo"]["request"]["fields"]
@@ -3552,9 +3543,9 @@ def arm_interface() -> None:
             ],
         )
         check(
-            f"{job} compiler exposes optional strict segment turbo",
-            next(f for f in segment["type"]["list"]["fields"] if f["name"] == "turbo"),
-            {"name": "turbo", "type": "bool", "wire": "optional"},
+            f"{job} compiler exposes no segment sampling override",
+            any(f["name"] == "turbo" for f in segment["type"]["list"]["fields"]),
+            False,
         )
         check(
             f"{job} segments expose optional music overrides",
