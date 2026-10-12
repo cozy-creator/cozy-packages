@@ -54,7 +54,14 @@ class UpscaleInput(msgspec.Struct):
 
 
 class UpscaleOutput(msgspec.Struct):
-    video: Annotated[VideoAsset, AssetBound(max_bytes=1 << 30, max_decoded_bytes=32 << 30)]
+    video: Annotated[
+        VideoAsset,
+        AssetBound(
+            max_bytes=1 << 30,
+            max_decoded_bytes=32 << 30,
+            media_types=("video/mp4",),
+        ),
+    ]
     frame_count: int
     fps: float
 
