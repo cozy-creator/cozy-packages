@@ -492,7 +492,7 @@ async def references() -> None:
 
     check("a supplied image is reused", await resolve_reference_images([hero], generate), {"Hero": supplied})
     scene_prompt = image_prompt(StoryReference("Depot", "scene", "A wet train platform."))
-    for forbidden in ("no people", "no human figures", "no silhouettes", "no human-like subjects"):
+    for forbidden in ("no people", "human figures", "silhouettes", "human-like subjects"):
         check(f"scene generation explicitly excludes {forbidden}", forbidden in scene_prompt.lower(), True)
     mixed = await resolve_reference_images([hero, depot], generate)
     check("only the missing image is generated", (mixed["Depot"] is generated, made), (True, ["Depot"]))
