@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import replace
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 import msgspec
 import torch
-from PIL import Image
+from PIL import Image, ImageOps
 from torchvision.transforms import functional as vision
 from cozy_runtime.author import (
     App,
@@ -42,12 +42,26 @@ class UpscaleInput(msgspec.Struct):
     video: Annotated[VideoAsset, AssetBound(max_bytes=1 << 30, max_decoded_bytes=2 << 30)]
     resolution: Resolution = Resolution.HD
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] = 42
+    aspect_ratio: Literal["source", "16:9"] = "source"
 
 
 class UpscaleOutput(msgspec.Struct):
     video: Annotated[VideoAsset, AssetBound(max_bytes=1 << 30, max_decoded_bytes=32 << 30)]
     frame_count: int
     fps: float
+
+
+def output_sizes(
+    width: int, height: int, edge: int, aspect_ratio: Literal["source", "16:9"]
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Restore at the fitted size; the encoder receives the requested even-sized canvas."""
+    if aspect_ratio == "16:9":
+        canvas = (edge * 16 // 9, edge)
+        scale = min(canvas[0] / width, canvas[1] / height)
+    else:
+        scale = edge / min(width, height)
+    restored = (max(2, 2 * round(width * scale / 2)), max(2, 2 * round(height * scale / 2)))
+    return restored, canvas if aspect_ratio == "16:9" else restored
 
 
 @app.entrypoint(
@@ -73,6 +87,7 @@ def upscale(
         audio: list[DecodedAudioChunk] = []
         tail: list[Image.Image] = []
         width = height = 0
+        canvas = (0, 0)
 
         def restore(last: bool) -> Iterator[DecodedVideoFrame]:
             nonlocal tail, count, pending
@@ -96,7 +111,8 @@ def upscale(
             emit = len(restored) if last else len(restored) - overlap
             for original, image in zip(pending[:emit], restored[:emit], strict=True):
                 count += 1
-                yield replace(original, width=width, height=height, rgb=image.tobytes())
+                image = ImageOps.pad(image, canvas, method=Image.Resampling.LANCZOS, color="black")
+                yield replace(original, width=canvas[0], height=canvas[1], rgb=image.tobytes())
             tail = [] if last else restored[emit:]
             pending = [] if last else pending[emit:]
 
@@ -107,10 +123,12 @@ def upscale(
                     if event.video is None:
                         raise ValueError("SeedVR2 requires a video stream")
                     edge = int(payload.resolution.value[:-1])
-                    scale = edge / min(event.video.width, event.video.height)
-                    width = 2 * round(event.video.width * scale / 2)
-                    height = 2 * round(event.video.height * scale / 2)
-                    yield replace(event, video=replace(event.video, width=width, height=height))
+                    (width, height), canvas = output_sizes(
+                        event.video.width, event.video.height, edge, payload.aspect_ratio
+                    )
+                    yield replace(
+                        event, video=replace(event.video, width=canvas[0], height=canvas[1])
+                    )
                 elif isinstance(event, DecodedVideoFrame):
                     pending.append(event)
                     if len(pending) == window:

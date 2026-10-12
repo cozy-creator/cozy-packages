@@ -2,7 +2,8 @@
 
 Managed SeedVR2 3B restoration with the upstream Apache-2.0 architecture, one-step
 sampler, fixed conditioning, standard PyTorch SDPA and Runtime-owned DiT/VAE weights.
-`upscale` takes a video, resolution (`1080p`, `1440p`, `2160p`) and deterministic seed.
+`upscale` takes a video, resolution (`1080p`, `1440p`, `2160p`), deterministic seed,
+and `aspect_ratio` (`source` by default, or `16:9` for an exact letterboxed canvas).
 Frame presentation timestamps and audio are passed through Runtime's streaming media API.
 Temporal windows overlap and use the upstream Numz crossfade.
 
@@ -33,3 +34,6 @@ Resolution sets the short edge and preserves aspect ratio. Internally, padding
 meets the model's 16-pixel grid and is cropped from the result. Audio is decoded
 and re-encoded by Runtime with its source clock; it is not copied byte-for-byte.
 Seventeen-frame windows share five frames and use upstream temporal blending.
+
+`aspect_ratio=16:9` outputs exactly 1920×1080,2560×1440 or 3840×2160 using Pillow
+letterboxing. The source subject is never stretched.
