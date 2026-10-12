@@ -75,6 +75,11 @@ return to the published function default. Existing valid owner overrides survive
   There is no curator stamp or `profile=` prefix.
 - A request overrides one slot for that call with `model.<param>=<org/model@release>`.
 
+H3's public defaults use a wildcard GPU row for each supported execution width (1, 2, 4, 7,
+and 8). This keeps private rentals on the GPU that was actually rented; public placement can
+match the architecture and let Runtime choose its kernel and precision policy. `encode_text`
+remains a one-GPU slot because its text encoder is intentionally local to the calling worker.
+
 ## SDXL sources
 
 A Civitai SDXL single file uploads servable: `cozy model upload civitai://<version> <org/model>`.
