@@ -1,6 +1,6 @@
 [project]
 name = "minimax-h3"
-version = "1.29.0"
+version = "1.30.0"
 requires-python = ">=3.12"
 dependencies = [
     "birefnet>=0.1.0",
@@ -43,6 +43,7 @@ only-include = [
     "long_form_state.py",
     "story.py",
     "text_states.py",
+    "upscale_options.py",
     "timestep-plans",
 ]
 
