@@ -16,6 +16,7 @@ from cozy_runtime.author import (
     Telemetry,
     WeightsOutput,
 )
+from cozy_runtime.models.minimax_h3.refinement import decode_latents, encode_latents
 
 from .model import H3LatentUpscaler
 from .normalize import normalize
@@ -49,8 +50,6 @@ def upscale(
     ctx: Context, payload: UpscaleInput, model: H3LatentUpscaler, out: Outputs, tel: Telemetry
 ) -> UpscaleOutput:
     """Upscale retained H3 video latents; preserve clean audio and refinement context."""
-    from cozy_runtime.models.minimax_h3.refinement import decode_latents, encode_latents
-
     ctx.raise_if_cancelled()
     if payload.height * payload.width > 16_777_216:
         raise InvalidRequest(

@@ -1147,7 +1147,7 @@ app.job(ref2va_turbo, emits_media=True)
 
 class UpscaleComparisonInput(ClipInput, kw_only=True):
     seed: int
-    resolution: Resolution = Resolution.FULL_HD
+    resolutions: tuple[Resolution, ...] = (Resolution.FULL_HD, Resolution.QHD, Resolution.UHD)
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps = DEFAULT_STEPS
 
@@ -1163,8 +1163,9 @@ async def _compare_upscalers(
     ctx: Context, payload: UpscaleComparisonInput, assets: KeyframeAssets | ReferenceAssets,
     out: Outputs, tel: Telemetry, *, trunk: Literal["fl2va", "ref2va"],
 ) -> UpscaleComparisonOutput:
-    if payload.resolution is Resolution.NATIVE:
-        raise InvalidRequest("an upscale comparison needs 1080p, 1440p or 2160p")
+    if (not payload.resolutions or Resolution.NATIVE in payload.resolutions
+            or len(set(payload.resolutions)) != len(payload.resolutions)):
+        raise InvalidRequest("select distinct comparison resolutions from 1080p, 1440p and 2160p")
     turbo = payload.mode == "turbo"
     request: RetainedClipInput
     if turbo:
@@ -1182,23 +1183,23 @@ async def _compare_upscalers(
     with tel.scope("Generating shared original 768p video"):
         source = await generate(payload=request, assets=assets)
     out.publish("original", source.video, label="Original 768p")
-    videos: dict[UpscaleMethod, list[VideoAsset]] = {}
+    videos: dict[UpscaleMethod, list[VideoAsset]] = {method: [] for method in UpscaleMethod}
     errors = []
-    for method in (UpscaleMethod.H3_LATENT, UpscaleMethod.SEEDVR2):
-        videos[method] = []
-        try:
-            result = await _upscale_generation(
-                ctx, source, payload.resolution, method, task=trunk,
-                seed=payload.seed, frames=frames_for(payload.duration_s), tel=tel,
-            )
-        except ChildCallError as failure:
-            ctx.raise_if_cancelled()
-            error = f"{method.value}: {failure.code}: {str(failure)[:512]}"
-            errors.append(error)
-            tel.log("Upscale comparison failed", level="warning", method=method.value, error=error)
-        else:
-            videos[method].append(result.video)
-            out.publish(method.value, result.video, label=f"{method.value} {payload.resolution.value}")
+    for resolution in payload.resolutions:
+        for method in (UpscaleMethod.H3_LATENT, UpscaleMethod.SEEDVR2):
+            try:
+                result = await _upscale_generation(
+                    ctx, source, resolution, method, task=trunk,
+                    seed=payload.seed, frames=frames_for(payload.duration_s), tel=tel,
+                )
+            except ChildCallError as failure:
+                ctx.raise_if_cancelled()
+                error = f"{method.value} {resolution.value}: {failure.code}: {str(failure)[:512]}"
+                errors.append(error)
+                tel.log("Upscale comparison failed", level="warning", method=method.value, error=error)
+            else:
+                videos[method].append(result.video)
+                out.publish(method.value, result.video, label=f"{method.value} {resolution.value}")
     ctx.release_gpus()
     return UpscaleComparisonOutput(
         source.video, videos[UpscaleMethod.H3_LATENT], videos[UpscaleMethod.SEEDVR2], errors
