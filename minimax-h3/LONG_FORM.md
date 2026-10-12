@@ -12,6 +12,13 @@ prompt, so the workflow copies the global information into it.
   then composited onto white before H3 receives it. The prepared image appears in the
   reference outputs and is reused for every segment. Supplied scene images and audio
   are used as supplied. References generated from descriptions keep their existing path.
+- `prepare_references` (default `true`): remove supplied character backgrounds.
+- `caption_references` (default `true`): describe supplied characters that have no
+  authored description, using Qwen3-VL. The one-sentence description covers identity,
+  appearance, clothing and items, excluding the background or scene. It is reused in
+  every relevant segment's subject definition. Captioning and background removal
+  are submitted concurrently. Per-character `remove_background` and `caption`
+  booleans override these defaults; supplied descriptions are always retained.
 - `style`: look shared by generated reference images and every segment (optional).
 - `overall_soundscape`: sound shared by every segment (optional).
 - `non_diegetic_music`: score shared by every segment (default `N/A`).
