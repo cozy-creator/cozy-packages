@@ -1736,7 +1736,7 @@ async def long_form(
     tel.log(
         "h3 long-form delivery",
         mode=payload.mode,
-        steps=", ".join(str(count) for count in steps),
+        steps=steps,
         segments=count,
         delivered_frames=delivered_frames,
     )
