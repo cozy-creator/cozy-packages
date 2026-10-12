@@ -1,0 +1,31 @@
+[project]
+name = "seedvr2"
+version = "0.1.0"
+description = "SeedVR2 3B temporally consistent video restoration"
+requires-python = ">=3.12"
+dependencies = [
+    "cozy-runtime[media]>=0.23.23",
+    "diffusers>=0.40",
+    "einops>=0.8",
+    "msgspec>=0.19",
+    "numpy>=2",
+    "omegaconf>=2.3",
+    "pillow>=12",
+    "rotary-embedding-torch>=0.5.3",
+    "tensorfs>=0.6.1",
+    "torch>=2.14",
+    "torchvision>=0.29",
+]
+
+[project.entry-points."cozy.application"]
+default = "seedvr2:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["seedvr2"]
+
+[tool.uv]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
