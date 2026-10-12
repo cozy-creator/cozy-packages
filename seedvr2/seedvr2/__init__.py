@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import replace
 from enum import StrEnum
-from fractions import Fraction
 from typing import Annotated
 
 import msgspec
@@ -67,10 +66,9 @@ def upscale(
     # Keep only one window and its tail; the media writer streams the completed frames.
     window, overlap = 17, 5
     count = 0
-    fps = 0.0
 
     def events() -> Iterator[DecodedMediaHeader | DecodedVideoFrame | DecodedAudioChunk]:
-        nonlocal count, fps
+        nonlocal count
         pending: list[DecodedVideoFrame] = []
         audio: list[DecodedAudioChunk] = []
         tail: list[Image.Image] = []
@@ -108,7 +106,6 @@ def upscale(
                     scale = edge / min(event.video.width, event.video.height)
                     width = 2 * round(event.video.width * scale / 2)
                     height = 2 * round(event.video.height * scale / 2)
-                    fps = float(event.video.nominal_frame_rate or Fraction(24))
                     yield replace(event, video=replace(event.video, width=width, height=height))
                 elif isinstance(event, DecodedVideoFrame):
                     pending.append(event)
@@ -123,4 +120,6 @@ def upscale(
             yield from audio
 
     saved = out.save_video_stream(events())
-    return UpscaleOutput(saved.video, count, fps)
+    if saved.frame_count != count:
+        raise RuntimeError("video encoder changed the restored frame count")
+    return UpscaleOutput(saved.video, count, float(saved.frame_rate))
