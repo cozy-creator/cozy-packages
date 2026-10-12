@@ -492,6 +492,26 @@ async def references() -> None:
     check("a supplied image is reused", await resolve_reference_images([hero], generate), {"Hero": supplied})
     mixed = await resolve_reference_images([hero, depot], generate)
     check("only the missing image is generated", (mixed["Depot"] is generated, made), (True, ["Depot"]))
+    prepared = ImageAsset("sha256:" + "c" * 64)
+    removed: list[str] = []
+
+    async def prepare_character(reference: StoryReference) -> ImageAsset:
+        removed.append(reference.name)
+        return prepared
+
+    scene = StoryReference("Scene", "scene", image=supplied)
+    voice = AudioAsset("sha256:" + "d" * 64)
+    audio = StoryReference("Voice", "audio", audio=voice)
+    missing_character = StoryReference("Courier", "character", "An adult courier in red.")
+    made.clear()
+    cleaned = await resolve_reference_images(
+        [hero, scene, depot, missing_character, audio], generate, prepare_character,
+    )
+    check("only supplied characters lose their background",
+          (cleaned["Hero"] is prepared, cleaned["Scene"] is supplied,
+           cleaned["Depot"] is generated, cleaned["Courier"] is generated,
+           cleaned["Voice"] is voice, removed, made),
+          (True, True, True, True, True, ["Hero"], ["Depot", "Courier"]))
     # Run 1559: names as people type them normalise; only an invisible or duplicate name refuses.
     typed = request(
         list[StoryReference],

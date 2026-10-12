@@ -6,7 +6,7 @@
 [tool.mypy]
 python_version = "3.12"
 files = [
-    "anima", "minimax-h3", "sdxl", "qwen-image-2", "scripts", "examples",
+    "anima", "birefnet", "minimax-h3", "sdxl", "qwen-image-2", "scripts", "examples",
     "minimax-h3-tools/src",
 ]
 strict = true
@@ -14,7 +14,7 @@ warn_unreachable = true
 disallow_any_generics = true
 implicit_reexport = false
 # This client-script directory reuses the module names prepare/compare, which stops the run.
-exclude = ["^examples/client-scripts/h3-motion-context/"]
+exclude = ["^examples/client-scripts/h3-motion-context/", "^birefnet/birefnet/upstream/"]
 
 # Static checks install the typed Runtime distribution from PyPI. Heavy model libraries remain
 # absent to check the package-facing contracts without their large third-party stub trees.
@@ -47,13 +47,19 @@ warn_unused_ignores = false
 module = ["qwen_image_2.model"]
 disallow_subclassing_any = false
 
+# Attributed upstream architecture is exercised by its real constructor and model proof.
+[[tool.mypy.overrides]]
+module = ["birefnet.upstream.*"]
+follow_imports = "skip"
+ignore_errors = true
+
 [tool.ruff]
 line-length = 100
 src = [
     "anima", "minimax-h3", "sdxl", "qwen-image-2", "scripts", "examples",
     "minimax-h3-tools",
 ]
-exclude = [".venv"]
+exclude = [".venv", "birefnet/birefnet/upstream"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
