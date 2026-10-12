@@ -1138,10 +1138,10 @@ async def ref2va_turbo(ctx: Context, payload: RenderInput, assets: ReferenceAsse
     return await _render_workflow(ctx, payload, assets, out, tel, task="ref2va_turbo", steps=None)
 
 
-app.job(fl2va, emits_media=True)
-app.job(fl2va_turbo, emits_media=True)
-app.job(ref2va, emits_media=True)
-app.job(ref2va_turbo, emits_media=True)
+app.job(fl2va, emits_media=True, accelerator=False)
+app.job(fl2va_turbo, emits_media=True, accelerator=False)
+app.job(ref2va, emits_media=True, accelerator=False)
+app.job(ref2va_turbo, emits_media=True, accelerator=False)
 
 
 
@@ -1222,8 +1222,8 @@ async def compare_ref2va_upscalers(
     return await _compare_upscalers(ctx, payload, assets, out, tel, trunk="ref2va")
 
 
-app.job(compare_fl2va_upscalers, emits_media=True)
-app.job(compare_ref2va_upscalers, emits_media=True)
+app.job(compare_fl2va_upscalers, emits_media=True, accelerator=False)
+app.job(compare_ref2va_upscalers, emits_media=True, accelerator=False)
 
 
 def _keyframes_to_video(
