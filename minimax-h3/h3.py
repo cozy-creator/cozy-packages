@@ -1122,10 +1122,9 @@ ContextFrames = Literal[0, 22, 39, 56]
 
 
 class StorySegment(ClipInput, kw_only=True):
-    """One story segment; false selects standard sampling in a Turbo story."""
+    """One story segment with an optional music override."""
 
     non_diegetic_music: str | None = None
-    turbo: bool = True
 
 
 class LongFormSegment(StorySegment, kw_only=True):
@@ -1416,14 +1415,14 @@ class LongFormCutsInput(msgspec.Struct):
 
 def segment_sampling(
     payload: LongFormInput | LongFormCutsInput,
-) -> tuple[list[bool], list[int]]:
-    turbo = [payload.mode == "turbo" and shot.turbo for shot in payload.segments]
-    if any(turbo) and payload.steps is not None:
+) -> tuple[bool, int]:
+    turbo = payload.mode == "turbo"
+    if turbo and payload.steps is not None:
         raise InvalidRequest(
             "turbo fixes eight PDD evaluations; omit steps or select mode=standard",
             fields=["mode", "steps"],
         )
-    return turbo, [TURBO_STEPS if selected else payload.steps or DEFAULT_STEPS for selected in turbo]
+    return turbo, TURBO_STEPS if turbo else payload.steps or DEFAULT_STEPS
 
 
 def log_prompt(tel: Telemetry, event: str, prompt: str, **fields: str | int) -> None:
@@ -1512,7 +1511,7 @@ async def long_form_cuts(
     turbo, steps = segment_sampling(payload)
     calls = segment_calls(payload)
     planned_frames = [frames_for(shot.duration_s) for shot in payload.segments]
-    render_work = [frames * count for frames, count in zip(planned_frames, steps, strict=True)]
+    render_work = [frames * steps for frames in planned_frames]
     reference_steps = 40
     reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * reference_steps
     total_work = sum(render_work) + reference_work
@@ -1521,7 +1520,6 @@ async def long_form_cuts(
     images = await _create_references(ctx, payload.references, tel, out, references, style=payload.style)
     completed_work = reference_work
     expected = None
-    renderers: dict[bool, RenderProvenance] = {}
     warnings = [warning for call in calls for warning in call.warnings]
     count = len(payload.segments)
     cut = CutJoin(decoder, out, ctx.raise_if_cancelled)
@@ -1560,10 +1558,10 @@ async def long_form_cuts(
                             payload=CutInput(
                                 prompt=prompt,
                                 seed=seed,
-                                steps=steps[index],
-                                turbo=turbo[index],
+                                steps=steps,
+                                turbo=turbo,
                                 duration_s=shot.duration_s,
-                                expected_provenance=renderers.get(turbo[index]),
+                                expected_provenance=expected,
                                 previous_provenance=expected,
                             ),
                             assets=assets,
@@ -1574,9 +1572,7 @@ async def long_form_cuts(
                         f"shot {index + 1} of {count} failed ({failure.code}): {str(failure)[:512]}",
                         code="segment_failed",
                     ) from failure
-                compatible(result.provenance, renderers.get(turbo[index]))
-                compatible_base(result.provenance, expected)
-                renderers[turbo[index]] = result.provenance
+                compatible(result.provenance, expected)
                 expected = result.provenance
                 scanning.add(result.video)
                 warnings.extend(result.warnings)
@@ -1651,7 +1647,7 @@ async def long_form(
         )
         for index, duration in enumerate(durations)
     ]
-    render_work = [plan.sample_frames * count for plan, count in zip(plans, steps, strict=True)]
+    render_work = [plan.sample_frames * steps for plan in plans]
     reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * 40
     total_work = sum(render_work) + reference_work
     prefetch(motion_segment)
@@ -1660,7 +1656,6 @@ async def long_form(
     completed_work = reference_work
     context = None
     expected: RenderProvenance | None = None
-    renderers: dict[bool, RenderProvenance] = {}
     count = len(payload.segments)
     cut = CutJoin(decoder, out, ctx.raise_if_cancelled)
     joining: asyncio.Future[None] | None = None
@@ -1697,10 +1692,10 @@ async def long_form(
                             prompt=calls[index].prompt,
                             seed=seed,
                             duration_s=durations[index],
-                            steps=steps[index],
-                            turbo=turbo[index],
+                            steps=steps,
+                            turbo=turbo,
                             frames=held_frames(plans[index]),
-                            expected_provenance=renderers.get(turbo[index]),
+                            expected_provenance=expected,
                             previous_provenance=expected,
                             context=context if windows[index] else None,
                             context_frames=windows[index],
@@ -1717,9 +1712,7 @@ async def long_form(
                         f"segment {index + 1} of {count} failed ({failure.code}): {str(failure)[:512]}",
                         code="segment_failed",
                     ) from failure
-                compatible(shot_result.provenance, renderers.get(turbo[index]))
-                compatible_base(shot_result.provenance, expected)
-                renderers[turbo[index]] = shot_result.provenance
+                compatible(shot_result.provenance, expected)
                 expected = shot_result.provenance
                 scanning.add(shot_result.video)
                 warnings.extend(shot_result.warnings)
