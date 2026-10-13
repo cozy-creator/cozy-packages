@@ -8,17 +8,16 @@ owns a fresh Python process, and its activity observer is process state.
 from __future__ import annotations
 
 import asyncio
-import base64
+import json
 import subprocess
 import sys
 import tempfile
 import threading
-import zlib
 from pathlib import Path
 from typing import Any
 
 import torch
-from cozy_runtime.author import Config
+from cozy_runtime.author import Config, ModelAssets
 from cozy_runtime.author._activity import event_loop, observing
 from diffusers import FlowMatchEulerDiscreteScheduler, QwenImage21Pipeline
 from tokenizers import Tokenizer, models, pre_tokenizers
@@ -136,32 +135,29 @@ def staged(tmp_path: Path) -> None:
         tokenizer=tok,
         chat_template=chat,
     )
-    processor_bundle = {
-        "tokenizer": base64.urlsafe_b64encode(
-            zlib.compress(tok.backend_tokenizer.to_str().encode())
-        ).decode(),
-        "tokenizer_config": {"unk_token": "[UNK]", "pad_token": "[PAD]"},
-        "image_processor": {"patch_size": 16, "merge_size": 2, "temporal_patch_size": 2},
-        "video_processor": {"patch_size": 16, "merge_size": 2, "temporal_patch_size": 2},
-        "chat_template": chat,
+    tokenizer_config = {"unk_token": "[UNK]", "pad_token": "[PAD]", "tokenizer_class": "X"}
+    geometry = {"patch_size": 16, "merge_size": 2, "temporal_patch_size": 2}
+    files = {
+        "tokenizer.json": tok.backend_tokenizer.to_str().encode(),
+        "tokenizer_config.json": json.dumps(tokenizer_config).encode(),
+        "preprocessor_config.json": json.dumps(geometry).encode(),
+        "video_preprocessor_config.json": json.dumps(geometry).encode(),
+        "chat_template.jinja": chat.encode(),
     }
-    rebuilt = build_processor(processor_bundle)
+
+    def assets(files: dict[str, bytes]) -> ModelAssets:
+        named = {f"processor/{name}": raw for name, raw in files.items()}
+        return ModelAssets(named, lambda _operation: None)
+
+    rebuilt = build_processor(assets(files))
     assert rebuilt.tokenizer.encode("blue jacket") == processor.tokenizer.encode("blue jacket")
-    extended = build_processor(dict(processor_bundle, added_by_a_newer_ingester=True))
-    assert extended.tokenizer.encode("blue jacket") == processor.tokenizer.encode("blue jacket")
-    for invalid in (
-        {key: value for key, value in processor_bundle.items() if key != "chat_template"},
-        dict(processor_bundle, tokenizer="invalid"),
-        dict(
-            processor_bundle,
-            tokenizer=base64.urlsafe_b64encode(zlib.compress(b"x") + b"extra").decode(),
-        ),
-    ):
-        try:
-            build_processor(invalid)
-        except ValueError:
-            continue
-        raise AssertionError("an invalid processor bundle was accepted")
+    assert rebuilt.chat_template == chat
+    try:
+        build_processor(assets({k: v for k, v in files.items() if k != "chat_template.jinja"}))
+    except Exception as missing:
+        assert "chat_template.jinja" in str(missing), missing
+    else:
+        raise AssertionError("a checkpoint without its chat template was accepted")
     # Nonpersistent RoPE frequencies are rebuilt by official loading. Saving our exact
     # tiny weights and reloading them tests the construction boundary independently.
     encoder = graph.components["text_encoder"]
