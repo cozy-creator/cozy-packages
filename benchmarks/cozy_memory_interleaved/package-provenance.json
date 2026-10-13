@@ -1,0 +1,59 @@
+{
+  "owner": "audit_rollout_completion",
+  "purpose": "CPU preparation for ordinary Cozy matched interleaved benchmark; no default/GPU actions before handoff",
+  "branch": "bench/cozy-memory-interleaved-20260929",
+  "base_sha": "598866a6a95c0bf0068fa28c6a915ec7dda4154f",
+  "source_worktree": "/home/fidika/cozy/.worktrees/packages/tracker-246-retry-current",
+  "source_head": "598866a6a95c0bf0068fa28c6a915ec7dda4154f",
+  "created_at": "2026-09-29T17:52:38.640959+00:00",
+  "runtime_wheel": "/home/fidika/cozy_v2/outputs/memory-246-inference-20260929/final-combined-r5/bundled/cozy_runtime-0.18.88+dev.h2756e96e1279b1952673b7c580ffbd61d48f18b7f7eba42adb909e167d620caf-cp312-abi3-manylinux_2_28_x86_64.whl",
+  "runtime_sha256": "a56720cf0559c9b33d2003f60709ea9487881b6ca42ac4ad37c9999f813deea3",
+  "runtime_version": "0.18.88+dev.h2756e96e1279b1952673b7c580ffbd61d48f18b7f7eba42adb909e167d620caf",
+  "tensorfs_wheel": "/home/fidika/cozy_v2/outputs/memory-246-inference-20260929/wheels/tensorfs-0.3.78-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+  "tensorfs_sha256": "1ade5ca22b204aaa0d86ec8ece2b54ae1db142148535f4858613565ab81d6c88",
+  "packages": {
+    "sdxl": {
+      "path": "/home/fidika/cozy/.worktrees/packages/cozy-memory-interleaved-20260929/benchmarks/cozy_memory_interleaved/packages/sdxl",
+      "target": "local/cozy-memory-bench-sdxl-r5/generate",
+      "source_files_sha256": {
+        "package.toml": "ddb9b7cba77ce3819f89f9be3f60242ef1d62e8b053b4a69d0932e3a38bb9c19",
+        "uv.lock": "ad687b8a1123c847237f85f6228ec7175368a81e05055fc41e664eb87608fd31",
+        "pyproject.toml": "596b1cfc67dfc67e32f76fc174a0dc59eeb286f27eac5ca42eeb0553222d0843",
+        "sdxl/clip_merges.txt": "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a",
+        "sdxl/clip_vocab.json": "e089ad92ba36837a0d31433e555c8f45fe601ab5c221d4f607ded32d9f7a4349",
+        "sdxl/__init__.py": "f42676945b2aae75940f319bb47ceb2fcaf3a7efad9dfbf9a7092e6a939b8b32",
+        "sdxl/operations.py": "ede13b9643fb4703e8e3d4c96018ca15b37d81dd42eb9784f9b1416b3633047b",
+        "metadata/package-interface.json": "7a8ffd9adb48a7d9aaaeabd013668b21cba48dc908407b5276d9d837ac66ed6a"
+      },
+      "changes": "private distribution name, Python3.12, exact R5/TFS artifacts, exact Comfy Torch/CUDA wheels; author code unchanged"
+    },
+    "anima": {
+      "path": "/home/fidika/cozy/.worktrees/packages/cozy-memory-interleaved-20260929/benchmarks/cozy_memory_interleaved/packages/anima",
+      "target": "local/cozy-memory-bench-anima-r5/generate",
+      "source_files_sha256": {
+        "package.toml": "80a24abed0af38f3493bab7a6e22ee73149cb9c9494c730cb93e5ef4f36992b2",
+        "uv.lock": "26a57649b579f2e60d74c92379ad29c0eabdda5acf04597a05c584cc6b127cd5",
+        "pyproject.toml": "8ca038f81069baeaaf78fcd6b9e05ed181cd867933a443f1fefd105773e0bf10",
+        "anima/LICENSE.model.md": "3ab19eea6d1a4a08d1256851c32e5df533dfd7b760313c56797b78ee2ee24724",
+        "anima/__init__.py": "f5edc352a6707049cd9a84d50efa9317bab056be81b8b5d1a98dd52ee3cb350b",
+        "anima/operations.py": "ee08809267df11273581605d7775be98d4936d8384b9d8d5accc507037e720f3",
+        "configs/transformer.json": "bf42ca1e331067f70063e7596d33869095bf360bfb5fd3ff4cd5a36b95632aa9",
+        "configs/text_encoder.json": "84d477d57a20538af60eb43d1d119cdf0f86fc3ca756f3458394955ec83b016a",
+        "configs/modular_model_index.json": "043c257f13165131c3141160ba39018bfc273f681e8e21ac85fb39d1490ad04b",
+        "configs/scheduler.json": "aedcf349fcadd5493b7dcec85827e5cfb38751c1ad7fda0d67ea5fdc08aa826b",
+        "configs/text_conditioner.json": "556df47c5db947e108db9b1ad8c40ee22b08b0a65bba72dd9b240ea2cd42a890",
+        "configs/vae.json": "f9917414da358ab86f0f5b53975015d74fa4fc2973a7dc6a5b1bea5cf2592798",
+        "metadata/package-interface.json": "cf987552796b254e52dea2a99afce8b9aab2ac67e4111a449a106253eb50c032",
+        "anima/t5_tokenizer/tokenizer.json": "35d68e7b16911b6ee06bbdef28577c34eb391905550e8740a48aa6984c2382c5",
+        "anima/t5_tokenizer/tokenizer_config.json": "3b5e68830ffc0f92ddf95b0e3994991c27926e38ead3575a9a5c0e0d6e90140d",
+        "anima/tokenizer/tokenizer.json": "f36e3013e43c57d3e43b8877b32af2d9a3582448e3a766d728bb9abd580d8f7a",
+        "anima/tokenizer/tokenizer_config.json": "6b589ccd67dac34cfd9e274864e34c819309cec98d99bb76aa1e13faf217d03e",
+        "anima/tokenizer/chat_template.jinja": "44d5f08f3f72b837eaad09f13a54c1f9f4eb58d75240334548b7fd52a5437fa5"
+      },
+      "changes": "private distribution name, Python3.12, exact R5/TFS artifacts, exact Comfy Torch/CUDA wheels; author code unchanged"
+    }
+  },
+  "public_memory_release_target": "0.18.89",
+  "release_reservation": "Public Runtime 0.18.88 is reserved for separate boundary-only release; these clones pin an unpublished .88+dev R5 benchmark artifact, not a public release requirement.",
+  "agent_sha256": "2c1001ad51bc4a7d84e9a0c46c942b4b3515d30a7edf9fa48b7009c7860ad8af"
+}
