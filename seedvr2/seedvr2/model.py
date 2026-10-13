@@ -176,7 +176,6 @@ class RestorationModel(Model[Graph]):
         )
         pixels = pixels.to(device=device, dtype=torch.float16).permute(1, 0, 2, 3).mul(2).sub(1)
         conditioning = cast(Conditioning, self.graph.components["conditioning"])
-        positive, negative = conditioning.positive, conditioning.negative
         with torch.inference_mode(), torch.random.fork_rng(devices=[device.index or 0]):
             torch.manual_seed(seed)
             with tel.stage("SeedVR2 VAE encode"):
@@ -189,7 +188,11 @@ class RestorationModel(Model[Graph]):
             with torch.autocast(device.type, dtype=torch.bfloat16):
                 with tel.stage("SeedVR2 denoise"):
                     restored = runner.inference(
-                        noises, conditions, [positive], [negative], decode=False
+                        noises,
+                        conditions,
+                        [conditioning.positive],
+                        [conditioning.negative],
+                        decode=False,
                     )
                 with tel.stage("SeedVR2 VAE decode"):
                     sample = runner.vae_decode(restored)[0]

@@ -15,3 +15,5 @@ The 3B rotary frequency table uses the batch's actual axis sizes, following the
 community implementation, instead of allocating the full 1024x128x128 grid.
 Inference can return its denoised latents so the adapter records VAE encoding,
 denoising and VAE decoding with Runtime's standard telemetry stages.
+Without a sequence-parallel group, rank lookup uses the adapter's single-GPU
+rank instead of requiring a default PyTorch distributed process group.
