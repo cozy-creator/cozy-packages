@@ -209,7 +209,7 @@ class VideoDiffusionInfer():
         texts_pos: Union[List[str], List[Tensor], List[Tuple[Tensor]]],
         texts_neg: Union[List[str], List[Tensor], List[Tuple[Tensor]]],
         cfg_scale: Optional[float] = None,
-        dit_offload: bool = False,
+        decode: bool = True,
     ) -> List[Tensor]:
         assert len(noises) == len(conditions) == len(texts_pos) == len(texts_neg)
         batch_size = len(noises)
@@ -285,7 +285,5 @@ class VideoDiffusionInfer():
         latents = na.unflatten(latents, latents_shapes)
 
 
-        # Vae decode.
-        samples = self.vae_decode(latents)
-
-        return samples
+        # The adapter can time denoising and decoding as separate Runtime stages.
+        return self.vae_decode(latents) if decode else latents

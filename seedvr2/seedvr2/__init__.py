@@ -110,7 +110,7 @@ def upscale(
             else:
                 frames = [Image.frombytes("RGB", (f.width, f.height), f.rgb) for f in pending]
                 with tel.stage("restoring video window"):
-                    restored = model.restore(frames, width, height, payload.seed)
+                    restored = model.restore(frames, width, height, payload.seed, tel)
             if tail:
                 previous = torch.stack([vision.to_tensor(frame).permute(1, 2, 0) for frame in tail])
                 current = torch.stack(

@@ -10,7 +10,7 @@ import torch
 from omegaconf import OmegaConf
 from torchvision.transforms import functional as vision
 from PIL import Image, ImageOps
-from cozy_runtime.author import Config, Loader, Model, uses_components
+from cozy_runtime.author import Config, Loader, Model, Telemetry, uses_components
 
 from .upstream.infer import VideoDiffusionInfer
 from .upstream.models.dit_v2.nadit import NaDiT
@@ -131,7 +131,7 @@ class RestorationModel(Model[Graph]):
 
     @uses_components("dit", "vae", "conditioning")
     def restore(
-        self, frames: list[Image.Image], width: int, height: int, seed: int
+        self, frames: list[Image.Image], width: int, height: int, seed: int, tel: Telemetry
     ) -> list[Image.Image]:
         device = next(self.graph.components["dit"].parameters()).device
         cfg = OmegaConf.create(
@@ -179,14 +179,20 @@ class RestorationModel(Model[Graph]):
         positive, negative = conditioning.positive, conditioning.negative
         with torch.inference_mode(), torch.random.fork_rng(devices=[device.index or 0]):
             torch.manual_seed(seed)
-            latents = runner.vae_encode([pixels])
+            with tel.stage("SeedVR2 VAE encode"):
+                latents = runner.vae_encode([pixels])
             noises = [torch.randn_like(latent) for latent in latents]
             conditions = [
                 runner.get_condition(noise, latent_blur=latent, task="sr")
                 for noise, latent in zip(noises, latents, strict=True)
             ]
             with torch.autocast(device.type, dtype=torch.bfloat16):
-                sample = runner.inference(noises, conditions, [positive], [negative])[0]
+                with tel.stage("SeedVR2 denoise"):
+                    restored = runner.inference(
+                        noises, conditions, [positive], [negative], decode=False
+                    )
+                with tel.stage("SeedVR2 VAE decode"):
+                    sample = runner.vae_decode(restored)[0]
             if sample.ndim == 3:
                 sample = sample.unsqueeze(1)
             sample = (
