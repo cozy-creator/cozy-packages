@@ -3240,7 +3240,8 @@ def arm_interface() -> None:
             f"{name} request fields",
             [field["name"] for field in entry["request"]["fields"]],
             fields[:3] + ["resolution", "upscale_method"]
-            + (["references", "style", "prepare_references"] if name.startswith("ref2va") else [])
+            + (["references", "style", "prepare_references", "describe_references"]
+               if name.startswith("ref2va") else [])
             + fields[3:],
         )
         check(f"{name} resolution is a closed enum",
@@ -3545,7 +3546,7 @@ def arm_interface() -> None:
                 (f["name"], f["type"])
                 for f in workflows["ref2va_turbo"]["request"]["fields"]
                 if f["name"] not in {"assets", "resolution", "upscale_method", "references",
-                                      "style", "prepare_references"}
+                                      "style", "prepare_references", "describe_references"}
             ],
         )
         check(
@@ -3575,6 +3576,7 @@ def arm_interface() -> None:
             "context_frames",
             "mode",
             "steps",
+            "describe_references",
         ],
     )
     check(

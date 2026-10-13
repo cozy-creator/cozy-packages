@@ -12,6 +12,12 @@ prompt, so the workflow copies the global information into it.
   then composited onto white before H3 receives it. The prepared image appears in the
   reference outputs and is reused for every segment. Supplied scene images and audio
   are used as supplied. References generated from descriptions keep their existing path.
+- `describe_references` (default `true`): a vision-language model writes one sentence
+  about each supplied character image that has no `description` (identity, hair, face,
+  clothing and items; never the background, pose or style). It runs once, alongside
+  background removal, and joins that character's subject definition in every segment.
+  An authored description is kept as written. If describing fails, the run continues
+  without it and reports a warning.
 - `style`: look shared by generated reference images and every segment (optional).
 - `overall_soundscape`: sound shared by every segment (optional).
 - `non_diegetic_music`: score shared by every segment (default `N/A`).

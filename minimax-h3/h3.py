@@ -107,6 +107,7 @@ from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate_image as generate_reference
 from birefnet import RemoveBackgroundOutput
 from birefnet import remove_background
+from character_describer import CaptionImagesOutput, caption_images
 from h3_latent_upscaler import UpscaleOutput as LatentUpscaleOutput
 from h3_latent_upscaler import upscale as upscale_latents
 from seedvr2 import Resolution as RestorationResolution
@@ -256,6 +257,7 @@ class ReferenceRenderInput(RenderInput, kw_only=True):
     references: list[StoryReference] | None = None
     style: str = ""
     prepare_references: bool = False
+    describe_references: bool = False
 
 
 class ReferenceStandardRenderInput(ReferenceRenderInput, kw_only=True):
@@ -1202,48 +1204,48 @@ async def _direct_reference_assets(
     assets: DirectReferenceAssets,
     out: Outputs,
     tel: Telemetry,
-) -> ReferenceAssets:
+) -> tuple[ReferenceRenderInput, ReferenceAssets]:
     """Resolve named references once for a direct call.
 
-    ``assets`` is the prepared handoff used by long-form children.  When named
-    references are supplied, the CPU parent owns preparation and constructs the
-    same labeled mixed asset list that a long-form segment receives.
+    ``assets`` is the prepared handoff used by long-form children.  Named references are
+    prepared here, then compiled exactly like one long-form segment.
     """
     if payload.references is None:
         if not assets:
             raise InvalidRequest("ref2va requires references or assets", fields=["references"])
-        return assets
+        return payload, assets
     if assets:
         raise InvalidRequest("send references or assets, not both", fields=["references", "assets"])
     if not payload.references:
         raise InvalidRequest("references must contain at least one item", fields=["references"])
     validate_references(payload.references)
-    prepared: list[ImageAsset] = []
-    images = await _create_references(
+    images, references, _ = await _create_references(
         ctx,
         payload.references,
         tel,
         out,
-        prepared,
+        [],
         style=payload.style,
         prepare_characters=payload.prepare_references,
+        describe_characters=payload.describe_references,
     )
-    return Assets[Mixed]([
-        images[ref.name].with_label(label)
-        for ref, label in _label_references(payload.references)
-    ])
+    call = compile_segments([payload.prompt], references, style=payload.style)[0]
+    for warning in call.warnings:
+        tel.log("h3 reference prompt", level="warning", warning=warning)
+    labeled = Assets[Mixed]([images[ref.name].with_label(label) for ref, label in _label_references(call.references)])
+    return replace(payload, prompt=call.prompt), labeled
 
 
 async def ref2va(ctx: Context, payload: ReferenceStandardRenderInput, out: Outputs, tel: Telemetry,
                  assets: DirectReferenceAssets) -> RenderOutput:
-    resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
-    return await _render_workflow(ctx, payload, resolved, out, tel, task="ref2va", steps=payload.steps)
+    request, resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
+    return await _render_workflow(ctx, request, resolved, out, tel, task="ref2va", steps=payload.steps)
 
 
 async def ref2va_turbo(ctx: Context, payload: ReferenceRenderInput, out: Outputs, tel: Telemetry,
                        assets: DirectReferenceAssets) -> RenderOutput:
-    resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
-    return await _render_workflow(ctx, payload, resolved, out, tel, task="ref2va_turbo", steps=None)
+    request, resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
+    return await _render_workflow(ctx, request, resolved, out, tel, task="ref2va_turbo", steps=None)
 
 
 app.job(fl2va, emits_media=True, accelerator=False)
@@ -1570,6 +1572,7 @@ class LongFormInput(msgspec.Struct):
     context_frames: ContextFrames = 22
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
+    describe_references: bool = True
 
 
 class LongFormOutput(msgspec.Struct):
@@ -1836,6 +1839,7 @@ class LongFormCutsInput(msgspec.Struct):
     non_diegetic_music: str = "N/A"
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps | None = None
+    describe_references: bool = True
 
 
 def segment_sampling(
@@ -1877,7 +1881,9 @@ async def _create_references(
     *,
     style: str,
     prepare_characters: bool = True,
-) -> dict[str, ImageAsset | AudioAsset]:
+    describe_characters: bool = True,
+) -> tuple[dict[str, ImageAsset | AudioAsset], list[StoryReference], list[str]]:
+    """Prepare, generate and describe references concurrently; return the described list."""
     reference_steps = 40
     # Managed dependencies install an asynchronous flat caller for the source
     # entrypoint, whose own annotations describe its injected implementation.
@@ -1914,9 +1920,13 @@ async def _create_references(
         shown.append(result.image)
         return result.image
 
-    images = await resolve_reference_images(
-        references, create_reference, prepare_character if prepare_characters else None
-    )
+    async with asyncio.TaskGroup() as group:
+        resolving = group.create_task(resolve_reference_images(
+            references, create_reference, prepare_character if prepare_characters else None
+        ))
+        describing = group.create_task(_describe_characters(references, tel)) if describe_characters else None
+    images = resolving.result()
+    described, warnings = describing.result() if describing is not None else (references, [])
     for reference in references:
         ctx.raise_if_cancelled()
         tel.log(
@@ -1928,7 +1938,35 @@ async def _create_references(
                      else "attached" if reference.image is not None else "generated")),
             digest=images[reference.name].digest,
         )
-    return images
+    return images, described, warnings
+
+
+async def _describe_characters(
+    references: list[StoryReference], tel: Telemetry
+) -> tuple[list[StoryReference], list[str]]:
+    """One identity sentence for each supplied character the author did not describe.
+
+    Descriptions only help, so a failure warns and keeps the references as written.
+    """
+    pending = [
+        index for index, ref in enumerate(references)
+        if ref.kind == "character" and ref.image is not None and not ref.description.strip()
+    ]
+    if not pending:
+        return references, []
+    describe = cast(Callable[..., Awaitable[CaptionImagesOutput]], caption_images)
+    described = list(references)
+    try:
+        with tel.scope("Describing characters"):
+            result = await describe(images=[references[index].image for index in pending])
+        for caption in result.captions:
+            index = pending[caption.index]
+            described[index] = replace(described[index], description=caption.text)
+            tel.log("h3 character description", subject=described[index].name, description=caption.text[:400])
+    except Exception as exc:
+        tel.log("h3 character descriptions skipped", level="warning", error=str(exc)[:400])
+        return references, [f"Character descriptions were skipped: {str(exc)[:200]}"]
+    return described, []
 
 
 async def long_form_cuts(
@@ -1956,10 +1994,14 @@ async def long_form_cuts(
     total_work = sum(render_work) + reference_work
     prefetch(cut_segment)
     references: list[ImageAsset] = []
-    images = await _create_references(ctx, payload.references, tel, out, references, style=payload.style)
+    images, described, warnings = await _create_references(
+        ctx, payload.references, tel, out, references, style=payload.style,
+        describe_characters=payload.describe_references,
+    )
+    calls = segment_calls(replace(payload, references=described))
     completed_work = reference_work
     expected = None
-    warnings = [warning for call in calls for warning in call.warnings]
+    warnings += [warning for call in calls for warning in call.warnings]
     count = len(payload.segments)
     cut = CutJoin(decoder, out, ctx.raise_if_cancelled)
     joining: asyncio.Future[None] | None = None
@@ -2091,7 +2133,12 @@ async def long_form(
     total_work = sum(render_work) + reference_work
     prefetch(motion_segment)
     references: list[ImageAsset] = []
-    images = await _create_references(ctx, payload.references, tel, out, references, style=payload.style)
+    images, described, described_warnings = await _create_references(
+        ctx, payload.references, tel, out, references, style=payload.style,
+        describe_characters=payload.describe_references,
+    )
+    calls = segment_calls(replace(payload, references=described))
+    warnings = described_warnings + warnings
     completed_work = reference_work
     context = None
     expected: RenderProvenance | None = None

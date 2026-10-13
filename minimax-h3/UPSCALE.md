@@ -2,8 +2,10 @@
 
 Direct `ref2va` and `ref2va_turbo` calls also accept the long-form `references`
 syntax. A reference with an `image` is passed through as supplied by default;
-`prepare_references: true` runs BiRefNet for supplied character images.
-Descriptions without images are generated once with Qwen Image 2.1. The resolved
+`prepare_references: true` runs BiRefNet for supplied character images, and
+`describe_references: true` adds a one-sentence description of each undescribed
+supplied character, as in long-form. The prompt is then compiled like one long-form
+segment. Descriptions without images are generated once with Qwen Image 2.1. The resolved
 assets are then handed to the H3 child, so preprocessing is not repeated. Send
 either `references` or attached `assets`; a references-only request sends `"assets": []`.
 
@@ -16,7 +18,8 @@ either `references` or attached `assets`; a references-only request sends `"asse
     {"name": "Studio", "kind": "scene", "description": "A bright studio."}
   ],
   "assets": [],
-  "prepare_references": true
+  "prepare_references": true,
+  "describe_references": true
 }
 ```
 
