@@ -113,6 +113,25 @@ wheels = [
 ]
 
 [[package]]
+name = "character-describer"
+version = "0.2.0"
+source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
+dependencies = [
+    { name = "cozy-runtime", extra = ["media"] },
+    { name = "msgspec" },
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "tensorfs" },
+    { name = "tokenizers" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "transformers" },
+]
+wheels = [
+    { url = "https://tensorhub.com/v1/index/fidika/character-describer/0.2.0/character_describer-0.2.0-py3-none-any.whl", hash = "sha256:415882c31765ce0b3172fb6aa51f20d666ce4f03b9f14801144e659bf35c543a" },
+]
+
+[[package]]
 name = "charset-normalizer"
 version = "3.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -516,10 +535,11 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.31.0"
+version = "1.32.0"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },
+    { name = "character-describer" },
     { name = "cozy-eval" },
     { name = "cozy-runtime", extra = ["media", "minimax-h3"] },
     { name = "diffusers" },
@@ -544,6 +564,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "birefnet", specifier = ">=0.1.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
+    { name = "character-describer", specifier = ">=0.2.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
     { name = "cozy-eval", specifier = ">=0.7.3" },
     { name = "cozy-runtime", extras = ["media", "minimax-h3"], specifier = ">=0.23.24" },
     { name = "diffusers", git = "https://github.com/huggingface/diffusers?rev=578c9b2c6636ab2424a0e56186268b83623656b2" },

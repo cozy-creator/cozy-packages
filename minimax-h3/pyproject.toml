@@ -1,9 +1,10 @@
 [project]
 name = "minimax-h3"
-version = "1.31.0"
+version = "1.32.0"
 requires-python = ">=3.12"
 dependencies = [
     "birefnet>=0.1.0",
+    "character-describer>=0.2.0",
     "cozy-runtime[media,minimax-h3]>=0.23.24",
     "cozy-eval>=0.7.3",
     # MiniMax-H3 and Qwen-Image-2.1 share one Diffusers: the commit qwen-image-2 pins, since
@@ -57,5 +58,6 @@ environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 [tool.uv.sources]
 qwen-image-2 = { index = "tensorhub" }
 birefnet = { index = "tensorhub" }
+character-describer = { index = "tensorhub" }
 h3-latent-upscaler = { index = "tensorhub" }
 seedvr2 = { index = "tensorhub" }
