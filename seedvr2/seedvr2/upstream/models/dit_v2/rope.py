@@ -131,10 +131,17 @@ class NaMMRotaryEmbedding3d(MMRotaryEmbeddingBase):
         torch.Tensor,
         torch.Tensor,
     ]:
-        vid_freqs = self.get_axial_freqs(1024, 128, 128)
-        txt_freqs = self.get_axial_freqs(1024)
+        # Language-style RoPE frequencies depend on coordinates, not axis bounds.
+        # As in the community implementation, allocate only the axes this batch uses.
+        shapes = list(zip(vid_shape.tolist(), txt_shape[:, 0].tolist()))
+        vid_freqs = self.get_axial_freqs(
+            max(length + frames for (frames, _, _), length in shapes),
+            max(height for (_, height, _), _ in shapes),
+            max(width for (_, _, width), _ in shapes),
+        )
+        txt_freqs = self.get_axial_freqs(max(length for _, length in shapes))
         vid_freq_list, txt_freq_list = [], []
-        for (f, h, w), l in zip(vid_shape.tolist(), txt_shape[:, 0].tolist()):
+        for (f, h, w), l in shapes:
             vid_freq = vid_freqs[l : l + f, :h, :w].reshape(-1, vid_freqs.size(-1))
             txt_freq = txt_freqs[:l].repeat(1, 3).reshape(-1, vid_freqs.size(-1))
             vid_freq_list.append(vid_freq)
