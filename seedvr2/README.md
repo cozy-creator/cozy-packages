@@ -7,9 +7,11 @@ and `aspect_ratio` (`source` by default, or `16:9` for an exact letterboxed canv
 Frame presentation timestamps and audio are passed through Runtime's streaming media API.
 Temporal windows overlap and use the upstream Numz crossfade.
 
-This implementation is under qualification. CPU constructor/header parity, native
-model normalization, GPU execution, package publication and benchmark results are
-separate gates; this source alone does not claim any of them complete.
+Qualified 2026-10-13 with the published 0.1.3 on full 15.08 s H3 clips (362 frames, one
+RTX Pro 6000): 1080p 3B 6.8-8.0 min, 7B 7.4-8.2 min; 1440p 3B 11.7-13.1 min, 7B 12.5 min;
+2160p 3B 26-30 min, 7B 27.7 min. VAE passes run over 512-pixel tiles, so memory follows
+the tile, not the frame; 7B 1080p also runs on a 24 GB RTX 3090. 7B keeps faces closest to the source; 3B is
+sharper but raises contrast. Model digests are identical on both hubs.
 
 Weight source: `numz/SeedVR2_comfyUI` revision
 `09ced71023636e9bc8cdf9cdecfb2625d1e691e8`, Apache-2.0 FP16 conversions of the
