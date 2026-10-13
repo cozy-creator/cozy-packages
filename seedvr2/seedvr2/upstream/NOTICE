@@ -11,3 +11,5 @@ overrides were removed; Runtime owns those actions. Patch imports moved to modul
 Both the 3B dit_v2 and 7B dit architectures are included. The 7B graph uses the
 same adapted SDPA and standard normalization implementations as the 3B graph;
 its unused upstream upscaler wrapper is omitted.
+The 3B rotary frequency table uses the batch's actual axis sizes, following the
+community implementation, instead of allocating the full 1024x128x128 grid.
