@@ -24,6 +24,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 #: package directory -> (module to import, compiled peers that must load beside it)
 PACKAGES = {
+    "character-describer": (
+        "character_describer", ("torch", "torchvision", "transformers", "tensorfs"),
+    ),
     "h3-latent-upscaler": (
         "h3_latent_upscaler", ("torch", "einops", "tensorfs"),
     ),

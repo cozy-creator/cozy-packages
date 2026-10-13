@@ -964,7 +964,7 @@ def fence_interface_format() -> Fence:
 
 def fence_publication_metadata() -> Fence:
     bad: list[str] = []
-    expected_projects = {"anima", "birefnet", "h3-latent-upscaler", "seedvr2", "sdxl", "minimax-h3", "minimax-h3-tools", "qwen-image-2"}
+    expected_projects = {"anima", "birefnet", "character-describer", "h3-latent-upscaler", "seedvr2", "sdxl", "minimax-h3", "minimax-h3-tools", "qwen-image-2"}
     actual_projects = {
         rel(path.parent)
         for path in ROOT.rglob("package.toml")
