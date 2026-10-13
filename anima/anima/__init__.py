@@ -47,7 +47,7 @@ from diffusers.hooks.first_block_cache import (
 )
 from diffusers.hooks.hooks import HookRegistry
 from diffusers.models.transformers.transformer_cosmos import CosmosTransformerBlock
-from diffusers.modular_pipelines import ModularPipelineBlocks
+from diffusers.modular_pipelines import ModularPipelineBlocks, SequentialPipelineBlocks
 from transformers import PreTrainedTokenizerFast, Qwen3Config, Qwen3Model
 from transformers import initialization as transformer_init
 
@@ -254,7 +254,8 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
         there is no attempt to meter, so the phases stay silent."""
         card = GenerateInput(prompt="")
         ctx.raise_if_cancelled()
-        self.render(
+        _render(
+            self,
             card.quality_prefix,
             card.negative_prompt,
             512,
@@ -267,53 +268,84 @@ class AnimaModel(Model[AnimaPipeline], encoded_leaves="accept"):
             _Phases(),
         )
 
-    @uses_components("text_encoder", "text_conditioner", "transformer", "vae")
-    def render(
-        self,
-        prompt: str,
-        negative_prompt: str,
-        width: int,
-        height: int,
-        steps: int,
-        guidance: float,
-        cfg_interval: tuple[float, float],
-        first_block_cache: float,
-        seed: int,
-        phases: _Phases,
+    @uses_components("text_encoder")
+    def encode(self, blocks: Any, pipeline: Any, state: Any) -> Any:
+        pipeline._cozy_execution_device = next(
+            self.pipe.components["text_encoder"].parameters()
+        ).device
+        return SequentialPipelineBlocks.__call__(blocks, pipeline, state)
+
+    @uses_components("text_conditioner", "transformer")
+    def denoise(
+        self, blocks: Any, pipeline: Any, state: Any, seed: int, first_block_cache: float
     ) -> Any:
-        device = next(self.pipe.components["transformer"].parameters()).device
-        generator = torch.Generator(device=device).manual_seed(seed)
-        pipeline: Any = _text2image_pipeline(device, phases)
-        pipeline.register_components(
-            **self.pipe.components,
-            scheduler=FlowMatchEulerDiscreteScheduler.from_config(self.pipe.scheduler_config),
-            tokenizer=self.pipe.tokenizer,
-            t5_tokenizer=self.pipe.t5_tokenizer,
-        )
-        pipeline.guider.guidance_scale = guidance
-        # Diffusers 0.40 stores the interval on private attrs set by BaseGuidance.__init__;
-        # outside [start, stop) num_conditions == 1 and the uncond forward never runs.
-        pipeline.guider._start, pipeline.guider._stop = cfg_interval
         transformer = self.pipe.components["transformer"]
+        device = next(transformer.parameters()).device
+        pipeline._cozy_execution_device = device
+        for name, value in state.values.items():
+            if isinstance(value, torch.Tensor):
+                state.set(name, value.to(device))
+        state.set("generator", torch.Generator(device=device).manual_seed(seed))
         restore_cache = _apply_first_block_cache(transformer, pipeline.guider, first_block_cache)
-        phases.enter(_ENCODE_PROMPT)
         try:
-            result = pipeline(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                width=width,
-                height=height,
-                num_inference_steps=steps,
-                generator=generator,
-                output="images",
-                output_type="pt",
-            )
+            return SequentialPipelineBlocks.__call__(blocks, pipeline, state)
         finally:
             restore_cache()
-        return result
+
+    @uses_components("vae")
+    def decode(self, blocks: Any, pipeline: Any, state: Any) -> Any:
+        device = next(self.pipe.components["vae"].parameters()).device
+        pipeline._cozy_execution_device = device
+        state.set("latents", state.get("latents").to(device))
+        return SequentialPipelineBlocks.__call__(blocks, pipeline, state)
 
 
-def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
+def _render(
+    model: AnimaModel,
+    prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    steps: int,
+    guidance: float,
+    cfg_interval: tuple[float, float],
+    first_block_cache: float,
+    seed: int,
+    phases: _Phases,
+) -> Any:
+    pipeline: Any = _text2image_pipeline(
+        None, phases, model=model, seed=seed, first_block_cache=first_block_cache
+    )
+    pipeline.register_components(
+        **model.pipe.components,
+        scheduler=FlowMatchEulerDiscreteScheduler.from_config(model.pipe.scheduler_config),
+        tokenizer=model.pipe.tokenizer,
+        t5_tokenizer=model.pipe.t5_tokenizer,
+    )
+    pipeline.guider.guidance_scale = guidance
+    # Diffusers 0.40 stores the interval on private attrs set by BaseGuidance.__init__;
+    # outside [start, stop) num_conditions == 1 and the uncond forward never runs.
+    pipeline.guider._start, pipeline.guider._stop = cfg_interval
+    phases.enter(_ENCODE_PROMPT)
+    return pipeline(
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        width=width,
+        height=height,
+        num_inference_steps=steps,
+        output="images",
+        output_type="pt",
+    )
+
+
+def _text2image_pipeline(
+    device: Any,
+    phases: _Phases,
+    *,
+    model: AnimaModel | None = None,
+    seed: int = 0,
+    first_block_cache: float = 0.0,
+) -> Any:
     """The text2image pipeline, instrumented on the blocks it will actually run.
 
     `ModularPipeline.blocks` is a property returning a DEEPCOPY, so a hook installed through
@@ -337,7 +369,7 @@ def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
     class RuntimeAnimaPipeline(AnimaModularPipeline):
         @property
         def _execution_device(self) -> Any:
-            return device
+            return getattr(self, "_cozy_execution_device", device)
 
     blocks = AnimaAutoBlocks().get_workflow("text2image")
     order = list(blocks.sub_blocks)
@@ -345,6 +377,37 @@ def _text2image_pipeline(device: Any, phases: _Phases) -> Any:
         raise RuntimeError(f"Diffusers Anima text2image blocks changed: {order}")
     blocks.sub_blocks["denoise.denoise"].progress_bar = _progress_bar(phases)
     blocks.sub_blocks.insert("conditioning", Announce(), order.index("denoise.text_conditioning"))
+    if model is not None:
+        # Keep Diffusers' original blocks and one PipelineState. The wrappers only
+        # enter Runtime's leases; there is no pipeline rebuild or state copy between
+        # stages, and no package-owned offload policy.
+        class Encode(SequentialPipelineBlocks):
+            def __call__(self, pipeline: Any, state: Any) -> Any:
+                return model.encode(self, pipeline, state)
+
+        class Denoise(SequentialPipelineBlocks):
+            def __call__(self, pipeline: Any, state: Any) -> Any:
+                return model.denoise(self, pipeline, state, seed, first_block_cache)
+
+        class Decode(SequentialPipelineBlocks):
+            def __call__(self, pipeline: Any, state: Any) -> Any:
+                return model.decode(self, pipeline, state)
+
+        groups: dict[str, dict[str, Any]] = {"encode": {}, "denoise": {}, "decode": {}}
+        for name, block in blocks.sub_blocks.items():
+            if name == "text_encoder":
+                groups["encode"][name] = block
+            elif name == "conditioning" or name.startswith("denoise."):
+                groups["denoise"][name] = block
+            elif name.startswith("decode."):
+                groups["decode"][name] = block
+            else:
+                raise RuntimeError(f"unscoped Diffusers Anima block: {name}")
+        blocks = SequentialPipelineBlocks.from_blocks_dict({
+            "encode": Encode.from_blocks_dict(groups["encode"]),
+            "denoise": Denoise.from_blocks_dict(groups["denoise"]),
+            "decode": Decode.from_blocks_dict(groups["decode"]),
+        })
     return RuntimeAnimaPipeline(blocks=blocks)
 
 
@@ -442,7 +505,8 @@ def generate(
             "cfg_interval_start must not exceed cfg_interval_stop", code="cfg_interval"
         )
     with _Phases(tel) as phases:
-        images = model.render(
+        images = _render(
+            model,
             payload.quality_prefix + payload.prompt,
             payload.negative_prompt,
             width,
