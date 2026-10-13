@@ -361,7 +361,7 @@ wheels = [
 
 [[package]]
 name = "h3-latent-upscaler"
-version = "0.1.1"
+version = "0.1.2"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["model-execution"] },
@@ -372,7 +372,7 @@ dependencies = [
     { name = "torch" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/h3-latent-upscaler/0.1.1/h3_latent_upscaler-0.1.1-py3-none-any.whl", hash = "sha256:47b8d465fe0f11e0feb1394fe661752b794dccbb92246eee229772515c5b5d9d" },
+    { url = "https://tensorhub.com/v1/index/fidika/h3-latent-upscaler/0.1.2/h3_latent_upscaler-0.1.2-py3-none-any.whl", hash = "sha256:9a635b3811c19cb549dfda5acd3fa13a91d5c9d94e2bd01ce8ca02f8af528de6" },
 ]
 
 [[package]]
@@ -535,7 +535,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.32.1"
+version = "1.32.2"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },
@@ -568,7 +568,7 @@ requires-dist = [
     { name = "cozy-eval", specifier = ">=0.7.3" },
     { name = "cozy-runtime", extras = ["media", "minimax-h3"], specifier = ">=0.23.24" },
     { name = "diffusers", git = "https://github.com/huggingface/diffusers?rev=578c9b2c6636ab2424a0e56186268b83623656b2" },
-    { name = "h3-latent-upscaler", specifier = ">=0.1.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
+    { name = "h3-latent-upscaler", specifier = ">=0.1.2", index = "https://tensorhub.com/v1/index/fidika/simple/" },
     { name = "hf-xet", specifier = ">=1.6.0" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
