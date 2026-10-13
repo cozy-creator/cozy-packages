@@ -26,12 +26,12 @@ Commit locks bound to production. After changing dependencies, run as `fidika`:
 cozy package lock --tensorhub https://tensorhub.com
 ```
 
-A lock is a floor for Cozy's own releases, never a pin. The machine installs the
-Runtime the package's `cozy-runtime>=` bound admits (its own, else the newest
-published), and serves a same-account callee (qwen-image-2) from the newest
-published release at or above the locked one. A Runtime or callee release needs no
-relock or republish of its dependents; relock (`--upgrade-package qwen-image-2`)
-only to raise that floor.
+A published release runs exactly the dependency versions in its `uv.lock`, including
+same-account callees such as qwen-image-2. To pick up a new dependency release, relock
+(`cozy package lock --tensorhub https://tensorhub.com --upgrade-package qwen-image-2`)
+and publish a new version of the dependent. The exception is `cozy-runtime` and
+`tensorfs`: every package runs on its machine's Runtime, so the package only declares
+the minimum its `cozy-runtime>=` bound admits.
 
 `scripts/bind-account-index.sh` writes the same index for the CI lock checks. Each
 publication rebinds the committed lock to its target: `cozy package publish` to the
