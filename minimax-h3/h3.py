@@ -107,14 +107,6 @@ from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate_image as generate_reference
 from birefnet import RemoveBackgroundOutput
 from birefnet import remove_background
-try:
-    # Optional until the JoyCaption weights are published.  The package deliberately
-    # fails closed when its model lane is unavailable; importing H3 must remain possible
-    # for callers that provide already-prepared references.
-    from joycaption import CaptionImagesOutput, caption_images
-except ImportError:  # pragma: no cover - exercised in the normal H3 image
-    CaptionImagesOutput = None  # type: ignore[assignment,misc]
-    caption_images = None  # type: ignore[assignment]
 from h3_latent_upscaler import UpscaleOutput as LatentUpscaleOutput
 from h3_latent_upscaler import upscale as upscale_latents
 from seedvr2 import Resolution as RestorationResolution
@@ -129,6 +121,7 @@ from story import (
     image_prompt,
     reference_seed,
     resolve_reference_images,
+    validate_references,
 )
 from text_states import encode_text
 from upscale_options import OUTPUT_SIZES, REFINEMENT_SIZES, Resolution, UpscaleMethod
@@ -151,6 +144,18 @@ ReferenceAssets = Annotated[
     ImagePreparation(max_edge=8192, max_pixels=16_777_216),
     msgspec.Meta(min_length=1),
 ]
+# Direct ref2va takes either attached assets or named `references`; the wire field is required,
+# so a references-only request sends `"assets": []`.
+DirectReferenceAssets = Annotated[
+    Assets[Mixed],
+    AssetLimits(
+        images=MAX_IMAGE_REFERENCES,
+        videos=MAX_VIDEO_REFERENCES,
+        audio=MAX_AUDIO_REFERENCES,
+        total=MAX_REFERENCES,
+    ),
+    ImagePreparation(max_edge=8192, max_pixels=16_777_216),
+]
 
 
 def _label_references(references: Sequence[StoryReference]) -> list[tuple[StoryReference, str]]:
@@ -164,19 +169,6 @@ def _label_references(references: Sequence[StoryReference]) -> list[tuple[StoryR
             pictures += 1
             labeled.append((reference, f"Picture {pictures}"))
     return labeled
-
-
-class ReferenceRenderInput(RenderInput, kw_only=True):
-    """Direct ref2va request using the same named references as ``long_form``."""
-
-    references: list[StoryReference] | None = None
-    style: str = ""
-    prepare_references: bool = False
-    caption_references: bool = False
-
-
-class ReferenceStandardRenderInput(ReferenceRenderInput, kw_only=True):
-    steps: Steps = DEFAULT_STEPS
 
 
 KeyframeAssets = Annotated[Assets[Image], AssetLimits(images=2)]
@@ -254,6 +246,18 @@ class RenderInput(ClipInput, kw_only=True):
 
 
 class StandardRenderInput(RenderInput, kw_only=True):
+    steps: Steps = DEFAULT_STEPS
+
+
+class ReferenceRenderInput(RenderInput, kw_only=True):
+    """Direct ref2va request using the same named references as ``long_form``."""
+
+    references: list[StoryReference] | None = None
+    style: str = ""
+    prepare_references: bool = False
+
+
+class ReferenceStandardRenderInput(ReferenceRenderInput, kw_only=True):
     steps: Steps = DEFAULT_STEPS
 
 
@@ -1149,7 +1153,7 @@ async def _upscale_generation(
 
 
 async def _render_workflow(
-    ctx: Context, payload: RenderInput, assets: KeyframeAssets | ReferenceAssets | None,
+    ctx: Context, payload: RenderInput, assets: KeyframeAssets | ReferenceAssets,
     out: Outputs, tel: Telemetry, *, task: Task, steps: int | None,
 ) -> RenderOutput:
     seed = shot_seed(payload, ctx.request_id, 0)
@@ -1165,8 +1169,6 @@ async def _render_workflow(
     functions = {"fl2va": generate_fl2va, "fl2va_turbo": generate_fl2va_turbo,
                  "ref2va": generate_ref2va, "ref2va_turbo": generate_ref2va_turbo}
     generate = cast(Callable[..., Awaitable[RetainedVideoOutput]], functions[task])
-    if assets is None:
-        raise InvalidRequest("ref2va requires references or prepared assets", fields=["references"])
     with tel.scope("Generating original 768p video"):
         source = await generate(payload=request, assets=assets)
     if payload.resolution is Resolution.NATIVE:
@@ -1194,10 +1196,10 @@ async def fl2va_turbo(ctx: Context, payload: RenderInput, assets: KeyframeAssets
 async def _direct_reference_assets(
     ctx: Context,
     payload: ReferenceRenderInput,
-    assets: ReferenceAssets | None,
+    assets: DirectReferenceAssets,
     out: Outputs,
     tel: Telemetry,
-) -> ReferenceAssets | None:
+) -> ReferenceAssets:
     """Resolve named references once for a direct call.
 
     ``assets`` is the prepared handoff used by long-form children.  When named
@@ -1205,11 +1207,13 @@ async def _direct_reference_assets(
     same labeled mixed asset list that a long-form segment receives.
     """
     if payload.references is None:
+        if not assets:
+            raise InvalidRequest("ref2va requires references or assets", fields=["references"])
         return assets
+    if assets:
+        raise InvalidRequest("send references or assets, not both", fields=["references", "assets"])
     if not payload.references:
         raise InvalidRequest("references must contain at least one item", fields=["references"])
-    from story import validate_references
-
     validate_references(payload.references)
     prepared: list[ImageAsset] = []
     images = await _create_references(
@@ -1218,9 +1222,8 @@ async def _direct_reference_assets(
         tel,
         out,
         prepared,
-        style=payload.style if hasattr(payload, "style") else "",
+        style=payload.style,
         prepare_characters=payload.prepare_references,
-        caption_references=payload.caption_references,
     )
     return Assets[Mixed]([
         images[ref.name].with_label(label)
@@ -1229,13 +1232,13 @@ async def _direct_reference_assets(
 
 
 async def ref2va(ctx: Context, payload: ReferenceStandardRenderInput, out: Outputs, tel: Telemetry,
-                 assets: ReferenceAssets | None = None) -> RenderOutput:
+                 assets: DirectReferenceAssets) -> RenderOutput:
     resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
     return await _render_workflow(ctx, payload, resolved, out, tel, task="ref2va", steps=payload.steps)
 
 
 async def ref2va_turbo(ctx: Context, payload: ReferenceRenderInput, out: Outputs, tel: Telemetry,
-                       assets: ReferenceAssets | None = None) -> RenderOutput:
+                       assets: DirectReferenceAssets) -> RenderOutput:
     resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
     return await _render_workflow(ctx, payload, resolved, out, tel, task="ref2va_turbo", steps=None)
 
@@ -1863,32 +1866,12 @@ async def _create_references(
     *,
     style: str,
     prepare_characters: bool = True,
-    caption_references: bool = False,
 ) -> dict[str, ImageAsset | AudioAsset]:
     reference_steps = 40
     # Managed dependencies install an asynchronous flat caller for the source
     # entrypoint, whose own annotations describe its injected implementation.
     reference_generator = cast(Callable[..., Awaitable[ReferenceImageOutput]], generate_reference)
     background_remover = cast(Callable[..., Awaitable[RemoveBackgroundOutput]], remove_background)
-
-    if caption_references:
-        if caption_images is None:
-            raise InvalidRequest(
-                "caption_references requires the optional joycaption package and published model",
-                fields=["caption_references"], code="caption_unavailable",
-            )
-        supplied = [ref.image for ref in references if ref.kind == "character" and ref.image is not None]
-        if supplied:
-            try:
-                caption_result = cast(Callable[..., Awaitable[CaptionImagesOutput]], caption_images)
-                result = await caption_result(images=supplied)
-            except (RuntimeError, ChildCallError) as exc:
-                raise InvalidRequest(
-                    f"identity captioning is unavailable: {str(exc)[:256]}",
-                    fields=["caption_references"], code="caption_unavailable",
-                ) from exc
-            for caption in result.captions:
-                tel.log("h3 character identity caption", index=caption.index, chars=len(caption.text))
 
     async def prepare_character(reference: StoryReference) -> ImageAsset:
         ctx.raise_if_cancelled()
