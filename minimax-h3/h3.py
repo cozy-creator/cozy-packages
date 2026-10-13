@@ -108,7 +108,6 @@ from birefnet import RemoveBackgroundOutput
 from birefnet import remove_background
 from character_describer import CaptionImagesOutput, caption_images
 from seedvr2 import Resolution as RestorationResolution
-from seedvr2 import Tuning as UpscaleTuning
 from seedvr2 import UpscaleOutput as RestorationOutput
 from seedvr2 import upscale as restore_video
 from story import (
@@ -247,11 +246,31 @@ class Resolution(Enum):
     UHD = "2160p"
 
 
+class Upscale(msgspec.Struct, kw_only=True):
+    """SeedVR2's ComfyUI controls (seedvr2 README, Tuning); unset fields keep SeedVR2's defaults."""
+
+    color_correction: (
+        Literal["lab", "wavelet", "wavelet_adaptive", "hsv", "adain", "none"] | None
+    ) = None
+    input_noise_scale: Annotated[float, msgspec.Meta(ge=0, le=1)] | None = None
+    latent_noise_scale: Annotated[float, msgspec.Meta(ge=0, le=1)] | None = None
+    batch_size: Annotated[int, msgspec.Meta(ge=1)] | None = None
+    uniform_batch_size: bool | None = None
+    temporal_overlap: Annotated[int, msgspec.Meta(ge=0, le=16)] | None = None
+    prepend_frames: Annotated[int, msgspec.Meta(ge=0, le=32)] | None = None
+
+    def __post_init__(self) -> None:
+        if self.batch_size is not None and self.batch_size % 4 != 1:
+            raise ValueError(
+                f"batch_size must be 4n+1 (1, 5, 9, 13, 17, 21, ...), got {self.batch_size}"
+            )
+
+
 class RenderInput(ClipInput, kw_only=True):
-    """`upscale` passes SeedVR2's ComfyUI controls through above 768p (UPSCALE.md: Tuning)."""
+    """`upscale` passes SeedVR2's controls through above 768p (UPSCALE.md: Tuning)."""
 
     resolution: Resolution = Resolution.NATIVE
-    upscale: UpscaleTuning = msgspec.field(default_factory=UpscaleTuning)
+    upscale: Upscale | None = None
 
 
 class StandardRenderInput(RenderInput, kw_only=True):
@@ -1050,14 +1069,15 @@ async def _render_workflow(
         source = await generate(payload=request, assets=assets)
     if payload.resolution is Resolution.NATIVE:
         ctx.release_gpus()
-        ignored = ["upscale settings apply only above 768p"] if payload.upscale != UpscaleTuning() else []
+        ignored = ["upscale settings apply only above 768p"] if payload.upscale else []
         return RenderOutput(source.video, [], source.warnings + ignored)
     out.publish("originals", source.video, label="Original 768p video")
     restore = cast(Callable[..., Awaitable[RestorationOutput]], restore_video)
     with tel.scope(f"SeedVR2 upscale to {payload.resolution.value}"):
         result = await restore(
             video=source.video, resolution=RestorationResolution(payload.resolution.value),
-            seed=seed, aspect_ratio="16:9", **asdict(payload.upscale),
+            seed=seed, aspect_ratio="16:9",
+            **{k: v for k, v in asdict(payload.upscale or Upscale()).items() if v is not None},
         )
     ctx.release_gpus()
     return RenderOutput(result.video, [source.video], source.warnings)
