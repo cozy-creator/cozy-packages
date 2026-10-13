@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, cast
+from typing import Any, cast
 from collections.abc import Callable
 
 
@@ -12,21 +12,21 @@ from torchvision.transforms import functional as vision
 from PIL import Image, ImageOps
 from cozy_runtime.author import Config, Loader, Model, Telemetry, uses_components
 
+from .color import Correction, correct
+from .frames import extend
 from .upstream.infer import VideoDiffusionInfer
-from .upstream.models.dit_v2.nadit import NaDiT
-from .upstream.models.dit.nadit import NaDiT as NaDiT7B
+from .upstream.models.dit.nadit import NaDiT
 from .upstream.models.video_vae_v3.modules.attn_video_vae import VideoAutoencoderKLWrapper
 
+# SeedVR's configs_7b/main.yaml: separate text/video weights throughout.
 DIT = dict(
     vid_in_channels=33,
     vid_out_channels=16,
-    vid_dim=2560,
-    vid_out_norm="rms",
+    vid_dim=3072,
     txt_in_dim=5120,
-    txt_in_norm="layer",
-    txt_dim=2560,
-    emb_dim=15360,
-    heads=20,
+    txt_dim=3072,
+    emb_dim=18432,
+    heads=24,
     head_dim=128,
     expand_ratio=4,
     norm="rms",
@@ -34,16 +34,15 @@ DIT = dict(
     ada="single",
     qk_bias=False,
     qk_norm="rms",
+    qk_rope=True,
     patch_size=(1, 2, 2),
-    num_layers=32,
-    mm_layers=10,
-    mlp_type="swiglu",
-    msa_type=None,
-    block_type=["mmdit_sr"] * 32,
-    window=[(4, 3, 3)] * 32,
-    window_method=["720pwin_by_size_bysize", "720pswin_by_size_bysize"] * 16,
-    rope_type="mmrope3d",
-    rope_dim=128,
+    num_layers=36,
+    mlp_type="normal",
+    shared_mlp=False,
+    shared_qkv=False,
+    block_type=["mmdit_sr"] * 36,
+    window=[(4, 3, 3)] * 36,
+    window_method=["720pwin_by_size_bysize", "720pswin_by_size_bysize"] * 18,
 )
 VAE = dict(
     act_fn="silu",
@@ -65,30 +64,7 @@ VAE = dict(
     freeze_encoder=False,
 )
 
-Variant = Literal["3b", "7b"]
-ARCHITECTURES: dict[str, Variant] = {"SeedVR2-3B": "3b", "SeedVR2-7B": "7b"}
-# SeedVR's configs_7b/main.yaml: the 7B graph has separate text/video weights
-# throughout, rather than the 3B graph's mixed layers and SwiGLU feed-forward.
-DIT_7B = {
-    **{
-        key: value
-        for key, value in DIT.items()
-        if key
-        not in {"vid_out_norm", "txt_in_norm", "mm_layers", "msa_type", "rope_type", "rope_dim"}
-    },
-    "vid_dim": 3072,
-    "txt_dim": 3072,
-    "emb_dim": 18432,
-    "heads": 24,
-    "num_layers": 36,
-    "mlp_type": "normal",
-    "qk_rope": True,
-    "shared_mlp": False,
-    "shared_qkv": False,
-    "block_type": ["mmdit_sr"] * 36,
-    "window": [(4, 3, 3)] * 36,
-    "window_method": ["720pwin_by_size_bysize", "720pswin_by_size_bysize"] * 18,
-}
+ARCHITECTURE = "SeedVR2-7B"
 
 
 class Conditioning(torch.nn.Module):
@@ -101,22 +77,18 @@ class Conditioning(torch.nn.Module):
         self.register_buffer("negative", torch.empty(64, 5120, dtype=torch.bfloat16))
 
 
-def modules(variant: Variant = "3b") -> dict[str, torch.nn.Module]:
-    if variant not in ("3b", "7b"):
-        raise ValueError(f"unknown SeedVR2 variant: {variant}")
-    constructor, settings = (NaDiT, DIT) if variant == "3b" else (NaDiT7B, DIT_7B)
+def modules() -> dict[str, torch.nn.Module]:
     return {
-        "dit": cast(Callable[..., torch.nn.Module], constructor)(**settings).eval().half(),
+        "dit": cast(Callable[..., torch.nn.Module], NaDiT)(**DIT).eval().half(),
         "vae": cast(Callable[..., torch.nn.Module], VideoAutoencoderKLWrapper)(**VAE).eval().half(),
     }
 
 
 class Graph:
     def __init__(self, config: Config) -> None:
-        architecture = config.mapping().get("architecture")
-        if architecture not in ARCHITECTURES:
-            raise ValueError("SeedVR2 requires a normalized 3B or 7B checkpoint")
-        self.components = {**modules(ARCHITECTURES[architecture]), "conditioning": Conditioning()}
+        if config.mapping().get("architecture") != ARCHITECTURE:
+            raise ValueError("SeedVR2 requires a normalized 7B checkpoint")
+        self.components = {**modules(), "conditioning": Conditioning()}
 
 
 def build(config: Config) -> Graph:
@@ -131,7 +103,16 @@ class RestorationModel(Model[Graph]):
 
     @uses_components("dit", "vae", "conditioning")
     def restore(
-        self, frames: list[Image.Image], width: int, height: int, seed: int, tel: Telemetry
+        self,
+        frames: list[Image.Image],
+        width: int,
+        height: int,
+        seed: int,
+        tel: Telemetry,
+        *,
+        correction: Correction,
+        input_noise: float,
+        latent_noise: float,
     ) -> list[Image.Image]:
         device = next(self.graph.components["dit"].parameters()).device
         cfg = OmegaConf.create(
@@ -160,7 +141,7 @@ class RestorationModel(Model[Graph]):
         runner.configure_diffusion()
         if not frames:
             raise ValueError("SeedVR2 restoration needs at least one frame")
-        padded = frames + [frames[-1]] * ((1 - len(frames)) % 4)
+        padded = extend(frames, (1 - len(frames)) % 4)
         canvas = ((width + 15) // 16 * 16, (height + 15) // 16 * 16)
         left, top = (canvas[0] - width) // 2, (canvas[1] - height) // 2
         pixels = torch.stack(
@@ -174,13 +155,30 @@ class RestorationModel(Model[Graph]):
                 for frame in padded
             ]
         )
+        crop = (slice(top, top + height), slice(left, left + width))
+        source = pixels[: len(frames), :, crop[0], crop[1]].mul(2).sub(1)
         pixels = pixels.to(device=device, dtype=torch.float16).permute(1, 0, 2, 3).mul(2).sub(1)
         conditioning = cast(Conditioning, self.graph.components["conditioning"])
         with torch.inference_mode(), torch.random.fork_rng(devices=[device.index or 0]):
             torch.manual_seed(seed)
+            if input_noise:
+                pixels = pixels + torch.randn_like(pixels) * (0.025 * input_noise)
             with tel.stage("SeedVR2 VAE encode"):
                 latents = runner.vae_encode([pixels])
             noises = [torch.randn_like(latent) for latent in latents]
+            if latent_noise:
+                # Upstream's `_add_noise`, including its (h, w, c) shape for the shift.
+                latents = [
+                    runner.schedule.forward(
+                        latent,
+                        noise * 0.1 + torch.randn_like(noise) * 0.05,
+                        runner.timestep_transform(
+                            torch.tensor([1000.0 * latent_noise], device=device),
+                            torch.tensor(latent.shape[1:], device=device)[None],
+                        ),
+                    )
+                    for noise, latent in zip(noises, latents, strict=True)
+                ]
             conditions = [
                 runner.get_condition(noise, latent_blur=latent, task="sr")
                 for noise, latent in zip(noises, latents, strict=True)
@@ -198,16 +196,13 @@ class RestorationModel(Model[Graph]):
                     sample = runner.vae_decode(restored)[0]
             if sample.ndim == 3:
                 sample = sample.unsqueeze(1)
-            sample = (
-                sample[:, : len(frames)]
-                .permute(1, 0, 2, 3)
-                .float()
-                .cpu()
-                .clamp(-1, 1)
-                .add(1)
-                .div(2)
+            sample = sample[:, : len(frames), crop[0], crop[1]].permute(1, 0, 2, 3).float()
+            sample = torch.cat(
+                [
+                    correct(
+                        frame[None].clamp(-1, 1), source[index : index + 1].to(device), correction
+                    )
+                    for index, frame in enumerate(sample)
+                ]
             )
-        return [
-            vision.to_pil_image(frame).crop((left, top, left + width, top + height))
-            for frame in sample
-        ]
+        return [vision.to_pil_image(frame) for frame in sample.cpu().clamp(-1, 1).add(1).div(2)]

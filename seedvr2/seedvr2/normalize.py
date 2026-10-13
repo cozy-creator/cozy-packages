@@ -17,7 +17,7 @@ from cozy_runtime.author import (
     invocable,
 )
 from tensorfs.derived import Config, Derivation, Target, Tensor, Part
-from .model import Variant, modules
+from .model import ARCHITECTURE, modules
 
 
 class Source(Model[object]):
@@ -32,18 +32,17 @@ async def normalize(
     dit: Source,
     vae: Source,
     conditioning: Annotated[Tree, AssetBound(max_bytes=2 << 20)],
-    variant: Variant = "3b",
 ) -> ModelArtifact:
     sources = {"dit": ctx.tensorfs_source(dit), "vae": ctx.tensorfs_source(vae)}
     with torch.device("meta"):
-        expected = modules(variant)
+        expected = modules()
     order = []
     for name, module in expected.items():
         found = sources[name].inspect().components
         tensors = found.get("model", {})
         state = module.state_dict()
         if set(found) != {"model"} or set(tensors) != set(state):
-            raise ValueError(f"{name} does not match the SeedVR2-{variant.upper()} tensor census")
+            raise ValueError(f"{name} does not match the {ARCHITECTURE} tensor census")
         for key, tensor in state.items():
             if (
                 tuple(tensors[key].shape) != tuple(tensor.shape)
@@ -106,8 +105,6 @@ async def normalize(
                 )
                 transaction.checkpoint()
         if "model" not in set(transaction.completed_configs()):
-            transaction.add_config(
-                "model", canonical_json.encode({"architecture": f"SeedVR2-{variant.upper()}"})
-            )
+            transaction.add_config("model", canonical_json.encode({"architecture": ARCHITECTURE}))
             transaction.checkpoint()
         return ctx.adopt_model(transaction.commit())

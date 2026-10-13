@@ -11,8 +11,15 @@
         "context": "ctx",
         "defaults": {
           "request/aspect_ratio": "source",
+          "request/batch_size": 5,
+          "request/color_correction": "lab",
+          "request/input_noise_scale": 0,
+          "request/latent_noise_scale": 0,
+          "request/prepend_frames": 0,
           "request/resolution": "1080p",
-          "request/seed": 42
+          "request/seed": 42,
+          "request/temporal_overlap": 0,
+          "request/uniform_batch_size": false
         },
         "enum_members": {
           "request/resolution": [
@@ -25,135 +32,13 @@
         "memoize": true,
         "module": "seedvr2",
         "parameters": [
-          "video",
-          "resolution",
-          "seed",
-          "aspect_ratio"
-        ],
-        "type_names": {
-          "request": "UpscaleInput",
-          "request/resolution": "Resolution",
-          "result": "UpscaleOutput"
-        }
-      },
-      "models": [
-        {
-          "class": "RestorationModel",
-          "component_use": {
-            "restore": [
-              "conditioning",
-              "dit",
-              "vae"
-            ]
-          },
-          "default_ladder": [
-            {
-              "gpu": "*",
-              "gpus": 1,
-              "lane": "seedvr2@0.1.0/original"
-            }
-          ],
-          "encoded_leaves": "refuse",
-          "path": "upscale.models.model"
-        }
-      ],
-      "name": "upscale",
-      "request": {
-        "fields": [
-          {
-            "asset_bound": {
-              "max_bytes": 1073741824
-            },
-            "name": "video",
-            "type": {
-              "asset": "video"
-            }
-          },
-          {
-            "default": "1080p",
-            "name": "resolution",
-            "type": {
-              "literal": [
-                "1080p",
-                "1440p",
-                "2160p"
-              ]
-            },
-            "wire": "optional"
-          },
-          {
-            "constraints": {
-              "ge": 0,
-              "le": 9007199254740991
-            },
-            "default": 42,
-            "name": "seed",
-            "type": "int",
-            "wire": "optional"
-          },
-          {
-            "default": "source",
-            "name": "aspect_ratio",
-            "type": {
-              "literal": [
-                "16:9",
-                "source"
-              ]
-            },
-            "wire": "optional"
-          }
-        ]
-      },
-      "result": {
-        "fields": [
-          {
-            "asset_bound": {
-              "max_bytes": 1073741824,
-              "max_decoded_bytes": 34359738368,
-              "media_types": [
-                "video/mp4"
-              ]
-            },
-            "name": "video",
-            "type": {
-              "asset": "video"
-            }
-          },
-          {
-            "name": "frame_count",
-            "type": "int"
-          },
-          {
-            "name": "fps",
-            "type": "float"
-          }
-        ]
-      }
-    },
-    {
-      "invocable": {
-        "capabilities": [
-          "media_decode",
-          "save",
-          "telemetry"
-        ],
-        "context": "ctx",
-        "defaults": {
-          "request/aspect_ratio": "source",
-          "request/resolution": "1080p",
-          "request/seed": 42
-        },
-        "enum_members": {
-          "request/resolution": [
-            "HD",
-            "QHD",
-            "UHD"
-          ]
-        },
-        "export": "upscale_7b",
-        "memoize": true,
-        "module": "seedvr2",
-        "parameters": [
+          "color_correction",
+          "input_noise_scale",
+          "latent_noise_scale",
+          "batch_size",
+          "uniform_batch_size",
+          "temporal_overlap",
+          "prepend_frames",
           "video",
           "resolution",
           "seed",
@@ -183,12 +68,82 @@
             }
           ],
           "encoded_leaves": "refuse",
-          "path": "upscale_7b.models.model"
+          "path": "upscale.models.model"
         }
       ],
-      "name": "upscale_7b",
+      "name": "upscale",
       "request": {
         "fields": [
+          {
+            "default": "lab",
+            "name": "color_correction",
+            "type": {
+              "literal": [
+                "adain",
+                "hsv",
+                "lab",
+                "none",
+                "wavelet",
+                "wavelet_adaptive"
+              ]
+            },
+            "wire": "optional"
+          },
+          {
+            "constraints": {
+              "ge": 0,
+              "le": 1
+            },
+            "default": 0,
+            "name": "input_noise_scale",
+            "type": "float",
+            "wire": "optional"
+          },
+          {
+            "constraints": {
+              "ge": 0,
+              "le": 1
+            },
+            "default": 0,
+            "name": "latent_noise_scale",
+            "type": "float",
+            "wire": "optional"
+          },
+          {
+            "constraints": {
+              "ge": 1
+            },
+            "default": 5,
+            "name": "batch_size",
+            "type": "int",
+            "wire": "optional"
+          },
+          {
+            "default": false,
+            "name": "uniform_batch_size",
+            "type": "bool",
+            "wire": "optional"
+          },
+          {
+            "constraints": {
+              "ge": 0,
+              "le": 16
+            },
+            "default": 0,
+            "name": "temporal_overlap",
+            "type": "int",
+            "wire": "optional"
+          },
+          {
+            "constraints": {
+              "ge": 0,
+              "le": 32
+            },
+            "default": 0,
+            "name": "prepend_frames",
+            "type": "int",
+            "wire": "optional"
+          },
           {
             "asset_bound": {
               "max_bytes": 1073741824
@@ -271,8 +226,7 @@
         "context": "ctx",
         "defaults": {
           "request/dit": null,
-          "request/vae": null,
-          "request/variant": "3b"
+          "request/vae": null
         },
         "enum_members": {},
         "export": "normalize",
@@ -281,8 +235,7 @@
         "parameters": [
           "dit",
           "vae",
-          "conditioning",
-          "variant"
+          "conditioning"
         ],
         "type_names": {
           "request": "normalizeRequest"
@@ -340,17 +293,6 @@
             "type": {
               "input": "tree"
             }
-          },
-          {
-            "default": "3b",
-            "name": "variant",
-            "type": {
-              "literal": [
-                "3b",
-                "7b"
-              ]
-            },
-            "wire": "optional"
           }
         ]
       },

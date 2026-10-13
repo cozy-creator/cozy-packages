@@ -34,7 +34,7 @@ from seedvr2.upstream.common.distributed.meta_init_utils import (
 )
 # from common.fs import download
 
-from seedvr2.upstream.models.dit_v2 import na
+from seedvr2.upstream.models.dit import na
 
 class VideoDiffusionInfer():
     def __init__(self, config: DictConfig):

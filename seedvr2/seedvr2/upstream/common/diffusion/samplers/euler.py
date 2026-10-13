@@ -22,7 +22,7 @@ import torch
 from einops import rearrange
 from torch.nn import functional as F
 
-from seedvr2.upstream.models.dit_v2 import na
+from seedvr2.upstream.models.dit import na
 
 from ..types import PredictionType
 from ..utils import expand_dims
