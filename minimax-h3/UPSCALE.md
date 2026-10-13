@@ -2,12 +2,10 @@
 
 Direct `ref2va` and `ref2va_turbo` calls also accept the long-form `references`
 syntax. A reference with an `image` is passed through as supplied by default;
-`prepare_references: true` runs BiRefNet for supplied character images, and
-`caption_references: true` additionally requests the optional identity-only
-JoyCaption child. JoyCaption is not published yet, so requesting captions fails
-closed with `caption_unavailable` until its verified model lane is available.
+`prepare_references: true` runs BiRefNet for supplied character images.
 Descriptions without images are generated once with Qwen Image 2.1. The resolved
-assets are then handed to the H3 child, so preprocessing is not repeated.
+assets are then handed to the H3 child, so preprocessing is not repeated. Send
+either `references` or attached `assets`; a references-only request sends `"assets": []`.
 
 ```json
 {
@@ -17,8 +15,8 @@ assets are then handed to the H3 child, so preprocessing is not repeated.
     {"name": "Rover", "kind": "character", "image": "./rover.png"},
     {"name": "Studio", "kind": "scene", "description": "A bright studio."}
   ],
-  "prepare_references": true,
-  "caption_references": false
+  "assets": [],
+  "prepare_references": true
 }
 ```
 
