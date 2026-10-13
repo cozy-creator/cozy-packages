@@ -3356,7 +3356,7 @@ def arm_interface() -> None:
         check(
             f"{name} exact customer result fields",
             [field["name"] for field in entry["result"]["fields"]],
-            ["video", "originals", "warnings"],
+            ["video", "originals", "warnings"] + (["references"] if name.startswith("ref2va") else []),
         )
     for wire in (package.ClipInput,):
         check(

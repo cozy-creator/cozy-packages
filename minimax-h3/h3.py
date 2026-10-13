@@ -298,6 +298,12 @@ class RenderOutput(msgspec.Struct):
     warnings: list[str]
 
 
+class ReferenceRenderOutput(RenderOutput):
+    """Direct ref2va also returns the references it prepared or generated, each published as it lands."""
+
+    references: list[ImageAsset] = msgspec.field(default_factory=list)
+
+
 class RefineInput(msgspec.Struct):
     latents: LatentAsset
     resolution: Annotated[Resolution, Shape(pixels=REFINEMENT_SIZES)]
@@ -1204,7 +1210,7 @@ async def _direct_reference_assets(
     assets: DirectReferenceAssets,
     out: Outputs,
     tel: Telemetry,
-) -> tuple[ReferenceRenderInput, ReferenceAssets]:
+) -> tuple[ReferenceRenderInput, ReferenceAssets, list[ImageAsset], list[str]]:
     """Resolve named references once for a direct call.
 
     ``assets`` is the prepared handoff used by long-form children.  Named references are
@@ -1213,18 +1219,19 @@ async def _direct_reference_assets(
     if payload.references is None:
         if not assets:
             raise InvalidRequest("ref2va requires references or assets", fields=["references"])
-        return payload, assets
+        return payload, assets, [], []
     if assets:
         raise InvalidRequest("send references or assets, not both", fields=["references", "assets"])
     if not payload.references:
         raise InvalidRequest("references must contain at least one item", fields=["references"])
     validate_references(payload.references)
-    images, references, _ = await _create_references(
+    shown: list[ImageAsset] = []
+    images, references, warnings = await _create_references(
         ctx,
         payload.references,
         tel,
         out,
-        [],
+        shown,
         style=payload.style,
         prepare_characters=payload.prepare_references,
         describe_characters=payload.describe_references,
@@ -1233,19 +1240,21 @@ async def _direct_reference_assets(
     for warning in call.warnings:
         tel.log("h3 reference prompt", level="warning", warning=warning)
     labeled = Assets[Mixed]([images[ref.name].with_label(label) for ref, label in _label_references(call.references)])
-    return replace(payload, prompt=call.prompt), labeled
+    return replace(payload, prompt=call.prompt), labeled, shown, warnings
 
 
 async def ref2va(ctx: Context, payload: ReferenceStandardRenderInput, out: Outputs, tel: Telemetry,
-                 assets: DirectReferenceAssets) -> RenderOutput:
-    request, resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
-    return await _render_workflow(ctx, request, resolved, out, tel, task="ref2va", steps=payload.steps)
+                 assets: DirectReferenceAssets) -> ReferenceRenderOutput:
+    request, resolved, shown, warnings = await _direct_reference_assets(ctx, payload, assets, out, tel)
+    result = await _render_workflow(ctx, request, resolved, out, tel, task="ref2va", steps=payload.steps)
+    return ReferenceRenderOutput(result.video, result.originals, warnings + result.warnings, shown)
 
 
 async def ref2va_turbo(ctx: Context, payload: ReferenceRenderInput, out: Outputs, tel: Telemetry,
-                       assets: DirectReferenceAssets) -> RenderOutput:
-    request, resolved = await _direct_reference_assets(ctx, payload, assets, out, tel)
-    return await _render_workflow(ctx, request, resolved, out, tel, task="ref2va_turbo", steps=None)
+                       assets: DirectReferenceAssets) -> ReferenceRenderOutput:
+    request, resolved, shown, warnings = await _direct_reference_assets(ctx, payload, assets, out, tel)
+    result = await _render_workflow(ctx, request, resolved, out, tel, task="ref2va_turbo", steps=None)
+    return ReferenceRenderOutput(result.video, result.originals, warnings + result.warnings, shown)
 
 
 app.job(fl2va, emits_media=True, accelerator=False)
