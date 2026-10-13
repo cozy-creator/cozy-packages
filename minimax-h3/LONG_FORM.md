@@ -194,7 +194,8 @@ to characters the previous segment's last shot does not name.
 
 A segment delivers at least its `duration_s`: the native grid snaps it up, and nothing
 sampled after the carried frames is discarded. A carried picture of 22/39/56 frames allows
-at most 14/13/12 new seconds; longer segments are shortened and reported. `long_form_cuts`
+at most 14/13/12 new seconds, and carried sound alone (a one-second head) 14; longer
+segments are shortened and reported. `long_form_cuts`
 renders independent segments. Turbo uses eight PDD evaluations, and standard allows
 30/40/50 steps.
 
