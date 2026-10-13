@@ -53,6 +53,13 @@ FRAMES = (30, 41, 50)
 SOUND = (30 * 2000 - 400, 41 * 2000 + 400 + 1600, 50 * 2000 - 1600)
 
 
+class Joined(msgspec.Struct):
+    """The joined video; `video` is the output each revision is published to."""
+
+    video: VideoAsset
+    samples: int
+
+
 @invocable
 async def progressive(
     ctx: Context,
@@ -61,7 +68,7 @@ async def progressive(
     decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
-) -> assembly.AssembleVideoRequest:
+) -> Joined:
     """long_form's join: one revision published per segment, the joined video returned."""
     cut = assembly.CutJoin(decoder, out, ctx.raise_if_cancelled)
     with assembly.ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
@@ -71,12 +78,7 @@ async def progressive(
             revision = cut.append(scanning.result(index), FRAMES[index], last=last)
             out.publish("video", revision, label=f"Video (segments 1-{index + 1})")
         joined = cut.finish()
-    return assembly.AssembleVideoRequest(videos=[joined.video])
-
-
-class ContinuousJoin(msgspec.Struct):
-    video: VideoAsset
-    samples: int
+    return Joined(joined.video, joined.submitted_audio_samples)
 
 
 @invocable
@@ -87,7 +89,7 @@ async def continuous(
     decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
-) -> ContinuousJoin:
+) -> Joined:
     """long_form's join of continuation segments."""
     cut = assembly.CutJoin(decoder, out, ctx.raise_if_cancelled, continuous=True)
     with assembly.ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
@@ -95,7 +97,7 @@ async def continuous(
             scanning.add(video)
             cut.append(scanning.result(index), FRAMES[index], last=index + 1 == len(FRAMES))
         joined = cut.finish()
-    return ContinuousJoin(joined.video, joined.submitted_audio_samples)
+    return Joined(joined.video, joined.submitted_audio_samples)
 
 
 def tone(samples: int) -> np.ndarray:
@@ -247,7 +249,7 @@ def main() -> None:
     one_shot = root / "one-shot.mp4"
     one_shot.write_bytes(reference.result.video.read_bytes())
     final = root / "final.mp4"
-    final.write_bytes(joined.result.videos[0].read_bytes())
+    final.write_bytes(joined.result.video.read_bytes())
     final_decoded = decoded(final)
     assert final_decoded == decoded(one_shot), "the incremental join decodes differently"
     final_packets = video_packets(final)
