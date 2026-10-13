@@ -63,7 +63,7 @@ wheels = [
 [[package]]
 name = "birefnet"
 version = "0.1.0"
-source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
+source = { registry = "http://127.0.0.1:8819/v1/index/paul/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
     { name = "einops" },
@@ -77,7 +77,7 @@ dependencies = [
     { name = "transformers" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/birefnet/0.1.0/birefnet-0.1.0-py3-none-any.whl", hash = "sha256:5247da02f6adea41387295aeaa24cb95aa9216fe345a6f766e30b60463087636" },
+    { url = "http://127.0.0.1:8819/v1/index/paul/birefnet/0.1.0/birefnet-0.1.0-py3-none-any.whl", hash = "sha256:5247da02f6adea41387295aeaa24cb95aa9216fe345a6f766e30b60463087636" },
 ]
 
 [[package]]
@@ -110,6 +110,25 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/9f/e8e3dfa04a1b4c241f8c91faacad872b4d4efd051d49764ad4e2fd4b9fea/cffi-2.1.1-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:cc572dace3f60ef98d7b12ff411d20f5362feb31a0439eab0085bbfd349982d7", size = 223197, upload-time = "2026-08-03T21:20:59.968Z" },
     { url = "https://files.pythonhosted.org/packages/52/86/2976131c639aead931c5bee5aba67e4b09fbeb8018b6f282f70803f923a7/cffi-2.1.1-cp315-cp315t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:363e05fa78e15116c3c32c210ee36884fd6b9afa6d440e47112c3bd511d64cb6", size = 223835, upload-time = "2026-08-03T21:21:07.539Z" },
     { url = "https://files.pythonhosted.org/packages/e3/26/2cde30fdde421130bfc18f70395731a6e6b2053c6a1978a5258ff04e72fa/cffi-2.1.1-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:7da0c5eff80f0197f3b3d1232ec5a682a9325f4ae9016a78f5f5ca35f9ced1f5", size = 225539, upload-time = "2026-08-03T21:21:09.911Z" },
+]
+
+[[package]]
+name = "character-describer"
+version = "0.1.0"
+source = { registry = "http://127.0.0.1:8819/v1/index/paul/simple/" }
+dependencies = [
+    { name = "cozy-eval", extra = ["jobs", "judge"] },
+    { name = "cozy-runtime", extra = ["media"] },
+    { name = "msgspec" },
+    { name = "pillow" },
+    { name = "tensorfs" },
+    { name = "tokenizers" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "transformers" },
+]
+wheels = [
+    { url = "http://127.0.0.1:8819/v1/index/paul/character-describer/0.1.0/character_describer-0.1.0-py3-none-any.whl", hash = "sha256:533674b3cf6aef14c37feee0b7d1e7d23f1d7aca8018a3c3425679484fcee417" },
 ]
 
 [[package]]
@@ -148,20 +167,34 @@ wheels = [
 
 [[package]]
 name = "cozy-eval"
-version = "0.7.5"
+version = "0.7.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "msgspec" },
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1d/fd/8760b75050d895170fb1d51a2c1f58344d618a79ff7987edb953c9c29505/cozy_eval-0.7.5.tar.gz", hash = "sha256:3fc1fd2d2824973f4b24ee48585a0d7b4666b4ed52e74760ec7c78dc74c84d5a", size = 1988607, upload-time = "2026-09-27T02:17:23.487Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a4/97/cab2391abfa3d77a9be1671f9270b1d1978a525b62cd63a28d983116245e/cozy_eval-0.7.6.tar.gz", hash = "sha256:8de2b11fa3b62c61ceefa944789ad2702e87467801ca24cd32bd5de48b78a655", size = 1989335, upload-time = "2026-09-28T08:06:08.251Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/48/27/b5f552f3f49f7d058898f14312dbf1505fc10f74bb4070ea91716b69ffdc/cozy_eval-0.7.5-py3-none-any.whl", hash = "sha256:e21e4067914594f91ae2bce79f1d84282052871b1f60d18204cf5f64738dfccf", size = 383065, upload-time = "2026-09-27T02:17:21.623Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/8f/4c83a1232b368766a4da68079db6f78ae323fb7c05d08c14627e3e6e66f9/cozy_eval-0.7.6-py3-none-any.whl", hash = "sha256:37072575abdf55a72d9695a85223a2d65baf3e8413b581d376c9c3f1ef1007c3", size = 382966, upload-time = "2026-09-28T08:06:06.778Z" },
+]
+
+[package.optional-dependencies]
+jobs = [
+    { name = "cozy-runtime", extra = ["media"] },
+    { name = "numpy" },
+    { name = "scipy" },
+    { name = "tensorfs" },
+]
+judge = [
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "torch" },
+    { name = "transformers" },
 ]
 
 [[package]]
 name = "cozy-runtime"
-version = "0.23.22"
+version = "0.23.25"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -171,10 +204,10 @@ dependencies = [
     { name = "pillow" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/51/70/38e2c84178ef812085fa20f73c01a6e67388122c7d5e3d1b1606bf8072dc/cozy_runtime-0.23.22.tar.gz", hash = "sha256:43b7e056d8c5f3d999ec63e4f27e3241d8c9c5c1ca62135cb0711930e3a4620e", size = 3715334, upload-time = "2026-10-11T07:01:43.929Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e2/9b/0e091b1677ec56128adac9456c39bb8fc87e8870b809c95ca93e92880d43/cozy_runtime-0.23.25.tar.gz", hash = "sha256:54eb6d7790740c105232d5655b540e2d42e51450483ce9c92a7161d7962716fd", size = 3730784, upload-time = "2026-10-13T00:06:35.678Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/53/4a/5bb794293c9daacf1453a970a558b9db4014e49c109d2a2e4356c1c35181/cozy_runtime-0.23.22-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:8f044f37bd92052d720198d24c57afed948d60ef45eb4354347f4675fd86da82", size = 27832505, upload-time = "2026-10-11T07:01:39.969Z" },
-    { url = "https://files.pythonhosted.org/packages/aa/f5/706fcfd502f90837d910b831681aad7099bee72d2ddfb1f239c347ef8d4a/cozy_runtime-0.23.22-py3-none-any.whl", hash = "sha256:21f6a7abc48a8ff2d98db6e6150184ab6fb9e6507810604a33a1104888e3bf92", size = 2854227, upload-time = "2026-10-11T07:01:42.441Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/2e/ca3089c790b4928e6a1bf651277d4f0b61b8f2bc012014790d8bbc6c4549/cozy_runtime-0.23.25-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:47b7970a6ffd02c5563b1aa018558c97a9e782e361cf127d5950a465f8dbbb2f", size = 27896327, upload-time = "2026-10-13T00:06:30.845Z" },
+    { url = "https://files.pythonhosted.org/packages/17/f1/b75e0f2ecc474556a71aeca9e49cb192be0c878299ba7eb311760e7e747c/cozy_runtime-0.23.25-py3-none-any.whl", hash = "sha256:5e8727d970de2c85db17d6922a76ccac72ec98fdf6d23a26b3ae8411653b29c0", size = 2865407, upload-time = "2026-10-13T00:06:33.758Z" },
 ]
 
 [package.optional-dependencies]
@@ -190,6 +223,9 @@ minimax-h3 = [
     { name = "torch" },
     { name = "torchvision" },
     { name = "transformers" },
+]
+model-execution = [
+    { name = "tensorfs" },
 ]
 
 [[package]]
@@ -335,6 +371,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/ee/02a2c011bdab74c6fb3c75474d40b3052059d95df7e73351460c8588d963/h11-0.16.0.tar.gz", hash = "sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1", size = 101250, upload-time = "2025-04-24T03:35:25.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl", hash = "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86", size = 37515, upload-time = "2025-04-24T03:35:24.344Z" },
+]
+
+[[package]]
+name = "h3-latent-upscaler"
+version = "0.1.1"
+source = { registry = "http://127.0.0.1:8819/v1/index/paul/simple/" }
+dependencies = [
+    { name = "cozy-runtime", extra = ["model-execution"] },
+    { name = "einops" },
+    { name = "msgspec" },
+    { name = "safetensors" },
+    { name = "tensorfs" },
+    { name = "torch" },
+]
+wheels = [
+    { url = "http://127.0.0.1:8819/v1/index/paul/h3-latent-upscaler/0.1.1/h3_latent_upscaler-0.1.1-py3-none-any.whl", hash = "sha256:dd72b2beb1d6115eaff009449ba7567b7bdcb33a1d1bdaf3ca989024693e5647" },
 ]
 
 [[package]]
@@ -497,13 +549,15 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.29.0"
+version = "1.30.0"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },
+    { name = "character-describer" },
     { name = "cozy-eval" },
     { name = "cozy-runtime", extra = ["media", "minimax-h3"] },
     { name = "diffusers" },
+    { name = "h3-latent-upscaler" },
     { name = "hf-xet" },
     { name = "msgspec" },
     { name = "numpy" },
@@ -512,6 +566,7 @@ dependencies = [
     { name = "qwen-image-2" },
     { name = "regex" },
     { name = "safetensors" },
+    { name = "seedvr2" },
     { name = "shellingham" },
     { name = "tensorfs" },
     { name = "tokenizers" },
@@ -522,18 +577,21 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "birefnet", specifier = ">=0.1.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
+    { name = "birefnet", specifier = ">=0.1.0", index = "http://127.0.0.1:8819/v1/index/paul/simple/" },
+    { name = "character-describer", specifier = ">=0.1.0", index = "http://127.0.0.1:8819/v1/index/paul/simple/" },
     { name = "cozy-eval", specifier = ">=0.7.3" },
-    { name = "cozy-runtime", extras = ["media", "minimax-h3"], specifier = ">=0.23.22" },
+    { name = "cozy-runtime", extras = ["media", "minimax-h3"], specifier = ">=0.23.24" },
     { name = "diffusers", git = "https://github.com/huggingface/diffusers?rev=578c9b2c6636ab2424a0e56186268b83623656b2" },
+    { name = "h3-latent-upscaler", specifier = ">=0.1.1", index = "http://127.0.0.1:8819/v1/index/paul/simple/" },
     { name = "hf-xet", specifier = ">=1.6.0" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pydantic-core", specifier = ">=2.46.4" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "qwen-image-2", specifier = ">=0.3.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
+    { name = "qwen-image-2", specifier = ">=0.3.0", index = "http://127.0.0.1:8819/v1/index/paul/simple/" },
     { name = "regex", specifier = ">=2026.7.19" },
     { name = "safetensors", specifier = ">=0.8.0" },
+    { name = "seedvr2", specifier = ">=0.1.0", index = "http://127.0.0.1:8819/v1/index/paul/simple/" },
     { name = "shellingham", specifier = ">=1.5.4" },
     { name = "tensorfs", specifier = ">=0.3.74" },
     { name = "tokenizers", specifier = ">=0.23.1" },
@@ -734,6 +792,18 @@ wheels = [
 ]
 
 [[package]]
+name = "omegaconf"
+version = "2.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cc/10/1cabf3188a4d9684a06568c7fd76f9536eede625733c8399cf1f5337b83e/omegaconf-2.4.0.tar.gz", hash = "sha256:7e219a70bea371da250285b9c01c7db027bc421722799c2cc4ff14bc4a2a753b", size = 3544508, upload-time = "2026-10-09T12:44:02.326Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/bd/0d9f8247b0819385213d09564eda5c52d3673313c2414d51f72883ec24cd/omegaconf-2.4.0-py3-none-any.whl", hash = "sha256:f141a664c777582405e3cc6e0545ecc79429e79f844995b1a6e71c35946a025c", size = 254152, upload-time = "2026-10-09T12:43:59.764Z" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.3"
 source = { registry = "https://pypi.org/simple" }
@@ -855,7 +925,7 @@ wheels = [
 [[package]]
 name = "qwen-image-2"
 version = "0.4.0"
-source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
+source = { registry = "http://127.0.0.1:8819/v1/index/paul/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
     { name = "diffusers" },
@@ -869,7 +939,7 @@ dependencies = [
     { name = "transformers" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/qwen-image-2/0.4.0/qwen_image_2-0.4.0-py3-none-any.whl", hash = "sha256:22296ae8f7c77d6636e6c903453ba4a5058688ebf5723ab13ba5f3c46d44e981" },
+    { url = "http://127.0.0.1:8819/v1/index/paul/qwen-image-2/0.4.0/qwen_image_2-0.4.0-py3-none-any.whl", hash = "sha256:22296ae8f7c77d6636e6c903453ba4a5058688ebf5723ab13ba5f3c46d44e981" },
 ]
 
 [[package]]
@@ -919,6 +989,19 @@ wheels = [
 ]
 
 [[package]]
+name = "rotary-embedding-torch"
+version = "0.9.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "einops" },
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fc/63/776d55b395aed9d2815afc1740056e919691d1be1ceee203d101d33d1674/rotary_embedding_torch-0.9.1.tar.gz", hash = "sha256:f43c39cd9c0aaa17d47e876db89a552a203dd8af35e7980f484ab7ad7ea8bf69", size = 13246, upload-time = "2026-06-20T23:39:14.667Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ea/63/ca681366df98d207876c6ad7761ef6910668c83ec766fd5a70c56b9c3567/rotary_embedding_torch-0.9.1-py3-none-any.whl", hash = "sha256:489ef53e21ab4c4eb35c0c97b551d724f5eea71c2bca39acb8fee8d88b142a76", size = 17423, upload-time = "2026-06-20T23:39:13.427Z" },
+]
+
+[[package]]
 name = "safetensors"
 version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -926,6 +1009,50 @@ sdist = { url = "https://files.pythonhosted.org/packages/45/06/f955dbbb1859e3bd2
 wheels = [
     { url = "https://files.pythonhosted.org/packages/28/50/f203ff3a3ddfe19308efc83c5a3a29ed02bf786732ec35e68bf9162f3365/safetensors-0.8.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fd6f3f93c9a0a7cc2788ee63fb763353d4bd2e89b0751bc78fcf7dda00bea774", size = 516040, upload-time = "2026-06-09T07:52:16.29Z" },
     { url = "https://files.pythonhosted.org/packages/27/43/41c1621732edd934d868a00d1b891584c892a7b62a9aab82ea5a0a5623ee/safetensors-0.8.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:8e080062fcde23be189565e1c3305d16751a218ecf9412c8601e64204eb6f846", size = 722361, upload-time = "2026-06-09T07:52:23.924Z" },
+]
+
+[[package]]
+name = "scipy"
+version = "1.18.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7e/74/66de6258867beb2ef08f35f9f2ac017a52cacd5081714d239ff1a442d458/scipy-1.18.1.tar.gz", hash = "sha256:52c4b7422442aba924d03ad4019852b08a92e64ea187b933135687bfe2747307", size = 30781235, upload-time = "2026-08-21T23:28:50.599Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/df/64/ff35eb9e54894cf471ff4716abd3c81eb0a0626869217ce3e6ba4ccf17d7/scipy-1.18.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f55fa87b6c612ecd6b058f167c53231b1d14e412efe361d3d6e38b3631c73218", size = 35344199, upload-time = "2026-08-21T23:24:07.844Z" },
+    { url = "https://files.pythonhosted.org/packages/91/4c/075e4f66471bac101141ac739e9e135549be1bae584571bd03a530c056e1/scipy-1.18.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:d2924a03db38dc2e848bca2fe9f077dafb891480b91a00a0963a8cf86dfc31c1", size = 37480330, upload-time = "2026-08-21T23:24:19.608Z" },
+    { url = "https://files.pythonhosted.org/packages/41/48/6450ed9243315322bbc19ac57b9b70d66a20bf1d38d124c96bc4bf6af9ea/scipy-1.18.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fdaf5ea890a6183d0565f51a61799d67081bd5b1cf03c5f4b3fd3732108625c9", size = 35312578, upload-time = "2026-08-21T23:25:00.44Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/4e/3c45c33e00a77996c4b1cb707929f833ba7b1d522ee29f882512c330676d/scipy-1.18.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:e3b417bf8c2c7c16e8f58ad91db17783ec911ac16e7b50eb6eab6e809b4f5b07", size = 37457323, upload-time = "2026-08-21T23:25:12.483Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/89/2a844506d49651e9aa1af6ef95b6bd8031cb1d5a4375edec6155037e04cf/scipy-1.18.1-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ac0333bdf38309aa3dcbe7e3fa7ea29e7a2c37c6ea306a757b700ded8e4596ad", size = 35329183, upload-time = "2026-08-21T23:25:53.522Z" },
+    { url = "https://files.pythonhosted.org/packages/24/16/ec8536f351421f8bf60a1120930638f83790f4710b8230446aca3d6159d4/scipy-1.18.1-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:95298364e251be3e60249facbeeca03631d3bb7584f85879516ec55ac717b81f", size = 37469416, upload-time = "2026-08-21T23:26:05.432Z" },
+    { url = "https://files.pythonhosted.org/packages/87/53/39d046cc7574ed6acacb6bd5723e220107ece80bff12faaf3efc4ddeede4/scipy-1.18.1-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a1d33a7836f7ddc1993427966a0823468ec41bcbdb1a9f9942d1d7e57f803ba3", size = 35380876, upload-time = "2026-08-21T23:26:46.1Z" },
+    { url = "https://files.pythonhosted.org/packages/88/2e/f97a666d362fee68b18f41c9c30ed502ca5c98b549749bfcb52a8b74d1eb/scipy-1.18.1-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:11c423f1049c5755ad4409af52a9ada1cff96fe9b50795d4af3619f292901239", size = 37525424, upload-time = "2026-08-21T23:26:56.751Z" },
+    { url = "https://files.pythonhosted.org/packages/91/d4/bf3e735dc0b9d5a8ff45079d2540e17d3aff7a2f0048dd8f552ffd031d2b/scipy-1.18.1-cp315-cp315-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0ac49ea97594532dd44b7136094d35f5440fa06e6d9c6384a74c01764df388c5", size = 35333883, upload-time = "2026-08-21T23:27:34.293Z" },
+    { url = "https://files.pythonhosted.org/packages/70/cd/886219313a1012a48e6ae0ec4f302c837151beb92e1ff0d709ef8fdfc488/scipy-1.18.1-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:f29633129f9fa7e88a3f0fca835de2d030bfc9643f7799e1a0c46cee24d38fc7", size = 37470753, upload-time = "2026-08-21T23:27:44.435Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/3e/8572ef536957ddb8aa81bb4090d9e25f257e3b4e05d97deb54319deb8a3a/scipy-1.18.1-cp315-cp315t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:49023963c193dacee096301452f223ee24d86ec5807f8df93c0f7221d119e305", size = 35374253, upload-time = "2026-08-21T23:28:23.732Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/d9/135be205d9de8783193aff9cc3bf483a03a38e4b29432c954e8cb66ac14e/scipy-1.18.1-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:179ce34a8d0fe273d8883ba59e17e052247d08973dfcb743ca52bb1cce2d60b0", size = 37521946, upload-time = "2026-08-21T23:28:35.245Z" },
+]
+
+[[package]]
+name = "seedvr2"
+version = "0.1.2"
+source = { registry = "http://127.0.0.1:8819/v1/index/paul/simple/" }
+dependencies = [
+    { name = "cozy-runtime", extra = ["media"] },
+    { name = "diffusers" },
+    { name = "einops" },
+    { name = "msgspec" },
+    { name = "numpy" },
+    { name = "omegaconf" },
+    { name = "pillow" },
+    { name = "rotary-embedding-torch" },
+    { name = "tensorfs" },
+    { name = "torch" },
+    { name = "torchvision" },
+]
+wheels = [
+    { url = "http://127.0.0.1:8819/v1/index/paul/seedvr2/0.1.2/seedvr2-0.1.2-py3-none-any.whl", hash = "sha256:cbebf200df0b8c2ab43026f8e96ea093c5349b32d0c538642dec986dd3799f3a" },
 ]
 
 [[package]]
@@ -1050,7 +1177,7 @@ wheels = [
 
 [[package]]
 name = "transformers"
-version = "5.17.0"
+version = "5.19.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
@@ -1063,9 +1190,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/9e/750649904a065007a838981785b2bd8d9ff26154c6c341ac67d0b7f82c68/transformers-5.17.0.tar.gz", hash = "sha256:a153be279169b55b92d8000bf4af294aed684503d091cca7804da2dd8a9de000", size = 9817878, upload-time = "2026-09-09T15:39:56.886Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/65/4c/70012ed0795235fb6bd7806fafd4a1842f03e49ebbfa3bb9580e451948ce/transformers-5.19.0.tar.gz", hash = "sha256:87f38dd25e4521151b97e94520ac457f44a0ae8a8358a5b112daff6c64a822d6", size = 10032022, upload-time = "2026-10-06T16:39:00.229Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e8/d0/c502b60d684adbd98a8dc7d5bb866842772b816ac4354e4608be240041ae/transformers-5.17.0-py3-none-any.whl", hash = "sha256:78ec1ce21579b38dfb83950a0658cd119f87212a2fcfdff478096ce9d6c03801", size = 12295140, upload-time = "2026-09-09T15:39:53.746Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/59/1e7f1212c215c73690ae6cab4678efe1555ff985953e145d88cc212859b0/transformers-5.19.0-py3-none-any.whl", hash = "sha256:afcd2dd5f603ed28c1e1fcb00a338ccbb4ef5f878ed289635df8b58187afb518", size = 12599123, upload-time = "2026-10-06T16:38:56.794Z" },
 ]
 
 [[package]]
