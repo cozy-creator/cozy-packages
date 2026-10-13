@@ -2,7 +2,7 @@
 
 Managed SeedVR2 3B and 7B restoration with the upstream Apache-2.0 architectures, one-step
 sampler, fixed conditioning, standard PyTorch SDPA and Runtime-owned DiT/VAE weights.
-`upscale` takes a video, resolution (`1080p`, `1440p`, `2160p`), deterministic seed,
+`upscale` (3B) and `upscale_7b` take a video, resolution (`1080p`, `1440p`, `2160p`), deterministic seed,
 and `aspect_ratio` (`source` by default, or `16:9` for an exact letterboxed canvas).
 Frame presentation timestamps and audio are passed through Runtime's streaming media API.
 Temporal windows overlap and use the upstream Numz crossfade.
@@ -33,10 +33,8 @@ cozy run ./seedvr2/normalize model.dit=paul/seedvr2-dit-raw#sha256:DIT_CHECKPOIN
 
 For 7B, ingest `seedvr2_ema_7b_fp16.safetensors` to a separate raw model, reuse
 the same VAE and conditioning tree, and pass `variant=7b` during normalization.
-Publish that result as `paul/seedvr2-7b`; inference selects the matching upstream
-graph from the normalized checkpoint's architecture. Select it explicitly with
-`model.model=paul/seedvr2-7b@0.1.0/original` on `cozy run paul/seedvr2/upscale`.
-The default remains the 3B checkpoint.
+Publish that result as `seedvr2-7b`. `upscale` serves the 3B model and `upscale_7b`
+the 7B one; both take the same input, and the graph follows the checkpoint's architecture.
 
 Resolution defines the maximum 16:9 canvas; source-aspect output fits inside it. Internally, padding
 meets the model's 16-pixel grid and is cropped from the result. Audio is decoded
