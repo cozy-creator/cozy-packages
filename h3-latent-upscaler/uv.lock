@@ -181,7 +181,7 @@ wheels = [
 
 [[package]]
 name = "h3-latent-upscaler"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["model-execution"] },

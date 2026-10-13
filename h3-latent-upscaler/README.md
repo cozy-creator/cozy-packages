@@ -5,9 +5,11 @@ LBH-123-AI 3D Conv v1 network enlarges normalized H3 video latents spatially, pr
 time and leaving audio untouched. Target latent dimensions are exact, from 1x to 4x.
 The H3 package owns the follow-up refinement and video decode.
 
-The upstream ComfyUI node normalizes raw VAE latents first. Diffusers H3 latents are
-already normalized with those same per-channel mean/std values; this adapter calls
-the network directly and returns normalized CPU float32 latents. Full temporal context is the default. Optional temporal chunking uses the upstream
+The network expects H3's normalized latents normalized again by the same per-channel
+mean/std, as the ComfyUI node applies them to the latents it receives; this adapter does
+the same around the network and returns H3-normalized CPU float32 latents. On real H3
+latents the network's output, area-downsampled, has cosine 0.89 with its input this way
+and about 0 without the second normalization. Full temporal context is the default. Optional temporal chunking uses the upstream
 32-row chunks with overlap blending; it is not numerically identical to a full-context
 forward because GroupNorm and temporal convolutions see different windows.
 
