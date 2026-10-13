@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Literal, cast
 from collections.abc import Callable
 
 
@@ -14,6 +14,7 @@ from cozy_runtime.author import Config, Loader, Model, uses_components
 
 from .upstream.infer import VideoDiffusionInfer
 from .upstream.models.dit_v2.nadit import NaDiT
+from .upstream.models.dit.nadit import NaDiT as NaDiT7B
 from .upstream.models.video_vae_v3.modules.attn_video_vae import VideoAutoencoderKLWrapper
 
 DIT = dict(
@@ -64,6 +65,31 @@ VAE = dict(
     freeze_encoder=False,
 )
 
+Variant = Literal["3b", "7b"]
+ARCHITECTURES: dict[str, Variant] = {"SeedVR2-3B": "3b", "SeedVR2-7B": "7b"}
+# SeedVR's configs_7b/main.yaml: the 7B graph has separate text/video weights
+# throughout, rather than the 3B graph's mixed layers and SwiGLU feed-forward.
+DIT_7B = {
+    **{
+        key: value
+        for key, value in DIT.items()
+        if key
+        not in {"vid_out_norm", "txt_in_norm", "mm_layers", "msa_type", "rope_type", "rope_dim"}
+    },
+    "vid_dim": 3072,
+    "txt_dim": 3072,
+    "emb_dim": 18432,
+    "heads": 24,
+    "num_layers": 36,
+    "mlp_type": "normal",
+    "qk_rope": True,
+    "shared_mlp": False,
+    "shared_qkv": False,
+    "block_type": ["mmdit_sr"] * 36,
+    "window": [(4, 3, 3)] * 36,
+    "window_method": ["720pwin_by_size_bysize", "720pswin_by_size_bysize"] * 18,
+}
+
 
 class Conditioning(torch.nn.Module):
     positive: torch.Tensor
@@ -75,18 +101,22 @@ class Conditioning(torch.nn.Module):
         self.register_buffer("negative", torch.empty(64, 5120, dtype=torch.bfloat16))
 
 
-def modules() -> dict[str, torch.nn.Module]:
+def modules(variant: Variant = "3b") -> dict[str, torch.nn.Module]:
+    if variant not in ("3b", "7b"):
+        raise ValueError(f"unknown SeedVR2 variant: {variant}")
+    constructor, settings = (NaDiT, DIT) if variant == "3b" else (NaDiT7B, DIT_7B)
     return {
-        "dit": cast(Callable[..., torch.nn.Module], NaDiT)(**DIT).eval().half(),
+        "dit": cast(Callable[..., torch.nn.Module], constructor)(**settings).eval().half(),
         "vae": cast(Callable[..., torch.nn.Module], VideoAutoencoderKLWrapper)(**VAE).eval().half(),
     }
 
 
 class Graph:
     def __init__(self, config: Config) -> None:
-        if config.mapping().get("architecture") != "SeedVR2-3B":
-            raise ValueError("SeedVR2 requires its normalized 3B checkpoint")
-        self.components = {**modules(), "conditioning": Conditioning()}
+        architecture = config.mapping().get("architecture")
+        if architecture not in ARCHITECTURES:
+            raise ValueError("SeedVR2 requires a normalized 3B or 7B checkpoint")
+        self.components = {**modules(ARCHITECTURES[architecture]), "conditioning": Conditioning()}
 
 
 def build(config: Config) -> Graph:
