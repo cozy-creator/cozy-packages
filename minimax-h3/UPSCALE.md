@@ -57,5 +57,17 @@ The requested 15 seconds follows H3's native frame grid (362 frames at 24 fps, a
 Upscaling can restore or synthesize texture; it cannot guarantee correction of wrong
 motion or character identity. Review moving faces, hands and clothing at normal speed.
 
-This source is under qualification; the 1080p, 1440p and 2160p GPU comparison results
-are not established until the accompanying benchmark receipts are complete.
+Qualified 2026-10-13 on one RTX Pro 6000 with 15 s Turbo originals (seed 581203; FL2VA and
+Ref2VA). Minutes per upscale of the 362-frame clip, and down-consistency PSNR (output area-scaled
+back to 1344×768 against the original) for FL2VA / Ref2VA:
+
+| method | 1080p | 1440p | 2160p |
+|---|---|---|---|
+| `h3_latent` | 3.1–3.6 min, 33.7 / 35.4 dB | 6.9–7.3 min, 35.1 / 35.6 dB | fails on one GPU |
+| `seedvr2` (3B) | 6.8–8.0 min, 33.4 / 33.0 dB | 11.7–13.1 min, 36.2 / 34.7 dB | 26–30 min, 38.0 / 36.4 dB |
+| `seedvr2_7b` | 7.4–8.2 min, 34.5 / 34.1 dB | 12.5 min, 38.1 / 36.2 dB | 27.6–27.7 min, 39.3 / 37.6 dB |
+
+`seedvr2_7b` keeps faces closest to the original while adding detail; `seedvr2` is sharpest
+but raises contrast; `h3_latent` is soft and can drift a reference identity slightly. 2160p
+`h3_latent` needs more than one GPU: a 96 GB RTX Pro 6000 refuses its first DiT block and an
+H200 faults in attention at about 866k tokens. Use `seedvr2` or `seedvr2_7b` for 2160p.
