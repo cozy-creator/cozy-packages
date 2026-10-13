@@ -49,14 +49,15 @@ See the checkpoint's licence/Notice and upstream source attribution in Runtime.
 
 ## Prepare the checkpoint
 
-With Runtime 0.18.23 or newer, use an existing rental to download, convert, attach
-required metadata, and upload the model:
+Use an existing rental to download, convert and upload the model. The checkpoint
+carries the upstream `processor/` files (tokenizer, chat template, image and video
+processor configs) as assets; the package builds its processor from them:
 
 ```sh
 cozy model upload \
   hf://Qwen/Qwen-Image-2.1@790c92633540aa0cb11d9abf19eb46d861714758 \
-  paul/reference-image --rental=YOUR_RENTAL --await
-cozy model publish paul/reference-image --release 0.1.0 \
+  paul/qwen-image-2.1 --rental=YOUR_RENTAL --await
+cozy model publish paul/qwen-image-2.1 --release 0.1.0 \
   --lane original=sha256:CHECKPOINT_DIGEST
 ```
 
@@ -118,7 +119,7 @@ image = await generate_image(
 
 The Hub package is `<account>/qwen-image-2`, e.g. `paul/qwen-image-2` on the local
 Hub and `fidika/qwen-image-2` on tensorhub.com; its callable is `generate_image`. The
-default model is the org-relative `reference-image@0.1.0/original`: the publishing
-account's `reference-image` model.
+default model is the org-relative `qwen-image-2.1@0.1.0/original`: the publishing
+account's `qwen-image-2.1` model.
 Installing the wheel alone does not turn GPU execution into an in-process call;
 Cozy supplies the managed caller when composing package functions.

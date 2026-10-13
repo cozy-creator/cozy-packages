@@ -151,7 +151,7 @@ def rgb_image(decoded: Any) -> Image.Image:
 
 
 @app.entrypoint(
-    defaults={"model": [{"gpu": "*", "gpus": 1, "lane": "reference-image@0.1.0/original"}]},
+    defaults={"model": [{"gpu": "*", "gpus": 1, "lane": "qwen-image-2.1@0.1.0/original"}]},
     memoize=Memoize(requires=["seed"]),
 )
 def generate_image(

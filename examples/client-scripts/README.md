@@ -8,25 +8,6 @@ Current private capture and preparation require Runtime 0.16.10 or newer on
 both the local client and private worker. The script captures its dependencies.
 
 
-## Qwen reference-image preparation
-
-Use the standard command to prepare a complete model on an existing rental:
-
-```sh
-cozy model upload \
-  hf://Qwen/Qwen-Image-2.1@790c92633540aa0cb11d9abf19eb46d861714758 \
-  paul/reference-image --rental=YOUR_RENTAL --await
-```
-
-Runtime 0.18.23 owns the reviewed download, native TensorFS conversion, and required
-configuration, tokenizer and license preparation. Upload returns an immutable
-checkpoint. Publish its release separately, using the returned checkpoint ID:
-
-```sh
-cozy model publish paul/reference-image --release 0.1.0 \
-  --lane original=sha256:CHECKPOINT_DIGEST
-```
-
 `sdxl_prepare.py` converts any Civitai SDXL checkpoint into its served lanes (`fp16`, plus
 the `fp8`/`mxfp8` package functions) and uploads them; `h3_lanes.py` does the same for every
 H3 lane and the PDD-8 turbo LoRA. Set their constants (scripts take no scalar arguments), then:

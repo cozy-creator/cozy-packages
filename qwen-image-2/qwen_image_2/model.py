@@ -7,8 +7,7 @@ no Diffusers weight loader, device placement, or offload hook takes part in serv
 
 from __future__ import annotations
 
-import base64
-import zlib
+import json
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any
 
@@ -26,7 +25,14 @@ from transformers import (
 )
 from transformers import initialization as transformer_init
 
-from cozy_runtime.author import Config, ConformanceError, Loader, Model, uses_components
+from cozy_runtime.author import (
+    Config,
+    ConformanceError,
+    Loader,
+    Model,
+    ModelAssets,
+    uses_components,
+)
 
 try:
     from diffusers import (
@@ -101,41 +107,35 @@ class QwenImage21Graph:
         # built; Runtime skips its stored weight.
         self.components["text_encoder"].lm_head = torch.nn.Identity()
         self.scheduler_config = _section(mapping["scheduler"], "scheduler")
-        self.processor_config = _section(mapping.get("processor", {}), "processor")
 
 
 def build_qwen_image21(config: Config) -> QwenImage21Graph:
     return QwenImage21Graph(config)
 
 
-def build_processor(config: Mapping[str, Any]) -> Any:
-    """Decode the prepared checkpoint's bounded processor bundle without file/network loading."""
-    expected = {
-        "tokenizer",
-        "tokenizer_config",
-        "image_processor",
-        "video_processor",
-        "chat_template",
-    }
-    if not expected <= set(config):
-        raise ValueError("Qwen Image processor config is missing fields")
-    encoded = config["tokenizer"]
-    if not isinstance(encoded, str) or len(encoded) > 32 << 20:
-        raise ValueError("Qwen Image tokenizer exceeds its encoded size limit")
-    compressed = base64.b64decode(encoded, altchars=b"-_", validate=True)
-    inflater = zlib.decompressobj()
-    raw = inflater.decompress(compressed, (32 << 20) + 1)
-    if len(raw) > 32 << 20 or not inflater.eof or inflater.unused_data:
-        raise ValueError("Qwen Image tokenizer exceeds its size limit or has invalid compression")
+def build_processor(assets: ModelAssets) -> Any:
+    """Qwen3-VL's processor from the checkpoint's upstream `processor/` files, parsed in memory."""
+
+    def read(name: str) -> bytes:
+        return assets.read(f"processor/{name}")
+
+    tokenizer_config = json.loads(read("tokenizer_config.json"))
+    for key in (
+        "tokenizer_file",
+        "name_or_path",
+        "added_tokens_decoder",
+        "tokenizer_class",
+        "processor_class",
+    ):
+        tokenizer_config.pop(key, None)
     tokenizer = PreTrainedTokenizerFast(
-        tokenizer_object=Tokenizer.from_str(raw.decode("utf-8")),
-        **dict(config["tokenizer_config"]),
+        tokenizer_object=Tokenizer.from_str(read("tokenizer.json").decode()), **tokenizer_config
     )
     return Qwen3VLProcessor(
         tokenizer=tokenizer,
-        image_processor=Qwen2VLImageProcessor(**dict(config["image_processor"])),
-        video_processor=Qwen3VLVideoProcessor(**dict(config["video_processor"])),
-        chat_template=config["chat_template"],
+        image_processor=Qwen2VLImageProcessor(**json.loads(read("preprocessor_config.json"))),
+        video_processor=Qwen3VLVideoProcessor(**json.loads(read("video_preprocessor_config.json"))),
+        chat_template=read("chat_template.jinja").decode(),
     )
 
 
@@ -183,7 +183,7 @@ class QwenImage21Model(Model[QwenImage21Graph]):
 
     def load(self, loader: Loader) -> None:
         self.graph = loader.construct(QwenImage21Graph, factory=build_qwen_image21)
-        self.processor = build_processor(self.graph.processor_config)
+        self.processor = build_processor(loader.assets)
 
     def _pipeline(self) -> _StagedPipeline:
         return _StagedPipeline(
