@@ -88,6 +88,34 @@ def upscale(
     out: Outputs,
     tel: Telemetry,
 ) -> UpscaleOutput:
+    """Restore with SeedVR2 3B."""
+    return _upscale(ctx, payload, model, decoder, out, tel)
+
+
+@app.entrypoint(
+    defaults={"model": [{"gpu": "*", "gpus": 1, "lane": "seedvr2-7b@0.1.0/original"}]},
+    memoize=True,
+)
+def upscale_7b(
+    ctx: Context,
+    payload: UpscaleInput,
+    model: RestorationModel,
+    decoder: MediaDecoder,
+    out: Outputs,
+    tel: Telemetry,
+) -> UpscaleOutput:
+    """Restore with SeedVR2 7B."""
+    return _upscale(ctx, payload, model, decoder, out, tel)
+
+
+def _upscale(
+    ctx: Context,
+    payload: UpscaleInput,
+    model: RestorationModel,
+    decoder: MediaDecoder,
+    out: Outputs,
+    tel: Telemetry,
+) -> UpscaleOutput:
     # 17-frame windows overlap by five frames (12 new frames / three VAE steps).
     # Keep only one window and its tail; the media writer streams the completed frames.
     window, overlap = 17, 5
