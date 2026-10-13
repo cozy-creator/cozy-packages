@@ -1721,7 +1721,7 @@ SegmentSeconds = Annotated[int, msgspec.Meta(ge=MIN_DURATION_S, le=MAX_DURATION_
 def held_frames(plan: ContinuationPlan) -> int:
     """The frames a segment's DiT holds: its sampled window, plus the carried picture again as
     condition rows (the double form; single-copy was tested and rejected, 2026-10-10)."""
-    return plan.sample_frames + plan.prefix_frames
+    return plan.sample_frames + plan.carried.frames
 
 
 class MotionInput(msgspec.Struct):
@@ -2112,10 +2112,10 @@ async def long_form(
     turbo, steps = segment_sampling(payload)
     calls = segment_calls(payload)
     carries = segment_carries(payload)
-    # A carried picture shares the native window with new frames. Shorten requested
+    # A carry's regenerated head shares the native window with new frames. Shorten requested
     # segments to its whole-second budget instead of refusing a valid 5-15s request.
     durations = [
-        min(shot.duration_s, (MAX_FRAMES - carry.frames) // FPS)
+        min(shot.duration_s, (MAX_FRAMES - carry.head_frames) // FPS)
         for shot, carry in zip(payload.segments, carries, strict=True)
     ]
     warnings = [warning for call in calls for warning in call.warnings]
@@ -2127,13 +2127,13 @@ async def long_form(
         if duration != shot.duration_s:
             warning = (
                 f"Segment {index + 1}: shortened from {shot.duration_s}s to {duration}s "
-                f"to fit {carries[index].frames} carried frames."
+                f"to fit {carries[index].head_frames} carried frames."
             )
             warnings.append(warning)
             tel.log(
                 "Adjusted segment duration", shot=index + 1,
                 requested_seconds=shot.duration_s, delivered_seconds=duration,
-                context_frames=carries[index].frames,
+                context_frames=carries[index].head_frames,
             )
     # Validate every adjusted generation window before creating reference images.
     plans = [

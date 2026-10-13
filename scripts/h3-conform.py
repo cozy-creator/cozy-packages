@@ -3546,7 +3546,7 @@ def arm_interface() -> None:
     check("picture and sound carry independently", package.segment_carries(silent),
           [Carry(), Carry(22), Carry(0, True), Carry()])
     plans = [
-        ContinuationPlan(15 if not carry.frames else 14, carry, successor)
+        ContinuationPlan(14 if carry else 15, carry, successor)
         for carry, successor in zip(
             package.segment_carries(silent),
             [*package.segment_carries(silent)[1:], Carry()],
@@ -3555,7 +3555,7 @@ def arm_interface() -> None:
     ]
     check("a segment ends its picture where its successor's carry needs it",
           [(plan.sample_frames, plan.delivered_frames) for plan in plans],
-          [(362, 362), (362, 339), (362, 362), (362, 362)])
+          [(362, 362), (362, 339), (362, 338), (362, 362)])
     for field in ("context_frames", "context_audio"):
         for value in (0, 22, 56, None, "false"):
             invalid = {"segments": [{"prompt": "x", "duration_s": 5, field: value}],
