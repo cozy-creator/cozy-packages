@@ -112,6 +112,7 @@ from h3_latent_upscaler import upscale as upscale_latents
 from seedvr2 import Resolution as RestorationResolution
 from seedvr2 import UpscaleOutput as RestorationOutput
 from seedvr2 import upscale as restore_video
+from seedvr2 import upscale_7b as restore_video_7b
 from cozy_runtime.models.minimax_h3.refinement import capture_latents, decode_latents, encode_latents
 from story import (
     SegmentCall,
@@ -1134,9 +1135,11 @@ async def _upscale_generation(
     *, task: str, seed: int, frames: int, tel: Telemetry,
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
-    if method is UpscaleMethod.SEEDVR2:
-        restore = cast(Callable[..., Awaitable[RestorationOutput]], restore_video)
-        with tel.scope(f"SeedVR2 upscale to {resolution.value}"):
+    if method is not UpscaleMethod.H3_LATENT:
+        seven = method is UpscaleMethod.SEEDVR2_7B
+        restore = cast(Callable[..., Awaitable[RestorationOutput]],
+                       restore_video_7b if seven else restore_video)
+        with tel.scope(f"SeedVR2 {'7B' if seven else '3B'} upscale to {resolution.value}"):
             result = await restore(
                 video=source.video, resolution=RestorationResolution(resolution.value), seed=seed,
                 aspect_ratio="16:9",
@@ -1253,6 +1256,9 @@ app.job(ref2va_turbo, emits_media=True, accelerator=False)
 class UpscaleComparisonInput(ClipInput, kw_only=True):
     seed: int
     resolutions: tuple[Resolution, ...] = (Resolution.FULL_HD, Resolution.QHD, Resolution.UHD)
+    methods: tuple[UpscaleMethod, ...] = (
+        UpscaleMethod.H3_LATENT, UpscaleMethod.SEEDVR2, UpscaleMethod.SEEDVR2_7B,
+    )
     mode: Literal["turbo", "standard"] = "turbo"
     steps: Steps = DEFAULT_STEPS
 
@@ -1261,6 +1267,7 @@ class UpscaleComparisonOutput(msgspec.Struct):
     original: Annotated[VideoAsset, AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
     h3_latent: Annotated[list[VideoAsset], AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
     seedvr2: Annotated[list[VideoAsset], AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
+    seedvr2_7b: Annotated[list[VideoAsset], AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
     errors: list[str]
 
 
@@ -1271,14 +1278,17 @@ async def _compare_upscalers(
     if (not payload.resolutions or Resolution.NATIVE in payload.resolutions
             or len(set(payload.resolutions)) != len(payload.resolutions)):
         raise InvalidRequest("select distinct comparison resolutions from 1080p, 1440p and 2160p")
+    if not payload.methods or len(set(payload.methods)) != len(payload.methods):
+        raise InvalidRequest("select distinct upscale methods", fields=["methods"])
     turbo = payload.mode == "turbo"
+    retain = UpscaleMethod.H3_LATENT in payload.methods
     request: RetainedClipInput
     if turbo:
         request = RetainedClipInput(prompt=payload.prompt, seed=payload.seed,
-                                    duration_s=payload.duration_s, retain_latents=True)
+                                    duration_s=payload.duration_s, retain_latents=retain)
     else:
         request = RetainedStandardClipInput(prompt=payload.prompt, seed=payload.seed,
-                                            duration_s=payload.duration_s, retain_latents=True,
+                                            duration_s=payload.duration_s, retain_latents=retain,
                                             steps=payload.steps)
     if trunk == "fl2va":
         selected = generate_fl2va_turbo if turbo else generate_fl2va
@@ -1290,8 +1300,8 @@ async def _compare_upscalers(
     out.publish("original", source.video, label="Original 768p")
     videos: dict[UpscaleMethod, list[VideoAsset]] = {method: [] for method in UpscaleMethod}
     errors = []
-    for resolution in payload.resolutions:
-        for method in (UpscaleMethod.H3_LATENT, UpscaleMethod.SEEDVR2):
+    for method in payload.methods:
+        for resolution in payload.resolutions:
             try:
                 result = await _upscale_generation(
                     ctx, source, resolution, method, task=trunk,
@@ -1307,7 +1317,8 @@ async def _compare_upscalers(
                 out.publish(method.value, result.video, label=f"{method.value} {resolution.value}")
     ctx.release_gpus()
     return UpscaleComparisonOutput(
-        source.video, videos[UpscaleMethod.H3_LATENT], videos[UpscaleMethod.SEEDVR2], errors
+        source.video, videos[UpscaleMethod.H3_LATENT], videos[UpscaleMethod.SEEDVR2],
+        videos[UpscaleMethod.SEEDVR2_7B], errors,
     )
 
 

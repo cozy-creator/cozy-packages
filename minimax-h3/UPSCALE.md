@@ -25,9 +25,9 @@ FL2VA and Ref2VA, including their Turbo variants, accept `resolution` as a close
 output. Higher tiers deliver 1920×1080, 2560×1440, or 3840×2160 with aspect-preserving
 fitting and narrow letterboxing where necessary; the original 7:4 frame is never stretched.
 
-Choose `upscale_method: seedvr2` (default) for video restoration, or
-`upscale_method: h3_latent` for learned latent upscaling followed by two standard H3
-refinement steps. Original audio and frame timing are retained. H3 refinement uses a
+Choose `upscale_method: seedvr2` (default, SeedVR2 3B) or `seedvr2_7b` (SeedVR2 7B) for
+video restoration, or `upscale_method: h3_latent` for learned latent upscaling followed by
+two standard H3 refinement steps. Original audio and frame timing are retained. H3 refinement uses a
 suffix of the existing standard 30-step schedule, even when the original was Turbo.
 It does not apply arbitrary extra steps to the PDD-8 adapter.
 
@@ -43,10 +43,10 @@ cozy run paul/minimax-h3/ref2va_turbo --asset character.png \
 ```
 
 `compare_fl2va_upscalers` and `compare_ref2va_upscalers` reuse one original generation
-for both methods and all selected resolutions. Supply the same inputs plus a required seed,
+for every selected method and resolution. Supply the same inputs plus a required seed,
 optionally `resolutions: [1080p, 1440p, 2160p]` (the default),
-and optionally `mode: standard` (default `turbo`). They publish `original`, `h3_latent`,
-and `seedvr2` videos, labeled by resolution. Every result uses the exact same original
+`methods: [h3_latent, seedvr2, seedvr2_7b]` (the default), and `mode: standard` (default
+`turbo`). They publish `original` and one video per method and resolution, labeled by both. Every result uses the exact same original
 generation. A failed variant records its error and leaves the other comparisons running.
 
 The requested 15 seconds follows H3's native frame grid (362 frames at 24 fps, about

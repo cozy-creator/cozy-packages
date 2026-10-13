@@ -12,6 +12,7 @@ class Resolution(Enum):
 
 class UpscaleMethod(Enum):
     SEEDVR2 = "seedvr2"
+    SEEDVR2_7B = "seedvr2_7b"
     H3_LATENT = "h3_latent"
 
 
