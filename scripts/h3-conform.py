@@ -106,7 +106,7 @@ from cozy_runtime.models.minimax_h3.conditioner import (  # noqa: E402
     build_text_conditioner,
     text_conditioner_config,
 )
-from cozy_runtime.models.minimax_h3.continuation import plan_continuation  # noqa: E402
+from cozy_runtime.models.minimax_h3.continuation import Carry, ContinuationPlan  # noqa: E402
 from cozy_runtime.models.minimax_h3.official import (  # noqa: E402
     FPS,
     MAX_CONDITIONER_VISION_TOKENS,
@@ -3415,9 +3415,11 @@ def arm_interface() -> None:
             "request/assets/[]/fidelity",
             "request/assets/[]/label",
             "request/payload/context",
+            "request/payload/context_audio",
             "request/payload/context_frames",
             "request/payload/expected_provenance",
             "request/payload/expected_provenance/union/1/turbo_lora_manifest",
+            "request/payload/next_context_audio",
             "request/payload/next_context_frames",
             "request/payload/previous_provenance",
             "request/payload/previous_provenance/union/1/turbo_lora_manifest",
@@ -3425,8 +3427,8 @@ def arm_interface() -> None:
         ],
     )
     # Run 1560: a 12 s continuation shared a 6 s opener's shape and ran on its peak.
-    opener = plan_continuation(6 * FPS)
-    follower = plan_continuation(12 * FPS, context_frames=56)
+    opener = ContinuationPlan(6)
+    follower = ContinuationPlan(12, Carry(56, True))
     check(
         "a segment's shape is the frames its DiT holds: window plus conditioning context",
         [
@@ -3446,7 +3448,7 @@ def arm_interface() -> None:
         ],
         [
             {"frames": 158, "steps": 8},
-            {"frames": 345 if hasattr(follower, "held_frames") else 345 + 56, "steps": 8},
+            {"frames": 345 + 56, "steps": 8},
         ],
     )
     adapter = object()
@@ -3513,8 +3515,11 @@ def arm_interface() -> None:
     check("long-form has no contradictory standard step default", unseeded.steps, None)
     check("long-form preserves the global context default", unseeded.context_frames, 22)
     check("segment context defaults to true", [s.context_frames for s in unseeded.segments], [True, True])
-    check("segments inherit global context except the first", package.context_windows(unseeded), [0, 22])
-    for global_frames, expected_windows in ((None, [0, 22, 0, 22]), (0, [0, 0, 0, 0]), (39, [0, 39, 0, 39])):
+    check("segment sound defaults to true", [s.context_audio for s in unseeded.segments], [True, True])
+    check("segments carry the global picture and the sound except the first",
+          package.segment_carries(unseeded), [Carry(), Carry(22, True)])
+    for global_frames, windows in ((None, [0, 22, 0, 22]), (0, [0, 0, 0, 0]), (39, [0, 39, 0, 39])):
+        expected_windows = [Carry(n, bool(i)) for i, n in enumerate(windows)]
         authored: dict[str, Any] = {
             "segments": [{"prompt": "x", "duration_s": 15,
                           **({"context_frames": False} if index == 2 else {})}
@@ -3524,24 +3529,46 @@ def arm_interface() -> None:
         if global_frames is not None:
             authored["context_frames"] = global_frames
         resolved = msgspec.convert(authored, type=package.LongFormInput)
-        check(f"global window with a segment opt-out {global_frames}", package.context_windows(resolved), expected_windows)
+        check(f"global window with a segment picture opt-out {global_frames}",
+              package.segment_carries(resolved), expected_windows)
         explicit = copy.deepcopy(authored)
         for segment in explicit["segments"]:
             segment.setdefault("context_frames", True)
         check(f"explicit true matches omission with global {global_frames}",
-              package.context_windows(msgspec.convert(explicit, type=package.LongFormInput)), expected_windows)
-    for value in (0, 22, 56, None, "false"):
-        invalid = {"segments": [{"prompt": "x", "duration_s": 5, "context_frames": value}],
-                   "references": [{"name": "Hero", "kind": "character"}]}
-        refusal(f"segment context refuses {value!r}",
-                partial(msgspec.convert, invalid, type=package.LongFormInput),
-                "ValidationError")
+              package.segment_carries(msgspec.convert(explicit, type=package.LongFormInput)), expected_windows)
+    silent = msgspec.convert(
+        {"segments": [{"prompt": "x", "duration_s": 5}] + [
+            {"prompt": "x", "duration_s": 5, "context_frames": frames, "context_audio": audio}
+            for frames, audio in ((True, False), (False, True), (False, False))
+        ], "references": [{"name": "Hero", "kind": "character"}]},
+        type=package.LongFormInput,
+    )
+    check("picture and sound carry independently", package.segment_carries(silent),
+          [Carry(), Carry(22), Carry(0, True), Carry()])
+    plans = [
+        ContinuationPlan(15 if not carry.frames else 14, carry, successor)
+        for carry, successor in zip(
+            package.segment_carries(silent),
+            [*package.segment_carries(silent)[1:], Carry()],
+            strict=True,
+        )
+    ]
+    check("a segment ends its picture where its successor's carry needs it",
+          [(plan.sample_frames, plan.delivered_frames) for plan in plans],
+          [(362, 362), (362, 339), (362, 362), (362, 362)])
+    for field in ("context_frames", "context_audio"):
+        for value in (0, 22, 56, None, "false"):
+            invalid = {"segments": [{"prompt": "x", "duration_s": 5, field: value}],
+                       "references": [{"name": "Hero", "kind": "character"}]}
+            refusal(f"segment {field} refuses {value!r}",
+                    partial(msgspec.convert, invalid, type=package.LongFormInput),
+                    "ValidationError")
     for job in ("long_form", "long_form_cuts"):
         segment = next(f for f in jobs[job]["request"]["fields"] if f["name"] == "segments")
         check(
             f"a {job} segment preserves the turbo request fields",
             [(f["name"], f["type"]) for f in segment["type"]["list"]["fields"]
-             if f["name"] not in {"context_frames", "non_diegetic_music"}],
+             if f["name"] not in {"context_frames", "context_audio", "non_diegetic_music"}],
             [
                 (f["name"], f["type"])
                 for f in workflows["ref2va_turbo"]["request"]["fields"]
@@ -3560,9 +3587,10 @@ def arm_interface() -> None:
             {"name": "non_diegetic_music", "type": {"union": ["null", "str"]}, "wire": "optional"},
         )
         check(
-            f"per-segment motion context belongs only to long_form ({job})",
-            any(f["name"] == "context_frames" for f in segment["type"]["list"]["fields"]),
-            job == "long_form",
+            f"per-segment picture and sound carry belong only to long_form ({job})",
+            [f["name"] for f in segment["type"]["list"]["fields"]
+             if f["name"] in {"context_frames", "context_audio"}],
+            ["context_frames", "context_audio"] if job == "long_form" else [],
         )
     check(
         "long_form request fields",

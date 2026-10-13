@@ -350,10 +350,22 @@ class CutJoin:
     soundtrack join one CMAF video when the segment lands, and the video joined so far is a
     revision the run publishes; the last revision is the joined video, byte for byte. A
     segment's peak gain is its own, so a published fragment never changes when a later
-    segment is loud; it equals the one-shot join's unless a segment clips."""
+    segment is loud; it equals the one-shot join's unless a segment clips.
 
-    def __init__(self, decoder: MediaDecoder, out: Outputs, check: Callable[[], None]) -> None:
+    `continuous` joins segments whose sound each starts where the previous one's ended (H3
+    continuation cuts it so): every soundtrack is kept whole, and only the running clock
+    must stay within a frame of the picture."""
+
+    def __init__(
+        self,
+        decoder: MediaDecoder,
+        out: Outputs,
+        check: Callable[[], None],
+        *,
+        continuous: bool = False,
+    ) -> None:
         self.decoder, self.out, self.check = decoder, out, check
+        self.continuous = continuous
         self.join: VideoJoin | None = None
         self.audio: DecodedAudioFormat | None = None
         self.scans: list[_Scan] = []
@@ -377,10 +389,13 @@ class CutJoin:
                     code="shot_frames",
                 )
             self.scans.append(replace(scan, frames=copied))
-            tolerance = self.out.video_audio_frame_samples
-            selection = _segment_selections(
-                self.scans, FRAME_RATE, audio, tolerance, trim_replay=False
-            )[-1]
+            if self.continuous:
+                selection = self._whole(scan, audio)
+            else:
+                tolerance = self.out.video_audio_frame_samples
+                selection = _segment_selections(
+                    self.scans, FRAME_RATE, audio, tolerance, trim_replay=False
+                )[-1]
             gain = _global_gain(self.scans[-1:], [selection], [_Gains()], audio)
             segment = _SegmentAudio(audio, selection, _Gains(), gain, self.output_audio)
             with self.decoder.stream_audio(scan.asset) as stream:
@@ -393,6 +408,18 @@ class CutJoin:
             self.output_audio = segment.pts
 
         return self.join.append(scan.asset, soundtrack, last=last)
+
+    def _whole(self, scan: _Scan, audio: DecodedAudioFormat) -> _AudioSelection:
+        frames = sum(joined.frames for joined in self.scans)
+        clock = _nearest(Fraction(frames * audio.sample_rate, 1) / FRAME_RATE)
+        drift = self.output_audio + scan.audio_samples - clock
+        if abs(drift) > _nearest(Fraction(audio.sample_rate, 1) / FRAME_RATE):
+            raise InvalidRequest(
+                f"segment {len(self.scans)} leaves the soundtrack {drift} samples off the "
+                "picture",
+                code="invalid_request",
+            )
+        return _AudioSelection(0, scan.audio_samples, scan.audio_samples, 0, 0)
 
     def finish(self) -> SavedVideo:
         """The joined video: the last revision when the last append said so."""
