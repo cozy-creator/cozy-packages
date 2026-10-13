@@ -210,9 +210,6 @@ minimax-h3 = [
     { name = "torchvision" },
     { name = "transformers" },
 ]
-model-execution = [
-    { name = "tensorfs" },
-]
 
 [[package]]
 name = "cryptography"
@@ -357,22 +354,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/ee/02a2c011bdab74c6fb3c75474d40b3052059d95df7e73351460c8588d963/h11-0.16.0.tar.gz", hash = "sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1", size = 101250, upload-time = "2025-04-24T03:35:25.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl", hash = "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86", size = 37515, upload-time = "2025-04-24T03:35:24.344Z" },
-]
-
-[[package]]
-name = "h3-latent-upscaler"
-version = "0.1.2"
-source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
-dependencies = [
-    { name = "cozy-runtime", extra = ["model-execution"] },
-    { name = "einops" },
-    { name = "msgspec" },
-    { name = "safetensors" },
-    { name = "tensorfs" },
-    { name = "torch" },
-]
-wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/h3-latent-upscaler/0.1.2/h3_latent_upscaler-0.1.2-py3-none-any.whl", hash = "sha256:9a635b3811c19cb549dfda5acd3fa13a91d5c9d94e2bd01ce8ca02f8af528de6" },
 ]
 
 [[package]]
@@ -535,7 +516,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.33.1"
+version = "1.34.0"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },
@@ -543,7 +524,6 @@ dependencies = [
     { name = "cozy-eval" },
     { name = "cozy-runtime", extra = ["media", "minimax-h3"] },
     { name = "diffusers" },
-    { name = "h3-latent-upscaler" },
     { name = "hf-xet" },
     { name = "msgspec" },
     { name = "numpy" },
@@ -568,7 +548,6 @@ requires-dist = [
     { name = "cozy-eval", specifier = ">=0.7.3" },
     { name = "cozy-runtime", extras = ["media", "minimax-h3"], specifier = ">=0.23.30" },
     { name = "diffusers", git = "https://github.com/huggingface/diffusers?rev=578c9b2c6636ab2424a0e56186268b83623656b2" },
-    { name = "h3-latent-upscaler", specifier = ">=0.1.2", index = "https://tensorhub.com/v1/index/fidika/simple/" },
     { name = "hf-xet", specifier = ">=1.6.0" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
@@ -577,7 +556,7 @@ requires-dist = [
     { name = "qwen-image-2", specifier = ">=0.5.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
     { name = "regex", specifier = ">=2026.7.19" },
     { name = "safetensors", specifier = ">=0.8.0" },
-    { name = "seedvr2", specifier = ">=0.1.3", index = "https://tensorhub.com/v1/index/fidika/simple/" },
+    { name = "seedvr2", specifier = ">=0.2.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
     { name = "shellingham", specifier = ">=1.5.4" },
     { name = "tensorfs", specifier = ">=0.3.74" },
     { name = "tokenizers", specifier = ">=0.23.1" },
@@ -999,7 +978,7 @@ wheels = [
 
 [[package]]
 name = "seedvr2"
-version = "0.1.3"
+version = "0.2.0"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -1015,7 +994,7 @@ dependencies = [
     { name = "torchvision" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/seedvr2/0.1.3/seedvr2-0.1.3-py3-none-any.whl", hash = "sha256:bbd0c31b7e76ef0e595df8bbe5b3418ac85f4d2e5cc9716b98a22dd5bcc545d5" },
+    { url = "https://tensorhub.com/v1/index/fidika/seedvr2/0.2.0/seedvr2-0.2.0-py3-none-any.whl", hash = "sha256:15ce278142cca831f19d517891dcf7b35e3d33e1f0d140a44120dfcad2a0f024" },
 ]
 
 [[package]]

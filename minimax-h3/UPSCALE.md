@@ -24,50 +24,53 @@ either `references` or attached `assets`; a references-only request sends `"asse
 ```
 
 FL2VA and Ref2VA, including their Turbo variants, accept `resolution` as a closed enum:
-`768p`, `1080p`, `1440p`, or `2160p` (4K UHD). The default remains the original 1344×768
-output. Higher tiers deliver 1920×1080, 2560×1440, or 3840×2160 with aspect-preserving
-fitting and narrow letterboxing where necessary; the original 7:4 frame is never stretched.
+`768p` (default, the native 1344×768), `1080p`, `1440p`, or `2160p` (4K UHD). Above 768p,
+SeedVR2 7B restores the original to 1920×1080, 2560×1440, or 3840×2160, fitted without
+stretching: the 7:4 frame gets narrow letterboxing. Audio and frame timing are retained.
+SeedVR2 matches its colour to the original (`lab`) by default.
 
-Choose `upscale_method: seedvr2` (default, SeedVR2 3B) or `seedvr2_7b` (SeedVR2 7B) for
-video restoration, or `upscale_method: h3_latent` for learned latent upscaling followed by
-two standard H3 refinement steps. Original audio and frame timing are retained. H3 refinement uses a
-suffix of the existing standard 30-step schedule, even when the original was Turbo.
-It does not apply arbitrary extra steps to the PDD-8 adapter.
-
-Higher-resolution calls publish the original 768p video before the upscale finishes.
-CPU orchestration runs each model as a separate GPU child. Omit `--gpus` so the single-GPU
-upscalers and multi-GPU H3 stages can each use their supported count. An explicit count
+Higher-resolution calls publish the original 768p video (`originals`) before the upscale
+finishes. CPU orchestration runs H3 and SeedVR2 as separate GPU children. Omit `--gpus` so
+single-GPU SeedVR2 and multi-GPU H3 can each use their supported count. An explicit count
 applies to every GPU child and is never silently reduced.
 
 ```sh
 cozy run paul/minimax-h3/ref2va_turbo --asset character.png \
   prompt='<Picture 1> waves in a bright studio.' duration_s=15 seed=581203 \
-  resolution=1440p upscale_method=h3_latent --await
+  resolution=1440p --await
 ```
 
-`compare_fl2va_upscalers` and `compare_ref2va_upscalers` reuse one original generation
-for every selected method and resolution. Supply the same inputs plus a required seed,
-optionally `resolutions: [1080p, 1440p, 2160p]` (the default),
-`methods: [h3_latent, seedvr2, seedvr2_7b]` (the default), and `mode: standard` (default
-`turbo`). They publish `original` and one video per method and resolution, labeled by both. Every result uses the exact same original
-generation. A failed variant records its error and leaves the other comparisons running.
-
 The requested 15 seconds follows H3's native frame grid (362 frames at 24 fps, about
-15.083 seconds). All three comparison videos retain the same frames and audio clock.
-Upscaling can restore or synthesize texture; it cannot guarantee correction of wrong
+15.083 seconds). Upscaling can restore or synthesize texture; it cannot correct wrong
 motion or character identity. Review moving faces, hands and clothing at normal speed.
 
 Qualified 2026-10-13 on one RTX Pro 6000 with 15 s Turbo originals (seed 581203; FL2VA and
-Ref2VA). Minutes per upscale of the 362-frame clip, and down-consistency PSNR (output area-scaled
-back to 1344×768 against the original) for FL2VA / Ref2VA:
+Ref2VA; seedvr2 0.1.3, 17-frame windows, no colour correction): minutes per upscale of the
+362-frame clip, and down-consistency PSNR (output area-scaled back to 1344×768 against the
+original) for FL2VA / Ref2VA:
 
-| method | 1080p | 1440p | 2160p |
-|---|---|---|---|
-| `h3_latent` | 3.1–3.6 min, 33.7 / 35.4 dB | 6.9–7.3 min, 35.1 / 35.6 dB | fails on one GPU |
-| `seedvr2` (3B) | 6.8–8.0 min, 33.4 / 33.0 dB | 11.7–13.1 min, 36.2 / 34.7 dB | 26–30 min, 38.0 / 36.4 dB |
-| `seedvr2_7b` | 7.4–8.2 min, 34.5 / 34.1 dB | 12.5 min, 38.1 / 36.2 dB | 27.6–27.7 min, 39.3 / 37.6 dB |
+| 1080p | 1440p | 2160p |
+|---|---|---|
+| 7.4–8.2 min, 34.5 / 34.1 dB | 12.5 min, 38.1 / 36.2 dB | 27.6–27.7 min, 39.3 / 37.6 dB |
 
-`seedvr2_7b` keeps faces closest to the original while adding detail; `seedvr2` is sharpest
-but raises contrast; `h3_latent` is soft and can drift a reference identity slightly. 2160p
-`h3_latent` needs more than one GPU: a 96 GB RTX Pro 6000 refuses its first DiT block and an
-H200 faults in attention at about 866k tokens. Use `seedvr2` or `seedvr2_7b` for 2160p.
+The owner chose SeedVR2 7B on 2026-10-13: it keeps faces closest to the original while adding
+detail. SeedVR2 3B was sharper but over-processed, and the H3 latent upscaler with H3
+refinement was soft, drifted identity and could not reach 2160p on one GPU; both were deleted.
+
+## Tuning
+
+`upscale` passes SeedVR2's ComfyUI controls (seedvr2 README, Tuning) to the upscale, under the
+upstream names; it applies only above 768p. Restoration can invent skin texture and fine detail;
+`latent_noise_scale` softens it:
+
+```sh
+cozy run paul/minimax-h3/fl2va_turbo prompt='...' duration_s=15 resolution=1080p \
+  'upscale:={"latent_noise_scale": 0.1}' --await
+```
+
+Measured on the Ref2VA original above at 1080p (seedvr2 README has the full table): colour
+correction removes a ~15% chroma over-saturation (ΔE76 3.90 → 2.87 with `lab`) at no detail
+cost; `latent_noise_scale` 0.1 and 0.2 lower the detail measure by 7% and 12% and visibly remove
+invented skin blemishes while staying sharper than the original; `input_noise_scale` 0.2 changes
+little. The default five-frame windows took 5.5 min against 7.2 min for 17-frame windows that
+share five frames, with no seam or flicker penalty.
