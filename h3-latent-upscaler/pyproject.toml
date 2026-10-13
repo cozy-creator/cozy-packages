@@ -1,6 +1,6 @@
 [project]
 name = "h3-latent-upscaler"
-version = "0.1.1"
+version = "0.1.2"
 description = "Learned spatial upscaling for normalized MiniMax H3 video latents"
 requires-python = ">=3.12"
 dependencies = [
