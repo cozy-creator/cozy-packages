@@ -8,11 +8,16 @@ single Runtime-selected GPU. Fixed upstream conditioning tensors are admitted by
 normalize job from an explicit input Tree into a managed native conditioning component.
 Unused upstream device/process-group initialization and legacy state-dict loading
 overrides were removed; Runtime owns those actions. Patch imports moved to module scope.
-Both the 3B dit_v2 and 7B dit architectures are included. The 7B graph uses the
-same adapted SDPA and standard normalization implementations as the 3B graph;
-its unused upstream upscaler wrapper is omitted.
-The 3B rotary frequency table uses the batch's actual axis sizes, following the
-community implementation, instead of allocating the full 1024x128x128 grid.
+Only the 7B `dit` architecture is included, with the adapted SDPA and standard
+normalization (moved from the 3B `dit_v2` package, now deleted); unused upstream
+modules (the upscaler wrapper, config/decorator/partition/seed helpers, and the
+inflated and non-attention video VAE variants) are omitted.
+Colour correction (`seedvr2/color.py`), temporal padding (`seedvr2/frames.py`), input and
+latent noise and the batch/overlap/prepend windowing re-implement the numz
+ComfyUI-SeedVR2_VideoUpscaler 4490bd1f algorithms (`src/utils/color_fix.py`,
+`src/core/generation_phases.py`, `src/core/generation_utils.py`). Histogram matching
+(`lab`, `hsv`) runs per frame rather than over the whole batch, so memory follows one frame;
+quantile ranks are exact integers.
 Inference can return its denoised latents so the adapter records VAE encoding,
 denoising and VAE decoding with Runtime's standard telemetry stages.
 Without a sequence-parallel group, rank lookup uses the adapter's single-GPU
