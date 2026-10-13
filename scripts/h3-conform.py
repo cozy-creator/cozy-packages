@@ -4039,7 +4039,7 @@ class _Allocations(TorchDispatchMode):  # type: ignore[misc]
 def arm_turbo_lora() -> None:
     print("\n== PDD-8: the low-rank update accumulates in place ==")
     rows, width, out_features, rank = 20_000, 64, 48, 8
-    # The Runtime's fixed GEMM row count: 256 through 0.18.x, 4096 from 0.19 (cozy-machine #26:
+    # The Runtime's fixed GEMM row count: 256 through 0.18.x, 4096 from 0.19 (TensorD #26:
     # 256-row chunks cost 7.6% of a dense step on an RTX PRO 6000).
     chunk = turbo_module._LORA_ROW_CHUNK
     torch.manual_seed(3)
