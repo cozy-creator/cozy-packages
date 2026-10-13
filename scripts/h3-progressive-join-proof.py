@@ -4,6 +4,8 @@
 Synthetic pictures, real codecs: each segment is an H3-shaped fragmented MP4 (H.264 + AAC).
 The proof shows that
 - `assembly.CutJoin` decodes to exactly the frames and samples `assemble` writes;
+- its continuous join keeps each soundtrack whole, so sound cut on its own clock (H3
+  continuation) stays one continuous signal, and refuses a soundtrack off the picture;
 - its last revision is the joined video byte for byte;
 - live revisions retain immutable fragmented prefixes and play as an HLS EVENT
   playlist; the final indexed container preserves encoded packets and decoded frames,
@@ -26,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import av
+import msgspec
 import numpy as np
 from cozy_runtime.author import (
     App,
@@ -34,6 +37,7 @@ from cozy_runtime.author import (
     MediaDecoder,
     Outputs,
     Telemetry,
+    VideoAsset,
     attempt,
     fakes,
     invocable,
@@ -45,6 +49,8 @@ import assembly
 
 FPS, RATE = 24, 48000
 FRAMES = (30, 41, 50)
+#: Continuation's sound/picture offsets, in samples: short at a join, made up by the next head.
+SOUND = (30 * 2000 - 400, 41 * 2000 + 400 + 1600, 50 * 2000 - 1600)
 
 
 @invocable
@@ -66,6 +72,53 @@ async def progressive(
             out.publish("video", revision, label=f"Video (segments 1-{index + 1})")
         joined = cut.finish()
     return assembly.AssembleVideoRequest(videos=[joined.video])
+
+
+class ContinuousJoin(msgspec.Struct):
+    video: VideoAsset
+    samples: int
+
+
+@invocable
+async def continuous(
+    ctx: Context,
+    *,
+    payload: assembly.AssembleVideoRequest,
+    decoder: MediaDecoder,
+    out: Outputs,
+    tel: Telemetry,
+) -> ContinuousJoin:
+    """long_form's join of continuation segments."""
+    cut = assembly.CutJoin(decoder, out, ctx.raise_if_cancelled, continuous=True)
+    with assembly.ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
+        for index, video in enumerate(payload.videos):
+            scanning.add(video)
+            cut.append(scanning.result(index), FRAMES[index], last=index + 1 == len(FRAMES))
+        joined = cut.finish()
+    return ContinuousJoin(joined.video, joined.submitted_audio_samples)
+
+
+def tone(samples: int) -> np.ndarray:
+    return np.sin(np.arange(samples, dtype=np.float64) * (2 * np.pi * 220 / RATE)) * 0.1
+
+
+def continuous_fixtures(root: Path, sound: tuple[int, ...]) -> list[Path]:
+    """One unbroken tone, cut at the given sample counts, under each segment's pictures."""
+    root.mkdir()
+    signal = tone(sum(sound)).astype(np.float32)
+    paths, start = [], 0
+    for index, (frames, samples) in enumerate(zip(FRAMES, sound, strict=True)):
+        work = root / f"continuous-{index}"
+        work.mkdir()
+        out = fakes.fake_outputs(fakes.fake_attempt(f"continuous-{index}", spool=work))
+        pixels = np.full((frames, 64, 96, 3), 60 + 40 * index, dtype=np.uint8)
+        piece = signal[start : start + samples]
+        start += samples
+        clip = out.save_video(pixels, fps=FPS, audio=np.stack([piece, piece]), sample_rate=RATE)
+        path = root / f"continuous-{index}.mp4"
+        path.write_bytes(clip.read_bytes())
+        paths.append(path)
+    return paths
 
 
 def fixtures(root: Path) -> list[Path]:
@@ -91,7 +144,9 @@ def fixtures(root: Path) -> list[Path]:
     return paths
 
 
-def run(root: Path, label: str, handler: Callable[..., Any], paths: list[Path]) -> tuple[Any, Any]:
+def run(
+    root: Path, label: str, handler: Callable[..., Any], paths: list[Path], *, ok: bool = True
+) -> tuple[Any, Any]:
     work = root / label
     work.mkdir()
     assets, videos = {}, []
@@ -115,7 +170,7 @@ def run(root: Path, label: str, handler: Callable[..., Any], paths: list[Path]) 
         {"payload": {"videos": videos, "transition": "cut"}},
         Invocation(label, work, time.monotonic() + 300, assets=assets),
     )
-    assert outcome.terminal == "succeeded", outcome
+    assert (outcome.terminal == "succeeded") == ok, outcome
     return result, record
 
 
@@ -125,6 +180,12 @@ def decoded(path: Path) -> tuple[list[bytes], bytes]:
     with av.open(str(path)) as container:
         audio = b"".join(frame.to_ndarray().tobytes() for frame in container.decode(audio=0))
     return frames, audio
+
+
+def decoded_audio(data: bytes, path: Path) -> np.ndarray:
+    path.write_bytes(data)
+    with av.open(str(path)) as container:
+        return np.concatenate([frame.to_ndarray() for frame in container.decode(audio=0)], axis=1)
 
 
 def video_packets(path: Path) -> list[tuple[bytes, Fraction]]:
@@ -157,9 +218,29 @@ def probe(target: str) -> dict[str, Any]:
     return facts
 
 
+def continuous_join(root: Path) -> None:
+    joined, _ = run(root, "continuous", continuous, continuous_fixtures(root / "c", SOUND))
+    assert joined.result.samples == sum(SOUND) == sum(FRAMES) * RATE // FPS, joined.result
+    sound = decoded_audio(joined.result.video.read_bytes(), root / "continuous.mp4")[0]
+    # PyAV keeps the codec's whole frames: find where the tone starts.
+    reference = tone(sum(SOUND))
+    start = min(range(len(sound) - len(reference) + 1),
+                key=lambda k: float(np.abs(sound[k : k + 4800] - reference[:4800]).mean()))
+    error = np.abs(sound[start : start + len(reference)] - reference)
+    seams = list(itertools.accumulate(SOUND[:-1]))
+    near = max(error[max(0, j - 256) : j + 256].max() for j in seams)
+    # Each segment's AAC edge costs ~0.01 here; a sound offset by its 400-sample short end,
+    # the clocked join's zero pad, would cost the tone's whole 0.1 amplitude.
+    assert near < 0.03, (near, np.percentile(error, 99))
+    drifted = (SOUND[0] - 2001, SOUND[1] + 2001, SOUND[2])
+    run(root, "continuous-drift", continuous, continuous_fixtures(root / "d", drifted), ok=False)
+    print(f"continuous join: {len(SOUND)} soundtracks whole, seam error {near:.4f}", flush=True)
+
+
 def main() -> None:
     root = Path(sys.argv[1]).resolve()
     root.mkdir(parents=True, exist_ok=False)
+    continuous_join(root)
     paths = fixtures(root)
     reference, _ = run(root, "one-shot", assembly.assemble_video, paths)
     joined, record = run(root, "progressive", progressive, paths)
@@ -266,6 +347,8 @@ def main() -> None:
         "hls_gapless": True,
         "final_packets_unchanged": True,
         "final_seeks_match_decoded_frames": True,
+        "continuous_join_keeps_each_soundtrack_whole": True,
+        "continuous_join_refuses_sound_a_frame_off": True,
         "actual_h3_inference": False,
     }
     (root / "evidence.json").write_text(json.dumps(evidence, indent=2))

@@ -57,10 +57,10 @@ from cozy_runtime.author import (
 )
 from cozy_runtime.models.minimax_h3.continuation import (
     AVContext,
+    Carry,
     ContinuationPlan,
     decode_context,
     encode_context,
-    plan_continuation,
 )
 from cozy_runtime.models.minimax_h3.model import (
     H3Model as H3Model,
@@ -121,6 +121,7 @@ from story import (
     compile_segments,
     encoder_prompt,
     image_prompt,
+    opening_cut_warnings,
     reference_seed,
     resolve_reference_images,
     validate_references,
@@ -541,7 +542,7 @@ def _finish(
     tel: Telemetry,
     cancel: Any,
     checks: NumericalChecks | None = None,
-    completed: Callable[[Any, Any], None] | None = None,
+    completed: Callable[[Any], None] | None = None,
     delivered_frames: int | None = None,
     sampled_frames: int | None = None,
     retained: Callable[[Any], None] | None = None,
@@ -549,6 +550,9 @@ def _finish(
 ) -> H3VideoOutput:
 
     cancel()
+    if completed is not None:
+        # The successor's carry: a slice of the denoised latents, before either decode.
+        completed(state)
     with tel.stage("decode_audio", overall_range=(0.85, 0.90)):
         audio, sample_rate = model.decode_audio(task, state, checks=checks)
         release_rate = model.pipe.sample_rate
@@ -595,12 +599,6 @@ def _finish(
             stream.abandon()
             raise
     try:
-        if completed is not None and stream.landed == frames:
-            cancel()
-            # A continuation's successor context, from the delivered RGB8 frames as landed,
-            # encoded on the GPUs while the MP4 sink drains (run 1516: ~0.5 s a segment).
-            with tel.stage("export_context", overall_range=(0.97, 0.98)):
-                completed(state, stream.pixels)
         saved, video_pixel_digest = stream.finish()
     except BaseException:
         stream.abandon()
@@ -1461,7 +1459,7 @@ def _references_to_video(
     context: AVContext | None = None,
     delivery: ContinuationPlan | None = None,
     expected_context_provenance: str | None = None,
-    completed: Callable[[Any, Any], None] | None = None,
+    completed: Callable[[Any], None] | None = None,
     retained: Callable[[Any], None] | None = None,
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
@@ -1565,13 +1563,14 @@ class StorySegment(ClipInput, kw_only=True):
 
 
 class LongFormSegment(StorySegment, kw_only=True):
-    """One segment; false disables the global audio/video continuation window."""
+    """One segment: whether it continues the previous segment's picture and its sound."""
 
     context_frames: bool = True
+    context_audio: bool = True
 
 
 class LongFormInput(msgspec.Struct):
-    """Fixed references with optional completed audio/video context between segments."""
+    """Fixed references; each segment may carry the previous one's picture and/or sound."""
 
     segments: Annotated[list[LongFormSegment], msgspec.Meta(min_length=1)]
     references: Annotated[list[StoryReference], msgspec.Meta(min_length=1, max_length=MAX_REFERENCES)]
@@ -1596,10 +1595,14 @@ class LongFormOutput(msgspec.Struct):
     warnings: list[str]
 
 
-def context_windows(payload: LongFormInput) -> list[ContextFrames]:
-    """Resolve every edge before work; a segment's false disables inherited context."""
+def segment_carries(payload: LongFormInput) -> list[Carry]:
+    """What each segment takes from its predecessor: the global picture window unless the
+    segment turns it off (global 0 carries no picture), and one second of sound."""
     return [
-        0 if index == 0 or shot.context_frames is False else payload.context_frames
+        Carry(
+            payload.context_frames if index and shot.context_frames else 0,
+            bool(index and shot.context_audio),
+        )
         for index, shot in enumerate(payload.segments)
     ]
 
@@ -1709,18 +1712,16 @@ app.entrypoint(internal=True)(cut_segment)
 
 
 MotionContextAsset = Annotated[
-    FileAsset, AssetBound(max_bytes=64 << 20, media_types=("application/octet-stream",))
+    FileAsset, AssetBound(max_bytes=16 << 20, media_types=("application/octet-stream",))
 ]
 #: A segment's new seconds. Its memory is sized by `MotionInput.frames`, not by these alone.
 SegmentSeconds = Annotated[int, msgspec.Meta(ge=MIN_DURATION_S, le=MAX_DURATION_S)]
 
 
 def held_frames(plan: ContinuationPlan) -> int:
-    """The frames a segment's DiT holds: its new frames + context window on the 17n+5 grid,
-    plus the same context frames again as a reference video (intended, as in MiniMax fl2va and
-    Director's guide mode; single-copy was tested and rejected, 2026-10-10)."""
-    held: int = getattr(plan, "held_frames", plan.sample_frames + plan.prefix_frames)
-    return held
+    """The frames a segment's DiT holds: its sampled window, plus the carried picture again as
+    condition rows (the double form; single-copy was tested and rejected, 2026-10-10)."""
+    return plan.sample_frames + plan.prefix_frames
 
 
 class MotionInput(msgspec.Struct):
@@ -1733,12 +1734,14 @@ class MotionInput(msgspec.Struct):
     #: holds more than its seconds say, so a 12 s segment after a 6 s one ran on the 6 s
     #: peak and ran out on GPU 1 (run 1560). Any other value is refused.
     frames: int
-    context_frames: ContextFrames = 22
+    #: What this segment carries from its predecessor, and what its successor carries.
+    context_frames: ContextFrames = 0
+    context_audio: bool = False
+    next_context_frames: ContextFrames = 0
+    next_context_audio: bool = False
     expected_provenance: RenderProvenance | None = None
     previous_provenance: RenderProvenance | None = None
     context: MotionContextAsset | None = None
-    # Windows a successor may select from this shot's context; empty exports none.
-    next_context_frames: tuple[Literal[22, 39, 56], ...] = ()
 
 
 class MotionOutput(SegmentOutput):
@@ -1764,33 +1767,31 @@ def _render_motion(
     compatible(observed, payload.expected_provenance)
     compatible_base(observed, payload.previous_provenance)
     native_provenance = context_provenance(observed)
-    context = (
-        decode_context(payload.context.read_bytes())
-        if payload.context_frames and payload.context is not None else None
+    plan = ContinuationPlan(
+        payload.duration_s,
+        Carry(int(payload.context_frames), payload.context_audio),
+        Carry(int(payload.next_context_frames), payload.next_context_audio),
     )
-    if context is not None:
-        context = context.select(payload.context_frames)
-    delivery = plan_continuation(
-        payload.duration_s * FPS, context_frames=0 if context is None else payload.context_frames
-    )
-    if payload.frames != held_frames(delivery):
+    context: AVContext | None = None
+    if plan.carried:
+        if payload.context is None:
+            raise InvalidRequest("a carried picture or sound needs the previous context",
+                                 fields=["payload.context"])
+        context = decode_context(payload.context.read_bytes())
+    if payload.frames != held_frames(plan):
         raise InvalidRequest(
             f"a {payload.duration_s} s segment with this context holds "
-            f"{held_frames(delivery)} frames, not {payload.frames}",
+            f"{held_frames(plan)} frames, not {payload.frames}",
             fields=["payload.frames"],
         )
     _reference_policy(assets)
     saved_context: list[FileAsset] = []
 
-    def save_completed_context(state: Any, pixels: Any) -> None:
-        tail = model.export_completed_av_tail(
-            state,
-            frames=pixels,
-            windows=payload.next_context_frames,
-            provenance=native_provenance,
-        )
+    def save_context(state: Any) -> None:
+        carried = model.pipe.export_context(state, provenance=native_provenance)
+        assert carried is not None
         saved_context.append(
-            out.save_bytes(encode_context(tail), media_type="application/octet-stream")
+            out.save_bytes(encode_context(carried), media_type="application/octet-stream")
         )
 
     task: Task = "ref2va" if turbo_lora is None else "ref2va_turbo"
@@ -1805,9 +1806,9 @@ def _render_motion(
         steps=payload.steps,
         turbo_lora=turbo_lora,
         context=context,
-        delivery=delivery,
+        delivery=plan,
         expected_context_provenance=context_provenance(payload.previous_provenance or observed),
-        completed=save_completed_context if payload.next_context_frames else None,
+        completed=save_context if plan.successor else None,
     )
     return MotionOutput(
         shot.video,
@@ -2110,32 +2111,36 @@ async def long_form(
     ctx.raise_if_cancelled()
     turbo, steps = segment_sampling(payload)
     calls = segment_calls(payload)
-    windows = context_windows(payload)
-    # Motion context shares the native window with new frames. Shorten requested
+    carries = segment_carries(payload)
+    # A carried picture shares the native window with new frames. Shorten requested
     # segments to its whole-second budget instead of refusing a valid 5-15s request.
     durations = [
-        min(shot.duration_s, (MAX_FRAMES - windows[index]) // FPS)
-        for index, shot in enumerate(payload.segments)
+        min(shot.duration_s, (MAX_FRAMES - carry.frames) // FPS)
+        for shot, carry in zip(payload.segments, carries, strict=True)
     ]
     warnings = [warning for call in calls for warning in call.warnings]
+    warnings.extend(opening_cut_warnings(
+        [shot.prompt for shot in payload.segments], payload.references,
+        [carry.frames > 0 for carry in carries],
+    ))
     for index, (shot, duration) in enumerate(zip(payload.segments, durations, strict=True)):
         if duration != shot.duration_s:
             warning = (
                 f"Segment {index + 1}: shortened from {shot.duration_s}s to {duration}s "
-                f"to fit {windows[index]} motion-context frames."
+                f"to fit {carries[index].frames} carried frames."
             )
             warnings.append(warning)
             tel.log(
                 "Adjusted segment duration", shot=index + 1,
                 requested_seconds=shot.duration_s, delivered_seconds=duration,
-                context_frames=windows[index],
+                context_frames=carries[index].frames,
             )
     # Validate every adjusted generation window before creating reference images.
     plans = [
-        plan_continuation(
-            duration * FPS, context_frames=windows[index]
+        ContinuationPlan(duration, carried, successor)
+        for duration, carried, successor in zip(
+            durations, carries, [*carries[1:], Carry()], strict=True
         )
-        for index, duration in enumerate(durations)
     ]
     render_work = [plan.sample_frames * steps for plan in plans]
     reference_work = sum(ref.kind != "audio" and ref.image is None for ref in payload.references) * 40
@@ -2152,7 +2157,7 @@ async def long_form(
     context = None
     expected: RenderProvenance | None = None
     count = len(payload.segments)
-    cut = CutJoin(decoder, out, ctx.raise_if_cancelled)
+    cut = CutJoin(decoder, out, ctx.raise_if_cancelled, continuous=True)
     joining: asyncio.Future[None] | None = None
     with ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
 
@@ -2166,7 +2171,7 @@ async def long_form(
             for index, shot in enumerate(payload.segments):
                 ctx.raise_if_cancelled()
                 seed = shot_seed(shot, ctx.request_id, index)
-                next_window = windows[index + 1] if index + 1 < count else 0
+                carried, successor = plans[index].carried, plans[index].successor
                 try:
                     with tel.scope(
                         f"Segment {index + 1} of {count}",
@@ -2192,9 +2197,11 @@ async def long_form(
                             frames=held_frames(plans[index]),
                             expected_provenance=expected,
                             previous_provenance=expected,
-                            context=context if windows[index] else None,
-                            context_frames=windows[index],
-                            next_context_frames=(next_window,) if next_window else (),
+                            context=context if carried else None,
+                            context_frames=cast(ContextFrames, carried.frames),
+                            context_audio=carried.audio,
+                            next_context_frames=cast(ContextFrames, successor.frames),
+                            next_context_audio=successor.audio,
                         )
                         # The previous segment joins in a thread while this one renders.
                         shot_result = await motion_segment(  # type: ignore[call-arg]
@@ -2211,7 +2218,7 @@ async def long_form(
                 expected = shot_result.provenance
                 scanning.add(shot_result.video)
                 warnings.extend(shot_result.warnings)
-                context = shot_result.context if next_window else None
+                context = shot_result.context if successor else None
                 completed_work += render_work[index]
                 if joining is not None:
                     await joining

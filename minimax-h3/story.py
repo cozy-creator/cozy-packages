@@ -31,6 +31,7 @@ _HEADER = re.compile(
 _TOKEN = re.compile(r"<([^<>\n]+)>")
 _MEDIA = re.compile(r"\s*(picture|audio|video)\s+(\d+)\s*", re.IGNORECASE)
 _SHOT = re.compile(r"\[Shot\s*(\d+)\]", re.IGNORECASE)
+_CUT = re.compile(r"\bcut(?:s|ting)?\b", re.IGNORECASE)
 
 
 class StoryReference(msgspec.Struct):
@@ -335,6 +336,49 @@ def _segment_call(
         **shared,
     }
     return SegmentCall(_fill(text, additions), used, warnings)
+
+
+def _shot_texts(text: str) -> list[str]:
+    """The description's `[Shot N]` spans, or the whole description as one shot."""
+    _, start, end = _sections(text).get("detailed_description", (0, 0, 0))
+    marks = [m.start() for m in _SHOT.finditer(text, start, end)] or [start]
+    return [text[a:b] for a, b in pairwise([*marks, end])]
+
+
+def opening_cut_warnings(
+    prompts: Sequence[str], references: Sequence[StoryReference], carries_picture: Sequence[bool]
+) -> list[str]:
+    """A hint, not a gate: a segment carrying the previous picture whose first shot cuts to
+    characters the previous segment's last shot does not name. The carried frames open the
+    new clip, so H3 keeps the old characters and the cut is lost."""
+    by_key = {name_key(r.name): r.name for r in references if r.kind == "character"}
+    by_slot = {key: ref.name for key, ref in _numbering(references).items() if ref.kind == "character"}
+
+    def characters(shot: str) -> set[str]:
+        found = set()
+        for token in _TOKEN.finditer(shot):
+            media = _MEDIA.fullmatch(token.group(1))
+            name = (by_key.get(name_key(token.group(1))) if media is None
+                    else by_slot.get((media.group(1).lower(), int(media.group(2)))))
+            if name is not None:
+                found.add(name)
+        return found
+
+    warnings = []
+    for index, (previous, text) in enumerate(pairwise(prompts), start=1):
+        if not carries_picture[index] or not text.strip():
+            continue
+        opening = _shot_texts(text)[0]
+        new = sorted(characters(opening) - characters(_shot_texts(previous)[-1]))
+        if new and _CUT.search(opening):
+            names = ", ".join(f"<{name}>" for name in new)
+            warnings.append(
+                f"Segment {index + 1} carries the previous picture but opens with a cut to "
+                f"{names}, not in segment {index}'s last shot; the carried frames keep its "
+                "characters. For a clean picture cut with continuous sound, set "
+                "context_frames: false."
+            )
+    return warnings
 
 
 def _sections(text: str) -> dict[str, tuple[int, int, int]]:

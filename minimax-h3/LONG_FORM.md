@@ -2,8 +2,9 @@
 
 A segment is one H3 call. It takes the same fields as `ref2va_turbo`: free-text `prompt`,
 `duration_s` (5–15, required) and optional `seed`. A `long_form` segment also accepts
-the boolean `context_frames`, defaulting to `true`; `false` disables inherited motion for that segment. The model only ever sees one segment's
-prompt, so the workflow copies the global information into it.
+the booleans `context_frames` (carry the previous picture) and `context_audio` (carry the
+previous sound), both defaulting to `true`. The model only ever sees one segment's prompt,
+so the workflow copies the global information into it.
 
 ## Request
 
@@ -26,7 +27,7 @@ prompt, so the workflow copies the global information into it.
   segment field replaces an inline music section. Without that field, inline music
   takes precedence over the shared score. This applies to both long-form composers.
 - `segments`: the ordered calls.
-- `context_frames`: global window for `long_form` (0, 22, 39 or 56; default 22).
+- `context_frames`: global picture window for `long_form` (0, 22, 39 or 56; default 22).
 - `mode` (`turbo` or `standard`) and `steps` (standard only).
 
 Both long-form composers default to Turbo: eight PDD evaluations per segment.
@@ -46,13 +47,13 @@ segments:
     prompt: "<Rover> approaches <Bridge>."
   - duration_s: 6
     context_frames: false
-    prompt: "<Rover> leaps across the gap at <Bridge>."
+    prompt: "Cut to <Mara> watching from the far side of <Bridge>."
   - duration_s: 6
-    prompt: "<Rover> rolls away from <Bridge>."
+    prompt: "<Mara> waves as <Rover> lands beside her."
 ```
 
-`mode` and `context_frames` are independent. When continuation is enabled, the
-next segment receives the completed audio/video context from its previous segment.
+Segment 2 is a clean picture cut over continuous sound: music, room tone and the rhythm
+of speech carry on, the picture does not.
 
 Unknown fields are ignored, not refused; a missing required field, such as a misspelled
 `duration_s`, still refuses.
@@ -170,23 +171,32 @@ twelve references in all. An audio-only set is refused.
 cozy run fidika/minimax-h3/long_form --input story.json --await
 ```
 
-`long_form` uses one global numeric `context_frames`, defaulting to 22. A segment's
-`context_frames` defaults to `true`, which inherits that window. Set it to `false` to
-disable continuation for that segment. Per-segment numeric values are refused. Global 0 disables
-continuation throughout. The first segment always uses 0 because there is no previous clip.
+## Continuation
 
-Global 0 or a segment's `false` attaches no previous audio/video context. Ordinary authored character,
-scene and media references still apply; the preceding clip is not turned into another
-reference. This removes motion inheritance, but does not guarantee a visible cut.
-Continuation can resume after an independent segment. With global 56 and only segment 3
-set to `context_frames: false`, segment 2 continues from segment 1, segment 3 receives no
-previous context, and segment 4 continues from segment 3. Each segment exports only the
-window its successor needs, and exports none when that successor opts out or the global value is 0.
+Each segment after the first may carry two things from its predecessor, chosen separately:
 
-`context_frames` 22/39/56 allows at most 14/13/12 new seconds for that segment;
-0 allows 15 seconds. Longer segments are shortened and reported. `long_form_cuts` renders
-independent segments. Turbo uses eight PDD evaluations, and standard allows 30/40/50
-steps.
+| `context_frames` | `context_audio` | Result |
+| --- | --- | --- |
+| `true` (default) | `true` (default) | Motion and sound continue |
+| `false` | `true` | Clean picture cut; music, room tone and speech rhythm continue |
+| `true` | `false` | Motion continues; the sound starts fresh |
+| `false` | `false` | A fresh start |
+
+The picture is the previous segment's last `context_frames` frames (global: 22, 39 or 56;
+0 carries no picture anywhere, while sound still follows each segment's `context_audio`).
+The sound is always its last second. Both are the previous segment's own latents, never a
+decoded and re-encoded copy, so colour and sharpness do not drift down a chain.
+
+The carried picture becomes the literal opening of the new clip, so a prompt that opens
+with a cut to other characters loses to it: H3 keeps the old characters. Use
+`context_frames: false` for a cut; the run warns when a carrying segment's first shot cuts
+to characters the previous segment's last shot does not name.
+
+A segment delivers at least its `duration_s`: the native grid snaps it up, and nothing
+sampled after the carried frames is discarded. A carried picture of 22/39/56 frames allows
+at most 14/13/12 new seconds; longer segments are shortened and reported. `long_form_cuts`
+renders independent segments. Turbo uses eight PDD evaluations, and standard allows
+30/40/50 steps.
 
 Outputs arrive as they are made. Each generated reference image is published when it
 lands, and the video after every segment as the joined film so far: one file,

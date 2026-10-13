@@ -13,8 +13,7 @@ strict = true
 warn_unreachable = true
 disallow_any_generics = true
 implicit_reexport = false
-# This client-script directory reuses the module names prepare/compare, which stops the run.
-exclude = ["^examples/client-scripts/h3-motion-context/", "^birefnet/birefnet/upstream/", "^h3-latent-upscaler/h3_latent_upscaler/upstream/", "^seedvr2/seedvr2/upstream/"]
+exclude = ["^birefnet/birefnet/upstream/", "^h3-latent-upscaler/h3_latent_upscaler/upstream/", "^seedvr2/seedvr2/upstream/"]
 
 # Static checks install the typed Runtime distribution from PyPI. Heavy model libraries remain
 # absent to check the package-facing contracts without their large third-party stub trees.

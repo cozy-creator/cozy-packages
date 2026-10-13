@@ -23,6 +23,7 @@ from story import (
     StoryReference,
     encoder_prompt,
     image_prompt,
+    opening_cut_warnings,
     resolve_reference_images,
     validate_references,
 )
@@ -555,7 +556,26 @@ async def references() -> None:
         raise AssertionError("generation failure swallowed")
 
 
+def opening_cuts() -> None:
+    refs = [StoryReference("Ann", "character", "A woman."), StoryReference("Ben", "character", "A man."),
+            StoryReference("Cal", "character", "A boy."), StoryReference("Hall", "scene", "A hall.")]
+    ending = "detailed_description:\n[Shot 1] <Cal> waits.\n[Shot 2] <Ann> and <Ben> talk in <Hall>."
+    cut = "detailed_description:\n[Shot 1] Hard cut to <Cal> alone in <Hall>.\n[Shot 2] <Ann> enters."
+    walk = "detailed_description:\n[Shot 1] <Cal> walks up to <Ann> and <Ben>."
+    same = "Cut to a close-up of <Ann>."
+    got = opening_cut_warnings([ending, cut, ending, walk, ending, same], refs, [False, True] * 3)
+    check("an opening cut to an absent character warns, once", len(got), 1)
+    check("the warning names the cut-to character and the remedy",
+          ("<Cal>" in got[0], "context_frames: false" in got[0], got[0].startswith("Segment 2")),
+          (True, True, True))
+    check("no warning without a carried picture",
+          opening_cut_warnings([ending, cut], refs, [False, False]), [])
+    check("<Picture N> tokens name characters too",
+          len(opening_cut_warnings([ending, "Cut to <Picture 3>."], refs, [False, True])), 1)
+
+
 if __name__ == "__main__":
+    opening_cuts()
     one_offs()
     long_form()
     retention_defaults()
