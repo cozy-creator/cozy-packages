@@ -95,10 +95,14 @@ Reference = ImageReference | VideoReference | AudioReference
 Prompt = Annotated[str, msgspec.Meta(min_length=1, max_length=4096)]
 # The wire enum is the committed plans' step counts; a bound lane serves exactly these
 # and the fastest is the default.
-SUPPORTED_STEPS = supported_steps()
-DEFAULT_STEPS = min(SUPPORTED_STEPS)
+# Spelled literally so the interface is readable from SOURCE (cozy-runtime cr-114); the
+# committed plans are held to it at import.
+SUPPORTED_STEPS = (30, 40, 50)
+if supported_steps() != SUPPORTED_STEPS:
+    raise ValueError(f"the committed plans serve {supported_steps()}, not {SUPPORTED_STEPS}")
+DEFAULT_STEPS = 30
 Steps = Annotated[
-    Literal[SUPPORTED_STEPS],  # type: ignore[valid-type]
+    Literal[30, 40, 50],
     msgspec.Meta(description="Denoise steps (transformer evaluations); fewer is faster."),
 ]
 

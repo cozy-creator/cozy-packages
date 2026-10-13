@@ -80,7 +80,11 @@ def _table_budget() -> int:
     )
 
 
-TABLE_BYTES = _table_budget()
+# Spelled literally so the interface is readable from SOURCE (cozy-runtime cr-114); the
+# committed plans are held to it at import.
+TABLE_BYTES = 1_020_515_328
+if _table_budget() != TABLE_BYTES:
+    raise ValueError(f"the committed plans occupy {_table_budget()} table bytes, not {TABLE_BYTES}")
 MAX_FULL_BYTES = 64 << 10
 MAX_PRUNED_BYTES = 2 * TABLE_BYTES + (128 << 10)
 MAX_QUANTIZED_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_PRUNED_BYTES
