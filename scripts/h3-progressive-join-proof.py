@@ -294,7 +294,7 @@ def main() -> None:
     assert len(revisions[-1].parts) == 1 and revisions[-1].parts[0].duration_us > 0
     parts = revisions[-2].parts
     assert parts[0].duration_us == 0 and len(parts) == len(FRAMES)
-    # As the daemon serves them: players take an init `.mp4` and media `.m4s` segments.
+    # As Calcifer serves them: players take an init `.mp4` and media `.m4s` segments.
     stream = root / "stream"
     stream.mkdir()
     (stream / "init.mp4").write_bytes((spool / parts[0].local).read_bytes())
