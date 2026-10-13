@@ -17,3 +17,6 @@ Inference can return its denoised latents so the adapter records VAE encoding,
 denoising and VAE decoding with Runtime's standard telemetry stages.
 Without a sequence-parallel group, rank lookup uses the adapter's single-GPU
 rank instead of requiring a default PyTorch distributed process group.
+VAE encoding and decoding run over 512-pixel spatial tiles with a 64-pixel cosine-blended
+overlap, after the community implementation, and clear causal-convolution caches after
+each pass, so activation memory follows the tile instead of the frame.
