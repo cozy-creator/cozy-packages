@@ -13,6 +13,7 @@ import queue
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from concurrent.futures import Future
 from contextlib import suppress
+from enum import Enum
 from fractions import Fraction
 from functools import partial
 from typing import Annotated, Any, Literal, cast
@@ -40,11 +41,9 @@ from cozy_runtime.author import (
     ImagePreparation,
     InvalidRequest,
     MediaDecoder,
-    Memoize,
     Mixed,
     OutputError,
     Outputs,
-    Preflight,
     SavedVideo,
     Shape,
     Telemetry,
@@ -94,7 +93,7 @@ from cozy_runtime.models.minimax_h3.official import (
     turbo_steps,
     validate_reference_policy,
 )
-from msgspec.structs import replace
+from msgspec.structs import asdict, replace
 
 from assembly import CutJoin, ScanAhead, assemble_video
 from gates import MediaFacts, refuse_before_encode, report_after_encode
@@ -108,13 +107,10 @@ from qwen_image_2 import generate_image as generate_reference
 from birefnet import RemoveBackgroundOutput
 from birefnet import remove_background
 from character_describer import CaptionImagesOutput, caption_images
-from h3_latent_upscaler import UpscaleOutput as LatentUpscaleOutput
-from h3_latent_upscaler import upscale as upscale_latents
 from seedvr2 import Resolution as RestorationResolution
+from seedvr2 import Tuning as UpscaleTuning
 from seedvr2 import UpscaleOutput as RestorationOutput
 from seedvr2 import upscale as restore_video
-from seedvr2 import upscale_7b as restore_video_7b
-from cozy_runtime.models.minimax_h3.refinement import capture_latents, decode_latents, encode_latents
 from story import (
     SegmentCall,
     StoryReference,
@@ -127,7 +123,6 @@ from story import (
     validate_references,
 )
 from text_states import encode_text
-from upscale_options import OUTPUT_SIZES, REFINEMENT_SIZES, Resolution, UpscaleMethod
 
 app = App()
 
@@ -243,9 +238,20 @@ class StandardClipInput(ClipInput, kw_only=True):
     steps: Steps = DEFAULT_STEPS
 
 
+class Resolution(Enum):
+    """Native 768p, or SeedVR2 7B restoration of the 768p original above it."""
+
+    NATIVE = "768p"
+    FULL_HD = "1080p"
+    QHD = "1440p"
+    UHD = "2160p"
+
+
 class RenderInput(ClipInput, kw_only=True):
+    """`upscale` passes SeedVR2's ComfyUI controls through above 768p (UPSCALE.md: Tuning)."""
+
     resolution: Resolution = Resolution.NATIVE
-    upscale_method: UpscaleMethod = UpscaleMethod.SEEDVR2
+    upscale: UpscaleTuning = msgspec.field(default_factory=UpscaleTuning)
 
 
 class StandardRenderInput(RenderInput, kw_only=True):
@@ -265,31 +271,11 @@ class ReferenceStandardRenderInput(ReferenceRenderInput, kw_only=True):
     steps: Steps = DEFAULT_STEPS
 
 
-class RetainedClipInput(ClipInput, kw_only=True):
-    seed: int = 0
-    retain_latents: bool = False
-
-
-class RetainedStandardClipInput(RetainedClipInput, kw_only=True):
-    steps: Steps = DEFAULT_STEPS
-
-
-LatentAsset = Annotated[
-    FileAsset, AssetBound(max_bytes=2 << 30, media_types=("application/octet-stream",))
-]
-
-
 class H3VideoOutput(msgspec.Struct):
     """The catalog wire shape. Checkpoint, plan, geometry, and digest facts remain
     attempt observations (se-012): they ride Telemetry, never the customer result."""
 
     video: Annotated[VideoAsset, AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
-    warnings: list[str]
-
-
-class RetainedVideoOutput(msgspec.Struct):
-    video: Annotated[VideoAsset, AssetBound(media_types=("video/mp4",), max_bytes=1 << 30)]
-    latents: LatentAsset
     warnings: list[str]
 
 
@@ -303,12 +289,6 @@ class ReferenceRenderOutput(RenderOutput):
     """Direct ref2va also returns the references it prepared or generated, each published as it lands."""
 
     references: list[ImageAsset] = msgspec.field(default_factory=list)
-
-
-class RefineInput(msgspec.Struct):
-    latents: LatentAsset
-    resolution: Annotated[Resolution, Shape(pixels=REFINEMENT_SIZES)]
-    frames: Annotated[int, msgspec.Meta(ge=124, le=362)]
 
 
 def preflight_reference_media(
@@ -545,8 +525,6 @@ def _finish(
     completed: Callable[[Any], None] | None = None,
     delivered_frames: int | None = None,
     sampled_frames: int | None = None,
-    retained: Callable[[Any], None] | None = None,
-    output_size: tuple[int, int] | None = None,
 ) -> H3VideoOutput:
 
     cancel()
@@ -563,9 +541,6 @@ def _finish(
                 code="output_integrity",
             )
         waveform = audio[0].to(torch.float32).contiguous().cpu()
-    if retained is not None:
-        with tel.stage("retaining generation latents"):
-            retained(state)
     cancel()
     frames = frames_for(duration_s) if delivered_frames is None else delivered_frames
     clock = MediaFacts(frames=frames, fps=FPS, sample_rate=sample_rate)
@@ -589,12 +564,7 @@ def _finish(
             progress=tel.step_callback(frames, stage="decode_video", overall_range=(0.90, 0.97)),
         )
         try:
-            if output_size is None:
-                model.decode_video(task, state, on_chunk=stream.push, checks=checks)
-            else:
-                model.decode_video(
-                    task, state, on_chunk=stream.push, checks=checks, output_size=output_size
-                )
+            model.decode_video(task, state, on_chunk=stream.push, checks=checks)
         except BaseException:
             stream.abandon()
             raise
@@ -966,13 +936,13 @@ app.entrypoint(defaults={"model": _ENCODE_TEXT_LADDER}, components={"model": ("t
 async def generate_fl2va(
     ctx: Context,
     *,
-    payload: RetainedStandardClipInput,
+    payload: StandardClipInput,
     assets: KeyframeAssets,
     model: H3Model,
     out: Outputs,
     tel: Telemetry,
-) -> RetainedVideoOutput:
-    return _retained_render(ctx, "fl2va", payload, assets, model, out, tel, steps=payload.steps)
+) -> H3VideoOutput:
+    return _keyframes_to_video(ctx, "fl2va", payload, assets, model, out, tel, steps=payload.steps)
 
 
 @invocable(
@@ -983,15 +953,15 @@ async def generate_fl2va(
 async def generate_fl2va_turbo(
     ctx: Context,
     *,
-    payload: RetainedClipInput,
+    payload: ClipInput,
     assets: KeyframeAssets,
     base_model: H3TurboBase,
     turbo_lora: H3TurboLoRA,
     out: Outputs,
     tel: Telemetry,
-) -> RetainedVideoOutput:
+) -> H3VideoOutput:
     """`fl2va` under PDD-8: the same keyframes and prompt, eight transformer evaluations."""
-    return _retained_render(
+    return _keyframes_to_video(
         ctx,
         "fl2va_turbo",
         payload,
@@ -1012,13 +982,14 @@ async def generate_fl2va_turbo(
 async def generate_ref2va(
     ctx: Context,
     *,
-    payload: RetainedStandardClipInput,
+    payload: StandardClipInput,
     assets: ReferenceAssets,
     model: H3Model,
     out: Outputs,
     tel: Telemetry,
-) -> RetainedVideoOutput:
-    return _retained_render(
+) -> H3VideoOutput:
+    _reference_policy(assets)
+    return _references_to_video(
         ctx, "ref2va", payload, assets, model, out, tel, steps=payload.steps
     )
 
@@ -1031,15 +1002,16 @@ async def generate_ref2va(
 async def generate_ref2va_turbo(
     ctx: Context,
     *,
-    payload: RetainedClipInput,
+    payload: ClipInput,
     assets: ReferenceAssets,
     base_model: H3TurboBase,
     turbo_lora: H3TurboLoRA,
     out: Outputs,
     tel: Telemetry,
-) -> RetainedVideoOutput:
+) -> H3VideoOutput:
     """`ref2va` under PDD-8: the same references and prompt, eight transformer evaluations."""
-    return _retained_render(
+    _reference_policy(assets)
+    return _references_to_video(
         ctx,
         "ref2va_turbo",
         payload,
@@ -1053,112 +1025,10 @@ async def generate_ref2va_turbo(
 
 
 
-def _retained_render(
-    ctx: Context, task: Task, payload: RetainedClipInput,
-    assets: KeyframeAssets | ReferenceAssets, model: H3Model,
-    out: Outputs, tel: Telemetry, *, steps: int, turbo_lora: H3TurboLoRA | None = None,
-) -> RetainedVideoOutput:
-    seed = payload.seed
-    if task.startswith("ref2va"):
-        _reference_policy(assets)
-    retained: list[FileAsset] = []
-
-    def capture(state: Any) -> None:
-        value = capture_latents(task, state, checkpoint=model.checkpoint_ref, seed=seed)
-        retained.append(out.save_bytes(encode_latents(value), media_type="application/octet-stream"))
-
-    if task.startswith("fl2va"):
-        result = _keyframes_to_video(
-            ctx, task, payload, cast(KeyframeAssets, assets), model, out, tel, steps=steps,
-            turbo_lora=turbo_lora, retained=capture if payload.retain_latents else None,
-        )
-    else:
-        result = _references_to_video(
-            ctx, task, payload, assets, model, out, tel, steps=steps,
-            turbo_lora=turbo_lora, retained=capture if payload.retain_latents else None,
-        )
-    latent = retained[0] if retained else out.save_bytes(b"", media_type="application/octet-stream")
-    return RetainedVideoOutput(result.video, latent, result.warnings)
-
-
 app.entrypoint(internal=True)(generate_fl2va)
 app.entrypoint(internal=True)(generate_fl2va_turbo)
 app.entrypoint(internal=True)(generate_ref2va)
 app.entrypoint(internal=True)(generate_ref2va_turbo)
-
-
-def _refine(
-    ctx: Context, payload: RefineInput, model: H3Model, out: Outputs, tel: Telemetry,
-    task: Task,
-) -> H3VideoOutput:
-    value = decode_latents(payload.latents.read_bytes())
-    if value.task != task or value.frames != payload.frames:
-        raise InvalidRequest("retained generation differs from the requested refinement")
-    if payload.resolution is Resolution.NATIVE:
-        raise InvalidRequest("refinement requires a resolution above 768p")
-    if (value.width, value.height) != REFINEMENT_SIZES[payload.resolution]:
-        raise InvalidRequest("upscaled latent geometry differs from the selected resolution")
-    if value.checkpoint != model.checkpoint_ref:
-        raise InvalidRequest("refinement must use the generation's model checkpoint")
-    view = model.for_request(ctx, seed=value.seed)
-    checks = NumericalChecks(tel, model.pipe.resident)
-    refine = model.refine_fl2va if task == "fl2va" else model.refine_ref2va
-    with tel.stage("refining upscaled video"):
-        state, schedule = refine(
-            value, generator=model.pipe.generator(view.generator), steps=2,
-            on_step=tel.step_callback(2, stage="refining upscaled video"),
-            cancel=ctx.raise_if_cancelled, checks=checks,
-        )
-    return _finish(
-        model, task, state, schedule, duration_s=round(value.frames / FPS),
-        out=out, tel=tel, cancel=ctx.raise_if_cancelled, checks=checks,
-        delivered_frames=value.frames, output_size=OUTPUT_SIZES[payload.resolution],
-    )
-
-
-@invocable(defaults={"model": _DEFAULT_MODEL_LADDER},
-           components={"model": ("fl2va_dit", "video_vae", "audio_vae")}, memoize=True)
-async def refine_fl2va(
-    ctx: Context, *, payload: RefineInput, model: H3Model, out: Outputs, tel: Telemetry,
-) -> H3VideoOutput:
-    return _refine(ctx, payload, model, out, tel, "fl2va")
-
-
-@invocable(defaults={"model": _DEFAULT_MODEL_LADDER},
-           components={"model": ("ref2va_dit", "video_vae", "audio_vae")}, memoize=True)
-async def refine_ref2va(
-    ctx: Context, *, payload: RefineInput, model: H3Model, out: Outputs, tel: Telemetry,
-) -> H3VideoOutput:
-    return _refine(ctx, payload, model, out, tel, "ref2va")
-
-
-app.entrypoint(internal=True)(refine_fl2va)
-app.entrypoint(internal=True)(refine_ref2va)
-
-
-async def _upscale_generation(
-    ctx: Context, source: RetainedVideoOutput, resolution: Resolution, method: UpscaleMethod,
-    *, task: str, seed: int, frames: int, tel: Telemetry,
-) -> H3VideoOutput:
-    ctx.raise_if_cancelled()
-    if method is not UpscaleMethod.H3_LATENT:
-        seven = method is UpscaleMethod.SEEDVR2_7B
-        restore = cast(Callable[..., Awaitable[RestorationOutput]],
-                       restore_video_7b if seven else restore_video)
-        with tel.scope(f"SeedVR2 {'7B' if seven else '3B'} upscale to {resolution.value}"):
-            result = await restore(
-                video=source.video, resolution=RestorationResolution(resolution.value), seed=seed,
-                aspect_ratio="16:9",
-            )
-        return H3VideoOutput(result.video, list(source.warnings))
-    upscale = cast(Callable[..., Awaitable[LatentUpscaleOutput]], upscale_latents)
-    width, height = REFINEMENT_SIZES[resolution]
-    with tel.scope(f"H3 latent upscale to {resolution.value}"):
-        enlarged = await upscale(latents=source.latents, width=width, height=height)
-    refine = cast(Callable[..., Awaitable[H3VideoOutput]],
-                  refine_fl2va if task.startswith("fl2va") else refine_ref2va)
-    with tel.scope(f"H3 refinement at {resolution.value}"):
-        return await refine(payload=RefineInput(enlarged.latents, resolution, frames))
 
 
 async def _render_workflow(
@@ -1166,30 +1036,31 @@ async def _render_workflow(
     out: Outputs, tel: Telemetry, *, task: Task, steps: int | None,
 ) -> RenderOutput:
     seed = shot_seed(payload, ctx.request_id, 0)
-    retained = payload.resolution is not Resolution.NATIVE and payload.upscale_method is UpscaleMethod.H3_LATENT
-    request: RetainedClipInput
-    if steps is None:
-        request = RetainedClipInput(prompt=payload.prompt, seed=seed,
-                                    duration_s=payload.duration_s, retain_latents=retained)
-    else:
-        request = RetainedStandardClipInput(prompt=payload.prompt, seed=seed,
-                                            duration_s=payload.duration_s,
-                                            retain_latents=retained, steps=steps)
+    request = (
+        ClipInput(prompt=payload.prompt, seed=seed, duration_s=payload.duration_s)
+        if steps is None
+        else StandardClipInput(
+            prompt=payload.prompt, seed=seed, duration_s=payload.duration_s, steps=steps
+        )
+    )
     functions = {"fl2va": generate_fl2va, "fl2va_turbo": generate_fl2va_turbo,
                  "ref2va": generate_ref2va, "ref2va_turbo": generate_ref2va_turbo}
-    generate = cast(Callable[..., Awaitable[RetainedVideoOutput]], functions[task])
+    generate = cast(Callable[..., Awaitable[H3VideoOutput]], functions[task])
     with tel.scope("Generating original 768p video"):
         source = await generate(payload=request, assets=assets)
     if payload.resolution is Resolution.NATIVE:
         ctx.release_gpus()
-        return RenderOutput(source.video, [], source.warnings)
+        ignored = ["upscale settings apply only above 768p"] if payload.upscale != UpscaleTuning() else []
+        return RenderOutput(source.video, [], source.warnings + ignored)
     out.publish("originals", source.video, label="Original 768p video")
-    result = await _upscale_generation(
-        ctx, source, payload.resolution, payload.upscale_method, task=task,
-        seed=seed, frames=frames_for(payload.duration_s), tel=tel,
-    )
+    restore = cast(Callable[..., Awaitable[RestorationOutput]], restore_video)
+    with tel.scope(f"SeedVR2 upscale to {payload.resolution.value}"):
+        result = await restore(
+            video=source.video, resolution=RestorationResolution(payload.resolution.value),
+            seed=seed, aspect_ratio="16:9", **asdict(payload.upscale),
+        )
     ctx.release_gpus()
-    return RenderOutput(result.video, [source.video], result.warnings)
+    return RenderOutput(result.video, [source.video], source.warnings)
 
 
 async def fl2va(ctx: Context, payload: StandardRenderInput, assets: KeyframeAssets,
@@ -1262,95 +1133,6 @@ app.job(ref2va_turbo, emits_media=True, accelerator=False)
 
 
 
-class UpscaleComparisonInput(ClipInput, kw_only=True):
-    seed: int
-    resolutions: tuple[Resolution, ...] = (Resolution.FULL_HD, Resolution.QHD, Resolution.UHD)
-    methods: tuple[UpscaleMethod, ...] = (
-        UpscaleMethod.H3_LATENT, UpscaleMethod.SEEDVR2, UpscaleMethod.SEEDVR2_7B,
-    )
-    mode: Literal["turbo", "standard"] = "turbo"
-    steps: Steps = DEFAULT_STEPS
-
-
-class UpscaleComparisonOutput(msgspec.Struct):
-    original: Annotated[VideoAsset, AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
-    h3_latent: Annotated[list[VideoAsset], AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
-    seedvr2: Annotated[list[VideoAsset], AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
-    seedvr2_7b: Annotated[list[VideoAsset], AssetBound(max_bytes=1 << 30, media_types=("video/mp4",))]
-    errors: list[str]
-
-
-async def _compare_upscalers(
-    ctx: Context, payload: UpscaleComparisonInput, assets: KeyframeAssets | ReferenceAssets,
-    out: Outputs, tel: Telemetry, *, trunk: Literal["fl2va", "ref2va"],
-) -> UpscaleComparisonOutput:
-    if (not payload.resolutions or Resolution.NATIVE in payload.resolutions
-            or len(set(payload.resolutions)) != len(payload.resolutions)):
-        raise InvalidRequest("select distinct comparison resolutions from 1080p, 1440p and 2160p")
-    if not payload.methods or len(set(payload.methods)) != len(payload.methods):
-        raise InvalidRequest("select distinct upscale methods", fields=["methods"])
-    turbo = payload.mode == "turbo"
-    retain = UpscaleMethod.H3_LATENT in payload.methods
-    request: RetainedClipInput
-    if turbo:
-        request = RetainedClipInput(prompt=payload.prompt, seed=payload.seed,
-                                    duration_s=payload.duration_s, retain_latents=retain)
-    else:
-        request = RetainedStandardClipInput(prompt=payload.prompt, seed=payload.seed,
-                                            duration_s=payload.duration_s, retain_latents=retain,
-                                            steps=payload.steps)
-    if trunk == "fl2va":
-        selected = generate_fl2va_turbo if turbo else generate_fl2va
-    else:
-        selected = generate_ref2va_turbo if turbo else generate_ref2va
-    generate = cast(Callable[..., Awaitable[RetainedVideoOutput]], selected)
-    with tel.scope("Generating shared original 768p video"):
-        source = await generate(payload=request, assets=assets)
-    out.publish("original", source.video, label="Original 768p")
-    videos: dict[UpscaleMethod, list[VideoAsset]] = {method: [] for method in UpscaleMethod}
-    errors = []
-    for method in payload.methods:
-        for resolution in payload.resolutions:
-            try:
-                result = await _upscale_generation(
-                    ctx, source, resolution, method, task=trunk,
-                    seed=payload.seed, frames=frames_for(payload.duration_s), tel=tel,
-                )
-            except ChildCallError as failure:
-                ctx.raise_if_cancelled()
-                error = f"{method.value} {resolution.value}: {failure.code}: {str(failure)[:512]}"
-                errors.append(error)
-                tel.log("Upscale comparison failed", level="warning", method=method.value, error=error)
-            else:
-                videos[method].append(result.video)
-                out.publish(method.value, result.video, label=f"{method.value} {resolution.value}")
-    ctx.release_gpus()
-    return UpscaleComparisonOutput(
-        source.video, videos[UpscaleMethod.H3_LATENT], videos[UpscaleMethod.SEEDVR2],
-        videos[UpscaleMethod.SEEDVR2_7B], errors,
-    )
-
-
-async def compare_fl2va_upscalers(
-    ctx: Context, payload: UpscaleComparisonInput, assets: KeyframeAssets,
-    out: Outputs, tel: Telemetry,
-) -> UpscaleComparisonOutput:
-    """One original generation, reused by both upscalers with unchanged audio and timing."""
-    return await _compare_upscalers(ctx, payload, assets, out, tel, trunk="fl2va")
-
-
-async def compare_ref2va_upscalers(
-    ctx: Context, payload: UpscaleComparisonInput, assets: ReferenceAssets,
-    out: Outputs, tel: Telemetry,
-) -> UpscaleComparisonOutput:
-    """One reference-conditioned original, reused by both upscalers for direct comparison."""
-    return await _compare_upscalers(ctx, payload, assets, out, tel, trunk="ref2va")
-
-
-app.job(compare_fl2va_upscalers, emits_media=True, accelerator=False)
-app.job(compare_ref2va_upscalers, emits_media=True, accelerator=False)
-
-
 def _keyframes_to_video(
     ctx: Context,
     task: Task,
@@ -1362,7 +1144,6 @@ def _keyframes_to_video(
     *,
     steps: int,
     turbo_lora: H3TurboLoRA | None = None,
-    retained: Callable[[Any], None] | None = None,
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
     first_index, last_index = _keyframe_roles(assets)
@@ -1379,7 +1160,6 @@ def _keyframes_to_video(
         first=_keyframe_image(assets, first_index, field="first"),
         last=_keyframe_image(assets, last_index, field="last"),
         turbo_lora=turbo_lora,
-        retained=retained,
     )
 
 
@@ -1397,7 +1177,6 @@ def _render_keyframes(
     first: Image | None,
     last: Image | None,
     turbo_lora: H3TurboLoRA | None = None,
-    retained: Callable[[Any], None] | None = None,
 ) -> H3VideoOutput:
     """Shared FL2VA rendering for direct requests and chained asset handoffs."""
     ctx.raise_if_cancelled()
@@ -1441,7 +1220,6 @@ def _render_keyframes(
         tel=tel,
         cancel=ctx.raise_if_cancelled,
         checks=checks,
-        retained=retained,
     )
 
 
@@ -1460,7 +1238,6 @@ def _references_to_video(
     delivery: ContinuationPlan | None = None,
     expected_context_provenance: str | None = None,
     completed: Callable[[Any], None] | None = None,
-    retained: Callable[[Any], None] | None = None,
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
@@ -1529,7 +1306,6 @@ def _references_to_video(
         completed=completed,
         delivered_frames=None if delivery is None else delivery.delivered_frames,
         sampled_frames=None if delivery is None else delivery.sample_frames,
-        retained=retained,
     )
 
 

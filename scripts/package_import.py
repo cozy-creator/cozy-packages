@@ -27,9 +27,6 @@ PACKAGES = {
     "character-describer": (
         "character_describer", ("torch", "torchvision", "transformers", "tensorfs"),
     ),
-    "h3-latent-upscaler": (
-        "h3_latent_upscaler", ("torch", "einops", "tensorfs"),
-    ),
     "seedvr2": (
         "seedvr2", ("torch", "torchvision", "torchvision.ops", "diffusers", "tensorfs", "av"),
     ),

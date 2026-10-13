@@ -6,14 +6,14 @@
 [tool.mypy]
 python_version = "3.12"
 files = [
-    "anima", "birefnet", "character-describer", "h3-latent-upscaler", "seedvr2", "minimax-h3", "sdxl", "qwen-image-2", "scripts", "examples",
+    "anima", "birefnet", "character-describer", "seedvr2", "minimax-h3", "sdxl", "qwen-image-2", "scripts", "examples",
     "minimax-h3-tools/src",
 ]
 strict = true
 warn_unreachable = true
 disallow_any_generics = true
 implicit_reexport = false
-exclude = ["^birefnet/birefnet/upstream/", "^h3-latent-upscaler/h3_latent_upscaler/upstream/", "^seedvr2/seedvr2/upstream/"]
+exclude = ["^birefnet/birefnet/upstream/", "^seedvr2/seedvr2/upstream/"]
 
 # Static checks install the typed Runtime distribution from PyPI. Heavy model libraries remain
 # absent to check the package-facing contracts without their large third-party stub trees.
@@ -48,7 +48,7 @@ disallow_subclassing_any = false
 
 # Attributed upstream architecture is exercised by its real constructor and model proof.
 [[tool.mypy.overrides]]
-module = ["birefnet.upstream.*", "h3_latent_upscaler.upstream.*", "seedvr2.upstream.*"]
+module = ["birefnet.upstream.*", "seedvr2.upstream.*"]
 follow_imports = "skip"
 ignore_errors = true
 
@@ -58,7 +58,7 @@ src = [
     "anima", "minimax-h3", "sdxl", "qwen-image-2", "scripts", "examples",
     "minimax-h3-tools",
 ]
-exclude = [".venv", "birefnet/birefnet/upstream", "h3-latent-upscaler/h3_latent_upscaler/upstream", "seedvr2/seedvr2/upstream"]
+exclude = [".venv", "birefnet/birefnet/upstream", "seedvr2/seedvr2/upstream"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]

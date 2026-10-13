@@ -1,1 +1,0 @@
-"""Attributed upstream numerical implementation."""
