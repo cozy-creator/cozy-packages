@@ -8,3 +8,6 @@ single Runtime-selected GPU. Fixed upstream conditioning tensors are admitted by
 normalize job from an explicit input Tree into a managed native conditioning component.
 Unused upstream device/process-group initialization and legacy state-dict loading
 overrides were removed; Runtime owns those actions. Patch imports moved to module scope.
+Both the 3B dit_v2 and 7B dit architectures are included. The 7B graph uses the
+same adapted SDPA and standard normalization implementations as the 3B graph;
+its unused upstream upscaler wrapper is omitted.
