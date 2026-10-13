@@ -177,6 +177,8 @@ class Lane:
 
 _DIT_FP8 = Treatment(encode="fp8-rowwise/1")
 _DIT_MXFP8 = Treatment(encode="mxfp8/1")
+_VIDEO_VAE_FP8 = Treatment(cast="f16", encode="fp8-rowwise/1")
+_TEXT_FP8 = Treatment(encode="fp8-rowwise/1", keep=TEXT_ENCODER_KEEP)
 
 
 def _both_dits(treatment: Treatment) -> dict[str, Treatment]:
@@ -280,6 +282,15 @@ LANES: Mapping[str, Lane] = {
     "bf16-adaln-pruned": Lane("adaln-pruned"),
     "fp8-adaln-pruned": Lane("adaln-pruned", _both_dits(_DIT_FP8)),
     "mxfp8-adaln-pruned": Lane("adaln-pruned", _both_dits(_DIT_MXFP8)),
+    # Experimental component lanes.  They are explicit outputs so a producer can
+    # evaluate them from an existing checkpoint without re-downloading HF source;
+    # publication remains a separate quality-gated decision.
+    "fp8-vae-adaln-pruned": Lane(
+        "adaln-pruned", {**_both_dits(_DIT_FP8), "video_vae": _VIDEO_VAE_FP8}
+    ),
+    "fp8-text-adaln-pruned": Lane(
+        "adaln-pruned", {**_both_dits(_DIT_FP8), "text_encoder": _TEXT_FP8}
+    ),
 }
 
 
