@@ -111,6 +111,27 @@ often non-English speech. Prevent it in the text:
   "then closes her lips". Characters who never speak get no `(S1)` ID.
 - Use `N/A` in `overall_soundscape` only for total silence.
 
+## Writing segments that join well
+
+From community chains ([H3 Motion Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context#writing-prompts-for-a-chain)):
+
+- Describe the continuation of what is on screen. H3 renders contradictions as unions:
+  if segment N ends on A and segment N+1 describes B and C, you get all three.
+- To change setup, open the segment by holding the previous closing framing for about
+  2 s with no dialogue (an airlock), then cut.
+- Give every hold micro-motion: a breath, a weight shift, an eyeline change. A held
+  framing with nothing happening renders as a freeze.
+- Timecodes in a continuation land early by the context window. `duration_s` counts new
+  time only, but H3 samples the context first: a beat written for 4.0 s lands at 3.08 s
+  with context 22 (0.92 s early; 1.63 s at 39, 2.33 s at 56).
+- Keep context 22. A 56-frame window samples 2.33 s of old frames in every segment,
+  costing compute and new time.
+- Draft in Turbo; render long final chains with `mode: standard`. Turbo dulls the audio
+  and softens the picture, and each segment inherits the previous one's output, so the
+  loss compounds down a chain.
+- In very long pieces, restart continuity with `context_frames: false` at a natural
+  scene or musical transition.
+
 ## References and execution
 
 Each generated character reference uses one Qwen Image 2.1 call and returns exactly one image.
