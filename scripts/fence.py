@@ -902,7 +902,9 @@ def _anima_progress_ladder() -> list[str]:
     of the block tree, so a fence like this one was green while the meter sat frozen at
     `conditioning 0%` for the whole render.
     """
-    tree, _ = _anima_generate_input()
+    tree = ast.parse(
+        (ROOT / "anima" / "anima" / "model.py").read_text(), filename="anima/anima/model.py"
+    )
     phases: dict[str, tuple[str, float, float]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):

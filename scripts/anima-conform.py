@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Anima progress arms: the meter must MOVE, not merely be wired.
+"""Anima arms: the meter must MOVE, not merely be wired; the fused plan must match.
 
 se-026 shipped a denoise hook that was installed on a DEEPCOPY of the block tree — the
 `ModularPipeline.blocks` property returns one — so Diffusers never called it and
@@ -15,6 +15,7 @@ stubbed. No weights, GPU, network, or test framework.
 from __future__ import annotations
 
 import itertools
+import json
 import sys
 import types
 from pathlib import Path
@@ -23,6 +24,7 @@ from typing import Any
 import torch
 from diffusers import AnimaModularPipeline, ClassifierFreeGuidance, CosmosTransformer3DModel
 from diffusers.modular_pipelines import BlockState, PipelineState
+from diffusers.modular_pipelines.anima.before_denoise import AnimaPrepareLatentsStep
 from diffusers.modular_pipelines.anima.denoise import AnimaLoopDenoiser
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -30,7 +32,8 @@ sys.path.insert(0, str(ROOT / "anima"))
 
 from cozy_runtime.author.fakes import fake_attempt, fake_telemetry  # noqa: E402
 
-import anima as package  # noqa: E402
+from anima import model as package  # noqa: E402
+from anima import optimization  # noqa: E402
 
 PASS = "  ok   "
 FAIL = "  FAIL "
@@ -80,9 +83,9 @@ class Recorder:
         return f"{frame.stage} {round((frame.overall_fraction or 0) * 100)}%"
 
 
-def pipeline(recorder: Recorder, batched: bool = False) -> Any:
+def pipeline(recorder: Recorder, batched: bool = False, fused: bool = False) -> Any:
     """The package's own builder, on the CPU, with no components registered."""
-    return package._text2image_pipeline(torch.device("cpu"), recorder.phases, batched)
+    return package._text2image_pipeline(torch.device("cpu"), recorder.phases, batched, fused)
 
 
 def loop_state(loop: Any, steps: int) -> Any:
@@ -303,7 +306,107 @@ def arm_batched_cfg() -> None:
     print(f"         max abs difference {worst:.2e}")
 
 
+def arm_plan_matches_the_locked_sources() -> None:
+    """The fused plan installs on Anima Base 1.0's exact transformer, built here on the meta
+    device: the reviewed Diffusers and Runtime-kernel sources match this lock (else every
+    render runs eager), and installing it moves no tensor."""
+    config = json.loads((ROOT / "anima" / "configs" / "transformer.json").read_text())
+    with torch.device("meta"):
+        transformer = CosmosTransformer3DModel.from_config(config)
+    pipe = types.SimpleNamespace(components={"transformer": transformer})
+    check("the plan admits this transformer and these sources", optimization._plan_refusal(pipe), "")
+    before = optimization._tensor_census(transformer)
+    optimization._install_transformer_plan(transformer)
+    check("installing it moves no tensor", optimization._tensor_census(transformer) == before, True)
+    processors = {type(block.attn1.processor).__name__ for block in transformer.transformer_blocks}
+    check("every self-attention is fused", processors, {"_FusedSelfAttention"})
+    print(f"         this process: {optimization._capability() or 'fused'}")
+
+
+def arm_fused_attention_copies_nothing() -> None:
+    """The fused self-attention makes no K/V copy: Diffusers' grouped-query step repeats by a
+    head-width ratio of 1 in every Cosmos model, and `repeat_interleave(1)` copies both whole
+    (huaisang, rtx-4070-super: 0.35 s of a 30-step render). The rope kernel is an identity
+    here; the attention math around it is the plan's own."""
+
+    class Attention(torch.nn.Module):  # type: ignore[misc]
+        heads = 2
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.to_q, self.to_k, self.to_v = (
+                torch.nn.Linear(32, 32, bias=False) for _ in range(3)
+            )
+            self.to_out = torch.nn.ModuleList(
+                [torch.nn.Linear(32, 32, bias=False), torch.nn.Identity()]
+            )
+            self.norm_q = types.SimpleNamespace(weight=torch.ones(16), eps=1e-5)
+            self.norm_k = types.SimpleNamespace(weight=torch.ones(16), eps=1e-5)
+
+    class Count(torch.overrides.TorchFunctionMode):  # type: ignore[misc]
+        repeats = 0
+
+        def __torch_function__(
+            self, func: Any, types: Any, args: Any = (), kwargs: Any = None
+        ) -> Any:
+            if getattr(func, "__name__", "") == "repeat_interleave":
+                self.repeats += 1
+            return func(*args, **(kwargs or {}))
+
+    torch.manual_seed(3)
+    attention = Attention().eval()
+    kernels = types.SimpleNamespace(rms_rope_split_half=lambda q, k, *_: (q, k))
+    fused = optimization._FusedSelfAttention(kernels, optimization._RopeMatrix())
+    x = torch.randn(1, 6, 32)
+    with torch.no_grad():
+        q, k, v = (
+            getattr(attention, n)(x).unflatten(2, (2, -1)).transpose(1, 2)
+            for n in ("to_q", "to_k", "to_v")
+        )
+        expected = attention.to_out[0](
+            torch.nn.functional.scaled_dot_product_attention(q, k, v).transpose(1, 2).flatten(2, 3)
+        )
+        with Count() as count:
+            got = fused(attention, x, image_rotary_emb=torch.zeros(1, 1, 6, 64, 2, 2))
+    check("no K/V repeat", count.repeats, 0)
+    check("equals SDPA", torch.allclose(got, expected, atol=1e-6), True)
+
+
+def arm_fused_latents() -> None:
+    """The fused pipeline prepares the same latents as Diffusers' step, with the padding
+    mask at latent size (the transformer resizes the pixel-size zeros to exactly that)."""
+    fused_step = pipeline(Recorder(), fused=True)._blocks.sub_blocks["denoise.prepare_latents"]
+    stock_step = pipeline(Recorder())._blocks.sub_blocks["denoise.prepare_latents"]
+    check("the fused pipeline prepares latents with the plan", type(fused_step).__name__, "FusedLatents")
+    check("the eager pipeline keeps Diffusers' step", type(stock_step), AnimaPrepareLatentsStep)
+    components = types.SimpleNamespace(
+        default_height=1024,
+        default_width=1024,
+        num_channels_latents=16,
+        vae_scale_factor=8,
+        _execution_device=torch.device("cpu"),
+    )
+    results: list[tuple[Any, Any]] = []
+    for step in (fused_step, stock_step):
+        state = PipelineState()
+        for name, value in {
+            "height": 96, "width": 80, "batch_size": 1, "num_images_per_prompt": 1,
+            "generator": torch.Generator().manual_seed(11), "latents": None,
+            "dtype": torch.bfloat16,
+        }.items():
+            state.set(name, value)
+        step(components, state)
+        results.append((state.get("latents"), state.get("padding_mask")))
+    (latents, mask), (stock_latents, stock_mask) = results
+    check("the same latents", torch.equal(latents, stock_latents), True)
+    check("a latent-size mask", tuple(mask.shape), (1, 1, *latents.shape[-2:]))
+    check("of zeros, as Diffusers' pixel-size one", (mask.count_nonzero().item(), stock_mask.count_nonzero().item()), (0, 0))
+
+
 ARMS = {
+    "plan": arm_plan_matches_the_locked_sources,
+    "attention": arm_fused_attention_copies_nothing,
+    "latents": arm_fused_latents,
     "batched": arm_batched_cfg,
     "ladder": arm_ladder,
     "brackets": arm_phase_brackets,
