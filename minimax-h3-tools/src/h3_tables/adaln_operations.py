@@ -15,7 +15,6 @@ from cozy_runtime.author import (
     canonical_json,
     invocable,
 )
-from cozy_runtime.models.minimax_h3.table_layout import TableLayout
 from tensorfs.derived import (
     Config,
     Derivation,
@@ -33,6 +32,7 @@ from .model_config import dual_adaln_pruned_config, dual_full_config, parse_prod
 from .order import current_order, full_order
 from .plans import Task, TimestepPlan, parse_declared_plan
 from .source import TARGET_COMPONENT, H3FullTransformer, inspection
+from .table_layout import TableLayout
 
 PLAIN = "sha256:1fb882a7e46d0aff520f9d8a28cefd643954c19371737443101ba3c5fcc3613f"
 _SOURCE_SECTION = {"fl2va": "transformer", "ref2va": "transformer_ref"}

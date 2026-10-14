@@ -176,8 +176,8 @@ and two outputs; turbo preparation does not change the base schedule.
 The output binds to `minimax-h3`'s single `H3TurboModel` slot. Ordinary `H3Model`
 continues to consume a checkpoint with only the original five components.
 
-The row-label parser is Runtime's `cozy_runtime.models.minimax_h3.table_layout`;
-the producer imports it rather than keeping a copy.
+The row-label parser is the producer's `h3_tables.table_layout`; `minimax-h3`
+depends on this package and imports it rather than keeping a copy.
 
 
 The tensor-only serving hooks require Runtime's preservation of hooks during encoded

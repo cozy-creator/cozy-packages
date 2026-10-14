@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Any, cast
 
 from cozy_runtime.author import canonical_json
-from cozy_runtime.models.minimax_h3.table_layout import TableLayout
 
 from .kernel import H3Topology
 from .plans import Task, TimestepPlan
+from .table_layout import TableLayout
 
 _SOURCE_SECTIONS = {
     "transformer",
