@@ -170,17 +170,7 @@ def public_runtime_surface(module: str) -> bool:
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
 #: Private Runtime modules ONE package module imports, each with what retires it.
-PACKAGE_INTERNALS: dict[tuple[str, str], str] = {
-    ("anima/anima/optimization.py", "cozy_runtime._kernels"): (
-        "The Runtime's generic fused RMSNorm + split-half RoPE kernel, which the Anima plan "
-        "launches, has no public surface in Runtime 0.23.34 (anima's floor). Retire when the "
-        "Runtime exposes it publicly and anima's floor moves there."
-    ),
-    ("anima/anima/optimization.py", "cozy_runtime.internal.accel"): (
-        "`readable` maps plane stand-ins for that launch outside torch's dispatch. Retire with "
-        "the public kernel surface, which should make its launch plane-safe itself."
-    ),
-}
+PACKAGE_INTERNALS: dict[tuple[str, str], str] = {}
 
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
     ("scripts/qwen-image-2-model-proof.py", "cozy_runtime.author._activity"): (
