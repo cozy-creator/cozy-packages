@@ -16,7 +16,7 @@ from types import MethodType
 from typing import Any
 
 import torch
-from cozy_runtime import _kernels
+from cozy_runtime._kernels import rms_rope_split_half
 from cozy_runtime.internal.accel import readable
 from diffusers.models.attention_dispatch import dispatch_attention_fn
 from diffusers.models.normalization import RMSNorm
@@ -62,7 +62,7 @@ _SOURCE_DIGESTS: dict[str, tuple[Callable[..., object], str]] = {
         "5f758c69ad2f82a37d707e3ca736b88011b41f04a958dbc657ec397b88c2bef5",
     ),
     "cozy_runtime._kernels.rms_rope_split_half": (
-        _kernels.rms_rope_split_half,
+        rms_rope_split_half,
         "084c60d95676ae003e285fb57ec6b9c3416ffba6e0a0f62d2097f26b8c8aa999",
     ),
 }
@@ -258,8 +258,8 @@ def _direct_rope_forward(rope: Any, hidden_states: Any, fps: int | None = None) 
 
 
 class _FusedSelfAttention:
-    def __init__(self, kernels: Any, rope: _RopeMatrix) -> None:
-        self.kernels = kernels
+    def __init__(self, kernel: Callable[..., tuple[Any, Any]], rope: _RopeMatrix) -> None:
+        self.kernel = kernel
         self.rope = rope
 
     def __call__(
@@ -286,7 +286,7 @@ class _FusedSelfAttention:
         )
         # The kernel reads the scales by pointer, without calling the norms that own them.
         with readable(attn.norm_q.weight, attn.norm_k.weight) as (q_scale, k_scale):
-            query, key = self.kernels.rms_rope_split_half(
+            query, key = self.kernel(
                 query, key, self.rope.get(image_rotary_emb), q_scale, k_scale, attn.norm_q.eps
             )
         # Diffusers repeats K and V by the ratio of head widths, 1 in every Cosmos model;
@@ -389,7 +389,7 @@ def _install_transformer_plan(transformer: Any) -> None:
                 "anima_optimization_block_shape",
                 "Anima Cosmos block projections or attention processors do not match the plan",
             )
-        block.attn1.set_processor(_FusedSelfAttention(_kernels, rope))
+        block.attn1.set_processor(_FusedSelfAttention(rms_rope_split_half, rope))
         block.forward = MethodType(_block_forward, block)
     transformer.rope.forward = MethodType(_direct_rope_forward, transformer.rope)
     original = transformer.forward

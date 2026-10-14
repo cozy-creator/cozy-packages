@@ -11,7 +11,8 @@ than as a convention someone remembers:
                           client is the boundary violation the author surface exists to
                           prevent — and a driver reaching past it breaks exactly as
                           silently, so the scan covers drivers too. `DRIVER_INTERNALS`
-                          enumerates the exceptions a driver has EARNED, with the reason.
+                          enumerates the exceptions a driver has EARNED, with the reason;
+                          `PACKAGE_INTERNALS` the few a package module has, with what retires them.
   2. no-direct-artifact-loading
                           Runtime validates source-authored default ladders. Package code
                           still cannot fetch weights or bypass the verified model loader.
@@ -170,6 +171,19 @@ def public_runtime_surface(module: str) -> bool:
 #: public surface and what would retire the entry. Enumerated because an accepted coupling
 #: that is written down is one a rename can find; the alternative is not fewer couplings,
 #: only invisible ones.
+#: Private Runtime modules ONE package module imports, each with what retires it.
+PACKAGE_INTERNALS: dict[tuple[str, str], str] = {
+    ("anima/anima/optimization.py", "cozy_runtime._kernels"): (
+        "The Runtime's generic fused RMSNorm + split-half RoPE kernel, which the Anima plan "
+        "launches, has no public surface in Runtime 0.23.34 (anima's floor). Retire when the "
+        "Runtime exposes it publicly and anima's floor moves there."
+    ),
+    ("anima/anima/optimization.py", "cozy_runtime.internal.accel"): (
+        "`readable` maps plane stand-ins for that launch outside torch's dispatch. Retire with "
+        "the public kernel surface, which should make its launch plane-safe itself."
+    ),
+}
+
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
     ("scripts/qwen-image-2-model-proof.py", "cozy_runtime.author._activity"): (
         "Observe the executor's cooperative-timing frames around the staged model and its "
@@ -233,7 +247,7 @@ def surface_violations(label: str, source: str, *, driver: bool) -> list[str]:
     for module, line in imports(ast.parse(source, filename=label)):
         top = module.split(".")[0]
         if top == "cozy_runtime" and not public_runtime_surface(module):
-            if driver and (label, module) in DRIVER_INTERNALS:
+            if (label, module) in (DRIVER_INTERNALS if driver else PACKAGE_INTERNALS):
                 continue
             who = "a driver" if driver else "a package"
             how = (
@@ -256,16 +270,15 @@ def surface_violations(label: str, source: str, *, driver: bool) -> list[str]:
 
 def fence_author_surface() -> Fence:
     bad: list[str] = []
-    for path in package_modules():
-        bad += surface_violations(rel(path), path.read_text(), driver=False)
     imported: set[tuple[str, str]] = set()
-    for path in driver_modules():
-        source = path.read_text()
-        bad += surface_violations(rel(path), source, driver=True)
-        imported |= {
-            (rel(path), module) for module, _ in imports(ast.parse(source, filename=rel(path)))
-        }
-    for label, module in DRIVER_INTERNALS:
+    for driver, paths in ((False, package_modules()), (True, driver_modules())):
+        for path in paths:
+            source = path.read_text()
+            bad += surface_violations(rel(path), source, driver=driver)
+            imported |= {
+                (rel(path), module) for module, _ in imports(ast.parse(source, filename=rel(path)))
+            }
+    for label, module in (*DRIVER_INTERNALS, *PACKAGE_INTERNALS):
         if (label, module) not in imported:
             bad.append(
                 f"{label}: recorded internal {module!r} is not imported — a stale exception "
@@ -273,7 +286,8 @@ def fence_author_surface() -> Fence:
             )
     return bad, (
         f"{len(package_modules())} package modules and {len(driver_modules())} drivers "
-        f"import the public author surface, past {len(DRIVER_INTERNALS)} recorded exception(s)"
+        "import the public author surface, past "
+        f"{len(DRIVER_INTERNALS) + len(PACKAGE_INTERNALS)} recorded exception(s)"
     )
 
 
