@@ -199,8 +199,9 @@ segments are shortened and reported. `long_form_cuts`
 renders independent segments. Turbo uses eight PDD evaluations, and standard allows
 30/40/50 steps.
 
-Outputs arrive as they are made. Each generated reference image is published when it
-lands, and the video after every segment as the joined film so far: one file,
+Outputs arrive as they are made. Prepared and generated reference images are published in
+the request's reference order, each once it and every earlier one exist, and the video after
+every segment as the joined film so far: one file,
 `<run>-video.mp4`, appended in place (a fragmented MP4, one init plus one fragment per
 segment) that `cozy run play <run>` follows live. The final MP4 is the last revision, byte
 for byte, bounded at 256 MiB. A failed or canceled run fails, but keeps the references and

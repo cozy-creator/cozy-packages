@@ -1699,8 +1699,6 @@ async def _create_references(
         assert reference.image is not None
         with tel.scope(f"Removing background from {reference.name}"):
             result = await background_remover(image=reference.image)
-        out.publish("references", result.image, label=f"Reference: {reference.name}")
-        shown.append(result.image)
         return result.image
 
     async def create_reference(reference: StoryReference) -> ImageAsset:
@@ -1719,14 +1717,16 @@ async def _create_references(
                 seed=reference_seed(reference, ctx.request_id),
                 background="white" if sheet else "normal",
             )
-        # Each generated reference is shown the moment it exists.
-        out.publish("references", result.image, label=f"Reference: {reference.name}")
-        shown.append(result.image)
         return result.image
+
+    def show(reference: StoryReference, image: ImageAsset) -> None:
+        # In request order, each as soon as it and every earlier one exist.
+        out.publish("references", image, label=f"Reference: {reference.name}")
+        shown.append(image)
 
     async with asyncio.TaskGroup() as group:
         resolving = group.create_task(resolve_reference_images(
-            references, create_reference, prepare_character if prepare_characters else None
+            references, create_reference, prepare_character if prepare_characters else None, show
         ))
         describing = group.create_task(_describe_characters(references, tel)) if describe_characters else None
     images = resolving.result()

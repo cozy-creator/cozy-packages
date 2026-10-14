@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, get_type_hints
 
 import msgspec
 from cozy_runtime.author import AudioAsset, ImageAsset, InvalidRequest
+from cozy_runtime.author.fakes import fake_attempt, fake_context, fake_outputs, fake_telemetry
 from diffusers.modular_pipelines.minimax_h3.encoders import MiniMaxH3Ref2VATextEncoderStep
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
@@ -556,6 +559,62 @@ async def references() -> None:
         raise AssertionError("generation failure swallowed")
 
 
+async def reference_order() -> None:
+    """se-066: `references` come back in request order, whichever is made first."""
+    supplied = {name: ImageAsset("sha256:" + digit * 64) for name, digit in (("Ann", "1"), ("Cal", "3"))}
+    refs = [
+        StoryReference("Ann", "character", image=supplied["Ann"]),
+        StoryReference("Ben", "character", "An adult man in a red coat."),
+        StoryReference("Cal", "character", image=supplied["Cal"]),
+    ]
+    made_images = {name: ImageAsset("sha256:" + digit * 64) for name, digit in (("Ann", "a"), ("Ben", "b"), ("Cal", "c"))}
+    gates = {name: asyncio.Event() for name in made_images}
+    made: list[str] = []
+
+    async def finish(name: str) -> SimpleNamespace:
+        await gates[name].wait()
+        made.append(name)
+        return SimpleNamespace(image=made_images[name])
+
+    async def remove_background(*, image: ImageAsset) -> SimpleNamespace:
+        return await finish(next(name for name, asset in supplied.items() if asset is image))
+
+    async def generate_reference(**_: Any) -> SimpleNamespace:
+        return await finish("Ben")
+
+    # The managed callees are module names `_create_references` reads per call.
+    fakes: dict[str, Callable[..., Awaitable[SimpleNamespace]]] = {
+        "remove_background": remove_background, "generate_reference": generate_reference,
+    }
+    real = {name: getattr(h3, name) for name in fakes}
+    for name, fake in fakes.items():
+        setattr(h3, name, fake)
+    try:
+        attempt = fake_attempt("h3-reference-order")
+        shown: list[ImageAsset] = []
+        running = asyncio.create_task(h3._create_references(
+            fake_context(), refs, fake_telemetry(attempt), fake_outputs(attempt), shown,
+            style="", describe_characters=False,
+        ))
+        for name in ("Cal", "Ben"):
+            gates[name].set()
+            while name not in made:
+                await asyncio.sleep(0)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        check("a reference made early waits for every earlier one", [p.label for p in attempt.published], [])
+        gates["Ann"].set()
+        images, _, _ = await running
+    finally:
+        for name, callee in real.items():
+            setattr(h3, name, callee)
+    check("made last to first", made, ["Cal", "Ben", "Ann"])
+    check("references are published in request order",
+          [p.label for p in attempt.published], ["Reference: Ann", "Reference: Ben", "Reference: Cal"])
+    check("the returned references keep request order", shown, [made_images[n] for n in ("Ann", "Ben", "Cal")])
+    check("each name holds its own image", images, made_images)
+
+
 def opening_cuts() -> None:
     refs = [StoryReference("Ann", "character", "A woman."), StoryReference("Ben", "character", "A man."),
             StoryReference("Cal", "character", "A boy."), StoryReference("Hall", "scene", "A hall.")]
@@ -582,4 +641,5 @@ if __name__ == "__main__":
     style()
     music()
     asyncio.run(references())
+    asyncio.run(reference_order())
     print("H3 prompts: PASS")
