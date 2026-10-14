@@ -1,10 +1,10 @@
 [project]
 name = "anima"
-version = "0.4.1"
+version = "0.5.0"
 description = "Anima anime text-to-image package for Cozy"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media]>=0.23.22",
+    "cozy-runtime[media]>=0.23.34",
     "diffusers>=0.40.0",
     "hf-xet>=1.6.0",
     "msgspec>=0.19",

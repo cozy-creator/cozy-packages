@@ -15,7 +15,7 @@ sys.path[:0] = [str(ROOT / name) for name in ("sdxl", "anima")]
 from cozy_runtime.author import InvalidRequest, ModelAssets  # noqa: E402
 from cozy_runtime.internal import sandbox  # noqa: E402
 
-import anima  # noqa: E402
+from anima import model as anima  # noqa: E402
 import sdxl  # noqa: E402
 
 
