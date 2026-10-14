@@ -33,7 +33,7 @@ from minimax_h3.official import (  # noqa: E402
     _apply_video_vae_dtype,
     frames_for,
 )
-from minimax_h3.vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
+from minimax_h3.vae_tiles import TileBatchedVideoVAE  # noqa: E402
 from diffusers.modular_pipelines.minimax_h3.modular_pipeline import (  # noqa: E402
     video_latent_num_frames,
 )
@@ -94,7 +94,7 @@ def main() -> None:
     columns = baseline._split_tiles(
         CANVAS[1], baseline.tile_sample_min_width, baseline.tile_sample_min_overlap_width
     )
-    assert len(rows[0]) * len(columns[0]) == TILE_BATCH, "not the release tile grid"
+    assert len(rows[0]) * len(columns[0]) == 28, "not the release 4x7 tile grid"
 
     cells: dict[int, dict[str, object]] = {}
     for seconds in CELLS:

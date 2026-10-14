@@ -9,7 +9,8 @@ ViT over `(B, S, C)` tokens whose norms reduce over the last dimension only, who
 register/cls tokens are per-batch replicas and whose RoPE comes from the tile geometry.
 (`MiniMaxH3VideoGroupNorm`, the one batch-mixing module, is encoder-side.) So the tiles
 of one chunk go through `post_quant_conv` and the decoder as one `(tiles, C, T, h, w)`
-batch and are stitched by the unchanged `_stitch_tiles` in the unchanged order.
+batch, or as few as the device holds (the Runtime's `split`), and are stitched by the
+unchanged `_stitch_tiles` in the unchanged order.
 
 The arithmetic per tile is the same; the BYTES are a property of the kernel a larger GEMM
 selects, so they are measured, never assumed. Measured 2026-09-07 at the release tile
@@ -30,14 +31,7 @@ from diffusers import AutoencoderKLMiniMaxH3
 from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
 from diffusers.models.modeling_utils import get_parameter_dtype
 
-from cozy_runtime.author import spread
-
-#: Tiles per decoder forward. The release geometry (1344x768 at 256 px tiles, 64 px
-#: overlap) is a 4x7 grid, so one chunk is exactly one forward; a larger frame decodes in
-#: groups of this many, which bounds the batch's activation footprint. The batch size is
-#: part of the numerical identity of the decode (a different GEMM may reduce differently),
-#: so it is a declared plan fact and changes only with a banked before/after digest.
-TILE_BATCH = 28
+from cozy_runtime.author import Cut, split, spread
 
 
 class TileBatchedVideoVAE(AutoencoderKLMiniMaxH3):  # type: ignore[misc]
@@ -176,14 +170,14 @@ class TileBatchedVideoVAE(AutoencoderKLMiniMaxH3):  # type: ignore[misc]
             for y, y_len in zip(y_indices, y_lengths, strict=True)
             for x, x_len in zip(x_indices, x_lengths, strict=True)
         ]
-        decoded: list[torch.Tensor] = []
-        for start in range(0, len(tiles), TILE_BATCH):
-            group = tiles[start : start + TILE_BATCH]
-            batch = group[0] if len(group) == 1 else torch.cat(group, dim=0)
-            decoded.extend(self.decoder(self.post_quant_conv(batch)).split(z.shape[0], dim=0))
+        batch = tiles[0] if len(tiles) == 1 else torch.cat(tiles, dim=0)
+        decoded = split(self._decode_tiles, batch, Cut(0)).split(z.shape[0], dim=0)
         columns = len(x_indices)
         rows = [decoded[row * columns : (row + 1) * columns] for row in range(len(y_indices))]
         return self._stitch_tiles(rows, y_overlaps, x_overlaps)
+
+    def _decode_tiles(self, batch: torch.Tensor) -> torch.Tensor:
+        return self.decoder(self.post_quant_conv(batch))
 
     def encode_condition(
         self,

@@ -27,6 +27,7 @@ from diffusers.models.upsampling import Upsample2D
 from diffusers.utils import is_torch_version
 from diffusers.utils.accelerate_utils import apply_forward_hook
 from einops import rearrange
+from cozy_runtime.author import Cut, split
 
 from seedvr2.upstream.common.distributed.advanced import get_sequence_parallel_world_size
 from seedvr2.upstream.common.logger import get_logger
@@ -56,20 +57,9 @@ logger = get_logger(__name__)  # pylint: disable=invalid-name
 
 
 
-# Spatial VAE tiles in latent pixels: 512-pixel tiles with a 64-pixel blended overlap.
-TILE, OVERLAP = 64, 8
-
-
-def _fade(size: int, overlap: int, start: bool, end: bool, like: torch.Tensor) -> torch.Tensor:
-    weight = torch.ones(size, device=like.device, dtype=torch.float32)
-    span = max(0, min(overlap, size - 1))
-    if span:
-        ramp = 0.5 - 0.5 * torch.cos(torch.linspace(0, 1, span, device=like.device) * torch.pi)
-        if start:
-            weight[:span] = ramp
-        if end:
-            weight[-span:] = ramp.flip(0)
-    return weight
+#: Latent pixels neighbouring spatial tiles share, cross-faded: the decoder's reach. The
+#: Runtime sizes the tiles (`split`).
+OVERLAP = 8
 
 class Upsample3D(Upsample2D):
     """A 3D upsampling layer with an optional convolution."""
@@ -1259,37 +1249,12 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
                 module.memory = None
 
     def tiled_encode(self, x: torch.Tensor) -> torch.Tensor:
-        return self._tiled(self.slicing_encode, x, self.spatial_downsample_factor, 1)
+        f = self.spatial_downsample_factor
+        return split(self.slicing_encode, x, *(Cut(d, 1 / f, OVERLAP * f, f) for d in (-2, -1)))
 
     def tiled_decode(self, z: torch.Tensor) -> torch.Tensor:
-        return self._tiled(self.slicing_decode, z, 1, self.spatial_downsample_factor)
-
-    def _tiled(self, run, x: torch.Tensor, into: int, out: int) -> torch.Tensor:
-        """Run `run` over overlapping spatial tiles of `TILE` latent pixels, cosine-blended over
-        `OVERLAP`, so activation memory is bounded by the tile rather than the frame."""
-        height, width = -(-x.size(-2) // into), -(-x.size(-1) // into)
-        if height <= TILE and width <= TILE:
-            return run(x)
-        stride, result, total = TILE - OVERLAP, None, None
-        for top in range(0, height, stride):
-            if top and height - top <= OVERLAP:
-                continue
-            for left in range(0, width, stride):
-                if left and width - left <= OVERLAP:
-                    continue
-                bottom, right = min(top + TILE, height), min(left + TILE, width)
-                part = run(x[..., top * into : bottom * into, left * into : right * into])
-                if result is None:
-                    shape = (*part.shape[:3], height * out, width * out)
-                    result = part.new_zeros(shape, dtype=torch.float32)
-                    total = part.new_zeros((1, 1, 1, *shape[3:]), dtype=torch.float32)
-                rows = _fade((bottom - top) * out, OVERLAP * out, top > 0, bottom < height, part)
-                cols = _fade((right - left) * out, OVERLAP * out, left > 0, right < width, part)
-                mask = rows.view(-1, 1) * cols.view(1, -1)
-                window = (..., slice(top * out, bottom * out), slice(left * out, right * out))
-                result[window] += part[..., : rows.numel(), : cols.numel()].float() * mask
-                total[window] += mask
-        return result.div_(total).to(part.dtype)
+        f = self.spatial_downsample_factor
+        return split(self.slicing_decode, z, *(Cut(d, f, OVERLAP) for d in (-2, -1)))
 
     def forward(
         self, x: torch.FloatTensor, mode: Literal["encode", "decode", "all"] = "all", **kwargs

@@ -153,7 +153,7 @@ from minimax_h3.turbo import (  # noqa: E402
     TurboSchedule,
     _LoRAHook,
 )
-from minimax_h3.vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
+from minimax_h3.vae_tiles import TileBatchedVideoVAE  # noqa: E402
 from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3Attention  # noqa: E402
 from minimax_h3 import glue, producer  # noqa: E402
 from cozy_runtime.author.kernels import Plan, PreQuantized  # noqa: E402
@@ -3079,11 +3079,7 @@ def arm_vae_tiles() -> None:
     ratio = vae.spatial_compression_ratio
     rows = vae._split_tiles(768, vae.tile_sample_min_height, vae.tile_sample_min_overlap_height)
     columns = vae._split_tiles(1344, vae.tile_sample_min_width, vae.tile_sample_min_overlap_width)
-    check(
-        "TILE_BATCH is the release grid, one forward per chunk",
-        len(rows[0]) * len(columns[0]),
-        TILE_BATCH,
-    )
+    check("the release grid is 4x7 tiles, one forward per chunk", len(rows[0]) * len(columns[0]), 28)
     clip = torch.randn(
         1, 24, 7, 768 // ratio, 1344 // ratio, generator=torch.Generator().manual_seed(1)
     )
