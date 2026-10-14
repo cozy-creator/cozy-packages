@@ -1,0 +1,74 @@
+version: "3"
+silent: true
+
+vars:
+  LOCK_HUB: tensorhub # committed locks resolve against production
+  HUBS: tensorhub local
+
+tasks:
+  # A copy of the tracked tree, the package bound to the index its lock names, in that exact environment.
+  conform:
+    desc: "CPU conformance of a package as tracked here, in its exact locked environment: task conform -- minimax-h3"
+    cmds:
+      - |
+        set -euo pipefail; p="{{.CLI_ARGS}}"; test -f "$p/package.toml" || { echo "usage: task conform -- <package>" >&2; exit 2; }
+        work=$(mktemp -d); trap 'rm -rf "$work"' EXIT; git ls-files -z | tar --null -T - -c | tar -x -C "$work"; cd "$work"
+        scripts/bind-account-index.sh "$(grep -om1 'https://[^"]*/v1/index/[^/]*/simple/' "$p/uv.lock" || true)" "$p"
+        uv sync -q --locked --no-install-project --python 3.12 --project "$p"; py=$PWD/$p/.venv/bin/python; export CUDA_VISIBLE_DEVICES=
+        $py scripts/torch_family.py; $py scripts/direct_requirements.py; $py scripts/package_import.py "$p"
+        "$p/.venv/bin/cozy-runtime" --json --dir "$p" describe | $py scripts/interface_current.py "$p/metadata/package-interface.json"
+        case $p in
+          anima) $py scripts/anima-conform.py ;;
+          qwen-image-2) $py scripts/qwen-image-2-conform.py; $py scripts/qwen-image-2-model-proof.py ;;
+          minimax-h3) for s in conform prompt-proof turbo-cp-proof reference-fidelity-proof; do $py "scripts/h3-$s.py"; done; $py scripts/h3-assembly-proof.py assembly ;;
+          minimax-h3-tools) for s in order stage full-source table-metadata; do PYTHONPATH=$p/src $py "$p/scripts/$s-proof.py"; done; PYTHONPATH=$p/src $py scripts/tensorfs_seeds.py ;;
+        esac
+        uv build -q --project "$p" --wheel --out-dir dist; uv pip install -q --python "$py" --no-deps dist/*.whl
+        $py -P scripts/package_import.py "$p" --installed
+        if [ "$p" = minimax-h3-tools ]; then $py -P scripts/h3-adaln-interface-proof.py; fi
+        echo "$p conforms"
+
+  # Locks pin same-account callees exactly, so each release of X is followed by one of every package
+  # whose lock holds X: relocked to it, patch-bumped, conformed, pushed to master, then published.
+  publish:
+    desc: "Conform and publish packages from master to every hub, then cascade to their in-repo dependents: task publish -- qwen-image-2"
+    cmds:
+      - |
+        set -euo pipefail; roots=" {{.CLI_ARGS}} "; changed=$roots
+        for r in $roots; do test -f "$r/package.toml" || { echo "usage: task publish -- <package>..." >&2; exit 2; }; done
+        git diff --quiet HEAD || { echo "commit or discard tracked changes first" >&2; exit 1; }
+        git fetch -q origin master; git merge -q --ff-only FETCH_HEAD
+        work=$(mktemp -d); trap 'git checkout -q -- .; rm -rf "$work"' EXIT
+        ver() { grep -m1 '^version = ' "$1/pyproject.toml" | cut -d'"' -f2; }
+        deps() { awk -F'"' '/^name = /{n=$2} /^source = / && /\/v1\/index\//{print n}' "$1/uv.lock"; }
+        pinned() { for q in $up; do grep -A1 -x "name = \"$q\"" "$1/uv.lock" | grep -qx "version = \"$(ver "$q")\"" || return 1; done; }
+        published() {
+          i=$(grep -om1 'https://[^"]*/v1/index/[^/]*/simple/' "$1/uv.lock"); a=${i%/simple/}
+          cozy package info "${a##*/}/$1" --tensorhub "${i%%/v1/*}" --json | jq -e --arg v "$(ver "$1")" 'any(.releases[]; .release == $v)' >/dev/null
+        }
+        ship() { for h in {{.HUBS}}; do rm -rf "${work:?}/$1"; git archive HEAD "$1" | tar -x -C "$work"; (cd "$work/$1" && cozy package publish --tensorhub "$h"); done; }
+        release() {
+          task conform -- "$1"
+          if ! git diff --quiet HEAD; then
+            git commit -q -m "$1 $(ver "$1"): lock$(for q in $up; do printf ' %s %s' "$q" "$(ver "$q")"; done)" -- "$1"
+            until git push -q origin HEAD:master; do
+              git fetch -q origin master
+              git diff --quiet HEAD~1 FETCH_HEAD -- "$1" || { git reset -q --keep HEAD~1; echo "master changed $1 during its release; run again" >&2; exit 1; }
+              git rebase -q FETCH_HEAD
+            done
+          fi
+          ship "$1"
+        }
+        for p in $(for p in */package.toml; do p=${p%/package.toml}; echo "$p $p"; deps "$p" | sed "s|\$| $p|"; done | tsort); do
+          [ -f "$p/package.toml" ] || continue
+          case $roots in *" $p "*) up=; release "$p"; continue ;; esac
+          up=$(for q in $(deps "$p"); do case $changed in *" $q "*) echo "$q" ;; esac; done)
+          [ -n "$up" ] || continue
+          changed="$changed$p "
+          published "$p" || { echo "$p $(ver "$p") on master is unpublished; release it first: task publish -- $p" >&2; exit 1; }
+          if pinned "$p"; then ship "$p"; continue; fi
+          uv version -q --bump patch --frozen --project "$p"
+          (cd "$p" && cozy package lock --tensorhub {{.LOCK_HUB}} $(printf -- '--upgrade-package=%s ' $up))
+          pinned "$p" || { echo "$p: the relock did not take $up at their released versions" >&2; exit 1; }
+          release "$p"
+        done
