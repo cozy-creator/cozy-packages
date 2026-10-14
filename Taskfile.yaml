@@ -68,7 +68,7 @@ tasks:
           published "$p" || { echo "$p $(ver "$p") on master is unpublished; release it first: task publish -- $p" >&2; exit 1; }
           if pinned "$p"; then ship "$p"; continue; fi
           uv version -q --bump patch --frozen --project "$p"
-          (cd "$p" && cozy package lock --tensorhub {{.LOCK_HUB}} $(printf -- '--upgrade-package=%s ' $up))
+          (cd "$p" && cozy package lock --tensorhub {{.LOCK_HUB}} $(printf ' --upgrade-package=%s' $up))
           pinned "$p" || { echo "$p: the relock did not take $up at their released versions" >&2; exit 1; }
           release "$p"
         done
