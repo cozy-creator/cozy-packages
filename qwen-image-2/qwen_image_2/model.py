@@ -273,29 +273,19 @@ class QwenImage21Model(Model[QwenImage21Graph]):
             on_step(step)
             return values
 
-        def run(use_kv_cache: bool) -> Any:
-            with torch.inference_mode():
-                return pipeline(
-                    image=reference_images,
-                    prompt_embeds=embeds.to(device=device, dtype=transformer.dtype),
-                    prompt_embeds_mask=None if mask is None else mask.to(device=device),
-                    width=width,
-                    height=height,
-                    num_inference_steps=steps,
-                    generator=torch.Generator(device=device).manual_seed(seed),
-                    output_type="latent",
-                    callback_on_step_end=observed,
-                    use_kv_cache=use_kv_cache,
-                ).images
-
         cancel()
-        # The prefix KV cache (text, vision and reference tokens, every layer) grows by
-        # ~2 GiB per 1 MP reference. It is an exact speedup: when the card cannot hold it,
-        # recompute the prefix each step instead, slower but the same image.
-        try:
-            return run(use_kv_cache=True)
-        except torch.OutOfMemoryError:
-            return run(use_kv_cache=False)
+        with torch.inference_mode():
+            return pipeline(
+                image=reference_images,
+                prompt_embeds=embeds.to(device=device, dtype=transformer.dtype),
+                prompt_embeds_mask=None if mask is None else mask.to(device=device),
+                width=width,
+                height=height,
+                num_inference_steps=steps,
+                generator=torch.Generator(device=device).manual_seed(seed),
+                output_type="latent",
+                callback_on_step_end=observed,
+            ).images
 
     @uses_components("vae")
     def decode(self, latents: Any, *, width: int, height: int) -> Any:
@@ -306,5 +296,8 @@ class QwenImage21Model(Model[QwenImage21Graph]):
             latents = latents.to(device=device, dtype=vae.dtype)
             mean = latents.new_tensor(vae.config.latents_mean).view(1, vae.config.z_dim, 1, 1, 1)
             std = latents.new_tensor(vae.config.latents_std).view(1, vae.config.z_dim, 1, 1, 1)
-            # Identical to the pipeline's final decode, with no cast of F32 source weights.
-            return vae.decode(latents * std + mean, return_dict=False)[0][:, :, 0]
+            # The pipeline's final decode, with no cast of F32 source weights, as one frame:
+            # Diffusers' `decode` keeps every convolution's input for a next frame an image
+            # never has (its feature cache, half the decode's memory); the same bits without.
+            x = vae.post_quant_conv(latents * std + mean)
+            return vae.decoder(x, first_chunk=True).clamp(-1.0, 1.0)[:, :, 0]
