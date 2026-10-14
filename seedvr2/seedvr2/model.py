@@ -96,113 +96,127 @@ def build(config: Config) -> Graph:
 
 
 class RestorationModel(Model[Graph]):
+    """Each phase declares the components it uses, so the Runtime places each on its own:
+    the VAE's activations take the room the transformer's weights held while it ran."""
+
     graph: Graph
 
     def load(self, loader: Loader) -> None:
         self.graph = loader.construct(Graph, factory=build)
 
-    @uses_components("dit", "vae", "conditioning")
-    def restore(
-        self,
-        frames: list[Image.Image],
-        width: int,
-        height: int,
-        seed: int,
-        tel: Telemetry,
-        *,
-        correction: Correction,
-        input_noise: float,
-        latent_noise: float,
-    ) -> list[Image.Image]:
-        device = next(self.graph.components["dit"].parameters()).device
-        cfg = OmegaConf.create(
-            {
-                "vae": {
-                    "dtype": "float16",
-                    "scaling_factor": 0.9152,
-                    "grouping": False,
-                    "model": {"temporal_downsample_factor": 4, "spatial_downsample_factor": 8},
-                },
-                "diffusion": {
-                    "schedule": {"type": "lerp", "T": 1000.0},
-                    "sampler": {"type": "euler", "prediction_type": "v_lerp"},
-                    "timesteps": {
-                        "sampling": {"type": "uniform_trailing", "steps": 1},
-                        "transform": True,
-                    },
-                    "cfg": {"scale": 1.0, "rescale": 0.0},
-                },
-            }
-        )
-        runner = cast(Any, VideoDiffusionInfer(cfg))
-        runner.dit, runner.vae = self.graph.components["dit"], self.graph.components["vae"]
-        runner.vae.set_causal_slicing(split_size=4, memory_device="same")
-        runner.vae.set_memory_limit(conv_max_mem=0.5, norm_max_mem=0.5)
-        runner.configure_diffusion()
-        if not frames:
-            raise ValueError("SeedVR2 restoration needs at least one frame")
-        padded = extend(frames, (1 - len(frames)) % 4)
-        canvas = ((width + 15) // 16 * 16, (height + 15) // 16 * 16)
-        left, top = (canvas[0] - width) // 2, (canvas[1] - height) // 2
-        pixels = torch.stack(
-            [
-                vision.to_tensor(
-                    ImageOps.expand(
-                        frame.resize((width, height), Image.Resampling.LANCZOS),
-                        border=(left, top, canvas[0] - width - left, canvas[1] - height - top),
-                    )
-                )
-                for frame in padded
-            ]
-        )
-        crop = (slice(top, top + height), slice(left, left + width))
-        source = pixels[: len(frames), :, crop[0], crop[1]].mul(2).sub(1)
-        pixels = pixels.to(device=device, dtype=torch.float16).permute(1, 0, 2, 3).mul(2).sub(1)
+    @uses_components("vae")
+    def encode(self, pixels: torch.Tensor) -> torch.Tensor:
+        """One window's pixels, (c, t, h, w) in [-1, 1], to its scaled latent."""
+        return _runner(self.graph).vae_encode([pixels])[0]
+
+    @uses_components("dit", "conditioning")
+    def denoise(self, latent: torch.Tensor, latent_noise: float) -> torch.Tensor:
+        """The one-step restoration of a window's latent, conditioned on itself."""
+        runner = _runner(self.graph)
         conditioning = cast(Conditioning, self.graph.components["conditioning"])
-        with torch.inference_mode(), torch.random.fork_rng(devices=[device.index or 0]):
-            torch.manual_seed(seed)
-            if input_noise:
-                pixels = pixels + torch.randn_like(pixels) * (0.025 * input_noise)
-            with tel.stage("SeedVR2 VAE encode"):
-                latents = runner.vae_encode([pixels])
-            noises = [torch.randn_like(latent) for latent in latents]
-            if latent_noise:
-                # Upstream's `_add_noise`, including its (h, w, c) shape for the shift.
-                latents = [
-                    runner.schedule.forward(
-                        latent,
-                        noise * 0.1 + torch.randn_like(noise) * 0.05,
-                        runner.timestep_transform(
-                            torch.tensor([1000.0 * latent_noise], device=device),
-                            torch.tensor(latent.shape[1:], device=device)[None],
-                        ),
-                    )
-                    for noise, latent in zip(noises, latents, strict=True)
-                ]
-            conditions = [
-                runner.get_condition(noise, latent_blur=latent, task="sr")
-                for noise, latent in zip(noises, latents, strict=True)
-            ]
-            with torch.autocast(device.type, dtype=torch.bfloat16):
-                with tel.stage("SeedVR2 denoise"):
-                    restored = runner.inference(
-                        noises,
-                        conditions,
-                        [conditioning.positive],
-                        [conditioning.negative],
-                        decode=False,
-                    )
-                with tel.stage("SeedVR2 VAE decode"):
-                    sample = runner.vae_decode(restored)[0]
-            if sample.ndim == 3:
-                sample = sample.unsqueeze(1)
-            sample = sample[:, : len(frames), crop[0], crop[1]].permute(1, 0, 2, 3).float()
-            sample = torch.cat(
-                [
-                    correct(
-                        frame[None].clamp(-1, 1), source[index : index + 1].to(device), correction
-                    )
-                    for index, frame in enumerate(sample)
-                ]
+        noise = torch.randn_like(latent)
+        if latent_noise:
+            # Upstream's `_add_noise`, including its (h, w, c) shape for the shift.
+            latent = runner.schedule.forward(
+                latent,
+                noise * 0.1 + torch.randn_like(noise) * 0.05,
+                runner.timestep_transform(
+                    torch.tensor([1000.0 * latent_noise], device=latent.device),
+                    torch.tensor(latent.shape[1:], device=latent.device)[None],
+                ),
             )
-        return [vision.to_pil_image(frame) for frame in sample.cpu().clamp(-1, 1).add(1).div(2)]
+        condition = runner.get_condition(noise, latent_blur=latent, task="sr")
+        with torch.autocast(latent.device.type, dtype=torch.bfloat16):
+            return runner.inference(
+                [noise], [condition], [conditioning.positive], [conditioning.negative], decode=False
+            )[0]
+
+    @uses_components("vae")
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        """A restored latent to pixels, (c, t, h, w) in about [-1, 1]."""
+        with torch.autocast(latent.device.type, dtype=torch.bfloat16):
+            return _runner(self.graph).vae_decode([latent])[0]
+
+
+def _runner(graph: Graph) -> Any:
+    """Upstream's inference driver over the constructed components (configuration only)."""
+    cfg = OmegaConf.create(
+        {
+            "vae": {
+                "dtype": "float16",
+                "scaling_factor": 0.9152,
+                "grouping": False,
+                "model": {"temporal_downsample_factor": 4, "spatial_downsample_factor": 8},
+            },
+            "diffusion": {
+                "schedule": {"type": "lerp", "T": 1000.0},
+                "sampler": {"type": "euler", "prediction_type": "v_lerp"},
+                "timesteps": {
+                    "sampling": {"type": "uniform_trailing", "steps": 1},
+                    "transform": True,
+                },
+                "cfg": {"scale": 1.0, "rescale": 0.0},
+            },
+        }
+    )
+    runner = cast(Any, VideoDiffusionInfer(cfg))
+    runner.dit, runner.vae = graph.components["dit"], graph.components["vae"]
+    runner.vae.set_causal_slicing(split_size=4, memory_device="same")
+    runner.vae.set_memory_limit(conv_max_mem=0.5, norm_max_mem=0.5)
+    runner.configure_diffusion()
+    return runner
+
+
+def restore(
+    model: RestorationModel,
+    frames: list[Image.Image],
+    width: int,
+    height: int,
+    seed: int,
+    tel: Telemetry,
+    *,
+    correction: Correction,
+    input_noise: float,
+    latent_noise: float,
+) -> list[Image.Image]:
+    """One window: encode, denoise and decode, each its own component scope."""
+    if not frames:
+        raise ValueError("SeedVR2 restoration needs at least one frame")
+    device = torch.device("cuda", torch.cuda.current_device())
+    padded = extend(frames, (1 - len(frames)) % 4)
+    canvas = ((width + 15) // 16 * 16, (height + 15) // 16 * 16)
+    left, top = (canvas[0] - width) // 2, (canvas[1] - height) // 2
+    pixels = torch.stack(
+        [
+            vision.to_tensor(
+                ImageOps.expand(
+                    frame.resize((width, height), Image.Resampling.LANCZOS),
+                    border=(left, top, canvas[0] - width - left, canvas[1] - height - top),
+                )
+            )
+            for frame in padded
+        ]
+    )
+    crop = (slice(top, top + height), slice(left, left + width))
+    source = pixels[: len(frames), :, crop[0], crop[1]].mul(2).sub(1)
+    pixels = pixels.to(device=device, dtype=torch.float16).permute(1, 0, 2, 3).mul(2).sub(1)
+    with torch.inference_mode(), torch.random.fork_rng(devices=[device.index or 0]):
+        torch.manual_seed(seed)
+        if input_noise:
+            pixels = pixels + torch.randn_like(pixels) * (0.025 * input_noise)
+        with tel.stage("SeedVR2 VAE encode"):
+            latent = model.encode(pixels)
+        with tel.stage("SeedVR2 denoise"):
+            latent = model.denoise(latent, latent_noise)
+        with tel.stage("SeedVR2 VAE decode"):
+            sample = model.decode(latent)
+        if sample.ndim == 3:
+            sample = sample.unsqueeze(1)
+        sample = sample[:, : len(frames), crop[0], crop[1]].permute(1, 0, 2, 3).float()
+        sample = torch.cat(
+            [
+                correct(frame[None].clamp(-1, 1), source[index : index + 1].to(device), correction)
+                for index, frame in enumerate(sample)
+            ]
+        )
+    return [vision.to_pil_image(frame) for frame in sample.cpu().clamp(-1, 1).add(1).div(2)]
