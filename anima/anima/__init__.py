@@ -47,8 +47,7 @@ class Megapixels(IntEnum):
     Tier 2 is the 1536-class (~2.3 MP) the model is meant to be run at and this
     package's default; tier 1 trades resolution for speed. Denoise attention is full
     (no windowing), so time and VRAM scale roughly linearly with area — tier 1 costs
-    about half of tier 2. The VAE always tiles. Every bucket is a multiple of the
-    pipeline's 16-px stride.
+    about half of tier 2. Every bucket is a multiple of the pipeline's 16-px stride.
     """
 
     MP1 = 1
