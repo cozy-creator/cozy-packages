@@ -77,8 +77,11 @@ async def resolve_reference_images(
     references: Sequence[StoryReference],
     generate: Callable[[StoryReference], Awaitable[ImageAsset]],
     prepare_character: Callable[[StoryReference], Awaitable[ImageAsset]] | None = None,
+    show: Callable[[StoryReference, ImageAsset], None] | None = None,
 ) -> dict[str, ImageAsset | AudioAsset]:
-    """Prepare supplied characters, reuse scenes/audio, and generate missing images once."""
+    """Prepare supplied characters, reuse scenes/audio, and generate missing images once,
+    concurrently. `show` gets each made image in request order, as soon as it and every
+    earlier one exist."""
     images: dict[str, ImageAsset | AudioAsset] = {}
     for ref in references:
         supplied = ref.audio if ref.kind == "audio" else ref.image
@@ -98,14 +101,21 @@ async def resolve_reference_images(
         return await generate(reference)
 
     tasks = [asyncio.create_task(one(reference)) for reference in pending]
+    ready = 0
     try:
-        generated = await asyncio.gather(*tasks)
+        for finished in asyncio.as_completed(tasks):
+            await finished
+            while ready < len(tasks) and tasks[ready].done():
+                reference, image = pending[ready], tasks[ready].result()
+                images[reference.name] = image
+                if show is not None:
+                    show(reference, image)
+                ready += 1
     except BaseException:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
-    images.update((ref.name, image) for ref, image in zip(pending, generated, strict=True))
     return images
 
 
