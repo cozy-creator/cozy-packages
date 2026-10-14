@@ -19,7 +19,9 @@ from cozy_runtime.author import (
     sequence_parallel,
     uses_components,
 )
+from cozy_runtime.author.kernels import Plan
 
+from . import glue, producer
 from .official import (
     NumericalChecks,
     OfficialH3Pipeline,
@@ -78,7 +80,7 @@ def condition_references(
 
 @placeable("text_encoder")
 @sequence_parallel(degrees=(2, 4, 7, 8))
-class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept"):
+class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept"):
     """H3 is head-shardable at every divisor of its 56 attention heads up to eight GPUs.
 
     The upstream `_cp_plan` shards the packed sequence itself with `tensor_split`, so any
@@ -116,6 +118,12 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept
 
     def unload(self, loader: Loader) -> None:
         return None
+
+    def execution_plan(self, plan: Plan) -> str:
+        """The fused glue on every filled H3 DiT, and the CP producer's rotary hook."""
+        for component in self.pipe.components.values():
+            producer.retain_rotary(component)
+        return glue.install(self, self.pipe, plan)
 
     def choose_attention(self, context: AttentionContext) -> tuple[str, ...] | None:
         if context.component not in DIT_COMPONENTS:
@@ -208,7 +216,7 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept", fusion="accept
             return self.pipe.denoise("ref2va", state, on_step=on_step, cancel=cancel, checks=checks)
 
 
-class H3TurboBase(H3Model, encoded_leaves="accept", fusion="accept"):
+class H3TurboBase(H3Model, encoded_leaves="accept"):
     """The five-root base checkpoint with construction-time turbo consumers.
 
     ``sol_dense_steps`` counts initial transformer evaluations, not scheduler

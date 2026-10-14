@@ -154,6 +154,9 @@ from minimax_h3.turbo import (  # noqa: E402
     _LoRAHook,
 )
 from minimax_h3.vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
+from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3Attention  # noqa: E402
+from minimax_h3 import glue, producer  # noqa: E402
+from cozy_runtime.author.kernels import Plan, PreQuantized  # noqa: E402
 from h3_tables.lanes import NORMALISED_COMPONENTS, decode_operand  # noqa: E402
 from h3_tables.model_config import (  # noqa: E402
     dual_adaln_pruned_config,
@@ -4644,6 +4647,147 @@ def arm_attention_scope() -> None:
         ),
     )
 
+def _code(call: Callable[[], object]) -> str:
+    try:
+        call()
+    except (glue.GlueRefusal, ValueError) as exc:
+        return str(getattr(exc, "code", type(exc).__name__))
+    return ""
+
+
+def arm_glue() -> None:
+    """The fused glue's Diffusers contract and topology match on a real (narrow) H3 DiT; a
+    device without the kernels serves eager, reported, with nothing substituted."""
+    torch.manual_seed(76182)
+    dit = (
+        MiniMaxH3Transformer3DModel(
+            num_layers=2,
+            num_refiner_layers=1,
+            hidden_size=256,
+            ffn_dim=512,
+            num_attention_heads=2,
+            attention_head_dim=128,
+            time_embed_hidden_dim=256,
+            time_embed_dim=128,
+        )
+        .eval()
+        .bfloat16()
+    )
+    glue._require_calls()
+    before = glue._tensor_census(dit)
+    glue._validate_transformer(dit, "dit")
+    check(
+        "glue matches the Diffusers H3 blocks, tensors untouched", glue._tensor_census(dit), before
+    )
+    check(
+        "a narrow DiT is not the compiled widths",
+        _code(lambda: glue._widths(dit, "dit")),
+        "fusion_block_shape",
+    )
+    handle = dit.transformer_blocks[1].ff.register_forward_hook(lambda *_: None)
+    check(
+        "a hooked later block refuses before any change",
+        _code(lambda: glue._validate_transformer(dit, "dit")),
+        "fusion_block_shape",
+    )
+    handle.remove()
+    model = SimpleNamespace()
+
+    def never(kernels: object) -> Any:
+        raise AssertionError("a CPU plan loaded kernels")
+
+    served = glue.install(model, SimpleNamespace(components={"dit": dit}), Plan("cpu", never))
+    check(
+        "a CPU executor serves eager, reported, unsubstituted",
+        (served, model._cozy_fusion_report["code"], type(dit.transformer_blocks[0]).__name__),
+        ("", "fusion_device_incapable", "MiniMaxH3TransformerBlock"),
+    )
+    check("the plan's identity is stable", glue.identity(), glue.identity())
+
+
+def arm_producer() -> None:
+    """The shared-QKV producers: registrations, carrier views, rotary presentation, step policy,
+    adjacent-step statistics, request-state cleanup and the processors they refuse."""
+    check(
+        "producers ride the Runtime's Kitchen Sol bases; only fixed means shards",
+        {name: (p.base, p.context_parallel) for name, p in producer.PRODUCERS.items()},
+        {
+            producer.FIXED_MEANS: ("kitchen-sol-fp4-fixed-means", True),
+            producer.FP4_LOWMEM: ("kitchen-sol-fp4-lowmem", False),
+            producer.FAST: ("kitchen-sol", False),
+        },
+    )
+    payload, scale = torch.arange(88).reshape(11, 8), torch.arange(11).reshape(11, 1)
+    part = producer.rows(PreQuantized(payload, scale, (1, 11, 8)), 3, 8)
+    check(
+        "carrier rows are views of the payload and scales",
+        (
+            part.shape,
+            part.payload.data_ptr() - payload.data_ptr(),
+            part.scale.data_ptr() - scale.data_ptr(),
+        ),
+        ((1, 5, 8), 3 * 8 * payload.element_size(), 3 * scale.element_size()),
+    )
+    cos, sin = torch.randn(1, 17, 1, 96), torch.randn(1, 17, 1, 96)
+    state = producer.RequestState()
+    freqs = producer.rope_presentation((cos, sin), 17, state)
+    x = torch.randn(17, 96)
+    f = freqs[:, 0]
+    turned = torch.cat(
+        (
+            f[:, :, 0, 0] * x[:, :48] + f[:, :, 0, 1] * x[:, 48:],
+            f[:, :, 1, 1] * x[:, 48:] + f[:, :, 1, 0] * x[:, :48],
+        ),
+        dim=-1,
+    )
+    expected = x * cos.reshape(17, 96) + torch.cat((-x[:, 48:], x[:, :48]), dim=-1) * sin.reshape(
+        17, 96
+    )
+    check(
+        "the rotary matrix is split-half RoPE, reused within a step",
+        (torch.equal(turned, expected), producer.rope_presentation((cos, sin), 17, state) is freqs),
+        (True, True),
+    )
+    layout = AttentionLayout(100, 17, 4, 4, ("transformer_blocks.1", "token_refiner"))
+    check(
+        "sparse steps skip the protected paths",
+        [
+            producer.sparse_step(layout, p)
+            for p in ("transformer_blocks.2.attn", "transformer_blocks.1.attn", "token_refiner.0")
+        ],
+        [True, False, False],
+    )
+    red(
+        "a dense step is never sparse",
+        producer.sparse_step(replace(layout, step=3), "transformer_blocks.2.attn"),
+        True,
+    )
+    key, geometry, mean = ("dit", "block.2"), (129, 56, 17), torch.ones(1)
+    reuse = []
+    for step, shape in ((5, geometry), (6, geometry), (5, (129, 56, 18))):
+        state.statistics[key] = (4, geometry, mean, mean)
+        reuse.append(producer.previous_statistics(state, key, step, shape)[0] is mean)
+    check(
+        "statistics carry to the adjacent step of the same geometry only",
+        reuse,
+        [True, False, False],
+    )
+    state.close()
+    check("closing the request drops its state", (state.statistics, state.rope), ({}, None))
+    attention = MiniMaxH3Attention(hidden_size=256, heads=2, dim_head=128)
+    check(
+        "an unencoded projection shares no quantization",
+        producer.shared_qkv_refusal(attention),
+        "non-rowwise-leaf",
+    )
+    producer.validate(attention)
+    attention.to_q.register_forward_hook(lambda *_: None)
+    check(
+        "an unknown projection hook is refused",
+        _code(lambda: producer.validate(attention)),
+        "ValueError",
+    )
+
 
 ARMS = {
     "attention-scope": arm_attention_scope,
@@ -4673,6 +4817,8 @@ ARMS = {
     "vae-tiles": arm_vae_tiles,
     "rgb8-handoff": arm_rgb8_handoff,
     "interface": arm_interface,
+    "glue": arm_glue,
+    "attention-producer": arm_producer,
 }
 
 
