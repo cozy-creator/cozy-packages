@@ -2,8 +2,9 @@
 
 `caption_images` describes each supplied character image in one sentence: identity, hair,
 face, clothing and carried or worn items, never the background, pose or style. Images are
-described independently, in request order, with greedy decoding. MiniMax-H3 uses it to fill
-a supplied character's missing description.
+described independently, in request order, with greedy decoding. A request takes 1 to 12
+PNG, JPEG or WebP images of up to 64 MiB each; each caption carries its image's `index`.
+MiniMax-H3 uses it to fill a supplied character's missing description.
 
 ```sh
 cozy run fidika/character-describer/caption_images --asset images.0=./character.png --await
