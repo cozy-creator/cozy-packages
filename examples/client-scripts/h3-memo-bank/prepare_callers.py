@@ -29,6 +29,8 @@ body = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
 code = '''# /// script
 # requires-python = ">=3.12,<3.13"
 # dependencies = ["cozy-runtime>=0.18.24,<1", "minimax-h3-tools>=2.12.9,<2.13"]
+# [tool.cozy]
+# accelerator = false
 # ///
 import msgspec
 from cozy_runtime.author import ModelArtifact

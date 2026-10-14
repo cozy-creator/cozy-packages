@@ -707,6 +707,7 @@ app.job(
     bf16_full,
     name="bf16-full",
     weights=(WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES + MAX_VIDEO_VAE_BYTES),),
+    accelerator=False,
 )
 # The pruned lanes compute AdaLN tables on the GPU.
 app.job(
@@ -1072,6 +1073,7 @@ app.job(
     _adaln_operations.compute_adaln_tables,
     name="compute-adaln-tables",
     weights=(WeightsOutput("model", MAX_TABLE_BYTES),),
+    accelerator=True,
 )
 app.job(
     _adaln_operations.apply_adaln,
@@ -1094,4 +1096,4 @@ app.job(
 
 from .turbo import turbo_lora  # noqa: E402
 
-app.job(turbo_lora, name="turbo-lora", weights=(WeightsOutput("pdd8", 1 << 29),))
+app.job(turbo_lora, name="turbo-lora", weights=(WeightsOutput("pdd8", 1 << 29),), accelerator=True)
