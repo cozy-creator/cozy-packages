@@ -34,6 +34,7 @@ from h3_tables.model_config import parse_production_config
 from h3_tables.quantization import h3_quantization_plan
 from h3_tables.source import full_targets as source_full_targets
 from h3_tables.source import official_full_specs
+from source_geometry import VIDEO_VAE_ROWS, conditioner_rows
 from tensorfs.derived import Part, Source, SourceInspection, Target, Tensor
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -126,6 +127,15 @@ def full_source_structures() -> dict[str, SourceInspection]:
     observed = {component: len(rows) for component, rows in components.items()}
     if observed != census:
         _fail(f"rebuilt source census is {observed}, expected {census}")
+    # The geometry the conformance proofs derive without this corpus is these headers.
+    banked = {
+        component: {key: (tensor.logical_dtype, tensor.shape) for key, tensor in rows.items()}
+        for component, rows in components.items()
+    }
+    if banked["text_encoder"] != conditioner_rows() or VIDEO_VAE_ROWS.items() - banked[
+        "video_vae"
+    ].items():
+        _fail("source_geometry.py is not the banked conditioner and video VAE geometry")
     # Header census only: this fixture grants no native source or payload access.
     return {
         alias: SourceInspection(
