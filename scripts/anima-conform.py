@@ -355,8 +355,7 @@ def arm_fused_attention_copies_nothing() -> None:
 
     torch.manual_seed(3)
     attention = Attention().eval()
-    kernels = types.SimpleNamespace(rms_rope_split_half=lambda q, k, *_: (q, k))
-    fused = optimization._FusedSelfAttention(kernels, optimization._RopeMatrix())
+    fused = optimization._FusedSelfAttention(lambda q, k, *_: (q, k), optimization._RopeMatrix())
     x = torch.randn(1, 6, 32)
     with torch.no_grad():
         q, k, v = (
