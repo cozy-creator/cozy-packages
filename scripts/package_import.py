@@ -111,19 +111,13 @@ def main(argv: list[str]) -> int:
         location = pathlib.Path(str(module.__file__))
         assert "site-packages" in location.parts, f"{module_name} answered from {location}"
         if package == "minimax-h3":
-            builtin = importlib.import_module("cozy_runtime.models.minimax_h3.model")
-            runtime_root = pathlib.Path(str(builtin.__file__)).parent
-            assert "site-packages" in runtime_root.parts
+            model = importlib.import_module("minimax_h3.model")
+            carried = pathlib.Path(str(model.__file__)).parent
+            assert carried.parent == location.parent, f"minimax_h3 answered from {carried}"
             for name in ("H3Model", "H3TurboBase", "H3TurboLoRA"):
-                assert getattr(module, name) is getattr(builtin, name)
-            for asset in ("processor", "tokenizer"):
-                assert (runtime_root / asset).is_dir(), f"Runtime carries no {asset}/"
-                assert not (location.parent / asset).exists(), f"workflow duplicates {asset}/"
-            for task in ("fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo"):
-                relative = pathlib.Path("timestep-plans") / f"{task}.json"
-                assert (location.parent / relative).read_bytes() == (
-                    runtime_root / relative
-                ).read_bytes()
+                assert getattr(module, name) is getattr(model, name)
+            for asset in ("processor", "tokenizer", "timestep-plans"):
+                assert (carried / asset).is_dir(), f"the wheel carries no minimax_h3/{asset}/"
         print(f"{package}: {module_name} imported from the installed wheel")
     app = module.app
     print(f"{package}: {module_name}:app registers {sorted(app._registry)}")

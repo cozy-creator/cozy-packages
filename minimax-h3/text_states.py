@@ -14,10 +14,10 @@ from typing import Annotated, Any
 import msgspec
 import torch
 from cozy_runtime.author import AssetBound, Context, FileAsset, Outputs, Telemetry
-from cozy_runtime.models.minimax_h3.model import H3Model
-from cozy_runtime.models.minimax_h3.official import NumericalChecks, frames_for
 from safetensors.torch import save
 
+from minimax_h3.model import H3Model
+from minimax_h3.official import NumericalChecks, frames_for
 from story import encoder_prompt
 
 #: H3 conditions on hidden_states[50] of its 50 retained decoder layers.

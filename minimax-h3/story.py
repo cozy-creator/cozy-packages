@@ -11,7 +11,8 @@ from typing import Annotated, Literal, NamedTuple
 
 import msgspec
 from cozy_runtime.author import AssetBound, AudioAsset, ImageAsset, InvalidRequest
-from cozy_runtime.models.minimax_h3.official import Task, validate_reference_policy
+
+from minimax_h3.official import Task, validate_reference_policy
 
 #: MiniMax's full-reference sections, plus `style`, in their canonical order.
 SECTIONS = (

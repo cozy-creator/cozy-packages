@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "minimax-h3"))
 sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
 
-from cozy_runtime.models.minimax_h3.official import (  # noqa: E402
+from minimax_h3.official import (  # noqa: E402
     REFERENCE_IMAGE_SHORT_EDGE,
     OfficialH3Pipeline,
     _ScopedPipeline,

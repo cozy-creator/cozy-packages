@@ -138,7 +138,8 @@ Each sampling scope holds its base DiT and separate overlay together. LoRA hooks
 are installed during construction, before Runtime chooses fusion or Ulysses
 execution. All three model classes declare degrees 2 and 4.
 
-Runtime also owns the [hardware-aware H3 attention policy](minimax-h3/docs/attention-defaults.md).
+H3's models state a [hardware-aware attention preference](minimax-h3/docs/attention-defaults.md)
+that Runtime applies.
 Turbo preserves four dense plus four sparse evaluations; regular 30-step sampling
 preserves ten dense plus twenty sparse evaluations when a sparse backend is selected.
 Explicit CLI attention pins take precedence.
@@ -318,9 +319,9 @@ attention work while the generated video retains its resolution; output quality 
 still require measurement. Prompts are bounded to 4,096 characters. The token budget is a
 conservative capacity limit, not a measured maximum-size GPU fit guarantee.
 
-The task-stamped canonical plans live in `minimax-h3/timestep-plans/`, derived from the official
-scheduler by `python scripts/h3_plans.py 30 40 50` (which also restamps the producer's copies and
-model config). Each plan lists one schedule per step count — its exact 31/41/51 video and audio
+The task-stamped canonical plans live in `minimax-h3/minimax_h3/timestep-plans/`, derived from the
+official scheduler by `python scripts/h3_plans.py 30 40 50` (which also restamps the producer's
+copies and model config). Each plan lists one schedule per step count — its exact 31/41/51 video and audio
 sigmas, 30/40/50 timesteps, and all five finite modulation classes (including the 0.999 clean-video
 and 1.0 clean-audio anchors) — plus one deduplicated union order of 315 block-modulation keys and 207
 final-normalization keys. These documents are the input boundary for `minimax-h3-tools`; that
