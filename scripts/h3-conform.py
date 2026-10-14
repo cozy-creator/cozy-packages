@@ -93,21 +93,21 @@ H3 = ROOT / "minimax-h3"
 sys.path.insert(0, str(H3))
 sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
 
-import cozy_runtime.models.minimax_h3.official as official_module  # noqa: E402
-from cozy_runtime.models.minimax_h3 import official  # noqa: E402
-from cozy_runtime.models.minimax_h3.adaln_pruned import (  # noqa: E402
+import minimax_h3.official as official_module  # noqa: E402
+from minimax_h3 import official  # noqa: E402
+from minimax_h3.adaln_pruned import (  # noqa: E402
     AdaLNPrunedMiniMaxH3Transformer,
     _AdaLNPrunedBlockTable,
     _AdaLNPrunedOutputTable,
     _AdaLNPrunedTimestepLookup,
 )
-from cozy_runtime.models.minimax_h3.conditioner import (  # noqa: E402
+from minimax_h3.conditioner import (  # noqa: E402
     FinalHiddenState,
     build_text_conditioner,
     text_conditioner_config,
 )
-from cozy_runtime.models.minimax_h3.continuation import Carry, ContinuationPlan  # noqa: E402
-from cozy_runtime.models.minimax_h3.official import (  # noqa: E402
+from minimax_h3.continuation import Carry, ContinuationPlan  # noqa: E402
+from minimax_h3.official import (  # noqa: E402
     FPS,
     MAX_CONDITIONER_VISION_TOKENS,
     MAX_DURATION,
@@ -141,9 +141,8 @@ from cozy_runtime.models.minimax_h3.official import (  # noqa: E402
     timestep_plan_digest,
     validate_reference_policy,
 )
-from cozy_runtime.models.minimax_h3 import turbo as turbo_module  # noqa: E402
-from cozy_runtime.models.minimax_h3.table_layout import TableLayout  # noqa: E402
-from cozy_runtime.models.minimax_h3.turbo import (  # noqa: E402
+from minimax_h3 import turbo as turbo_module  # noqa: E402
+from minimax_h3.turbo import (  # noqa: E402
     ATTENTION_KWARG,
     LORA_FAMILIES,
     OVERLAY_KWARG,
@@ -154,7 +153,7 @@ from cozy_runtime.models.minimax_h3.turbo import (  # noqa: E402
     TurboSchedule,
     _LoRAHook,
 )
-from cozy_runtime.models.minimax_h3.vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
+from minimax_h3.vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
 from h3_tables.lanes import NORMALISED_COMPONENTS, decode_operand  # noqa: E402
 from h3_tables.model_config import (  # noqa: E402
     dual_adaln_pruned_config,
@@ -164,6 +163,7 @@ from h3_tables.model_config import (  # noqa: E402
 from h3_tables.order import current_order, full_order  # noqa: E402
 from h3_tables.plans import TASKS, parse_plan  # noqa: E402
 from h3_tables.source import official_full_specs  # noqa: E402
+from h3_tables.table_layout import TableLayout  # noqa: E402
 from h3_tables.turbo import collapse_head_bank, pdd_head_plan, pdd_time_grid  # noqa: E402
 
 import h3 as package  # noqa: E402
@@ -347,6 +347,23 @@ def arm_checkpoint_table_layout() -> None:
         "artifact_config",
     )
 
+    t = (1.0).hex()
+    tolerant = TableLayout.parse(
+        {
+            "final_normalization": [{"timestep": t, "writer": "future"}],
+            "block_modulation": [
+                {"index": 0, "timestep": t, "modality_tag": 0, "modality": "video"},
+                {"timestep": t, "modality": "text"},
+                {"timestep": t, "modality_tag": 2, "note": 1},
+            ],
+            "provenance": {"tool": "future"},
+        }
+    )
+    check(
+        "labels from other writers ignore extras and default optionals",
+        tolerant.block_keys,
+        ((0, 0), (0, 1), (0, 2)),
+    )
     corruptions: tuple[tuple[str, Callable[[Any], None]], ...] = (
         ("missing layout", lambda value: value.clear()),
         ("noncontiguous index", lambda value: value["block_modulation"][0].update(index=1)),
@@ -586,14 +603,7 @@ def arm_schedule() -> None:
     plans = {task: canonical_timestep_plan(task) for task in ("fl2va", "ref2va")}
     for task, plan in plans.items():
         check(f"{task} canonical plan digest", plan.digest, PLAN_DIGESTS[task])
-        committed = (H3 / "timestep-plans" / f"{task}.json").read_bytes()
-        check(
-            f"{task} static schema plan matches the Runtime builtin bytes",
-            committed,
-            files("cozy_runtime.models.minimax_h3")
-            .joinpath("timestep-plans", f"{task}.json")
-            .read_bytes(),
-        )
+        committed = files("minimax_h3").joinpath("timestep-plans", f"{task}.json").read_bytes()
         check(
             f"{task} committed semantic document",
             canonical_json.encode(canonical_json.decode(committed)),
@@ -1954,7 +1964,7 @@ def arm_processor() -> None:
         check(
             relative,
             hashlib.sha256(
-                files("cozy_runtime.models.minimax_h3").joinpath(relative).read_bytes()
+                files("minimax_h3").joinpath(relative).read_bytes()
             ).hexdigest(),
             expected,
         )
@@ -3859,14 +3869,7 @@ def arm_turbo_plan() -> None:
         plan = canonical_timestep_plan(cast(Any, task))
         check(f"{task} plan is stamped with its trunk", plan.task, task.removesuffix("_turbo"))
         check(f"{task} canonical plan digest", plan.digest, TURBO_PLAN_DIGESTS[task])
-        committed = (H3 / "timestep-plans" / f"{task}.json").read_bytes()
-        check(
-            f"{task} static schema plan matches the Runtime builtin bytes",
-            committed,
-            files("cozy_runtime.models.minimax_h3")
-            .joinpath("timestep-plans", f"{task}.json")
-            .read_bytes(),
-        )
+        committed = files("minimax_h3").joinpath("timestep-plans", f"{task}.json").read_bytes()
         check(f"{task} committed semantic identity", timestep_plan_digest(committed), plan.digest)
         check(f"{task} one fixed schedule", plan.steps, (8,))
         (schedule,) = plan.schedules

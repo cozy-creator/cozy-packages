@@ -149,16 +149,14 @@ def imports(tree: ast.AST, package: str = "") -> Iterator[tuple[str, int]]:
 
 
 #: The runtime surface anything in this repo may import: `cozy_runtime.author` and
-#: `cozy_runtime.derive` (the public derivation plane), `cozy_runtime.models` (builtins),
-#: and their
-#: PUBLIC submodules. An underscored submodule — `author._assets`, `author._services` — is
-#: Runtime's own mechanism, and `cozy_runtime.internal` is the plane the author surface
-#: exists to hide. Both break the same way: the name stops existing on a later Runtime with
-#: nothing here having said it depended on one.
+#: `cozy_runtime.derive` (the public derivation plane), and their PUBLIC submodules. An
+#: underscored submodule — `author._assets`, `author._services` — is Runtime's own
+#: mechanism, and `cozy_runtime.internal` is the plane the author surface exists to hide.
+#: Both break the same way: the name stops existing on a later Runtime with nothing here
+#: having said it depended on one.
 PUBLIC_RUNTIME_ROOTS = (
     ["cozy_runtime", "author"],
     ["cozy_runtime", "derive"],
-    ["cozy_runtime", "models"],
 )
 
 
@@ -298,13 +296,13 @@ ARM_PRIVATE = (
     "from cozy_runtime.internal.derive import derive",
     "import cozy_runtime.internal.executor",
     "import cozy_runtime",
+    "from cozy_runtime.models.minimax_h3 import H3Model",
 )
 ARM_PUBLIC = (
     "from cozy_runtime.author import Outputs, decode_request",
     "from cozy_runtime.author.fakes import fake_attempt, fake_input",
     "import cozy_runtime.author",
     "from cozy_runtime.derive.quantization import derive_fp8",
-    "from cozy_runtime.models.minimax_h3 import H3Model",
 )
 
 
@@ -552,14 +550,18 @@ def fence_no_choreography() -> Fence:
         code = _strip_literals(source)
         # Encoding returned latent samples is an output operation, not a model
         # checkpoint reader. Permit only this explicit write-only import; load,
-        # safe_open and module imports still trigger the source-format fence.
+        # safe_open and module imports still trigger the source-format fence. H3's
+        # continuation also decodes its own bounded AV-context envelope, a prior
+        # request's output in the format it encodes, never a checkpoint.
+        continuation = rel(path) == "minimax-h3/minimax_h3/continuation.py"
+        own = {"save", "load"} if continuation else {"save"}
         serializers = {
             node.lineno
             for node in ast.parse(source).body
             if isinstance(node, ast.ImportFrom)
             and node.module == "safetensors.torch"
             and node.names
-            and all(alias.name == "save" for alias in node.names)
+            and all(alias.name in own for alias in node.names)
         }
         # This CPU conversion job ingests two explicitly granted, SHA-checked
         # upstream conditioning tensors. It does not load inference weights.

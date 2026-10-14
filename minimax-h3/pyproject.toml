@@ -1,16 +1,18 @@
 [project]
 name = "minimax-h3"
-version = "1.34.1"
+version = "1.35.0"
 requires-python = ">=3.12"
 dependencies = [
     "birefnet>=0.1.0",
     "character-describer>=0.2.0",
-    "cozy-runtime[media,minimax-h3]>=0.23.30",
+    "cozy-runtime[adapters,media]>=0.23.30",
     "cozy-eval>=0.7.3",
     # MiniMax-H3 and Qwen-Image-2.1 share one Diffusers: the commit qwen-image-2 pins, since
     # QwenImage21Pipeline is in Diffusers main, not yet in a release.
     "diffusers @ git+https://github.com/huggingface/diffusers@578c9b2c6636ab2424a0e56186268b83623656b2",
     "hf-xet>=1.6.0",
+    # The AdaLN table producer owns the row-label reader the pruned DiT is built from.
+    "minimax-h3-tools>=2.15.0",
     "msgspec>=0.19",
     "numpy>=1.26",
     "pydantic-core>=2.46.4",
@@ -43,9 +45,9 @@ only-include = [
     "gates.py",
     "h3.py",
     "long_form_state.py",
+    "minimax_h3",
     "story.py",
     "text_states.py",
-    "timestep-plans",
 ]
 
 [tool.uv]
@@ -58,3 +60,4 @@ qwen-image-2 = { index = "tensorhub" }
 birefnet = { index = "tensorhub" }
 character-describer = { index = "tensorhub" }
 seedvr2 = { index = "tensorhub" }
+minimax-h3-tools = { index = "tensorhub" }

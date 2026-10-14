@@ -27,13 +27,13 @@ from cozy_runtime.author import Config
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "minimax-h3"))
 
-from cozy_runtime.models.minimax_h3.official import (  # noqa: E402
+from minimax_h3.official import (  # noqa: E402
     FRAMES_PER_CHUNK,
     LATENTS_PER_CHUNK,
     _apply_video_vae_dtype,
     frames_for,
 )
-from cozy_runtime.models.minimax_h3.vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
+from minimax_h3.vae_tiles import TILE_BATCH, TileBatchedVideoVAE  # noqa: E402
 from diffusers.modular_pipelines.minimax_h3.modular_pipeline import (  # noqa: E402
     video_latent_num_frames,
 )

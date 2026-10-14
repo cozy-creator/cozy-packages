@@ -54,24 +54,27 @@ from cozy_runtime.author import (
     invocable,
     prefetch,
 )
-from cozy_runtime.models.minimax_h3.continuation import (
+from msgspec.structs import asdict, replace
+
+from assembly import CutJoin, ScanAhead, assemble_video
+from gates import MediaFacts, refuse_before_encode, report_after_encode
+from long_form_state import (
+    RenderProvenance, compatible, compatible_base, context_provenance, provenance,
+)
+from minimax_h3.continuation import (
     AVContext,
     Carry,
     ContinuationPlan,
     decode_context,
     encode_context,
 )
-from cozy_runtime.models.minimax_h3.model import (
+from minimax_h3.model import (
     H3Model as H3Model,
-)
-from cozy_runtime.models.minimax_h3.model import (
     H3TurboBase as H3TurboBase,
-)
-from cozy_runtime.models.minimax_h3.model import (
     H3TurboLoRA as H3TurboLoRA,
+    condition_references,
 )
-from cozy_runtime.models.minimax_h3.model import condition_references
-from cozy_runtime.models.minimax_h3.official import (
+from minimax_h3.official import (
     FPS,
     MAX_AUDIO_REFERENCES,
     MAX_CONDITIONER_VISION_TOKENS,
@@ -92,13 +95,6 @@ from cozy_runtime.models.minimax_h3.official import (
     reference_video_vision_tokens,
     turbo_steps,
     validate_reference_policy,
-)
-from msgspec.structs import asdict, replace
-
-from assembly import CutJoin, ScanAhead, assemble_video
-from gates import MediaFacts, refuse_before_encode, report_after_encode
-from long_form_state import (
-    RenderProvenance, compatible, compatible_base, context_provenance, provenance,
 )
 from qwen_image_2 import AspectRatio as ReferenceAspectRatio
 from qwen_image_2 import ImageOutput as ReferenceImageOutput
@@ -174,10 +170,12 @@ _SHORT_EDGE_LADDER = (2048, 1536, 1024, 768, 512, 256)
 _REFERENCE_FIDELITY_EDGES = {"low": 256, "medium": 1024, "high": REFERENCE_IMAGE_SHORT_EDGE}
 # The shipped plans own the enum and must agree for both inference tasks.
 SUPPORTED_STEPS = data_values(
-    __file__, "timestep-plans/fl2va.json", "schedules", "transformer_evaluations"
+    __file__, "minimax_h3/timestep-plans/fl2va.json", "schedules", "transformer_evaluations"
 )
 if (
-    data_values(__file__, "timestep-plans/ref2va.json", "schedules", "transformer_evaluations")
+    data_values(
+        __file__, "minimax_h3/timestep-plans/ref2va.json", "schedules", "transformer_evaluations"
+    )
     != SUPPORTED_STEPS
 ):
     raise ValueError("H3 task plans declare different supported step counts")

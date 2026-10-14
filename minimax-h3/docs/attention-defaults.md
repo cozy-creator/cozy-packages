@@ -1,9 +1,9 @@
 # H3 attention selection
 
-H3 uses the attention policy in the worker's Runtime. The package imports Runtime's
-`H3Model`, `H3TurboBase`, and `H3TurboLoRA` directly; it does not detect GPU names or
-pin a backend. Updating Runtime can therefore change the default for an existing
-H3 package release without changing its inputs, checkpoints, or LoRA.
+H3's models state their attention preference (`choose_attention` in
+`minimax_h3/model.py`); the worker's Runtime selects among the backends eligible there.
+The package does not detect GPU names or pin a backend, so a Runtime update can change
+an existing release's default without changing its inputs, checkpoints, or LoRA.
 
 The approved RTX 5090 policy uses **Sage3 NVFP4 dense attention followed by Kitchen
 INT8 Sol attention**. This is a hybrid: the sparse kernel is INT8, not FP4.

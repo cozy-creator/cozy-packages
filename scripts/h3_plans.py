@@ -27,7 +27,7 @@ CONFORM_SCRIPT = ROOT / "scripts" / "h3-conform.py"
 sys.path.insert(0, str(H3))
 
 from cozy_runtime.author import canonical_json  # noqa: E402
-from cozy_runtime.models.minimax_h3.official import Schedule, TimestepPlan, Trunk  # noqa: E402
+from minimax_h3.official import Schedule, TimestepPlan, Trunk  # noqa: E402
 from diffusers import MiniMaxH3Scheduler  # noqa: E402
 
 VIDEO_SHIFT = 12.0
@@ -89,10 +89,10 @@ def main(arguments: list[str]) -> None:
         plan = TimestepPlan(task, VIDEO_SHIFT, AUDIO_SHIFT, schedules)
         raw = plan.canonical_bytes()
         if turbo:
-            (H3 / "timestep-plans" / f"{task}_turbo.json").write_bytes(raw)
+            (H3 / "minimax_h3" / "timestep-plans" / f"{task}_turbo.json").write_bytes(raw)
             print(f"{task}_turbo: sha256:{plan.digest} steps={plan.steps}")
             continue
-        (H3 / "timestep-plans" / f"{task}.json").write_bytes(raw)
+        (H3 / "minimax_h3" / "timestep-plans" / f"{task}.json").write_bytes(raw)
         (TOOLS / f"timestep-plan.{task}.json").write_bytes(raw)
         digests[task] = f"sha256:{plan.digest}"
         final_rows, block_rows = plan.table_layout()
