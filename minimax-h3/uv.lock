@@ -180,7 +180,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.23.30"
+version = "0.23.36"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -190,10 +190,10 @@ dependencies = [
     { name = "pillow" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/33/b0/af71460fccf84a23d749c7a0d503dcb799b5da351255597045e81e382bf0/cozy_runtime-0.23.30.tar.gz", hash = "sha256:b1c21ddd50485ae964262fb0c02069693df5c854ef5886d6acb6320fa47412ce", size = 3737610, upload-time = "2026-10-13T15:45:53.57Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d5/ef/b2cc679e7b5470f01a628ae03215a8fe7a6251857b7d8cda62ae4c85ca42/cozy_runtime-0.23.36.tar.gz", hash = "sha256:a14b426df0f80a13e434eb1d0a6c7d8cd1013ac0a151276e4f16891494c78d07", size = 1788441, upload-time = "2026-10-14T12:31:14.895Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3a/60/7de5b284a1a0b7d7d32779de8aef80b03a8c08aad9b8d670d1fa3beb20e1/cozy_runtime-0.23.30-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:aea24f6f3122c7c434f8d5d61d48b9d9ae19f2bcde1285b70e0775112efe89c4", size = 27910906, upload-time = "2026-10-13T15:45:48.398Z" },
-    { url = "https://files.pythonhosted.org/packages/2b/1f/8f8d883726e42ce695ab3f282d7b4840c41a8b1e153c84206d42e26c38b6/cozy_runtime-0.23.30-py3-none-any.whl", hash = "sha256:6128dc9c9e0c5d1c519ad26e89f5a58ec2e28aa555f0025b886c49d75c84c804", size = 2867398, upload-time = "2026-10-13T15:45:51.674Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/e3/bfb374a71498793ab2730e327d17a2879b3570199676d03eb469c922027e/cozy_runtime-0.23.36-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:984ee8b14e301ab61856a7fda2f7d66b91c0a1e85b6d6ec18845355fefa0a591", size = 25772198, upload-time = "2026-10-14T12:31:10.745Z" },
+    { url = "https://files.pythonhosted.org/packages/9a/c1/6bd34f52b2d1d2e1c0d70309fc52fbb9717a42ecf0d7c830ac7b8c32fd49/cozy_runtime-0.23.36-py3-none-any.whl", hash = "sha256:f80197beec6fc293147395d1f7f20b4420e9b1813973c697cc3d77968b3a6b80", size = 923282, upload-time = "2026-10-14T12:31:13.285Z" },
 ]
 
 [package.optional-dependencies]
@@ -512,7 +512,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.35.2"
+version = "1.36.0"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },
@@ -543,7 +543,7 @@ requires-dist = [
     { name = "birefnet", specifier = ">=0.1.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
     { name = "character-describer", specifier = ">=0.2.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
     { name = "cozy-eval", specifier = ">=0.7.3" },
-    { name = "cozy-runtime", extras = ["adapters", "media"], specifier = ">=0.23.30" },
+    { name = "cozy-runtime", extras = ["adapters", "media"], specifier = ">=0.23.36" },
     { name = "diffusers", git = "https://github.com/huggingface/diffusers?rev=578c9b2c6636ab2424a0e56186268b83623656b2" },
     { name = "hf-xet", specifier = ">=1.6.0" },
     { name = "minimax-h3-tools", specifier = ">=2.15.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
