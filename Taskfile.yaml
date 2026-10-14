@@ -48,7 +48,7 @@ tasks:
         }
         ship() { for h in {{.HUBS}}; do rm -rf "${work:?}/$1"; git archive HEAD "$1" | tar -x -C "$work"; (cd "$work/$1" && cozy package publish --tensorhub "$h"); done; }
         release() {
-          task conform -- "$1"
+          task conform -- "$1" || { echo "REFUSED: $1 $(ver "$1") fails conformance; nothing of it was committed or published" >&2; exit 1; }
           if ! git diff --quiet HEAD; then
             git commit -q -m "$1 $(ver "$1"): lock$(for q in $up; do printf ' %s %s' "$q" "$(ver "$q")"; done)" -- "$1"
             until git push -q origin HEAD:master; do
