@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The incremental cut join, its live HLS revisions, and completed seekable MP4.
+"""The incremental cut join, its indexed revisions, and completed seekable MP4.
 
 Synthetic pictures, real codecs: each segment is an H3-shaped fragmented MP4 (H.264 + AAC).
 The proof shows that
@@ -7,9 +7,9 @@ The proof shows that
 - its continuous join keeps each soundtrack whole, so sound cut on its own clock (H3
   continuation) stays one continuous signal, and refuses a soundtrack off the picture;
 - its last revision is the joined video byte for byte;
-- live revisions retain immutable fragmented prefixes and play as an HLS EVENT
-  playlist; the final indexed container preserves encoded packets and decoded frames,
-  with accurate duration and seeks between keyframes.
+- every revision is one indexed MP4 of the segments so far (Runtime b1e6218f): it has
+  the frames so far, their encoded packets and an accurate duration; the final container
+  preserves encoded packets and decoded frames, gapless, with seeks between keyframes.
 
     python scripts/h3-progressive-join-proof.py <empty work directory>
 """
@@ -256,23 +256,25 @@ def main() -> None:
     assert final_packets == video_packets(one_shot), "finalization changed encoded video"
 
     spool = root / "progressive"
-    revisions = []
-    previous_live = b""
+    durations = []
+    assert len(record.published) == len(FRAMES), record.published
     for index, publish in enumerate(record.published):
-        data = b"".join((spool / part.local).read_bytes() for part in publish.parts)
+        frames = sum(FRAMES[: index + 1])
+        assert len(publish.parts) == 1, "a revision is one indexed MP4"
+        assert abs(publish.parts[0].duration_us - frames * 1_000_000 / FPS) < 1_000_000 / FPS
         path = root / f"revision-{index + 1}.mp4"
-        path.write_bytes(data)
+        path.write_bytes((spool / publish.parts[0].local).read_bytes())
         facts = probe(str(path))
         video = next(s for s in facts["streams"] if s["codec_type"] == "video")
-        frames = sum(FRAMES[: index + 1])
         assert int(video["nb_read_frames"]) == frames, facts
+        durations.append(float(facts["format"]["duration"]))
+        assert abs(durations[-1] - frames / FPS) < 1 / FPS, facts
         assert decoded(path)[0] == final_decoded[0][:frames], "revision changed decoded frames"
         assert video_packets(path) == final_packets[:frames], "revision changed video packets"
-        if index + 1 < len(FRAMES):
-            assert data.startswith(previous_live), "live fragment prefix changed"
-            previous_live = data
-        revisions.append(publish)
     assert final.read_bytes() == (root / f"revision-{len(FRAMES)}.mp4").read_bytes()
+    times = sorted(time for _, time in final_packets)
+    steps = [b - a for a, b in itertools.pairwise(times)]
+    assert all(step == Fraction(1, FPS) for step in steps), f"a gap at a boundary: {steps}"
 
     final_duration = float(probe(str(final))["format"]["duration"])
     assert abs(final_duration - sum(FRAMES) / FPS) < 1 / FPS
@@ -289,64 +291,17 @@ def main() -> None:
             )
             assert frame.to_ndarray().tobytes() == final_decoded[0][frame_index]
 
-    # Completion replaces the fragmented preview with one regular MP4. The last
-    # live revision remains available and immutable for an attached HLS observer.
-    assert len(revisions[-1].parts) == 1 and revisions[-1].parts[0].duration_us > 0
-    parts = revisions[-2].parts
-    assert parts[0].duration_us == 0 and len(parts) == len(FRAMES)
-    # As Calcifer serves them: players take an init `.mp4` and media `.m4s` segments.
-    stream = root / "stream"
-    stream.mkdir()
-    (stream / "init.mp4").write_bytes((spool / parts[0].local).read_bytes())
-    lines = [
-        "#EXTM3U",
-        "#EXT-X-VERSION:7",
-        "#EXT-X-PLAYLIST-TYPE:EVENT",
-        f"#EXT-X-TARGETDURATION:{max(-(-p.duration_us // 1_000_000) for p in parts[1:])}",
-        "#EXT-X-INDEPENDENT-SEGMENTS",
-        '#EXT-X-MAP:URI="init.mp4"',
-    ]
-    for index, part in enumerate(parts[1:]):
-        (stream / f"{index}.m4s").write_bytes((spool / part.local).read_bytes())
-        lines += [f"#EXTINF:{part.duration_us / 1e6:.6f},", f"{index}.m4s"]
-    playlist = stream / "video.m3u8"
-    playlist.write_text("\n".join([*lines, "#EXT-X-ENDLIST", ""]))
-    facts = probe(str(playlist))
-    counted = {s["codec_type"]: int(s["nb_read_frames"]) for s in facts["streams"]}
-    assert counted["video"] == sum(FRAMES[:-1]), facts
-    duration = float(facts["format"]["duration"])
-    assert abs(duration - sum(FRAMES[:-1]) / FPS) < 1 / FPS, facts
-    stamps = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v",
-            "-show_entries",
-            "packet=pts_time",
-            "-of",
-            "csv=p=0",
-            str(playlist),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.split()
-    times = sorted(float(value) for value in stamps)
-    steps = [b - a for a, b in itertools.pairwise(times)]
-    assert all(abs(step - 1 / FPS) < 1e-4 for step in steps), f"a gap at a boundary: {steps}"
     evidence = {
         "segments": len(FRAMES),
         "frames": sum(FRAMES),
-        "hls_duration_s": duration,
+        "revision_durations_s": durations,
         "completed_duration_s": final_duration,
         "revision_bytes": [
             (root / f"revision-{i + 1}.mp4").stat().st_size for i in range(len(FRAMES))
         ],
         "decoded_equal_to_one_shot_join": True,
         "final_is_last_revision_byte_for_byte": True,
-        "hls_gapless": True,
+        "final_gapless": True,
         "final_packets_unchanged": True,
         "final_seeks_match_decoded_frames": True,
         "continuous_join_keeps_each_soundtrack_whole": True,
