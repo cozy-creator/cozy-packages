@@ -27,7 +27,7 @@ from cozy_runtime.author import (
 )
 from .color import Correction
 from .frames import extend
-from .model import RestorationModel
+from .model import RestorationModel, restore as restore_window
 from .normalize import normalize
 from .upstream.temporal import blend_overlapping_frames
 
@@ -122,7 +122,8 @@ def upscale(
         if payload.uniform_batch_size:
             frames = extend(frames, size - len(frames))
         with tel.stage("restoring video window"):
-            restored = model.restore(
+            restored = restore_window(
+                model,
                 frames,
                 width,
                 height,
