@@ -2046,6 +2046,6 @@ async def long_form(
     )
 
 
-app.job(long_form, emits_media=True)
-app.job(long_form_cuts, emits_media=True)
-app.job(assemble_video, emits_media=True)
+app.job(long_form, emits_media=True, accelerator=False)
+app.job(long_form_cuts, emits_media=True, accelerator=False)
+app.job(assemble_video, emits_media=True, accelerator=False)

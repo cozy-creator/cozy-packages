@@ -46,7 +46,7 @@ class Request(msgspec.Struct):
     timesteps: int = 50
 
 
-@app.job
+@app.job(accelerator=False)
 async def prepare(ctx: Context, payload: Request) -> ModelArtifact:
     ctx.raise_if_cancelled()
     return await precompute_adaln(model=payload.model, timesteps=payload.timesteps)

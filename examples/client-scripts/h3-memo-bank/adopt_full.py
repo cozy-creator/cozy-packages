@@ -1,6 +1,8 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
 # dependencies = ["cozy-runtime>=0.18.24,<1", "tensorfs>=0.3.51,<0.4"]
+# [tool.cozy]
+# accelerator = false
 # [tool.cozy.weights]
 # original = 1
 # ///
