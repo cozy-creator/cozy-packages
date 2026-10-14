@@ -110,8 +110,8 @@ class Megapixels(IntEnum):
         1   ~1.0 MP  the launch envelope — serves on 8 GiB
         2   ~2.1 MP  denoise ~6 GiB, whole-frame fp32 decode ~4 GiB — a 12 GiB card
         4   ~4.2 MP  denoise ~8 GiB, whole-frame fp32 decode ~8 GiB — 12 GiB at its edge
-        8   ~8.3 MP  denoise ~12 GiB, decode tiled — a 24 GiB card
-        16  ~16.8 MP denoise ~15-19 GiB, decode tiled, 1:1 only — the top of 24 GiB
+        8   ~8.3 MP  denoise ~12 GiB — a 24 GiB card
+        16  ~16.8 MP denoise ~15-19 GiB, 1:1 only — the top of 24 GiB
     """
 
     MP1 = 1
@@ -162,10 +162,6 @@ _TIER_DEMAND: dict[Megapixels, tuple[int, int]] = {
     for tier in Megapixels
 }
 
-#: Whole-frame decode stops here. Above the 4 MP class one fp32 frame's decoder features
-#: alone outgrow a 24 GiB card, so the VAE tiles; at or below it the decode stays
-#: whole-frame and the banked 1024px digest is untouched.
-_UNTILED_DECODE_PIXELS = 2048 * 2048
 _WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
 
 
@@ -402,9 +398,6 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
     @uses_components("vae")
     def decode(self, latents: Any) -> Any:
         vae = self.pipe.components["vae"]
-        tiled = int(latents.shape[-2]) * int(latents.shape[-1]) * 64 > _UNTILED_DECODE_PIXELS
-        if tiled:
-            vae.enable_tiling()
         original_dtype = next(vae.parameters()).dtype
         upcast = bool(getattr(vae.config, "force_upcast", False))
         if upcast:
@@ -420,8 +413,6 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
         finally:
             if upcast:
                 vae.to(dtype=original_dtype)
-            if tiled:
-                vae.disable_tiling()
 
 
 # ------------------------------------------------------------------ the handler

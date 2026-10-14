@@ -87,7 +87,6 @@ class AnimaPipeline:
 
         for component in (transformer, text_encoder, text_conditioner, vae):
             component.eval()
-        vae.enable_tiling()
         self.scheduler_config = mapping["scheduler"]
         self.tokenizer = _tokenizer(_ROOT / "tokenizer")
         self.t5_tokenizer = _tokenizer(_ROOT / "t5_tokenizer")
