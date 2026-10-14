@@ -2,7 +2,9 @@
 """Prove optional source drops and declaration reuse through the author geometry view.
 
 Uses the existing full construction order and optional source-only lists; no second
-order file, tensor storage, GPU computation, or claimed numerical evidence.
+order file, tensor storage, GPU computation, or claimed numerical evidence. Rows a
+treatment selects by shape carry their real geometry (`source_geometry.py`), so every lane
+resolves its treatments over each granted source exactly as `_produce_lanes` does.
 """
 
 from __future__ import annotations
@@ -22,7 +24,12 @@ from h3_tables.order import current_order
 from h3_tables.order import full_order as compute_order
 from h3_tables.quantization import h3_quantization_plan
 from h3_tables.source import TARGET_COMPONENT, H3FullTransformer, full_targets
+from source_geometry import VIDEO_VAE_ROWS, conditioner_rows, plain
 from tensorfs.derived import Part, Source, SourceCapability, SourceInspection, Tensor
+
+GEOMETRY = {("text_encoder", key): spec for key, spec in conditioner_rows().items()} | {
+    ("video_vae", key): spec for key, spec in VIDEO_VAE_ROWS.items()
+}
 
 
 class Structures:
@@ -35,9 +42,8 @@ class Structures:
             self.calls[source.checkpoint_ref] += 1
             components: dict[str, dict[str, Tensor]] = {}
             for component, key in self.rows[source.checkpoint_ref]:
-                components.setdefault(component, {})[key] = Tensor(
-                    "f32", (1,), job.PLAIN_SPEC, {"value": Part("f32", (1,))}
-                )
+                spec = GEOMETRY.get((component, key), ("f32", (1,)))
+                components.setdefault(component, {})[key] = plain(*spec)
             return SourceInspection(Source(source.checkpoint_ref, 1), components, {})
 
         return SourceCapability(source.checkpoint_ref, 1, inspect)
@@ -54,8 +60,10 @@ def main() -> None:
     )
     assert len(optional) == 158 and len(full_order) == 3968
     source = H3FullTransformer.for_test(checkpoint_ref="test://complete-full")
+    sources = {"dits": source, "shared": source}
     clean = Structures({source.checkpoint_ref: full_order})
-    targets = module._select_full_targets(clean, {"dits": source, "shared": source})
+    clean_granted = module._structures(clean, sources)
+    targets = module._select_full_targets(clean, sources, clean_granted)
     assert clean.calls == {source.checkpoint_ref: 1}
     assert all(not target.drop for target in targets.values())
     assert {component: target.source for component, target in targets.items()} == {
@@ -74,58 +82,63 @@ def main() -> None:
             ),
         }
     )
-    selected = module._select_full_targets(native, {"dits": dits, "shared": shared})
+    native_sources = {"dits": dits, "shared": shared}
+    native_granted = module._structures(native, native_sources)
+    selected = module._select_full_targets(native, native_sources, native_granted)
     assert selected == original
     assert native.calls == {dits.checkpoint_ref: 1, shared.checkpoint_ref: 1}
 
     tables = job._table_additions(sections)
     quantization = prepare_quantization(h3_quantization_plan())
 
-    def pruned(lane_name: str, full_targets: dict[str, Any]) -> dict[str, Any]:
+    def declared(
+        lane_name: str, full_targets: dict[str, Any], granted: dict[str, SourceInspection]
+    ) -> dict[str, Any]:
+        """The lane's targets as `_produce_lanes` declares them over this granted source."""
         lane = lanes.LANES[lane_name]
         selections = {
-            component: lanes.select(component, treatment, dit_rows, dit_plan=quantization)
-            for component, treatment in lane.components.items()
+            component: lanes.select(
+                component,
+                treatment,
+                lanes.carried(full_targets[component], granted[full_targets[component].source]),
+                dit_plan=quantization,
+                allow_inert=component in lanes.NORMALISED_COMPONENTS,
+            )
+            for component, treatment in lanes.lane_treatments(lane).items()
         }
         return job._lane_targets(lane, sections, tables, full_targets, selections)
 
-    dit_rows = SourceInspection(
-        Source("sha256:" + "01" * 32, 1),
-        {
-            component: {
-                tensor.key: Tensor(
-                    tensor.logical_dtype,
-                    tensor.shape,
-                    job.PLAIN_SPEC,
-                    {"value": Part(tensor.logical_dtype, tensor.shape)},
-                )
-                for tensor in quantization.tensors
-            }
-            for component in TARGET_COMPONENT.values()
-        },
-        {},
-    )
-    for lane_name in ("bf16-pruned", "fp8-pruned", "mxfp8-pruned"):
-        encoding = lanes.LANES[lane_name].components.get("fl2va_dit")
-        old = pruned(lane_name, original)
-        raw = pruned(lane_name, selected)
-        cleaned = pruned(lane_name, targets)
+    for lane_name, lane in lanes.LANES.items():
+        old = declared(lane_name, original, native_granted)
+        raw = declared(lane_name, selected, native_granted)
+        cleaned = declared(lane_name, targets, clean_granted)
         assert raw == old
-        for task, section in (("fl2va", "transformer"), ("ref2va", "transformer_ref")):
-            component = TARGET_COMPONENT[task]
-            dynamic = set(removed_keys(H3Topology.from_config(sections[section])))
-            assert dynamic <= set(cleaned[component].drop)
+        for component in lanes.COMPONENTS:
             assert set(cleaned[component].drop) == set(old[component].drop) - set(
                 original[component].drop
-            )
-            assert cleaned[component].add == old[component].add
-            if encoding is not None:
+            ), (lane_name, component)
+            assert cleaned[component].add == old[component].add, (lane_name, component)
+        for task, section in (("fl2va", "transformer"), ("ref2va", "transformer_ref")):
+            component = TARGET_COMPONENT[task]
+            if lane.modulation == "adaln-pruned":
+                dynamic = set(removed_keys(H3Topology.from_config(sections[section])))
+                assert dynamic <= set(cleaned[component].drop)
+            if component in lane.components:
                 assert {row.key for row in quantization.tensors} <= set(cleaned[component].drop)
-        assert cleaned["text_encoder"].drop == ()
+        # A clean conditioner drops exactly what the lane encodes: h3a-028's 350 decoder
+        # linears, never a source-only row (lm_head among them) it no longer carries.
+        conditioner = cleaned["text_encoder"]
+        assert set(conditioner.drop) == set(conditioner.add)
+        assert len(conditioner.add) == (350 if "text_encoder" in lane.components else 0)
+        assert set(cleaned["video_vae"].drop) == {
+            "decoder.proj_in.weight",
+            "decoder.transformer_blocks.0.attn.to_q.weight",
+            "post_quant_conv.weight",
+        }
 
     # Unknown extras and missing required destinations are not converted to drops.
     changed = Structures({source.checkpoint_ref: (*full_order[1:], ("fl2va_dit", "unexpected"))})
-    changed_targets = module._select_full_targets(changed, {"dits": source, "shared": source})
+    changed_targets = module._select_full_targets(changed, sources)
     assert changed_targets == targets
     assert all("unexpected" not in target.drop for target in changed_targets.values())
     # Family policy is ordinary data. The Runtime shared operation enforces these
@@ -151,9 +164,9 @@ def main() -> None:
         for key in policy.keys
     )
     selected = tuple(
-        (component, key, tensor)
-        for component, rows in dit_rows.components.items()
-        for key, tensor in rows.items()
+        (component, tensor.key, plain(tensor.logical_dtype, tensor.shape))
+        for component in TARGET_COMPONENT.values()
+        for tensor in quantization.tensors
     )
 
     def identity(tensors: tuple[tuple[str, str, Tensor], ...]) -> str:

@@ -19,13 +19,8 @@ from cozy_runtime.derive.quantization import (
 from h3_tables import job, lanes
 from h3_tables.quantization import h3_quantization_plan
 from h3_tables.source import TARGET_COMPONENT, H3FullTransformer, full_targets
-from tensorfs.derived import (
-    Part,
-    Source,
-    SourceCapability,
-    SourceInspection,
-    Tensor,
-)
+from source_geometry import VIDEO_VAE_ROWS, conditioner_rows, plain
+from tensorfs.derived import Source, SourceCapability, SourceInspection
 
 
 class Interrupted(RuntimeError):
@@ -68,40 +63,30 @@ class Recorder:
         self.fail_at = ""
 
     def tensorfs_source(self, source: Any) -> SourceCapability:
-        """Native geometry values only; this stage test makes no byte custody claim."""
+        """Native geometry values only; this stage test makes no byte custody claim.
+
+        Every treated component carries the rows its treatment selects: the reviewed DiT
+        plan, the whole real conditioner (its source-only rows included) and real video VAE
+        decode operands.
+        """
 
         def inspect(_components: Any, _configs: Any) -> SourceInspection:
             plan = prepare_quantization(h3_quantization_plan())
             components = {
-                component: {
-                    key: Tensor("f32", (1,), job.PLAIN_SPEC, {"value": Part("f32", (1,))})
-                    for key in target.drop
-                }
+                component: {key: plain("f32", (1,)) for key in target.drop}
                 for component, target in full_targets().items()
             }
             for component in TARGET_COMPONENT.values():
                 components[component].update(
                     {
-                        tensor.key: Tensor(
-                            tensor.logical_dtype,
-                            tensor.shape,
-                            job.PLAIN_SPEC,
-                            {"value": Part(tensor.logical_dtype, tensor.shape)},
-                        )
+                        tensor.key: plain(tensor.logical_dtype, tensor.shape)
                         for tensor in plan.tensors
                     }
                 )
-            components["video_vae"].update(
-                {
-                    key: Tensor("f32", shape, job.PLAIN_SPEC, {"value": Part("f32", shape)})
-                    for key, shape in (
-                        ("decoder.proj_in.weight", (2048, 24)),
-                        ("decoder.transformer_blocks.0.attn.to_q.weight", (2048, 2048)),
-                        ("post_quant_conv.weight", (24, 24, 1, 1, 1)),
-                        ("decoder.norm_out.weight", (2048,)),
-                    )
-                }
-            )
+            components["text_encoder"] = {
+                key: plain(*spec) for key, spec in conditioner_rows().items()
+            }
+            components["video_vae"] = {key: plain(*spec) for key, spec in VIDEO_VAE_ROWS.items()}
             return SourceInspection(Source(source.checkpoint_ref, 1), components, {})
 
         return SourceCapability(source.checkpoint_ref, 1, inspect)
@@ -222,7 +207,8 @@ def main() -> None:
         assert tuple(recorder.committed) == slots
         assert list(result) == list(slots)
         # Every lane treats the video VAE, because the producer normalises it rather than
-        # each lane authoring it; only the encoding lanes also treat the two DiTs.
+        # each lane authoring it; only the encoding lanes encode the two DiTs and the text
+        # conditioner.
         casts = {event.split(":")[1] for event in recorder.events if event.startswith("cast:")}
         assert casts == set(slots) - set(retained), casts
         encoded = {
@@ -233,7 +219,7 @@ def main() -> None:
         assert encoded == {
             (slot, component)
             for slot in set(slots[2:]) - set(retained)
-            for component in ("fl2va_dit", "ref2va_dit")
+            for component in ("fl2va_dit", "ref2va_dit", "text_encoder")
         }, encoded
         assert not any(event == "commit:" + slot for slot in retained for event in recorder.events)
         for slot in retained:
