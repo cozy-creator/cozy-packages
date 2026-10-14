@@ -1,6 +1,6 @@
 [project]
 name = "character-describer"
-version = "0.2.0"
+version = "0.2.1"
 description = "One-sentence character identity descriptions from supplied reference images"
 requires-python = ">=3.12"
 dependencies = [
