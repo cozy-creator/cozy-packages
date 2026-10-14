@@ -2,7 +2,7 @@
 
     cozy run paul/minimax-h3/encode_text --input encode-request.json --rental=NAME --out bf16 \
       model.model=paul/minimax-h3@1.0.0-rc.2/fp8-pruned
-    cozy run ./examples/h3-te-drift/weight_drift --input weight-request.json \
+    cozy run ./examples/client-scripts/h3-te-drift/weight_drift --input weight-request.json \
       --asset states=bf16/<run>-states.bin --rental=NAME --await --json \
       model.bf16=... model.fp8=... model.mxfp8=...
 
