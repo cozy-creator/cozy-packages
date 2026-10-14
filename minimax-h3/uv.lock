@@ -114,7 +114,7 @@ wheels = [
 
 [[package]]
 name = "character-describer"
-version = "0.2.1"
+version = "0.2.2"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -128,7 +128,7 @@ dependencies = [
     { name = "transformers" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/character-describer/0.2.1/character_describer-0.2.1-py3-none-any.whl", hash = "sha256:2d0df1392f4d887ae8ce07318b999d32b0bba8da17d50942b9cf99ad2387941e" },
+    { url = "https://tensorhub.com/v1/index/fidika/character-describer/0.2.2/character_describer-0.2.2-py3-none-any.whl", hash = "sha256:3fe3cb583c079e6f7c92ad61bfdd43c2c1e8ef95467d51d3b5acec06c9c47213" },
 ]
 
 [[package]]
@@ -512,7 +512,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.35.0"
+version = "1.35.1"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },
