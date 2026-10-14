@@ -2,7 +2,9 @@
 
 `caption_images` describes each supplied character image in one sentence: identity, hair,
 face, clothing and carried or worn items, never the background, pose or style. Images are
-described independently, in request order, with greedy decoding. A request takes 1 to 12
+described independently, in request order, with greedy decoding. A caption that names a
+setting or pose word anyway is regenerated once with those words pointed out, and any clause
+that still names one is dropped. A request takes 1 to 12
 PNG, JPEG or WebP images of up to 64 MiB each; each caption carries its image's `index`.
 MiniMax-H3 uses it to fill a supplied character's missing description.
 
