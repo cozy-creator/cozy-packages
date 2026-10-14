@@ -23,6 +23,10 @@ from typing import Any
 
 import torch
 from diffusers import AnimaModularPipeline, ClassifierFreeGuidance, CosmosTransformer3DModel
+from diffusers.models.transformers.transformer_cosmos import (
+    CosmosRotaryPosEmbed,
+    CosmosTransformerBlock,
+)
 from diffusers.modular_pipelines import BlockState, PipelineState
 from diffusers.modular_pipelines.anima.before_denoise import AnimaPrepareLatentsStep
 from diffusers.modular_pipelines.anima.denoise import AnimaLoopDenoiser
@@ -371,6 +375,31 @@ def arm_fused_attention_copies_nothing() -> None:
     check("equals SDPA", torch.allclose(got, expected, atol=1e-6), True)
 
 
+def arm_direct_rope_matrix() -> None:
+    """The plan's direct RoPE matrix is the rotation the kernel would build from Diffusers'
+    own (cos, sin) pair, at Anima's rope geometry and a 32x24 latent."""
+    rope = CosmosRotaryPosEmbed(hidden_size=128, rope_scale=(1.0, 4.0, 4.0))
+    hidden = torch.zeros(1, 16, 1, 32, 24)
+    expected = optimization._RopeMatrix().get(rope(hidden))
+    got = optimization._direct_rope_forward(rope, hidden)
+    check("the direct matrix has the pair's shape", tuple(got.shape), tuple(expected.shape))
+    check("and its rotation", torch.allclose(got, expected, atol=1e-6), True)
+
+
+def arm_block_forward() -> None:
+    """The plan's block forward (one `addcmul` per gated residual) equals Diffusers' on a small
+    random Cosmos block with Diffusers' own attention processors."""
+    torch.manual_seed(5)
+    block = CosmosTransformerBlock(2, 16, cross_attention_dim=24, adaln_lora_dim=8).eval()
+    theta = torch.rand(10, 16) * 6.0
+    inputs = (torch.randn(1, 10, 32), torch.randn(1, 7, 24), torch.randn(1, 32), torch.randn(1, 96))
+    rotary = (torch.cos(theta), torch.sin(theta))
+    with torch.no_grad():
+        expected = block(*inputs, image_rotary_emb=rotary)
+        got = optimization._block_forward(block, *inputs, image_rotary_emb=rotary)
+    check("the fused block equals Diffusers'", torch.allclose(got, expected, atol=1e-5), True)
+
+
 def arm_fused_latents() -> None:
     """The fused pipeline prepares the same latents as Diffusers' step, with the padding
     mask at latent size (the transformer resizes the pixel-size zeros to exactly that)."""
@@ -406,6 +435,8 @@ ARMS = {
     "plan": arm_plan_matches_the_locked_sources,
     "attention": arm_fused_attention_copies_nothing,
     "latents": arm_fused_latents,
+    "rope": arm_direct_rope_matrix,
+    "block": arm_block_forward,
     "batched": arm_batched_cfg,
     "ladder": arm_ladder,
     "brackets": arm_phase_brackets,
