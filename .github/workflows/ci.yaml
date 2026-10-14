@@ -2,9 +2,8 @@ name: ci
 # Automatic: one ~20 s job on master pushes that touch Python: syntax errors and undefined
 # names across every package (Python has no compile step; a package's own proofs only see
 # the modules they import).
-# On demand, before a release (fences, types, locks, wheels, locked environments, H3 arms):
-#   gh workflow run ci.yaml -R cozy-creator/packages --ref <branch> \
-#     [-f packages='["sdxl"]'] [-f h3=false]
+# On demand (fences, types, locks, wheels, and `task conform` of each package):
+#   gh workflow run ci.yaml -R cozy-creator/cozy-packages --ref <branch> [-f packages='["sdxl"]']
 on:
   push:
     branches: [master]
@@ -12,13 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       packages:
-        description: JSON list of package environments to qualify
+        description: JSON list of packages to conform
         type: string
-        default: '["anima","birefnet","character-describer","seedvr2","sdxl","minimax-h3-tools","qwen-image-2"]'
-      h3:
-        description: Run H3 deterministic conformance
-        type: boolean
-        default: true
+        default: '["anima","birefnet","character-describer","seedvr2","sdxl","minimax-h3-tools","qwen-image-2","minimax-h3"]'
       account_index:
         description: Account index the committed locks are bound to (`cozy package lock`)
         type: string
@@ -105,72 +100,8 @@ jobs:
       - name: Native cohort validation accepts independent package environments
         run: uv run --no-project python scripts/torch_family.py --self-check
 
-  h3-conformance:
-    name: H3 deterministic conformance
-    if: github.event_name == 'workflow_dispatch' && inputs.h3
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
-        with:
-          version: "0.12.7"
-          enable-cache: false
-      - run: uv python install 3.12
-
-      # --no-cache: a second copy of the ~7.6 GiB CUDA closure does not fit the runner disk.
-      - name: Exact locked environment
-        run: |
-          scripts/bind-account-index.sh "${{ inputs.account_index }}" minimax-h3
-          uv lock --check --project minimax-h3
-          cd minimax-h3
-          uv sync --locked --no-cache
-
-      - name: The H3 environment owns a compatible native dependency cohort
-        run: minimax-h3/.venv/bin/python scripts/torch_family.py
-
-      # A callee runs in its caller's environment: every `name @ url` a dependency declares
-      # (qwen-image-2's Diffusers commit) must be what this lock installs.
-      - name: Every direct-reference requirement is installed as declared
-        run: minimax-h3/.venv/bin/python scripts/direct_requirements.py
-
-      - name: Arms
-        run: minimax-h3/.venv/bin/python scripts/h3-conform.py
-
-      - name: The exact text H3's encoder receives
-        run: minimax-h3/.venv/bin/python scripts/h3-prompt-proof.py
-
-      - name: Native long-form assembly and one-file delivery
-        run: |
-          minimax-h3/.venv/bin/python scripts/h3-assembly-proof.py "$RUNNER_TEMP/h3-assembly"
-        env:
-          CUDA_VISIBLE_DEVICES: ""
-          OMP_NUM_THREADS: "2"
-          MKL_NUM_THREADS: "2"
-          OPENBLAS_NUM_THREADS: "2"
-
-      - name: PDD Ulysses parity at degrees two and four
-        run: minimax-h3/.venv/bin/python scripts/h3-turbo-cp-proof.py
-
-      - name: Reference fidelity survives conditioning
-        run: CUDA_VISIBLE_DEVICES='' minimax-h3/.venv/bin/python scripts/h3-reference-fidelity-proof.py
-
-      # The committed interface must not omit or contradict what the tree describes;
-      # ordering, formatting and Runtime-added keys are ignored.
-      - name: Package interface is current
-        run: >-
-          minimax-h3/.venv/bin/cozy-runtime --json --dir minimax-h3 describe |
-          minimax-h3/.venv/bin/python scripts/interface_current.py
-          minimax-h3/metadata/package-interface.json
-
-      - name: The package builds and imports from its wheel
-        run: |
-          uv build --project minimax-h3 --wheel --out-dir dist/packages/minimax-h3
-          uv pip install --python minimax-h3/.venv/bin/python --no-deps dist/packages/minimax-h3/*.whl
-          minimax-h3/.venv/bin/python -P scripts/package_import.py minimax-h3 --installed
-
-  package-locks:
-    name: Package exact locked environments
+  conform:
+    name: Package conformance
     if: github.event_name == 'workflow_dispatch' && inputs.packages != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -178,6 +109,7 @@ jobs:
       OMP_NUM_THREADS: "2"
       MKL_NUM_THREADS: "2"
       OPENBLAS_NUM_THREADS: "2"
+      UV_NO_CACHE: "1" # a second copy of H3's ~7.6 GiB CUDA closure does not fit the runner disk
     strategy:
       fail-fast: false
       matrix:
@@ -188,59 +120,8 @@ jobs:
         with:
           version: "0.12.7"
           enable-cache: false
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.45.5
       - run: uv python install 3.12
-      - name: Exact locked environment
-        run: |
-          scripts/bind-account-index.sh "${{ inputs.account_index }}" ${{ matrix.package }}
-          uv lock --check --project ${{ matrix.package }}
-          cd ${{ matrix.package }}
-          uv sync --locked --no-cache --no-install-project
-      # The compiled extensions are the ABI proof: they raise undefined-symbol errors
-      # against the wrong torch, and nothing cheaper observes that.
-      - name: The package owns a compatible native dependency cohort
-        run: ${{ matrix.package }}/.venv/bin/python scripts/torch_family.py
-      - name: The locked stack imports
-        run: ${{ matrix.package }}/.venv/bin/python scripts/package_import.py ${{ matrix.package }}
-
-      # The committed interface must not omit or contradict what the tree describes;
-      # ordering, formatting and Runtime-added keys are ignored.
-      - name: Package interface is current
-        run: >-
-          ${{ matrix.package }}/.venv/bin/cozy-runtime --json --dir ${{ matrix.package }} describe |
-          ${{ matrix.package }}/.venv/bin/python scripts/interface_current.py
-          ${{ matrix.package }}/metadata/package-interface.json
-      # The progress meter is only observable by RUNNING the seam: se-026's denoise hook was
-      # installed on a deepcopy of the block tree, so every static check stayed green while
-      # the meter sat frozen for the whole render. These arms execute Diffusers' own loop.
-      - name: Anima progress arms
-        if: matrix.package == 'anima'
-        run: anima/.venv/bin/python scripts/anima-conform.py
-
-      - name: Reference image request and output contract
-        if: matrix.package == 'qwen-image-2'
-        run: qwen-image-2/.venv/bin/python scripts/qwen-image-2-conform.py
-
-      - name: Reference image model equals the Diffusers pipeline
-        if: matrix.package == 'qwen-image-2'
-        run: CUDA_VISIBLE_DEVICES='' qwen-image-2/.venv/bin/python scripts/qwen-image-2-model-proof.py
-
-      - name: H3 table construction order proofs
-        if: matrix.package == 'minimax-h3-tools'
-        run: |
-          minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/order-proof.py
-          minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/stage-proof.py
-          minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/full-source-proof.py
-          minimax-h3-tools/.venv/bin/python minimax-h3-tools/scripts/table-metadata-proof.py
-          minimax-h3-tools/.venv/bin/python scripts/tensorfs_seeds.py
-        env:
-          PYTHONPATH: minimax-h3-tools/src
-
-      - name: The package builds and imports from its wheel
-        run: |
-          uv build --project ${{ matrix.package }} --wheel --out-dir dist/packages/${{ matrix.package }}
-          uv pip install --python ${{ matrix.package }}/.venv/bin/python --no-deps dist/packages/${{ matrix.package }}/*.whl
-          ${{ matrix.package }}/.venv/bin/python -P scripts/package_import.py ${{ matrix.package }} --installed
-
-      - name: The installed H3 AdaLN helper drives its sibling calls
-        if: matrix.package == 'minimax-h3-tools'
-        run: minimax-h3-tools/.venv/bin/python -P scripts/h3-adaln-interface-proof.py
+      - run: task conform -- ${{ matrix.package }}
