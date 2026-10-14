@@ -2,8 +2,9 @@
 
 Only Python callables change: parameters, buffers, state-dict names and storage stay as the
 fill left them. One closed plan for the reviewed Diffusers sources, not a patching
-framework: any drift runs eager and says why. The kernel is the Runtime's generic fused
-RMSNorm + split-half RoPE, compiled into its linux x86 cp312-abi3 wheel.
+framework: any drift runs eager and says why. The kernel is the Runtime's public fused
+RMSNorm + split-half RoPE (`cozy_runtime.author.kernels`), compiled into its linux x86
+cp312-abi3 wheel; it maps plane stand-ins for its launch itself.
 """
 
 from __future__ import annotations
@@ -16,8 +17,7 @@ from types import MethodType
 from typing import Any
 
 import torch
-from cozy_runtime._kernels import rms_rope_split_half
-from cozy_runtime.internal.accel import readable
+from cozy_runtime.author.kernels import native, rms_rope_split_half
 from diffusers.models.attention_dispatch import dispatch_attention_fn
 from diffusers.models.normalization import RMSNorm
 from diffusers.models.transformers.transformer_cosmos import (
@@ -28,18 +28,11 @@ from diffusers.models.transformers.transformer_cosmos import (
 )
 from diffusers.modular_pipelines.anima.before_denoise import AnimaPrepareLatentsStep
 
-try:
-    from cozy_runtime._kernels import _C  # noqa: F401
-except ImportError as exc:
-    _NATIVE = f"cozy_runtime._kernels._C does not import ({exc}): this Runtime has no kernels"
-else:
-    _NATIVE = ""
-
 # The extension takes DLPack arrays and a CUDA stream through nanobind and never links
 # libtorch, so an explicit Torch/CUDA cohort is admitted rather than every future release.
 TORCH_RELEASES = ("2.13.0", "2.14.0")
 CUDA_RELEASE = "13.0"
-#: Diffusers 0.40.0's sources the plan replaces or mirrors, and the Runtime kernel wrapper.
+#: Diffusers 0.40.0's sources the plan replaces or mirrors.
 _SOURCE_DIGESTS: dict[str, tuple[Callable[..., object], str]] = {
     "RMSNorm.forward": (
         RMSNorm.forward,
@@ -60,10 +53,6 @@ _SOURCE_DIGESTS: dict[str, tuple[Callable[..., object], str]] = {
     "AnimaPrepareLatentsStep.__call__": (
         AnimaPrepareLatentsStep.__call__,
         "5f758c69ad2f82a37d707e3ca736b88011b41f04a958dbc657ec397b88c2bef5",
-    ),
-    "cozy_runtime._kernels.rms_rope_split_half": (
-        rms_rope_split_half,
-        "084c60d95676ae003e285fb57ec6b9c3416ffba6e0a0f62d2097f26b8c8aa999",
     ),
 }
 #: Anima Base 1.0's transformer, the one the norm and RoPE shapes below are reviewed for.
@@ -155,7 +144,7 @@ def _capability() -> str:
         return f"torch.version.cuda {torch.version.cuda!r} != the fused plan's {CUDA_RELEASE!r}"
     if not torch.cuda.is_available():
         return "torch reports no available CUDA device"
-    return _NATIVE
+    return native()
 
 
 def _plan_refusal(pipe: Any) -> str:
@@ -285,10 +274,14 @@ class _FusedSelfAttention:
             for projection in (attn.to_q, attn.to_k, attn.to_v)
         )
         # The kernel reads the scales by pointer, without calling the norms that own them.
-        with readable(attn.norm_q.weight, attn.norm_k.weight) as (q_scale, k_scale):
-            query, key = self.kernel(
-                query, key, self.rope.get(image_rotary_emb), q_scale, k_scale, attn.norm_q.eps
-            )
+        query, key = self.kernel(
+            query,
+            key,
+            self.rope.get(image_rotary_emb),
+            attn.norm_q.weight,
+            attn.norm_k.weight,
+            attn.norm_q.eps,
+        )
         # Diffusers repeats K and V by the ratio of head widths, 1 in every Cosmos model;
         # `repeat_interleave(1)` still copies both whole (huaisang, rtx-4070-super: 0.35 s
         # of a 30-step render, most of Anima's gap to ComfyUI).
