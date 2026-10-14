@@ -270,7 +270,7 @@ def _compute_table_parts(
         read=read,
         write=write,
         progress=progress,
-        device=torch.device("cuda"),
+        device=torch.device(str(ctx.device)),
         completed=completed,
     )
     expected = sum(
@@ -708,22 +708,24 @@ app.job(
     name="bf16-full",
     weights=(WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES + MAX_VIDEO_VAE_BYTES),),
 )
+# The pruned lanes compute AdaLN tables on the GPU.
 app.job(
     bf16_pruned,
     name="bf16-pruned",
     weights=(WeightsOutput("bf16-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),),
+    accelerator=True,
 )
 app.job(
     fp8_pruned,
     name="fp8-pruned",
     weights=(WeightsOutput("fp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),),
+    accelerator=True,
 )
 app.job(
     mxfp8_pruned,
     name="mxfp8-pruned",
-    weights=(
-        WeightsOutput("mxfp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),
-    ),
+    weights=(WeightsOutput("mxfp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),),
+    accelerator=True,
 )
 
 
