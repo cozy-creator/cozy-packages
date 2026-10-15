@@ -3,8 +3,10 @@ and its kernel are Runtime's."""
 
 from __future__ import annotations
 
-from cozy_runtime.author import Context, Loader, Model, ModelArtifact, Telemetry, invocable
+from cozy_runtime.author import Context, ModelArtifact, Telemetry, Weights, invocable
 from cozy_runtime.derive.operations import QuantizationPlan, quantize_into
+
+from .model import RestorationModel
 
 #: Every attention and MLP linear of the 36 DiT blocks, video and text streams. The patch,
 #: text and time embeddings, the output projection, the modulation, the conditioning and the
@@ -20,15 +22,8 @@ INT8 = QuantizationPlan(
 )
 
 
-class SeedVR2Source(Model[object]):
-    """The checkpoint a lane is derived from; never constructed for inference."""
-
-    def load(self, loader: Loader) -> None:
-        del loader
-
-
-@invocable(memoize=True, memo_version="seedvr2-int8/1")
-async def int8(ctx: Context, *, source: SeedVR2Source, tel: Telemetry) -> ModelArtifact:
+@invocable(memo_version="seedvr2-int8/1")
+async def int8(ctx: Context, *, source: Weights[RestorationModel], tel: Telemetry) -> ModelArtifact:
     """The int8 lane (`int8-convrot256/1`): W8A8 on the int8 tensor cores."""
     return quantize_into(
         ctx, tel, source=source, plan=INT8, encoding="int8-convrot256/1", output="int8"
