@@ -166,7 +166,7 @@ def run(
         )
         videos.append(digest)
     app = App()
-    app.job(handler, emits_media=True, accelerator=False)
+    app.entrypoint(handler, emits_media=True, accelerator=False)
     result, outcome, record = attempt(
         app.get(handler.__name__),
         {"payload": {"videos": videos, "transition": "cut"}},

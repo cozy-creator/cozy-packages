@@ -2768,8 +2768,10 @@ def arm_interface() -> None:
     print("\n== committed public surface ==")
     interface_path = H3 / "metadata" / "package-interface.json"
     interface = json.loads(interface_path.read_text())
-    entries = {entry["name"]: entry for entry in interface["entrypoints"]}
-    workflows = {entry["name"]: entry for entry in interface["jobs"]}
+    check("one entrypoints list", "jobs" in interface, False)
+    functions = {entry["name"]: entry for entry in interface["entrypoints"]}
+    workflows = {n: e for n, e in functions.items() if e.get("accelerator") is False}
+    entries = {n: e for n, e in functions.items() if n not in workflows}
     surfaces = {surface.name: surface for surface in describe(package.app)}
     check(
         "official actions, turbo functions, the model-bearing segments and encode_text",
@@ -2953,16 +2955,15 @@ def arm_interface() -> None:
     check("the turbo functions run the plans' eight evaluations", package.TURBO_STEPS, 8)
     red("eight is not a base step count", package.TURBO_STEPS in STEPS, True)
     print("\n== long-form composition ==")
-    jobs = {entry["name"]: entry for entry in interface["jobs"]}
     check(
-        "composition and assembly are CPU jobs",
-        set(jobs),
+        "composition, assembly and the direct workflows are CPU functions",
+        set(workflows),
         {"long_form", "long_form_cuts", "assemble_video", "fl2va", "fl2va_turbo",
          "ref2va", "ref2va_turbo"},
     )
     # The one property decision #601 turns on: the composer holds NO device while its shots
     # render. A model slot here would make one attempt hold eight shots.
-    check("long_form declares no model slot", "models" in jobs["long_form"], False)
+    check("long_form declares no model slot", "models" in workflows["long_form"], False)
     check(
         "every segment, turbo or standard, holds one turbo-capable base and its adapter",
         {
@@ -3052,7 +3053,7 @@ def arm_interface() -> None:
             "invalid_request",
         )
     segment_fields = next(
-        field for field in jobs["long_form"]["request"]["fields"] if field["name"] == "segments"
+        field for field in workflows["long_form"]["request"]["fields"] if field["name"] == "segments"
     )["type"]["list"]["fields"]
     check(
         "long-form segment seed is optional in the published interface",
@@ -3144,10 +3145,10 @@ def arm_interface() -> None:
             refusal(f"segment {field} refuses {value!r}",
                     partial(msgspec.convert, invalid, type=package.LongFormInput),
                     "ValidationError")
-    for job in ("long_form", "long_form_cuts"):
-        segment = next(f for f in jobs[job]["request"]["fields"] if f["name"] == "segments")
+    for workflow in ("long_form", "long_form_cuts"):
+        segment = next(f for f in workflows[workflow]["request"]["fields"] if f["name"] == "segments")
         check(
-            f"a {job} segment preserves the turbo request fields",
+            f"a {workflow} segment preserves the turbo request fields",
             [(f["name"], f["type"]) for f in segment["type"]["list"]["fields"]
              if f["name"] not in {"context_frames", "context_audio", "non_diegetic_music"}],
             [
@@ -3158,24 +3159,24 @@ def arm_interface() -> None:
             ],
         )
         check(
-            f"{job} compiler exposes no segment sampling override",
+            f"{workflow} compiler exposes no segment sampling override",
             any(f["name"] == "turbo" for f in segment["type"]["list"]["fields"]),
             False,
         )
         check(
-            f"{job} segments expose optional music overrides",
+            f"{workflow} segments expose optional music overrides",
             next(f for f in segment["type"]["list"]["fields"] if f["name"] == "non_diegetic_music"),
             {"name": "non_diegetic_music", "type": {"union": ["null", "str"]}, "wire": "optional"},
         )
         check(
-            f"per-segment picture and sound carry belong only to long_form ({job})",
+            f"per-segment picture and sound carry belong only to long_form ({workflow})",
             [f["name"] for f in segment["type"]["list"]["fields"]
              if f["name"] in {"context_frames", "context_audio"}],
-            ["context_frames", "context_audio"] if job == "long_form" else [],
+            ["context_frames", "context_audio"] if workflow == "long_form" else [],
         )
     check(
         "long_form request fields",
-        [field["name"] for field in jobs["long_form"]["request"]["fields"]],
+        [field["name"] for field in workflows["long_form"]["request"]["fields"]],
         [
             "segments",
             "references",
@@ -3190,7 +3191,7 @@ def arm_interface() -> None:
     )
     check(
         "long_form returns its video and references, each published as it lands",
-        [field["name"] for field in jobs["long_form"]["result"]["fields"]],
+        [field["name"] for field in workflows["long_form"]["result"]["fields"]],
         [
             "video",
             "references",
@@ -3203,7 +3204,7 @@ def arm_interface() -> None:
         "a segment list requires at least one segment without a count cap",
         next(
             field["constraints"]
-            for field in jobs["long_form"]["request"]["fields"]
+            for field in workflows["long_form"]["request"]["fields"]
             if field["name"] == "segments"
         ),
         {"min_length": 1},

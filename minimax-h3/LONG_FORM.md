@@ -158,7 +158,7 @@ style is specified, and use anime styling only when explicitly requested.
 A reference has:
 
 - `name` and `kind` (`character`, `scene` or `audio`);
-- optional `description`, `image`, `audio`, `retention-analysis` and `seed`.
+- optional `description`, `image`, `audio`, `retention_analysis` and `seed`.
 
 A supplied image skips generation. Otherwise Qwen-Image-2.1 generates the image once
 from the description. Names normalise: whitespace collapses and `<`/`>` are dropped. Two

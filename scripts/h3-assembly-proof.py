@@ -203,7 +203,7 @@ def execute(
             stream.write(b"x")
     app = App()
     handler = scanned_assembly if scanned else assembly.assemble_video
-    app.job(handler, emits_media=True, accelerator=False)
+    app.entrypoint(handler, emits_media=True, accelerator=False)
     result, outcome, _ = attempt(
         app.get(handler.__name__),
         {"payload": {"videos": videos, "master_audio": master_digest, "transition": transition}},
