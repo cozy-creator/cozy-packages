@@ -58,10 +58,17 @@ UPSAMPLER_INT8 = QuantizationPlan(
 )
 
 #: The same weights in NVFP4, served W4A16 below Blackwell and at decode: 0.56 bytes per weight,
-#: which is what puts the upsampler inside an 8 GB card.
+#: and the vision tower's linears too (its `mlp.linear_fc2` has K=4304, which no FP4 GEMM tiles).
+#: That is what brings the upsampler inside an 8 GB card's pool.
 UPSAMPLER_NVFP4 = QuantizationPlan(
     components=UPSAMPLER_INT8.components,
-    include=UPSAMPLER_INT8.include,
+    include=(
+        *UPSAMPLER_INT8.include,
+        "model.model.visual.blocks.*.attn.qkv.weight",
+        "model.model.visual.blocks.*.attn.proj.weight",
+        "model.model.visual.blocks.*.mlp.linear_fc1.weight",
+        "model.model.visual.merger.linear_fc*.weight",
+    ),
     output_precision="preserve",
 )
 
