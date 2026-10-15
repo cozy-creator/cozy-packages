@@ -57,7 +57,7 @@ from cozy_runtime.author import (
 from msgspec.structs import asdict, replace
 
 from assembly import CutJoin, ScanAhead, assemble_video
-from gates import MediaFacts, refuse_before_encode, report_after_encode
+from gates import MediaFacts, refuse_before_encode
 from long_form_state import (
     RenderProvenance, compatible, compatible_base, context_provenance, provenance,
 )
@@ -83,7 +83,6 @@ from minimax_h3.official import (
     MAX_REFERENCES,
     MAX_VIDEO_REFERENCES,
     REFERENCE_IMAGE_SHORT_EDGE,
-    NumericalChecks,
     OfficialH3Pipeline,
     ReferencePolicyFacts,
     ScheduleFacts,
@@ -538,7 +537,6 @@ def _finish(
     out: Outputs,
     tel: Telemetry,
     cancel: Any,
-    checks: NumericalChecks | None = None,
     completed: Callable[[Any], None] | None = None,
     delivered_frames: int | None = None,
     sampled_frames: int | None = None,
@@ -549,7 +547,7 @@ def _finish(
         # The successor's carry: a slice of the denoised latents, before either decode.
         completed(state)
     with tel.stage("decode_audio", overall_range=(0.85, 0.90)):
-        audio, sample_rate = model.decode_audio(task, state, checks=checks)
+        audio, sample_rate = model.decode_audio(task, state)
         release_rate = model.pipe.sample_rate
         if audio.ndim != 3 or int(audio.shape[0]) != 1 or sample_rate != release_rate:
             raise OutputError(
@@ -581,23 +579,16 @@ def _finish(
             progress=tel.step_callback(frames, stage="decode_video", overall_range=(0.90, 0.97)),
         )
         try:
-            model.decode_video(task, state, on_chunk=stream.push, checks=checks)
+            model.decode_video(task, state, on_chunk=stream.push)
         except BaseException:
             stream.abandon()
             raise
     try:
-        saved, video_pixel_digest = stream.finish()
+        saved = stream.finish()
     except BaseException:
         stream.abandon()
         raise
-    tel.metric("video_nonfinite_fraction", 0.0)
-    pixels = stream.pixels
-    _, height, width, _ = (int(value) for value in pixels.shape)
-
-    with tel.stage("check_output", overall_range=(0.98, 1.00)):
-        warnings = report_after_encode(
-            torch, pixels=pixels, waveform=waveform, requested=clock, tel=tel
-        )
+    _, height, width, _ = (int(value) for value in stream.pixels.shape)
 
     tel.log(
         "h3 output geometry",
@@ -630,11 +621,6 @@ def _finish(
         transformer_evaluations=schedule.transformer_evaluations,
     )
     tel.log(
-        "h3 source digests",
-        video_pixel_digest=video_pixel_digest,
-        audio_sample_digest=hashlib.sha256(waveform.numpy()).hexdigest(),
-    )
-    tel.log(
         "h3 container facts",
         video_codec=saved.video_codec,
         frame_count=saved.frame_count,
@@ -645,7 +631,7 @@ def _finish(
         audio_decoded_samples=saved.audio.decoded_samples if saved.audio is not None else 0,
         video_bytes=saved.video.size_bytes,
     )
-    return H3VideoOutput(video=saved.video, warnings=warnings)
+    return H3VideoOutput(video=saved.video, warnings=[])
 
 
 #: Frames per handoff slice: 8 frames of 1344x768 are 100 MB of fp32 source and 25 MB of
@@ -683,11 +669,9 @@ class _VideoStream:
     """The decode-to-encode handoff (h3a-017).
 
     The decode thread refuses non-finite values, quantizes each chunk on its device and
-    lands it in its slice of ONE host RGB8 buffer; a worker thread digests the slices in
-    order and feeds the runtime's streaming MP4 sink while the next chunk decodes. The
-    running sha256 is byte-for-byte the finished buffer's — the `h3 source digests`
-    identity — while the container's bytes are a codec fact, not an output identity.
-    The soundtrack, decoded first, is interleaved behind the frames it covers.
+    lands it in its slice of ONE host RGB8 buffer; a worker thread feeds the slices in order
+    to the runtime's streaming MP4 sink while the next chunk decodes. The soundtrack, decoded
+    first, is interleaved behind the frames it covers.
     """
 
     def __init__(
@@ -711,7 +695,6 @@ class _VideoStream:
         self._slices: queue.SimpleQueue[tuple[int, int] | None] = queue.SimpleQueue()
         self._pool = ThreadPoolExecutor(max_workers=1)
         self._encode: Future[SavedVideo] | None = None
-        self._digest = hashlib.sha256()
         self._abandoned = False
         self.pixels: Any = None
         self.landed = 0
@@ -755,9 +738,8 @@ class _VideoStream:
             self.landed += len(landed)
         self._progress(self.landed - 1)
 
-    def finish(self) -> tuple[SavedVideo, str]:
-        """Close the stream once every requested frame has landed; the sink's probed asset
-        and the buffer's digest."""
+    def finish(self) -> SavedVideo:
+        """Close the stream once every requested frame has landed; the sink's probed asset."""
         if self.landed != self._frames or self._encode is None:
             raise OutputError(
                 f"official H3 decode returned {self.landed} frames, expected {self._frames}",
@@ -765,7 +747,7 @@ class _VideoStream:
             )
         self._slices.put(None)
         try:
-            return self._encode.result(), self._digest.hexdigest()
+            return self._encode.result()
         finally:
             self._pool.shutdown(wait=False)
 
@@ -802,7 +784,6 @@ class _VideoStream:
         while (item := self._slices.get()) is not None:
             start, stop = item
             landed = self.pixels[start:stop]
-            self._digest.update(landed.numpy())
             for index in range(start, stop):
                 self._check_encoding()
                 yield DecodedVideoFrame(
@@ -1199,7 +1180,6 @@ def _render_keyframes(
     """Shared FL2VA rendering for direct requests and chained asset handoffs."""
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=seed)
-    checks = NumericalChecks(tel, model.pipe.resident)
     log_prompt(tel, "h3 encoder prompt", prompt)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
         state = model.pipe.start_fl2va(
@@ -1212,10 +1192,10 @@ def _render_keyframes(
             task=task,
         )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
-        model.condition_text(task, state, checks=checks)
+        model.condition_text(task, state)
     if first is not None or last is not None:
         with tel.stage("condition_media", overall_range=(0.08, 0.15)):
-            model.condition_fl2va_media(task, state, checks=checks)
+            model.condition_fl2va_media(task, state)
     if turbo_lora is None:
         sample = model.sample_fl2va
     else:
@@ -1226,7 +1206,6 @@ def _render_keyframes(
             state,
             on_step=tel.step_callback(steps, stage="denoise", overall_range=(0.15, 0.85)),
             cancel=ctx.raise_if_cancelled,
-            checks=checks,
         )
     return _finish(
         model,
@@ -1237,7 +1216,6 @@ def _render_keyframes(
         out=out,
         tel=tel,
         cancel=ctx.raise_if_cancelled,
-        checks=checks,
     )
 
 
@@ -1259,7 +1237,6 @@ def _references_to_video(
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
-    checks = NumericalChecks(tel, model.pipe.resident)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
         references, sizing = assets_to_h3_refs(assets, pipe=model.pipe)
         tel.log(
@@ -1298,7 +1275,7 @@ def _references_to_video(
                 )
     # Text and references at once where the text encoder lives on another GPU.
     with tel.stage("condition", overall_range=(0.03, 0.15)):
-        condition_references(model, task, state, checks=checks)
+        condition_references(model, task, state, tel=tel)
     if turbo_lora is None:
         sample = model.sample_ref2va
     else:
@@ -1309,7 +1286,6 @@ def _references_to_video(
             state,
             on_step=tel.step_callback(steps, stage="denoise", overall_range=(0.15, 0.85)),
             cancel=ctx.raise_if_cancelled,
-            checks=checks,
         )
     return _finish(
         model,
@@ -1320,7 +1296,6 @@ def _references_to_video(
         out=out,
         tel=tel,
         cancel=ctx.raise_if_cancelled,
-        checks=checks,
         completed=completed,
         delivered_frames=None if delivery is None else delivery.delivered_frames,
         sampled_frames=None if delivery is None else delivery.sample_frames,

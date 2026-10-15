@@ -1,4 +1,4 @@
-"""Path-free integrity checks over the exact tensors handed to Runtime's encoders."""
+"""The soundtrack's refusals, before any frame is encoded."""
 
 from __future__ import annotations
 
@@ -6,9 +6,6 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any
 
-import cozy_eval.audio as ce_audio
-import cozy_eval.integrity as ce_integrity
-import cozy_eval.metrics.audio as ce_metrics_audio
 from cozy_runtime.author import OutputError, Telemetry
 
 
@@ -67,51 +64,3 @@ def refuse_before_encode(
             f"{float(requested.duration):.3f}s of video",
             code="output_integrity",
         )
-
-
-def report_after_encode(
-    torch: Any,
-    *,
-    pixels: Any,
-    waveform: Any,
-    requested: MediaFacts,
-    tel: Telemetry,
-) -> list[str]:
-    """Quality observations over the exact RGB8 and PCM the encoders consumed: reported,
-    never refused. Quality acceptance belongs to explicit checkpoint validation; an
-    inference result retains its video and warnings so the caller can inspect it.
-    """
-    integrity = ce_integrity.output_integrity(pixels.numpy())
-    tel.metric("adjacent_frame_corr", round(integrity.adjacent_frame_corr or -1.0, 4))
-    tel.metric("frame_std_min", round(integrity.frame_std_min or -1.0, 5))
-    tel.metric("grid_peak_ratio", round(integrity.grid_peak_ratio or -1.0, 3))
-    tel.metric("grid_period_px", round(integrity.grid_period_px or -1.0, 1))
-    tel.log("h3 output integrity", verdict=integrity.verdict, summary=integrity.summary())
-    warnings = [] if integrity.ok else [integrity.summary()]
-
-    channels = int(waveform.shape[0])
-    stats = ce_metrics_audio.signal_stats(
-        waveform.to(torch.float32).cpu().numpy().T, requested.sample_rate
-    )
-    for name in (
-        "audio_rms_dbfs",
-        "audio_true_peak_dbtp",
-        "audio_clip_fraction",
-        "audio_max_silence_run",
-        "audio_dc_offset",
-    ):
-        if name in stats:
-            tel.metric(name, round(stats[name], 6))
-
-    # Cozy-eval's AUDIO_DEFECTS budget is REPORTED, never refused. cozy-eval itself
-    # demoted it to report-only after it falsely rejected real content, and a prompt like
-    # "an empty room, silence, then a distant door slam" legitimately exceeds
-    # `audio_max_silence_run high=0.25`. Refusing here destroyed a complete, billed
-    # 345-frame generation over a soundtrack the request asked for.
-    for defect in ce_audio.AUDIO_DEFECTS:
-        if defect.metric == "audio_stereo_separation_db" and channels < 2:
-            continue
-        value = stats.get(defect.metric)
-        if value is not None and defect.breached(value):
-            tel.metric(f"{defect.metric}_breached", 1)
-    return warnings

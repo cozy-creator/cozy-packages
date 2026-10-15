@@ -17,7 +17,7 @@ from cozy_runtime.author import AssetBound, Context, FileAsset, Outputs, Telemet
 from safetensors.torch import save
 
 from minimax_h3.model import H3Model
-from minimax_h3.official import NumericalChecks, frames_for
+from minimax_h3.official import frames_for
 from story import encoder_prompt
 
 #: H3 conditions on hidden_states[50] of its 50 retained decoder layers.
@@ -73,7 +73,6 @@ def encode_text(
     ctx: Context, payload: EncodeTextInput, model: H3Model, out: Outputs, tel: Telemetry
 ) -> EncodeTextOutput:
     conditioner = model.pipe.components["text_encoder"]
-    checks = NumericalChecks(tel, model.pipe.resident)
     wanted = sorted(set(payload.hidden_states)) or [FINAL]
     tensors: dict[str, torch.Tensor] = {}
     tokens: list[int] = []
@@ -91,7 +90,7 @@ def encode_text(
         )
         capture = _Capture(conditioner, wanted)
         try:
-            model.condition_text("fl2va", state, checks=checks)
+            model.condition_text("fl2va", state)
         finally:
             capture.close()
         if capture.token_ids is None or set(capture.states) != set(wanted):

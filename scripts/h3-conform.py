@@ -77,7 +77,6 @@ from diffusers.modular_pipelines.minimax_h3.before_denoise import (
 )
 from diffusers.modular_pipelines.minimax_h3.denoise import (
     MiniMaxH3LoopDenoiser,
-    MiniMaxH3LoopSchedulerStep,
 )
 from PIL import Image as PILImage
 from torch.nn import functional as F
@@ -115,9 +114,7 @@ from minimax_h3.official import (  # noqa: E402
     MIN_DURATION,
     MIN_FRAMES,
     REFERENCE_IMAGE_SHORT_EDGE,
-    NumericalChecks,
     OfficialH3Pipeline,
-    ResidentWeights,
     ScheduleFacts,
     _aligned_soundtrack,
     _apply_transformer_dtype,
@@ -170,7 +167,7 @@ from h3_tables.table_layout import TableLayout  # noqa: E402
 from h3_tables.turbo import collapse_head_bank, pdd_head_plan, pdd_time_grid  # noqa: E402
 
 import h3 as package  # noqa: E402
-from gates import MediaFacts, refuse_before_encode, report_after_encode  # noqa: E402
+from gates import MediaFacts, refuse_before_encode  # noqa: E402
 from h3_order import construction_order, encode_order  # noqa: E402
 
 STEPS = supported_steps()
@@ -1894,40 +1891,6 @@ def arm_adaln_pruned() -> None:
         "return_dict": False,
     }
     full_output = full(**forward)
-    numerical = _NumericalTelemetry()
-    checks = NumericalChecks(cast(Any, numerical))
-    checks.component("actual_h3", full)
-    with checks.forwards(full, "actual_h3"):
-        checked_output = full(**forward)
-    check(
-        "actual Diffusers H3 output PyTree is checked without changing values",
-        all(torch.equal(a, b) for a, b in zip(full_output, checked_output, strict=True)),
-        True,
-    )
-    first = next(row for row in numerical.rows if row.get("stage") == "actual_h3.prediction.0")
-    check("actual H3 tuple exposes both predictions", first["tensors"], 2)
-    saved = full.proj_in.bias.detach().clone()
-
-    def poisoned_step() -> None:
-        with checks.forwards(full, "actual_h3"):
-            full(**forward)
-
-    try:
-        with torch.no_grad():
-            full.proj_in.bias.fill_(float("nan"))
-        refusal(
-            "a later actual H3 prediction refuses when its loop settles",
-            poisoned_step,
-            "numerical_nonfinite",
-        )
-    finally:
-        with torch.no_grad():
-            full.proj_in.bias.copy_(saved)
-    check(
-        "actual H3 diagnostic hooks close after refusal",
-        (len(full._forward_pre_hooks), len(full._forward_hooks)),
-        (0, 0),
-    )
     pruned_output = pruned(**forward)
     check(
         "the inherited forward changes only the AdaLN-pruned modulation source",
@@ -2381,7 +2344,7 @@ def arm_media() -> None:
     # decoder. The sequential reference is the official whole-clip block quantized whole.
     pipe, state = finish_scaffold(DEFAULT_FRAMES)
     with torch.no_grad():
-        reference, reference_digest = package._rgb8(torch, pipe.decode_video("fl2va", state))
+        reference, _ = package._rgb8(torch, pipe.decode_video("fl2va", state))
     schedule = ScheduleFacts("a" * 64, 30, 31, *[character * 64 for character in "bcde"])
     spool = Path(tempfile.mkdtemp(prefix="h3-finish-"))
     attempt = fake_attempt("h3-finish-receipt", spool=spool)
@@ -2396,7 +2359,6 @@ def arm_media() -> None:
         out=outputs,
         tel=telemetry,
         cancel=lambda: None,
-        checks=NumericalChecks(cast(Any, telemetry), pipe.resident),
     )
     check(
         "finish returns exactly one typed media asset",
@@ -2404,21 +2366,11 @@ def arm_media() -> None:
         (VideoAsset, 1),
     )
     check("the video is the sink's committed mp4", finished.video.media_type, "video/mp4")
-    log_events = [
-        event
-        for event in telemetry.events
-        if event.kind == "log" and event.name != "h3 numerical check"
-    ]
+    log_events = [event for event in telemetry.events if event.kind == "log"]
     check(
-        "finish emits the four ordered proof rows after the integrity verdict",
+        "finish emits the three ordered proof rows",
         [event.name for event in log_events],
-        [
-            "h3 output integrity",
-            "h3 output geometry",
-            "h3 schedule facts",
-            "h3 source digests",
-            "h3 container facts",
-        ],
+        ["h3 output geometry", "h3 schedule facts", "h3 container facts"],
     )
     logs = {event.name: dict(event.fields) for event in log_events}
     check(
@@ -2449,14 +2401,6 @@ def arm_media() -> None:
         },
     )
     waveform = pipe.decode_audio("fl2va", state)[0].to(torch.float32).contiguous()
-    check(
-        "the streamed handoff digests exactly the sequential whole-clip RGB8",
-        logs.get("h3 source digests"),
-        {
-            "video_pixel_digest": reference_digest,
-            "audio_sample_digest": hashlib.sha256(waveform.numpy()).hexdigest(),
-        },
-    )
     facts = logs.get("h3 container facts") or {}
     check(
         "the container carries every frame and the whole soundtrack as h264 and aac",
@@ -2495,11 +2439,8 @@ def arm_media() -> None:
     stages = telemetry.stages()
     check(
         "the tail's stages are all measured",
-        [
-            name in stages
-            for name in ("decode_audio", "decode_video", "check_output")
-        ],
-        [True] * 3,
+        [name in stages for name in ("decode_audio", "decode_video")],
+        [True] * 2,
     )
     check(
         "finish receipt loses and refuses no Runtime observations",
@@ -2516,7 +2457,6 @@ def arm_media() -> None:
         state: Any,
         *,
         duration_s: int = DEFAULT_DURATION_S,
-        checks: NumericalChecks | None = None,
         max_output_bytes: int = 256 << 20,
     ) -> Callable[[], Any]:
         spool = Path(tempfile.mkdtemp(prefix=f"h3-finish-{name}-"))
@@ -2534,7 +2474,6 @@ def arm_media() -> None:
                     out=fake_outputs(attempt),
                     tel=telemetry,
                     cancel=lambda: None,
-                    checks=checks,
                 )
             finally:
                 check(
@@ -2551,7 +2490,7 @@ def arm_media() -> None:
         refused_tail("length", pipe, state, duration_s=DURATIONS[1]),
         "output_integrity",
     )
-    # Finite weights whose products overflow: the resident scan passes, the decode does not.
+    # Finite weights whose products overflow: the decode refuses the chunk.
     poisoned, poisoned_state = finish_scaffold(DEFAULT_FRAMES)
     with torch.no_grad():
         largest = torch.finfo(torch.float32).max
@@ -2560,16 +2499,6 @@ def arm_media() -> None:
         "a non-finite chunk is refused at the chunk, before RGB8 erases it",
         refused_tail("nan", poisoned, poisoned_state),
         "output_integrity",
-    )
-    refusal(
-        "with numerical checks the observer names it first",
-        refused_tail(
-            "nan-observed",
-            poisoned,
-            poisoned_state,
-            checks=NumericalChecks(cast(Any, fake_telemetry()), poisoned.resident),
-        ),
-        "numerical_nonfinite",
     )
     refusal(
         "the sink's own refusal reaches the decode thread instead of decoding on",
@@ -2664,348 +2593,8 @@ def arm_video_stream() -> None:
         check("cancelled encoding leaves no partial video", list(spool.iterdir()), [])
 
 
-class _NumericalTelemetry:
-    def __init__(self) -> None:
-        self.rows: list[dict[str, Any]] = []
-
-    def log(self, message: str, **fields: Any) -> None:
-        self.rows.append({"message": message, **fields})
-
-
-def arm_numerics() -> None:
-    print("\n== first non-finite numerical boundary ==")
-    telemetry = _NumericalTelemetry()
-    checks = NumericalChecks(cast(Any, telemetry))
-    original = torch.arange(12, dtype=torch.float32).reshape(3, 4).T
-    checks.tensors("condition_text", [("prompt_embeds", original)], required=True)
-    check(
-        "noncontiguous conditioning stays unchanged",
-        original.tolist(),
-        torch.arange(12).reshape(3, 4).T.tolist(),
-    )
-    check("absmax names its source", telemetry.rows[-1]["absmax_tensor"], "prompt_embeds")
-
-    # Real stored FP8 supports conversion but not every observer reduction. Track
-    # actual casts so a whole-weight float32 copy cannot pass the bounded proof.
-    class CastSizes(TorchDispatchMode):  # type: ignore[misc]  # Torch is absent in static CI.
-        def __init__(self) -> None:
-            super().__init__()
-            self.elements: list[int] = []
-
-        def __torch_dispatch__(
-            self, func: Any, types: Any, args: Any = (), kwargs: Any = None
-        ) -> Any:
-            if func == torch.ops.aten._to_copy.default and args[0].dtype == torch.float8_e4m3fn:
-                self.elements.append(args[0].numel())
-            return func(*args, **(kwargs or {}))
-
-    fp8 = torch.ones((257, 4097), dtype=torch.float32).to(torch.float8_e4m3fn).T
-    original_bytes = fp8.view(torch.uint8).clone()
-    scalar = torch.tensor(-448.0).to(torch.float8_e4m3fn)
-    with CastSizes() as casts:
-        checks.tensors("fp8", [("encoded", fp8), ("scalar", scalar)], required=True)
-    check("FP8 finite scan names the scalar maximum", telemetry.rows[-1]["absmax_tensor"], "scalar")
-    check("FP8 finite scan preserves exact maximum", telemetry.rows[-1]["absmax"], 448.0)
-    check("FP8 finite scan counts all elements", telemetry.rows[-1]["elements"], fp8.numel() + 1)
-    check(
-        "FP8 observer does not mutate stored bytes",
-        torch.equal(fp8.view(torch.uint8), original_bytes),
-        True,
-    )
-    check("FP8 casts cover exactly the observed values", sum(casts.elements), fp8.numel() + 1)
-    # Runtime #747 (0.18.49) bounds every reduction at 16M elements: a 64 MiB float32 transient.
-    check("FP8 float32 scratch is at most 64 MiB", max(casts.elements) <= 16 * 1024 * 1024, True)
-    poisoned = torch.tensor([1.0, float("nan")]).to(torch.float8_e4m3fn)
-    poisoned_bytes = poisoned.view(torch.uint8).clone()
-    refusal(
-        "FP8 NaN is refused by the numerical observer",
-        lambda: checks.tensors("fp8-nan", [("encoded", poisoned)], required=True),
-        "numerical_nonfinite",
-    )
-    check("FP8 NaN count is exact", telemetry.rows[-1]["chunk_nonfinite"], 1)
-    check(
-        "FP8 failed scan leaves stored bytes unchanged",
-        torch.equal(poisoned.view(torch.uint8), poisoned_bytes),
-        True,
-    )
-    large = torch.zeros(16 * 1024 * 1024 + 1, dtype=torch.float32)
-    large[-1] = float("nan")
-    refusal(
-        "large tensors are checked in bounded chunks",
-        lambda: checks.tensors("large", [("weight", large)], required=True),
-        "numerical_nonfinite",
-    )
-    check(
-        "observed scan chunk is bounded",
-        telemetry.rows[-1]["chunk_elements"] <= 16 * 1024 * 1024,
-        True,
-    )
-    refusal(
-        "empty output is not called validated",
-        lambda: checks.tensors("empty", [("x", None)], required=True),
-        "numerical_uninspectable",
-    )
-    refusal(
-        "opaque output cannot hide tensors",
-        lambda: checks.tensors("opaque", [("x", SimpleNamespace(tensor=original))], required=True),
-        "numerical_uninspectable",
-    )
-
-    module = torch.nn.Linear(4, 4)
-    module.register_buffer("derived_rotary", torch.tensor([float("nan")]), persistent=False)
-    refusal(
-        "nonpersistent resident buffer is inspected",
-        lambda: checks.component("rotary", module),
-        "numerical_nonfinite",
-    )
-    check("bad resident buffer is named", telemetry.rows[-1]["tensor"], "derived_rotary")
-    module.derived_rotary.fill_(1)
-    checks.component("rotary", module)
-
-    value = torch.ones(1, 4)
-    baseline = module(value)
-    with checks.forwards(module, "linear"):
-        check("first checked forward is exact", torch.equal(module(value), baseline), True)
-        check("second checked forward is exact", torch.equal(module(value), baseline), True)
-    check(
-        "each forward is checked",
-        [
-            r["stage"]
-            for r in telemetry.rows
-            if str(r.get("stage", "")).startswith("linear.prediction")
-        ],
-        ["linear.prediction.0", "linear.prediction.1"],
-    )
-
-    def bad_input() -> None:
-        with checks.forwards(module, "bad_input"):
-            module(torch.full((1, 4), float("inf")))
-
-    refusal("invalid input refuses when its loop settles", bad_input, "numerical_nonfinite")
-    check(
-        "input refusal removes both hooks",
-        (len(module._forward_pre_hooks), len(module._forward_hooks)),
-        (0, 0),
-    )
-
-    def fail_forward(*_args: Any, **_kwargs: Any) -> None:
-        raise RuntimeError("existing forward refusal")
-
-    foreign = module.register_forward_pre_hook(fail_forward)
-    try:
-        refusal("original forward exception survives", bad_input, "RuntimeError")
-        check(
-            "only pre-existing hook remains",
-            (len(module._forward_pre_hooks), len(module._forward_hooks)),
-            (1, 0),
-        )
-    finally:
-        foreign.remove()
-
-    original_register = module.register_forward_hook
-    module.register_forward_hook = fail_forward
-    try:
-        refusal("second hook registration failure cleans first", bad_input, "RuntimeError")
-        check(
-            "registration failure leaves no diagnostic hooks",
-            (len(module._forward_pre_hooks), len(module._forward_hooks)),
-            (0, 0),
-        )
-    finally:
-        module.register_forward_hook = original_register
-
-    # Execute the real official scheduler with finite extremes: its update overflows.
-    video_scheduler, audio_scheduler = MiniMaxH3Scheduler(), MiniMaxH3Scheduler()
-    for scheduler in (video_scheduler, audio_scheduler):
-        scheduler.set_timesteps(30)
-    maximum = torch.finfo(torch.float32).max
-    state = SimpleNamespace(
-        num_condition_video_rows=0,
-        num_condition_audio_rows=0,
-        noise_pred=torch.full((1, 1, 1), maximum),
-        audio_noise_pred=torch.zeros((1, 1, 1)),
-        latents=torch.full((1, 1), maximum),
-        audio_latents=torch.zeros((1, 1)),
-        audio_timesteps=audio_scheduler.timesteps,
-    )
-    checks.tensors(
-        "scheduler.predictions",
-        [("video", state.noise_pred), ("audio", state.audio_noise_pred)],
-        required=True,
-    )
-    MiniMaxH3LoopSchedulerStep()(
-        SimpleNamespace(scheduler=video_scheduler, audio_scheduler=audio_scheduler),
-        state,
-        i=0,
-        t=video_scheduler.timesteps[0],
-    )
-    refusal(
-        "actual scheduler overflow stops at updated latents",
-        lambda: checks.tensors(
-            "ref2va_dit.updated.0",
-            [("latents", state.latents), ("audio_latents", state.audio_latents)],
-            required=True,
-        ),
-        "numerical_nonfinite",
-    )
-
-
-def arm_resident_fill() -> None:
-    print("\n== resident weights are scanned once per fill ==")
-
-    class Kernels(TorchDispatchMode):  # type: ignore[misc]  # Torch is absent in static CI.
-        """Every dispatched operator; a reused verdict must launch none at all."""
-
-        def __init__(self) -> None:
-            super().__init__()
-            self.dispatched = 0
-
-        def __torch_dispatch__(
-            self, func: Any, types: Any, args: Any = (), kwargs: Any = None
-        ) -> Any:
-            self.dispatched += 1
-            return func(*args, **(kwargs or {}))
-
-    def request(resident: ResidentWeights, module: Any) -> tuple[dict[str, Any], int]:
-        """One request: a fresh NumericalChecks over the verdicts the pipeline keeps."""
-        telemetry = _NumericalTelemetry()
-        with Kernels() as kernels:
-            NumericalChecks(cast(Any, telemetry), resident).component("dit", module)
-        return telemetry.rows[-1], kernels.dispatched
-
-    def tensors(module: Any) -> list[tuple[str, Any]]:
-        return [*module.named_parameters(), *module.named_buffers()]
-
-    def restage(module: Any, values: dict[str, Any]) -> None:
-        """Exactly Runtime's shape: park on meta, reserve fresh storage, fill in place."""
-        module.to_empty(device="meta")
-        module.to_empty(device="cpu")
-        with torch.no_grad():
-            for name, tensor in tensors(module):
-                tensor.view(-1).view(torch.uint8).copy_(values[name].view(-1).view(torch.uint8))
-
-    module = torch.nn.Linear(4, 4)
-    module.register_buffer("rotary", torch.ones(2), persistent=False)
-    weights = {name: tensor.detach().clone() for name, tensor in tensors(module)}
-    resident = ResidentWeights()
-    row, scanned = request(resident, module)
-    check(
-        "the first request scans the fill", (row["status"], scanned > 0), ("finite_resident", True)
-    )
-    check("the first request counts every resident value", row["elements"], 16 + 4 + 2)
-    row, scanned = request(resident, module)
-    check("the second request reuses the verdict", (row["status"], scanned), ("verified_fill", 0))
-    check("the reused verdict names the verified tensors", row["tensors"], 3)
-    red("a request-local registry rescans", request(ResidentWeights(), module)[1], 0)
-
-    restage(module, weights)
-    row, scanned = request(resident, module)
-    check(
-        "a re-staged fill is scanned again", (row["status"], scanned > 0), ("finite_resident", True)
-    )
-    row, scanned = request(resident, module)
-    check("the re-staged verdict is reused", (row["status"], scanned), ("verified_fill", 0))
-
-    # A paged block parks by resizing its storage to zero and refills the same storage.
-    module.weight.untyped_storage().resize_(0)
-    row, scanned = request(resident, module)
-    check("a parked weight is neither claimed nor scanned", (row["tensors"], scanned), (2, 0))
-    module.weight.untyped_storage().resize_(weights["weight"].numel() * 4)
-    with torch.no_grad():
-        module.weight.view(-1).view(torch.uint8).copy_(weights["weight"].view(-1).view(torch.uint8))
-    row, scanned = request(resident, module)
-    check("a refilled storage is rescanned alone", (row["elements"], scanned > 0), (16, True))
-
-    poisoned = dict(weights, weight=weights["weight"].clone())
-    poisoned["weight"][0, 0] = float("nan")
-    restage(module, poisoned)
-    refusal(
-        "non-finite weights are refused after a re-stage",
-        lambda: request(resident, module),
-        "numerical_nonfinite",
-    )
-    refusal(
-        "a refused fill leaves no verdict to reuse",
-        lambda: request(resident, module),
-        "numerical_nonfinite",
-    )
-
-    print("\n== step checks settle once, after the loop ==")
-
-    class Sampler(torch.nn.Module):  # type: ignore[misc]
-        def __init__(self) -> None:
-            super().__init__()
-            self.calls = 0
-            self.poison_at = -1
-
-        def forward(self, value: torch.Tensor) -> torch.Tensor:
-            self.calls += 1
-            return value * float("nan") if self.calls - 1 == self.poison_at else value + 1
-
-    telemetry = _NumericalTelemetry()
-    checks = NumericalChecks(cast(Any, telemetry))
-    sampler = Sampler()
-
-    def loop() -> None:
-        latents = torch.ones(1, 4)
-        with checks.forwards(sampler, "dit"):
-            for index in range(3):
-                latents = sampler(latents)
-                checks.tensors(
-                    f"dit.updated.{index}", [("latents", latents)], required=True, defer=True
-                )
-            check("nothing is read inside the loop", len(telemetry.rows), 0)
-
-    loop()
-    stages = [
-        f"dit.{stage}.{index}" for index in range(3) for stage in ("input", "prediction", "updated")
-    ]
-    check("every step settles in step order", [row["stage"] for row in telemetry.rows], stages)
-    check("the settled loop names its maximum", telemetry.rows[-1]["absmax"], 4.0)
-
-    telemetry.rows.clear()
-    sampler.calls, sampler.poison_at = 0, 1
-    refusal("a planted NaN in a step output fails the attempt", loop, "numerical_nonfinite")
-    check("the first non-finite stage is named", telemetry.rows[-1]["stage"], "dit.prediction.1")
-    check(
-        "the stages before it settled first",
-        [row["stage"] for row in telemetry.rows[:-1]],
-        stages[:4],
-    )
-    check("a refusal leaves nothing pending", checks._pending, [])
-    check(
-        "the loop's hooks close after refusal",
-        (len(sampler._forward_pre_hooks), len(sampler._forward_hooks)),
-        (0, 0),
-    )
-
-    # The official update is an affine blend with no clamp: a step-0 NaN reaches the end.
-    video, audio = MiniMaxH3Scheduler(), MiniMaxH3Scheduler()
-    for scheduler in (video, audio):
-        scheduler.set_timesteps(DEFAULT_STEPS)
-    state = SimpleNamespace(
-        num_condition_video_rows=0,
-        num_condition_audio_rows=0,
-        audio_noise_pred=torch.zeros((1, 1, 1)),
-        latents=torch.ones((2, 1)),
-        audio_latents=torch.ones((1, 1)),
-        audio_timesteps=audio.timesteps,
-    )
-    components = SimpleNamespace(scheduler=video, audio_scheduler=audio)
-    for index, timestep in enumerate(video.timesteps):
-        state.noise_pred = torch.zeros((1, 2, 1))
-        if index == 0:
-            state.noise_pred[0, 1, 0] = float("nan")
-        MiniMaxH3LoopSchedulerStep()(components, state, i=index, t=timestep)
-    check(
-        "the official update carries a step-0 NaN into the final latents",
-        torch.isfinite(state.latents).flatten().tolist(),
-        [True, False],
-    )
-
-
 def arm_output_gates() -> None:
-    print("\n== structural refusals and quality observations ==")
+    print("\n== structural refusals ==")
     clock = MediaFacts(frames=2, fps=24, sample_rate=24)
     refusal(
         "a non-finite soundtrack refuses before a frame decodes",
@@ -3044,23 +2633,6 @@ def arm_output_gates() -> None:
         tel=fake_telemetry(),
     )
     observe("a stereo soundtrack one sample past the clock is within the tolerance")
-    # A real quality rejection must remain visible without suppressing an
-    # otherwise encodable inference result. Checkpoints are qualified separately.
-    clock = MediaFacts(frames=5, fps=24, sample_rate=240)
-    pixels = torch.full((5, 512, 512, 3), 100, dtype=torch.uint8)
-    pixels[:, ::16] = 220
-    warnings = report_after_encode(
-        torch,
-        pixels=pixels,
-        waveform=torch.zeros((2, 50)),
-        requested=clock,
-        tel=fake_telemetry(),
-    )
-    check(
-        "periodic output is returned with its actual quality rejection",
-        len(warnings) == 1 and "GRID:" in warnings[0] and "REJECT" in warnings[0],
-        True,
-    )
 
 
 def arm_vae_tiles() -> None:
@@ -4372,9 +3944,7 @@ def arm_turbo_state() -> None:
     loop = MiniMaxH3LoopDenoiser()
     observed: list[Any] = []
 
-    def denoise(
-        task: Any, state: Any, *, on_step: Any, cancel: Any, checks: Any, sol_dense_steps: int
-    ) -> Any:
+    def denoise(task: Any, state: Any, *, on_step: Any, cancel: Any, sol_dense_steps: int) -> Any:
         cancel()
         block_state = loop.get_block_state(state)
         observed.append((block_state.attention_kwargs.get(OVERLAY_KWARG), sol_dense_steps))
@@ -4408,7 +3978,6 @@ def arm_turbo_state() -> None:
                 sol_dense_steps=4,
                 on_step=lambda _step: None,
                 cancel=lambda: None,
-                checks=NumericalChecks(cast(Any, fake_telemetry())),
             ),
         )
     for got, want in zip(actual, expected, strict=True):
@@ -4435,7 +4004,6 @@ def arm_turbo_state() -> None:
             turbo_lora=lora,
             on_step=lambda _step: None,
             cancel=cancel,
-            checks=NumericalChecks(cast(Any, fake_telemetry())),
         )
     except Cancelled:
         pass
@@ -4808,8 +4376,6 @@ ARMS = {
     "media": arm_media,
     "video-stream": arm_video_stream,
     "gates": arm_output_gates,
-    "numerics": arm_numerics,
-    "resident-fill": arm_resident_fill,
     "vae-tiles": arm_vae_tiles,
     "rgb8-handoff": arm_rgb8_handoff,
     "interface": arm_interface,
