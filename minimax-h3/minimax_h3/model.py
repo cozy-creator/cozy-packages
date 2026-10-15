@@ -14,6 +14,7 @@ from cozy_runtime.author import (
     DerivedCache,
     Loader,
     Model,
+    Telemetry,
     concurrently,
     placeable,
     sequence_parallel,
@@ -23,7 +24,6 @@ from cozy_runtime.author.kernels import Plan
 
 from . import glue, producer
 from .official import (
-    NumericalChecks,
     OfficialH3Pipeline,
     OfficialH3TurboLoRA,
     ReferenceMemo,
@@ -54,9 +54,7 @@ REFERENCE_MEMO_ENTRIES = 256
 REFERENCE_MEMO_BYTES = 1 << 30
 
 
-def condition_references(
-    model: H3Model, task: Task, state: Any, *, checks: NumericalChecks
-) -> None:
+def condition_references(model: H3Model, task: Task, state: Any, *, tel: Telemetry) -> None:
     """`condition_text` and `condition_ref2va_media` of one `ref2va` request, overlapped where
     the group keeps the text encoder on a follower (`author.concurrently`): rank 0 encodes
     the references while the follower runs the conditioner.
@@ -69,13 +67,11 @@ def condition_references(
     text = model.pipe.text_state(state)
     started = time.perf_counter()
     concurrently(
-        partial(model.condition_text, task, text, checks=checks),
-        partial(model.condition_ref2va_media, task, state, checks=checks),
+        partial(model.condition_text, task, text),
+        partial(model.condition_ref2va_media, task, state, tel=tel),
     )
     model.pipe.adopt_text(task, state, text)
-    checks.telemetry.log(
-        "h3 conditioning", wall_ms=round((time.perf_counter() - started) * 1000, 1)
-    )
+    tel.log("h3 conditioning", wall_ms=round((time.perf_counter() - started) * 1000, 1))
 
 
 @placeable("text_encoder")
@@ -147,20 +143,12 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept"):
         self.pipe.warm_dit("ref2va")
 
     @uses_components("text_encoder")
-    def condition_text(self, task: Task, state: Any, *, checks: NumericalChecks) -> None:
-        checks.component("text_encoder", self.pipe.components["text_encoder"])
-        self.pipe.condition_text(task, state, checks=checks)
+    def condition_text(self, task: Task, state: Any) -> None:
+        self.pipe.condition_text(task, state)
 
     @uses_components("audio_vae")
-    def decode_audio(
-        self, task: Task, state: Any, *, checks: NumericalChecks | None = None
-    ) -> tuple[Any, int]:
-        if checks is not None:
-            checks.component("audio_vae", self.pipe.components["audio_vae"])
-        audio = self.pipe.decode_audio(task, state)
-        if checks is not None:
-            checks.tensors("decode_audio", [("audio", audio)])
-        return audio, int(state.sampling_rate)
+    def decode_audio(self, task: Task, state: Any) -> tuple[Any, int]:
+        return self.pipe.decode_audio(task, state), int(state.sampling_rate)
 
     @uses_components("video_vae")
     def decode_video(
@@ -169,51 +157,29 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept"):
         state: Any,
         *,
         on_chunk: Callable[[Any], None],
-        checks: NumericalChecks | None = None,
     ) -> int:
         """Hand every decoded temporal chunk to `on_chunk` inside the VAE's component scope;
         a generator would run its body after the scope had closed."""
-        if checks is not None:
-            checks.component("video_vae", self.pipe.components["video_vae"])
-
-        def observed(chunk: Any) -> None:
-            if checks is not None:
-                checks.tensors("decode_video", [("video", chunk)])
-            on_chunk(chunk)
-
-        return self.pipe.decode_video_chunks(task, state, observed)
+        return self.pipe.decode_video_chunks(task, state, on_chunk)
 
     @uses_components("video_vae")
-    def condition_fl2va_media(self, task: Task, state: Any, *, checks: NumericalChecks) -> None:
-        checks.component("video_vae", self.pipe.components["video_vae"])
-        self.pipe.condition_media(task, state, checks=checks)
+    def condition_fl2va_media(self, task: Task, state: Any) -> None:
+        self.pipe.condition_media(task, state)
 
     @uses_components("video_vae", "audio_vae")
-    def condition_ref2va_media(self, task: Task, state: Any, *, checks: NumericalChecks) -> None:
-        for name in ("video_vae", "audio_vae"):
-            checks.component(name, self.pipe.components[name])
+    def condition_ref2va_media(self, task: Task, state: Any, *, tel: Telemetry) -> None:
         cache: DerivedCache | None = getattr(self, "reference_latents", None)
         memo = None if cache is None else ReferenceMemo(cache, self.checkpoint_ref)
-        reused, encoded = self.pipe.condition_media(task, state, checks=checks, memo=memo)
-        checks.telemetry.log("h3 reference latents", reused=reused, encoded=encoded)
+        reused, encoded = self.pipe.condition_media(task, state, memo=memo)
+        tel.log("h3 reference latents", reused=reused, encoded=encoded)
 
     @uses_components("fl2va_dit")
-    def sample_fl2va(
-        self, state: Any, *, on_step: Any, cancel: Any, checks: NumericalChecks
-    ) -> ScheduleFacts:
-        root = self.pipe.components["fl2va_dit"]
-        checks.component("fl2va_dit", root)
-        with checks.forwards(root, "fl2va_dit"):
-            return self.pipe.denoise("fl2va", state, on_step=on_step, cancel=cancel, checks=checks)
+    def sample_fl2va(self, state: Any, *, on_step: Any, cancel: Any) -> ScheduleFacts:
+        return self.pipe.denoise("fl2va", state, on_step=on_step, cancel=cancel)
 
     @uses_components("ref2va_dit")
-    def sample_ref2va(
-        self, state: Any, *, on_step: Any, cancel: Any, checks: NumericalChecks
-    ) -> ScheduleFacts:
-        root = self.pipe.components["ref2va_dit"]
-        checks.component("ref2va_dit", root)
-        with checks.forwards(root, "ref2va_dit"):
-            return self.pipe.denoise("ref2va", state, on_step=on_step, cancel=cancel, checks=checks)
+    def sample_ref2va(self, state: Any, *, on_step: Any, cancel: Any) -> ScheduleFacts:
+        return self.pipe.denoise("ref2va", state, on_step=on_step, cancel=cancel)
 
 
 class H3TurboBase(H3Model, encoded_leaves="accept"):
@@ -238,7 +204,6 @@ class H3TurboBase(H3Model, encoded_leaves="accept"):
         turbo_lora: H3TurboLoRA,
         on_step: Any,
         cancel: Any,
-        checks: NumericalChecks,
         sol_dense_steps: int = 4,
     ) -> ScheduleFacts:
         return turbo_lora.sample_fl2va(
@@ -246,7 +211,6 @@ class H3TurboBase(H3Model, encoded_leaves="accept"):
             state,
             on_step=on_step,
             cancel=cancel,
-            checks=checks,
             sol_dense_steps=sol_dense_steps,
         )
 
@@ -258,7 +222,6 @@ class H3TurboBase(H3Model, encoded_leaves="accept"):
         turbo_lora: H3TurboLoRA,
         on_step: Any,
         cancel: Any,
-        checks: NumericalChecks,
         sol_dense_steps: int = 4,
     ) -> ScheduleFacts:
         return turbo_lora.sample_ref2va(
@@ -266,7 +229,6 @@ class H3TurboBase(H3Model, encoded_leaves="accept"):
             state,
             on_step=on_step,
             cancel=cancel,
-            checks=checks,
             sol_dense_steps=sol_dense_steps,
         )
 
@@ -291,7 +253,6 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
         *,
         on_step: Any,
         cancel: Any,
-        checks: NumericalChecks,
         sol_dense_steps: int = 4,
     ) -> ScheduleFacts:
         return self._sample(
@@ -300,7 +261,6 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
             state,
             on_step=on_step,
             cancel=cancel,
-            checks=checks,
             sol_dense_steps=sol_dense_steps,
         )
 
@@ -312,7 +272,6 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
         *,
         on_step: Any,
         cancel: Any,
-        checks: NumericalChecks,
         sol_dense_steps: int = 4,
     ) -> ScheduleFacts:
         return self._sample(
@@ -321,7 +280,6 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
             state,
             on_step=on_step,
             cancel=cancel,
-            checks=checks,
             sol_dense_steps=sol_dense_steps,
         )
 
@@ -333,15 +291,11 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
         *,
         on_step: Any,
         cancel: Any,
-        checks: NumericalChecks,
         sol_dense_steps: int,
     ) -> ScheduleFacts:
         _validate_sol_dense_steps(sol_dense_steps)
         task: Task = "fl2va_turbo" if trunk == "fl2va" else "ref2va_turbo"
         overlay = self.pipe.overlay(base.pipe, trunk)
-        root = base.pipe.components[f"{trunk}_dit"]
-        checks.component(f"{trunk}_dit", root)
-        checks.component(f"{trunk}_turbo", overlay)
         original = state.get("attention_kwargs")
         state.set(
             "attention_kwargs",
@@ -352,14 +306,8 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
             },
         )
         try:
-            with checks.forwards(root, f"{trunk}_dit"):
-                return base.pipe.denoise(
-                    task,
-                    state,
-                    on_step=on_step,
-                    cancel=cancel,
-                    checks=checks,
-                    sol_dense_steps=sol_dense_steps,
-                )
+            return base.pipe.denoise(
+                task, state, on_step=on_step, cancel=cancel, sol_dense_steps=sol_dense_steps
+            )
         finally:
             state.set("attention_kwargs", original)

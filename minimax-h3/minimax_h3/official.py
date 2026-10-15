@@ -16,11 +16,10 @@ import random
 import struct
 import sys
 import threading
-import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import CancelledError, Future
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from fractions import Fraction
 from functools import lru_cache
 from itertools import pairwise
@@ -51,7 +50,6 @@ from diffusers.modular_pipelines.minimax_h3.modular_pipeline import (
 )
 from diffusers.modular_pipelines.modular_pipeline import PipelineState
 from torch.nn.utils.weight_norm import WeightNorm
-from torch.utils._pytree import keystr, tree_flatten_with_path
 from transformers import (
     AddedToken,
     Qwen2Tokenizer,
@@ -69,8 +67,6 @@ from cozy_runtime.author import (
     DerivedCache,
     Image,
     InvalidRequest,
-    OutputError,
-    Telemetry,
     ThreadPoolExecutor,
     attention_scope,
     canonical_json,
@@ -166,11 +162,6 @@ _ASSETS = Path(__file__).resolve().parent
 #: (timestep, modality) pair the step gathers.
 _WARM_ROWS = 8
 _WARM_VIDEO_TAG, _WARM_TEXT_TAG, _WARM_AUDIO_TAG = 0, 1, 2
-
-#: Elements per numerical-check reduction. Each chunk costs a fixed handful of launches, so
-#: the bound is the float32 transient (64 MiB), whatever the stored width. A 1M-element FP8
-#: bound split the fp8 DiT into ~34k chunks: ~2.6 s of launch overhead after every re-stage.
-_CHECK_CHUNK_ELEMENTS = 16 * 1024 * 1024
 
 # NVIDIA's H3 sparse policy protects conditioning and the initial sensitive work.
 # This supplies semantics only; backend selection still requires explicit policy.
@@ -640,46 +631,6 @@ def reference_video_vision_tokens(width: int, height: int, duration: Fraction) -
     return temporal_blocks * spatial_tokens
 
 
-def _parked(tensor: Any) -> bool:
-    """Runtime parks an evicted or paged-out weight on ``meta`` or in a zero-byte storage.
-    A check claims only the resident values it counted, never unread storage."""
-    return bool(tensor.is_meta or (tensor.numel() and not tensor.untyped_storage().nbytes()))
-
-
-def _inspectable(tensor: Any) -> bool:
-    return bool((tensor.is_floating_point() or tensor.is_complex()) and not _parked(tensor))
-
-
-class ResidentWeights:
-    """Finite-weight verdicts that live exactly as long as the bytes they describe.
-
-    Weights are immutable once filled, so their scan runs once per fill rather than once
-    per request (h3a-016). A verdict is keyed on the storage object itself, held weakly:
-    eviction frees the storage and its verdict with it, and a re-stage fills a fresh
-    storage that has none. The fill writes in place, which bumps the tensor's version
-    counter, so a paged block refilled into a storage that was resized rather than
-    replaced is rescanned too. Nothing here holds a strong reference to a weight.
-    """
-
-    def __init__(self) -> None:
-        self._verdicts: weakref.WeakKeyDictionary[Any, tuple[int, int, int]] = (
-            weakref.WeakKeyDictionary()
-        )
-
-    @staticmethod
-    def _fill(tensor: Any) -> tuple[Any, tuple[int, int, int]]:
-        storage = tensor.untyped_storage()
-        return storage, (storage.data_ptr(), storage.nbytes(), tensor._version)
-
-    def verified(self, tensor: Any) -> bool:
-        storage, fill = self._fill(tensor)
-        return self._verdicts.get(storage) == fill
-
-    def record(self, tensor: Any) -> None:
-        storage, fill = self._fill(tensor)
-        self._verdicts[storage] = fill
-
-
 @dataclass(frozen=True, slots=True)
 class ReferenceMemo:
     """Where one generation keeps its reference latents (`loader.cache`), and the identity of
@@ -705,225 +656,6 @@ def reference_digest(pixels: Any) -> tuple[str, tuple[int, ...], str]:
         tuple(int(d) for d in contiguous.shape),
         hashlib.sha256(contiguous).hexdigest(),
     )
-
-
-@dataclass
-class _Observation:
-    """One stage's queued device reductions; nothing is read until it settles."""
-
-    stage: str
-    tensors: int = 0
-    elements: int = 0
-    parked: int = 0
-    chunks: list[tuple[str, int]] = field(default_factory=list)
-    nonfinite: list[Any] = field(default_factory=list)
-    absmax: list[Any] = field(default_factory=list)
-
-
-class NumericalChecks:
-    """Request-local, bounded observations; no tensor is replaced or modified.
-
-    A check queues its reductions on the device and reads them in one sync: at once for
-    conditioning, decode and resident weights, and once after the denoise loop for the
-    per-step hooks (``defer=True``), which used to drain the stream on every chunk of every
-    step. Deferral changes nothing the customer can see: every step's tensors are still
-    inspected, the verdict is read before any decode, and the first non-finite stage in
-    step order is the one named.
-    """
-
-    def __init__(self, telemetry: Telemetry, resident: ResidentWeights | None = None) -> None:
-        self.telemetry = telemetry
-        self.resident = ResidentWeights() if resident is None else resident
-        self._pending: list[_Observation] = []
-
-    def tensors(
-        self,
-        stage: str,
-        values: Sequence[tuple[str, Any]],
-        *,
-        required: bool = False,
-        defer: bool = False,
-    ) -> None:
-        observation = self._observe(stage, values, required=required)
-        if defer:
-            self._pending.append(observation)
-        else:
-            self._settle([observation])
-
-    def settle(self) -> None:
-        """Read every deferred observation in order: one sync for a whole denoise loop."""
-        pending, self._pending = self._pending, []
-        self._settle(pending)
-
-    def _observe(
-        self, stage: str, values: Sequence[tuple[str, Any]], *, required: bool
-    ) -> _Observation:
-        observation = _Observation(stage)
-        with torch.no_grad():
-            for name, value in values:
-                leaves, _ = tree_flatten_with_path(value)
-                for path, tensor in leaves:
-                    label = name + keystr(path)
-                    if not isinstance(tensor, torch.Tensor):
-                        if required and not isinstance(
-                            tensor, (bool, int, float, str, bytes, type(None))
-                        ):
-                            raise OutputError(
-                                f"uninspectable tensor output at {stage}/{label}: "
-                                f"{type(tensor).__name__} needs registered PyTree flattening",
-                                code="numerical_uninspectable",
-                            )
-                        continue
-                    if not (tensor.is_floating_point() or tensor.is_complex()):
-                        continue
-                    if _parked(tensor):
-                        observation.parked += 1
-                        continue
-                    observation.tensors += 1
-                    # Stored FP8 reductions are not supported on every backend.
-                    # Widen only this bounded observation, never the weight itself.
-                    widen = tensor.element_size() == 1
-                    chunks = [tensor.detach()]
-                    while chunks:
-                        part = chunks.pop()
-                        if part.numel() > _CHECK_CHUNK_ELEMENTS:
-                            axis = max(range(part.ndim), key=lambda dim: part.shape[dim])
-                            chunks.extend(part.split(max(1, part.shape[axis] // 2), dim=axis))
-                            continue
-                        size = part.numel()
-                        observation.elements += size
-                        if not size:
-                            continue
-                        if widen:
-                            part = part.float()
-                        observation.chunks.append((label, size))
-                        observation.nonfinite.append(size - torch.isfinite(part).sum())
-                        observation.absmax.append(
-                            torch.linalg.vector_norm(part, ord=math.inf).float()
-                        )
-        if required and not observation.elements:
-            raise OutputError(
-                f"no resident floating tensor values to inspect at {stage}",
-                code="numerical_uninspectable",
-            )
-        return observation
-
-    def _settle(self, observations: list[_Observation]) -> None:
-        counts = self._read([count for o in observations for count in o.nonfinite])
-        maxima = self._read([maximum for o in observations for maximum in o.absmax])
-        position = 0
-        for observation in observations:
-            maximum, maximum_name = -1.0, ""
-            for label, size in observation.chunks:
-                bad, observed = int(counts[position]), float(maxima[position])
-                position += 1
-                if bad:
-                    self.telemetry.log(
-                        "h3 non-finite tensor",
-                        stage=observation.stage,
-                        tensor=label[:512],
-                        chunk_elements=size,
-                        chunk_nonfinite=bad,
-                    )
-                    raise OutputError(
-                        f"non-finite tensor at {observation.stage}/{label}: "
-                        f"{bad} of {size} values in the checked chunk",
-                        code="numerical_nonfinite",
-                    )
-                if observed > maximum:
-                    maximum, maximum_name = observed, label
-            self.telemetry.log(
-                "h3 numerical check",
-                stage=observation.stage,
-                status="finite_resident" if observation.elements else "no_resident_float_values",
-                tensors=observation.tensors,
-                elements=observation.elements,
-                parked_tensors=observation.parked,
-                absmax=max(maximum, 0.0),
-                absmax_tensor=maximum_name[:512],
-            )
-
-    @staticmethod
-    def _read(scalars: list[Any]) -> list[float]:
-        """Copy queued scalars back in one sync per device, whatever mix they sit on."""
-        values: dict[int, float] = {}
-        by_device: dict[Any, list[int]] = {}
-        for index, scalar in enumerate(scalars):
-            by_device.setdefault(scalar.device, []).append(index)
-        for indices in by_device.values():
-            read = torch.stack([scalars[index] for index in indices]).tolist()
-            values.update(zip(indices, read, strict=True))
-        return [values[index] for index in range(len(scalars))]
-
-    def component(self, name: str, module: Any) -> None:
-        """Refuse non-finite resident weights before the first forward after a fill.
-
-        Derived rotary/config buffers are not checkpoint payloads but can poison the same
-        computation, so nonpersistent buffers are inspected under their exact names.
-        """
-        values = [*module.named_parameters(), *module.named_buffers()]
-        resident = [(label, tensor) for label, tensor in values if _inspectable(tensor)]
-        pending = [
-            (label, tensor) for label, tensor in resident if not self.resident.verified(tensor)
-        ]
-        if resident and not pending:
-            self.telemetry.log(
-                "h3 numerical check",
-                stage=f"resident.{name}",
-                status="verified_fill",
-                tensors=len(resident),
-            )
-            return
-        self.tensors(f"resident.{name}", values if len(pending) == len(resident) else pending)
-        for _, tensor in pending:
-            self.resident.record(tensor)
-
-    def outputs(self, stage: str, state: Any, outputs: Any, *, required: bool = False) -> None:
-        self.tensors(
-            stage,
-            [(item.name, getattr(state, item.name, None)) for item in outputs if item.name],
-            required=required,
-        )
-
-    @contextmanager
-    def forwards(self, module: Any, component: str) -> Iterator[None]:
-        """Observe every forward of one module; the verdicts are read when the block closes.
-
-        A body that raises discards its pending observations with the attempt.
-        """
-        handles: list[Any] = []
-        step = 0
-
-        def before(_module: Any, args: Any, kwargs: Any) -> None:
-            self.tensors(
-                f"{component}.input.{step}",
-                [("args", args), ("kwargs", kwargs)],
-                required=True,
-                defer=True,
-            )
-
-        def after(_module: Any, _args: Any, _kwargs: Any, output: Any) -> None:
-            nonlocal step
-            if output is not None:
-                self.tensors(
-                    f"{component}.prediction.{step}",
-                    [("output", output)],
-                    required=True,
-                    defer=True,
-                )
-                step += 1
-
-        try:
-            handles.append(module.register_forward_pre_hook(before, with_kwargs=True))
-            handles.append(module.register_forward_hook(after, with_kwargs=True, always_call=True))
-            yield
-        except BaseException:
-            self._pending.clear()
-            raise
-        finally:
-            for handle in handles:
-                handle.remove()
-        self.settle()
 
 
 class _ScopedPipeline:
@@ -1113,8 +845,6 @@ class OfficialH3Pipeline:
             "video_vae": video_vae,
             "audio_vae": audio_vae,
         }
-        # Finite-weight verdicts outlive requests exactly as the resident bytes do.
-        self.resident = ResidentWeights()
         # The one release audio clock, read off the contract-checked artifact config
         # rather than respelled by callers.
         self.sample_rate = int(audio_vae.config.sampling_rate)
@@ -1377,9 +1107,7 @@ class OfficialH3Pipeline:
         for output in block.intermediate_outputs:
             state.set(output.name, text.get(output.name), output.kwargs_type)
 
-    def condition_text(
-        self, task: Task, state: Any, *, checks: NumericalChecks | None = None
-    ) -> None:
+    def condition_text(self, task: Task, state: Any) -> None:
         conditioner = FinalHiddenState(self.components["text_encoder"])
         view = _ScopedPipeline(
             self._pipes[self._workflow(task, state)],
@@ -1387,22 +1115,12 @@ class OfficialH3Pipeline:
             overrides={"text_encoder": conditioner},
         )
         self._run_with(task, view, "text_encoder", state)
-        if checks is not None:
-            checks.outputs(
-                "condition_text",
-                state,
-                self._blocks[self._workflow(task, state)]
-                .sub_blocks["text_encoder"]
-                .intermediate_outputs,
-                required=True,
-            )
 
     def condition_media(
         self,
         task: Task,
         state: Any,
         *,
-        checks: NumericalChecks | None = None,
         memo: ReferenceMemo | None = None,
     ) -> tuple[int, int]:
         """Encode the request's keyframes or references. For `ref2va`, the (hits, encoded)
@@ -1425,15 +1143,6 @@ class OfficialH3Pipeline:
             state.set(
                 "normalized_references",
                 [*state.normalized_references, ContextReferenceLayout.of(context)],
-            )
-        if checks is not None:
-            checks.outputs(
-                "condition_media",
-                state,
-                self._blocks[self._workflow(task, state)]
-                .sub_blocks["vae_encoder"]
-                .intermediate_outputs,
-                required=True,
             )
         return counts
 
@@ -1609,7 +1318,6 @@ class OfficialH3Pipeline:
         *,
         on_step: Callable[[int], None],
         cancel: Callable[[], None],
-        checks: NumericalChecks | None = None,
         sol_dense_steps: int = 10,
     ) -> ScheduleFacts:
         _validate_sol_dense_steps(sol_dense_steps)
@@ -1632,13 +1340,6 @@ class OfficialH3Pipeline:
             if not name.startswith("denoise."):
                 continue
             self._run_with(task, scoped, name, state)
-            if checks is not None:
-                checks.outputs(
-                    name,
-                    state,
-                    blocks[name].intermediate_outputs,
-                    required=name.startswith("denoise.prepare_latents"),
-                )
 
         context = state.get("continuation_context")
         if context is not None:
@@ -1661,23 +1362,7 @@ class OfficialH3Pipeline:
                 _attention_layout(block_state, index, sol_dense_steps=sol_dense_steps)
             ):
                 _, block_state = loop.loop_step(scoped, block_state, i=index, t=timestep)
-            if checks is not None:
-                checks.tensors(
-                    f"{_DIT_COMPONENT[_TRUNK[task]]}.updated.{index}",
-                    [
-                        ("latents", block_state.latents),
-                        ("audio_latents", block_state.audio_latents),
-                    ],
-                    required=True,
-                    defer=True,
-                )
             on_step(index)
-        if checks is not None:
-            # One read for every step's inputs, predictions and updates, before any decode.
-            # Waiting loses nothing: the official update is an affine blend of the current
-            # latents and the prediction with no clamp, so a non-finite value that enters at
-            # step k is in every later latent, and the first offending stage is still named.
-            checks.settle()
         loop.set_block_state(state, block_state)
         self._run_with(task, scoped, "denoise.after_denoise", state)
         return facts
