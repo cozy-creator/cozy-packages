@@ -184,8 +184,11 @@ def prepare_reference(image: Image.Image) -> tuple[Image.Image, tuple[int, int, 
         return image, None
     left, top = (w - image.width) // 2, (h - image.height) // 2
     padding = ((top, h - image.height - top), (left, w - image.width - left), (0, 0))
-    mode = "reflect" if min(image.size) > PATCH else "symmetric"
-    padded = Image.fromarray(np.pad(np.asarray(image), padding, mode=mode))
+    pixels = np.asarray(image)
+    padded = Image.fromarray(
+        np.pad(pixels, padding, mode="reflect") if min(image.size) > PATCH
+        else np.pad(pixels, padding, mode="symmetric")
+    )
     return padded, (left, top, left + image.width, top + image.height)
 
 

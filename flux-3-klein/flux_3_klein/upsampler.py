@@ -37,7 +37,6 @@ from tokenizers import Tokenizer
 from transformers import (
     AutoConfig,
     AutoModelForImageTextToText,
-    LogitsProcessor,
     LogitsProcessorList,
     PreTrainedTokenizerFast,
 )
@@ -113,13 +112,13 @@ class UpsamplerGraph:
         self.system_prompts: dict[str, str] = json.loads(members["system_prompts.json"])
 
 
-class _PresencePenalty(LogitsProcessor):
+class _PresencePenalty:
     """vLLM's presence penalty: subtract `penalty` from every token already generated."""
 
     def __init__(self, prompt_length: int, penalty: float) -> None:
         self.prompt_length, self.penalty = prompt_length, penalty
 
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+    def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
         generated = input_ids[:, self.prompt_length:]
         if generated.shape[1]:
             seen = torch.zeros_like(scores, dtype=torch.bool).scatter_(1, generated, True)
@@ -127,19 +126,22 @@ class _PresencePenalty(LogitsProcessor):
         return scores
 
 
+def _floor(value: float) -> int:
+    return max(REFERENCE_MULTIPLE, int(math.floor(value / REFERENCE_MULTIPLE)) * REFERENCE_MULTIPLE)
+
+
 def reference_size(width: int, height: int, n_refs: int) -> tuple[int, int]:
-    floor = lambda v: max(REFERENCE_MULTIPLE, int(math.floor(v / REFERENCE_MULTIPLE)) * REFERENCE_MULTIPLE)  # noqa: E731
     cap = MAX_PIXELS_BY_REFS[n_refs]
     w = max(REFERENCE_MULTIPLE, round(width / REFERENCE_MULTIPLE) * REFERENCE_MULTIPLE)
     h = max(REFERENCE_MULTIPLE, round(height / REFERENCE_MULTIPLE) * REFERENCE_MULTIPLE)
     if w * h > cap:
         beta = math.sqrt(width * height / cap)
-        w, h = floor(width / beta), floor(height / beta)
+        w, h = _floor(width / beta), _floor(height / beta)
     if w * h > cap:
         if w == REFERENCE_MULTIPLE:
-            h = floor(cap / w)
+            h = _floor(cap / w)
         else:
-            w = floor(cap / h)
+            w = _floor(cap / h)
     return w, h
 
 
@@ -203,7 +205,7 @@ class Upsampler(Model[UpsamplerGraph]):
                 pad_token_id=tokenizer.pad_token_id,
                 logits_processor=LogitsProcessorList([_PresencePenalty(length, PRESENCE_PENALTY[task])]),
             )
-        caption = tokenizer.decode(out[0, length:], skip_special_tokens=True).strip()
+        caption = str(tokenizer.decode(out[0, length:], skip_special_tokens=True)).strip()
         if not caption:
             raise UnsupportedInput("the prompt upsampler returned an empty caption", code="output_integrity")
         return caption

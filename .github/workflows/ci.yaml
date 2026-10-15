@@ -13,7 +13,7 @@ on:
       packages:
         description: JSON list of packages to conform
         type: string
-        default: '["anima","birefnet","character-describer","seedvr2","sdxl","minimax-h3-tools","qwen-image-2","minimax-h3"]'
+        default: '["anima","birefnet","character-describer","seedvr2","sdxl","minimax-h3-tools","qwen-image-2","flux-3-klein","minimax-h3"]'
       account_index:
         description: Account index the committed locks are bound to (`cozy package lock`)
         type: string
@@ -60,7 +60,7 @@ jobs:
       - name: Lint
         run: >-
           uv run --no-project ruff check --select E9,F,B --ignore F401
-          anima/ birefnet/ character-describer/ seedvr2/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ qwen-image-2/ examples/
+          anima/ birefnet/ character-describer/ seedvr2/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ qwen-image-2/ flux-3-klein/ examples/
 
       - name: Types
         run: uv run --no-project mypy
@@ -70,15 +70,15 @@ jobs:
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          scripts/bind-account-index.sh "${{ inputs.account_index }}" anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2
-          for package in anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2; do
+          scripts/bind-account-index.sh "${{ inputs.account_index }}" anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 flux-3-klein
+          for package in anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 flux-3-klein; do
             uv lock --check --project "$package"
           done
 
       - name: Every package builds a wheel
         run: |
           mkdir -p dist/packages
-          for package in anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2; do
+          for package in anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 flux-3-klein; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done
@@ -93,6 +93,9 @@ jobs:
         run: |
           unzip -l dist/packages/qwen-image-2/qwen_image_2-*.whl | grep -F 'qwen_image_2/LICENSE.model.txt'
           unzip -l dist/packages/qwen-image-2/qwen_image_2-*.whl | grep -F 'qwen_image_2/Notice'
+          unzip -l dist/packages/flux-3-klein/flux_3_klein-*.whl | grep -F 'flux_3_klein/LICENSE.model.md'
+          unzip -l dist/packages/flux-3-klein/flux_3_klein-*.whl | grep -F 'flux_3_klein/NOTICE.model.md'
+          unzip -l dist/packages/flux-3-klein/flux_3_klein-*.whl | grep -F 'flux_3_klein/upsampler/tokenizer.json'
 
       # Each package has its own environment; native wheel requirements are checked
       # inside each environment before its compiled import proof below. Different package versions

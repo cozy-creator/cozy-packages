@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import secrets
 from enum import Enum, IntEnum
-from typing import Annotated
+from typing import Annotated, cast
 
 import msgspec
 from cozy_runtime.author import (
@@ -169,8 +169,11 @@ def output_size(aspect_ratio: AspectRatio | None, megapixels: Megapixels, first:
         return _BUCKETS[(aspect_ratio or AspectRatio.SQUARE, megapixels)]
     width, height = _BUCKETS[(AspectRatio.SQUARE, megapixels)]
     ratio = first.width / first.height
-    side = lambda v: min(MAX_SIDE, max(MIN_SIDE, round(v / PATCH) * PATCH))  # noqa: E731
-    return side(math.sqrt(width * height * ratio)), side(math.sqrt(width * height / ratio))
+    return _side(math.sqrt(width * height * ratio)), _side(math.sqrt(width * height / ratio))
+
+
+def _side(value: float) -> int:
+    return min(MAX_SIDE, max(MIN_SIDE, round(value / PATCH) * PATCH))
 
 
 def _render(
@@ -223,11 +226,11 @@ def _render(
     return ImageOutput(asset, width, height, seed, caption)
 
 
-_DISTILLED = {
+_DISTILLED: dict[str, list[dict[str, str | int]]] = {
     "model": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein@0.1.0/original"}],
     "upsampler": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-upsampler@0.1.0/original"}],
 }
-_BASE = {
+_BASE: dict[str, list[dict[str, str | int]]] = {
     "model": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-base@0.1.0/original"}],
     "upsampler": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-upsampler@0.1.0/original"}],
 }
@@ -260,7 +263,7 @@ def generate_base(ctx: Context, payload: GenerateBaseInput, model: Klein, upsamp
 def edit(ctx: Context, payload: EditInput, model: Klein, upsampler: Upsampler, decoder: MediaDecoder,
          out: Outputs, tel: Telemetry) -> ImageOutput:
     """Edit or compose one to ten ordered reference images with the distilled Klein."""
-    images = [decoder.value(asset) for asset in payload.reference_images]
+    images = [cast(Image.Image, decoder.value(asset)) for asset in payload.reference_images]
     return _render(ctx, model, upsampler, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
                    images=images, size=output_size(payload.aspect_ratio, payload.megapixels, images[0]),
                    canvas=None, steps=payload.steps, guidance=None, seed=payload.seed)
@@ -271,7 +274,7 @@ def edit(ctx: Context, payload: EditInput, model: Klein, upsampler: Upsampler, d
 def edit_base(ctx: Context, payload: EditBaseInput, model: Klein, upsampler: Upsampler, decoder: MediaDecoder,
               out: Outputs, tel: Telemetry) -> ImageOutput:
     """Edit or compose one to ten ordered reference images with Klein Base."""
-    images = [decoder.value(asset) for asset in payload.reference_images]
+    images = [cast(Image.Image, decoder.value(asset)) for asset in payload.reference_images]
     return _render(ctx, model, upsampler, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
                    images=images, size=output_size(payload.aspect_ratio, payload.megapixels, images[0]),
                    canvas=None, steps=payload.steps, guidance=payload.guidance, seed=payload.seed)
