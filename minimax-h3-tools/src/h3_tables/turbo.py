@@ -12,6 +12,7 @@ from cozy_runtime.author import (
     ModelArtifact,
     Telemetry,
     UnsupportedInput,
+    Weights,
     canonical_json,
     invocable,
 )
@@ -35,7 +36,7 @@ from .adaln_operations import (
 )
 from .kernel import H3Topology, LowRankAdapter, adapter_shapes, precompute_tables, table_shapes
 from .plans import Task, TimestepPlan, parse_plan
-from .source import H3FullTransformer, inspection
+from .source import inspection
 from .source import structures as _structures
 
 RANK = 64
@@ -213,7 +214,7 @@ def _produce(
     ctx: Context,
     tel: Telemetry,
     *,
-    sources: dict[str, H3FullTransformer],
+    sources: dict[str, Weights[Any]],
     adapters: dict[Task, tuple[str, str]],
     configs: dict[str, Any],
     topologies: dict[Task, H3Topology],
@@ -348,9 +349,9 @@ def _topologies() -> tuple[dict[str, Any], dict[Task, H3Topology]]:
 def build_turbo_adapter(
     ctx: Context,
     *,
-    full: H3FullTransformer,
-    fl2va_adapter: H3FullTransformer,
-    ref2va_adapter: H3FullTransformer,
+    full: Weights[Any],
+    fl2va_adapter: Weights[Any],
+    ref2va_adapter: Weights[Any],
     tel: Telemetry,
     output: str = "model",
 ) -> ModelArtifact:
@@ -358,7 +359,7 @@ def build_turbo_adapter(
     configs, topologies = _topologies()
     for task in TASKS:
         _validate_generators(inspection(ctx, full), task, topologies[task])
-    single: dict[Task, H3FullTransformer] = {"fl2va": fl2va_adapter, "ref2va": ref2va_adapter}
+    single: dict[Task, Weights[Any]] = {"fl2va": fl2va_adapter, "ref2va": ref2va_adapter}
     adapters: dict[Task, tuple[str, str]] = {}
     for task, model in single.items():
         components = list(inspection(ctx, model).components)
@@ -378,12 +379,12 @@ def build_turbo_adapter(
     )
 
 
-@invocable(memoize=True, memo_version="h3-turbo-lora/1", memo_dependencies=TURBO)
+@invocable(memo_version="h3-turbo-lora/1", memo_dependencies=TURBO)
 async def turbo_lora(
     ctx: Context,
     *,
-    adapters: H3FullTransformer,
-    base: H3FullTransformer,
+    adapters: Weights[Any],
+    base: Weights[Any],
     tel: Telemetry,
 ) -> ModelArtifact:
     """Build the standalone PDD-8 turbo LoRA from the upstream PDD adapter pair.

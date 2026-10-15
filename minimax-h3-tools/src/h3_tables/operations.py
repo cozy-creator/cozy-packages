@@ -90,7 +90,7 @@ async def precompute_adaln(
 ) -> ModelArtifact:
     """Return the pruned H3 model using shared tables for approved 30/40/50-step schedules.
 
-    This ordinary Python helper runs in the calling script and invokes memoized leaves.
+    This ordinary Python helper runs in the calling script; each leaf's committed derivation replays.
     Retabling an already pruned model requires its full generating model. The current
     approved union bank supports all three schedules and is shared across body encodings.
     """

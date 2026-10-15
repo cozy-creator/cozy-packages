@@ -35,10 +35,10 @@ cozy run fidika/minimax-h3-tools/turbo-lora fidika/minimax-h3-acc-loras@1.0.0/or
   fidika/minimax-h3-turbo-lora model.base=fidika/minimax-h3@1.0.0/bf16-full --rental=NAME --await
 ```
 
-The lane functions, `turbo-lora` and `retable` are memoized operations. Tables, heads and quantized
+The lane functions, `turbo-lora` and `retable` write weights, so they are never memoized; a
+committed derivation replays for the same code and inputs. Tables, heads and quantized
 tensors checkpoint as they complete; a request re-issued with the same inputs on the same
-worker adopts a retained stopped run's completed work (`cozy run pause <run>` retains it) and
-computes only the remainder. Quantized tensors encode on every available CPU. The metrics
+machine adopts a canceled or failed run's completed work and computes only the remainder. Quantized tensors encode on every available CPU. The metrics
 `h3.reused_tensors`/`h3.computed_tensors` (`h3.turbo.*` for the LoRA) report the split.
 
 The lane functions read the granted checkpoint's structure once and drop only source-only
@@ -97,7 +97,7 @@ every schedule in the task plan (30, 40 and 50 evaluations: 315 block rows and 2
 final-normalization rows, 1,020,515,328 table bytes), so one pruned checkpoint serves every
 served step count. FP8 is a child of those pruned BF16 task components.
 
-The ordinary `retable` job recomputes only those tables for an existing AdaLN-pruned
+The ordinary `retable` function recomputes only those tables for an existing AdaLN-pruned
 checkpoint of any encoding: `pruned` (the checkpoint to inherit, BF16, FP8 or int8) and
 `full` (the complete BF16 checkpoint whose modulation weights the rows are computed from).
 Every non-table tensor is inherited by reference and nothing is requantized, so widening the
@@ -111,11 +111,11 @@ modulation weights for both DiTs and `full` carries the exact modulation weights
 
 The package declares no GPU, SM, VRAM, or host-RAM guess. Creator derives accelerator-class work
 from the typed model inputs; exact artifact residency and measured request/scratch envelopes drive
-fit. The job opens the three pruned-output transactions together, computes each task's timestep tables once,
+fit. The function opens the three pruned-output transactions together, computes each task's timestep tables once,
 and writes the exact same table bytes to every active output. FP8 then reads the
 original BF16 DiTs through its own caller-owned transaction. There is no
-workflow graph and no nested job invocation. Tensorhub owns final retention or publication;
-the job receives no publisher credential or store path.
+workflow graph and no nested call. Tensorhub owns final retention or publication;
+the function receives no publisher credential or store path.
 
 Each checkpoint commits as soon as its computation finishes: full BF16 first, pruned
 BF16 after both table passes, FP8 after both FP8 passes. A retry replays
@@ -163,7 +163,7 @@ producer from two single-component adapter checkpoints in a client script.
 The output holds only the `fl2va_turbo` and `ref2va_turbo` components. Their six inference LoRA families inherit
 source objects. Only adapted AdaLN tables and eight collapsed output heads are
 written. The consumed AdaLN factors are absent from the output. One native transaction
-checkpoints each completed tensor, so cancellation resumes unfinished work and a
+checkpoints each completed tensor, so a resubmitted run continues unfinished work and a
 completed replay returns the same artifact. Ordinary `retable` keeps its two inputs
 and two outputs; turbo preparation does not change the base schedule.
 

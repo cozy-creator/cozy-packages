@@ -9,12 +9,7 @@ from importlib.resources import files
 from typing import Any, Protocol
 
 import msgspec
-from cozy_runtime.author import (
-    Context,
-    Loader,
-    Model,
-    canonical_json,
-)
+from cozy_runtime.author import Context, Weights, canonical_json
 from tensorfs.derived import SourceInspection, Target
 
 from .kernel import H3Topology, removed_keys, table_shapes
@@ -23,14 +18,7 @@ from .plans import TimestepPlan
 TARGET_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
 
 
-class H3FullTransformer(Model[object]):
-    """Native H3 source used only for derivation, never inference construction."""
-
-    def load(self, loader: Loader) -> None:
-        del loader
-
-
-def inspection(ctx: Context, source: Model[object]) -> SourceInspection:
+def inspection(ctx: Context, source: Weights[Any]) -> SourceInspection:
     """Read H3 planning facts through the exact native source capability."""
     with ctx.tensorfs_source(source) as capability:
         return capability.inspect()
@@ -222,7 +210,7 @@ def full_targets() -> dict[str, Target]:
 
 
 def structures(
-    ctx: Context, sources: Mapping[str, H3FullTransformer]
+    ctx: Context, sources: Mapping[str, Weights[Any]]
 ) -> dict[str, SourceInspection]:
     """One bounded structure read per DISTINCT granted checkpoint, keyed by source alias.
 
@@ -238,7 +226,7 @@ def structures(
 
 def select_full_targets(
     ctx: Context,
-    sources: Mapping[str, H3FullTransformer],
+    sources: Mapping[str, Weights[Any]],
     granted: Mapping[str, SourceInspection] | None = None,
 ) -> dict[str, Target]:
     """Drop source-only rows that remain in these exact granted checkpoints."""

@@ -18,8 +18,9 @@ three. Other schedules refuse until their package plan and serving contract are
 qualified. The argument does not silently invent a new scheduler.
 
 `precompute_adaln` runs in the calling script; it needs no `ctx` argument or
-separate job invocation. It invokes two inexpensive generating-weight projections,
-two independently memoized table computations and one native metadata attachment.
+separate call of its own. It invokes two inexpensive generating-weight projections,
+two independent table computations and one native metadata attachment; each one's
+committed derivation replays for the same code and inputs.
 Runtime's caller overlay preserves this helper and the package's plan assets;
 each leaf operation runs with its own managed services and cancellation checks.
 Each table computation checkpoints completed block tables and final normalization;
