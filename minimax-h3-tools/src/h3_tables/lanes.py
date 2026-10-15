@@ -45,7 +45,7 @@ CastDtype = Literal["bf16", "f16"]
 #: ``decode_operands`` is the video VAE's serving destination and nothing else — see
 #: ``VIDEO_VAE_NORMALISATION``.
 CastScope = Literal["component", "decode_operands"]
-Encoding = Literal["fp8-rowwise/1", "mxfp8/1", "int8-convrot256/1"]
+Encoding = Literal["fp8-rowwise/1", "int8-convrot256/1"]
 Modulation = Literal["full", "adaln-pruned"]
 
 #: The five components of an H3 checkpoint. Every lane declares all five: the ones it does
@@ -63,15 +63,7 @@ DIT_COMPONENTS = frozenset(TARGET_COMPONENT.values())
 
 #: The encodings with a rung on the cards we serve: `fp8-rowwise/1` (`cuda.sm89+`) and
 #: `int8-convrot256/1` (comfy-kitchen's CUTLASS int8 GEMM, sm80 and up).
-#: `MicroScaledNativeLeaf.device_predicate` is the EQUALITY `cuda.sm120`, which
-#: `DeviceFacts.satisfies` tests exactly — so `mxfp8/1` executes on no H100, H200 or B200 and
-#: degrades to `cozy.mxfp8.dequant/1` plus a bf16 GEMM. A lane that cannot be served on the
-#: card we serve is not a lane, so no new one may use it.
 SERVABLE_ENCODINGS = frozenset({"fp8-rowwise/1", "int8-convrot256/1"})
-
-#: The exact, named exception: `mxfp8-pruned` predates the rule above and is still
-#: published. It is grandfathered BY NAME, so adding any other mxfp8 lane refuses.
-UNSERVABLE_LANE = "mxfp8-pruned"
 
 #: Components no lane may treat, and why. This is a refusal BY NAME, not by shape, because
 #: the shape rule does not catch it. Of the audio VAE's 1,087 rows, 637 are rank-3 — 344 of
@@ -173,7 +165,6 @@ class Lane:
 
 
 _DIT_FP8 = Treatment(encode="fp8-rowwise/1")
-_DIT_MXFP8 = Treatment(encode="mxfp8/1")
 
 
 def _both_dits(treatment: Treatment) -> dict[str, Treatment]:
@@ -206,7 +197,6 @@ TEXT_ENCODER_KEEP: tuple[str, ...] = (
 )
 
 _TEXT_ENCODER_FP8 = Treatment(encode="fp8-rowwise/1", keep=TEXT_ENCODER_KEEP)
-_TEXT_ENCODER_MXFP8 = Treatment(encode="mxfp8/1", keep=TEXT_ENCODER_KEEP)
 
 #: The video VAE's stored form is NOT a lane choice, so it is not authored per row.
 #:
@@ -273,10 +263,6 @@ LANES: Mapping[str, Lane] = {
         "adaln-pruned",
         {**_both_dits(_DIT_FP8), "text_encoder": _TEXT_ENCODER_FP8},
     ),
-    "mxfp8-pruned": Lane(
-        "adaln-pruned",
-        {**_both_dits(_DIT_MXFP8), "text_encoder": _TEXT_ENCODER_MXFP8},
-    ),
 }
 
 
@@ -300,11 +286,7 @@ def validate_catalogue(lanes: Mapping[str, Lane] = LANES) -> None:
                 )
             if component not in COMPONENT_MAX_NEW_BYTES:
                 raise ValueError(f"lane {name!r} treats unknown component {component!r}")
-            if (
-                treatment.encode is not None
-                and treatment.encode not in SERVABLE_ENCODINGS
-                and name != UNSERVABLE_LANE
-            ):
+            if treatment.encode is not None and treatment.encode not in SERVABLE_ENCODINGS:
                 raise ValueError(
                     f"lane {name!r} encodes {component} as {treatment.encode}, which has no "
                     f"rung on the cards we serve; servable encodings are "

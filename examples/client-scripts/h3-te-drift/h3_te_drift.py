@@ -4,12 +4,12 @@
       model.model=paul/minimax-h3@1.0.0-rc.2/fp8-pruned
     cozy run ./examples/client-scripts/h3-te-drift/weight_drift --input weight-request.json \
       --asset states=bf16/<run>-states.bin --rental=NAME --await --json \
-      model.bf16=... model.fp8=... model.mxfp8=...
+      model.bf16=... model.fp8=...
 
 `states` is `encode_text`'s output for the bf16 lane: its token ids and hidden states are the
 reference. Each arm replays those token ids through one bf16 decoder layer at a time whose
-weights are that arm's exactly decoded values, with no activation quantization: our fp8 and
-mxfp8 lanes, and the community FP8 schemes of this encoder (Qwen's block-128, RedHat's
+weights are that arm's exactly decoded values, with no activation quantization: our fp8
+lane, and the community FP8 schemes of this encoder (Qwen's block-128, RedHat's
 per-channel with bf16 scales, Comfy's per-tensor) applied to the bf16 lane's weights. The
 community files are round-to-nearest encodings of these exact weights (audited against their
 bytes, 2026-10-09); package code has no network and TensorFS no ingest profile for those three
@@ -232,7 +232,6 @@ def weight_drift(
     payload: WeightRequest,
     bf16: QuantizationSource,
     fp8: QuantizationSource,
-    mxfp8: QuantizationSource,
     weights: WeightsReader,
     tel: Telemetry,
 ) -> Result:
@@ -256,7 +255,6 @@ def weight_drift(
     with (
         weights.open(bf16) as bf16_view,
         weights.open(fp8) as fp8_view,
-        weights.open(mxfp8) as mxfp8_view,
         ThreadPoolExecutor(len(LINEARS) + len(NORMS)) as pool,
     ):
         inputs = layer0_inputs(bf16_view, token_ids, config)
@@ -264,7 +262,6 @@ def weight_drift(
         arms: dict[str, Loader] = {
             "bf16 (harness floor)": original,
             "fp8 (ours, weights only)": checkpoint_layers(fp8_view, pool),
-            "mxfp8 (ours, weights only)": checkpoint_layers(mxfp8_view, pool),
             **{name: emulated(original, scheme) for name, (_, scheme, _) in COMMUNITY.items()},
         }
         for name, layer_weights in arms.items():

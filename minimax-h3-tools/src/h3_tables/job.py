@@ -77,7 +77,6 @@ app = App()
 
 PLAIN_SPEC = "sha256:1fb882a7e46d0aff520f9d8a28cefd643954c19371737443101ba3c5fcc3613f"
 FP8_SPEC = "sha256:c4be0120fb4548306b134f6ee07eb2545a363bc140a005af1ef6543c790cf890"
-MXFP8_SPEC = "sha256:7e9b1ad8f2e5ddd236a4d4303042d632a96eadef4f25d44eb0fb63124cec7cfd"
 INT8_SPEC = "sha256:ac25d323baebfdf1fd0ce3fdfd9f26400ce57914fdc442d0ade8cb187aef183f"
 
 SOURCE_READ_CHUNK = 32 << 20
@@ -141,9 +140,8 @@ LANE_OUTPUTS = (
     WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES + MAX_VIDEO_VAE_BYTES),
     WeightsOutput("bf16-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),
     WeightsOutput("fp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),
-    WeightsOutput("mxfp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),
 )
-LaneName = Literal["bf16-full", "bf16-pruned", "fp8-pruned", "mxfp8-pruned"]
+LaneName = Literal["bf16-full", "bf16-pruned", "fp8-pruned"]
 
 
 def _check_lane_outputs() -> None:
@@ -691,19 +689,6 @@ async def fp8_pruned(
     return lane["fp8-pruned"]
 
 
-@invocable(memoize=True, memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
-async def mxfp8_pruned(
-    ctx: Context,
-    *,
-    source: H3FullTransformer,
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """AdaLN-pruned MXFP8 (grandfathered; executes natively only on sm120)."""
-    lane = _produce_lanes(ctx, tel, source, ("mxfp8-pruned",), max_relative_frobenius)
-    return lane["mxfp8-pruned"]
-
-
 app.job(
     bf16_full,
     name="bf16-full",
@@ -723,15 +708,9 @@ app.job(
     weights=(WeightsOutput("fp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),),
     accelerator=True,
 )
-app.job(
-    mxfp8_pruned,
-    name="mxfp8-pruned",
-    weights=(WeightsOutput("mxfp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),),
-    accelerator=True,
-)
 
 
-#: `cozy model quantize <H3 checkpoint> --fp8|--mxfp8|--int8`: the quantized lanes' recipe over an
+#: `cozy model quantize <H3 checkpoint> --fp8|--int8`: the quantized lanes' recipe over an
 #: AdaLN-pruned checkpoint. Both DiTs encode through the reviewed plan and the text
 #: conditioner's 350 decoder-layer linears through the structural selection minus
 #: `TEXT_ENCODER_KEEP` (embeddings and the vision tower stay bf16). A recipe component the source still holds
@@ -740,7 +719,7 @@ app.job(
 QUANTIZER_RECIPE: Mapping[str, tuple[str, ...]] = {
     component: treatment.keep for component, treatment in LANES["fp8-pruned"].components.items()
 }
-QUANTIZER_SPECS = {"fp8-rowwise/1": FP8_SPEC, "mxfp8/1": MXFP8_SPEC, "int8-convrot256/1": INT8_SPEC}
+QUANTIZER_SPECS = {"fp8-rowwise/1": FP8_SPEC, "int8-convrot256/1": INT8_SPEC}
 #: Both DiTs and the conditioner at most; the transaction's own accounting is exact.
 MAX_QUANTIZER_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_TEXT_ENCODER_BYTES
 
@@ -757,7 +736,7 @@ def _quantizer_selections(
         ):
             raise UnsupportedInput(
                 f"{component} still carries its AdaLN modulation rows; quantize an AdaLN-pruned "
-                "lane (bf16-pruned, fp8-pruned or mxfp8-pruned)",
+                "lane (bf16-pruned or fp8-pruned)",
                 code="h3_quantize_unpruned",
             )
     dit_plan = prepare_quantization(h3_quantization_plan())
@@ -860,18 +839,6 @@ async def fp8(
 
 
 @invocable(memoize=True, memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
-async def mxfp8(
-    ctx: Context,
-    *,
-    source: H3FullTransformer,
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """H3's recipe at block-scaled MXFP8 (`mxfp8/1`; native on sm120, dequantized elsewhere)."""
-    return _quantize_lane(ctx, tel, source, "mxfp8", "mxfp8/1", max_relative_frobenius)
-
-
-@invocable(memoize=True, memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
 async def int8(
     ctx: Context,
     *,
@@ -887,12 +854,6 @@ app.job(
     fp8,
     name="fp8",
     weights=(WeightsOutput("fp8", max_new_bytes=MAX_QUANTIZER_BYTES),),
-    accelerator=False,
-)
-app.job(
-    mxfp8,
-    name="mxfp8",
-    weights=(WeightsOutput("mxfp8", max_new_bytes=MAX_QUANTIZER_BYTES),),
     accelerator=False,
 )
 app.job(
@@ -987,7 +948,7 @@ async def retable(
 ) -> RetableResult:
     """Recompute one AdaLN-pruned checkpoint's tables for the current plans.
 
-    Every non-table tensor of `pruned` (BF16, FP8 or MXFP8 alike) is inherited by reference;
+    Every non-table tensor of `pruned` (BF16, FP8 or int8 alike) is inherited by reference;
     only the modulation rows are read from `full` and recomputed, so a plan that adds
     schedules costs table bytes, never a requantization. The same rows also commit as a
     two-DiT table bank, the transaction the modulation reads are scoped to.

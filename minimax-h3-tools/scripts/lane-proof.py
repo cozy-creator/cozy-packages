@@ -218,7 +218,6 @@ def arm_census() -> None:
         "bf16-full": 12884967424,
         "bf16-pruned": 15032516608,
         "fp8-pruned": 83751993344 + (56 << 30),
-        "mxfp8-pruned": 83751993344 + (56 << 30),
     }
     if ceilings != shipped:
         _fail(f"lane ceilings changed: {ceilings}")
@@ -331,10 +330,10 @@ def _refusals(granted: dict[str, SourceInspection]) -> None:
         lambda: lanes.select("audio_vae", lanes.Treatment(cast="f16"), shared),
     )
     _refuses(
-        "a new mxfp8 lane",
+        "a lane with an unservable encoding",
         "",
         lambda: lanes.validate_catalogue(
-            {"mxfp8-vae-adaln-pruned": lanes.Lane("adaln-pruned", {"video_vae": lanes._DIT_MXFP8})}
+            {"nvfp4-vae-adaln-pruned": lanes.Lane("adaln-pruned", {"video_vae": lanes.Treatment(encode="nvfp4/1")})}  # type: ignore[arg-type]
         ),
     )
     _refuses(
@@ -412,13 +411,12 @@ def _pruned_source(dit_spec: str | None) -> SourceInspection:
 
 
 def arm_quantizer() -> None:
-    """`cozy model quantize --fp8|--mxfp8|--int8`: what H3's recipe encodes on each lane."""
-    print("\narm B — the fp8/mxfp8/int8 quantizer over pruned lanes")
+    """`cozy model quantize --fp8|--int8`: what H3's recipe encodes on each lane."""
+    print("\narm B — the fp8/int8 quantizer over pruned lanes")
     cases = (
         ("bf16-pruned --fp8", None, "fp8-rowwise/1", [313, 313, 350]),
         ("bf16-pruned --int8", None, "int8-convrot256/1", [313, 313, 350]),
         ("fp8-pruned --fp8", job.FP8_SPEC, "fp8-rowwise/1", [350]),
-        ("mxfp8-pruned --mxfp8", job.MXFP8_SPEC, "mxfp8/1", [350]),
     )
     for name, spec, encoding, expected in cases:
         selections = job._quantizer_selections(_pruned_source(spec), encoding)  # type: ignore[arg-type]
@@ -431,11 +429,6 @@ def arm_quantizer() -> None:
         lanes.TEXT_ENCODER_KEEP
     ):
         _fail("the conditioner selection reached outside layers.{0..49}")
-    _refuses(
-        "--mxfp8 over an fp8 DiT",
-        "h3_quantize_mixed",
-        lambda: job._quantizer_selections(_pruned_source(job.FP8_SPEC), "mxfp8/1"),
-    )
     _refuses(
         "--int8 over an fp8 DiT",
         "h3_quantize_mixed",

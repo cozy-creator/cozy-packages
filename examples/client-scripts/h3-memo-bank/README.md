@@ -129,8 +129,7 @@ was fabricated merely to make a dry-run appear complete.
    where a trained full-checkpoint comparator is not available, leave that
    numerical gate open instead of inventing an acceptance tolerance. Attach the
    banks to the real BF16 source and, via existing `retable_adaln`, to the retained
-   FP8 body; prove table part identity and zero model-sized copy. MXFP8 requires
-   its actual source if claiming that arm. Run ordinary pruning only after all
+   FP8 body; prove table part identity and zero model-sized copy. Run ordinary pruning only after all
    compute/invalidation arms; prove returned grafts still read exact table/body
    bytes after unused producer memo entries are collected. Prune alone is not
    proof that every explicitly retained producer was released.

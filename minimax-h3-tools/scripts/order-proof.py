@@ -17,7 +17,6 @@ from h3_tables import lanes as lane_recipes
 from h3_tables.job import (
     FP8_SPEC,
     MAX_TABLE_BYTES,
-    MXFP8_SPEC,
     PLAIN_SPEC,
     _lane_targets,
     _retable_targets,
@@ -172,7 +171,6 @@ def main() -> None:
     dits = _dit_structure(sections)
     pruned = _targets_of("bf16-pruned", sections, tables, full_targets, dits, quantization)
     fp8 = _targets_of("fp8-pruned", sections, tables, full_targets, dits, quantization)
-    mxfp8 = _targets_of("mxfp8-pruned", sections, tables, full_targets, dits, quantization)
 
     measured_bytes: dict[str, int] = {}
     for task, source, component in (
@@ -211,15 +209,8 @@ def main() -> None:
             ):
                 raise RuntimeError(f"{component}/{key} changed its exact BF16 table bytes")
         selected = {tensor.key for tensor in quantization.tensors}
-        for name, target, spec in (
-            ("fp8", fp8[component], FP8_SPEC),
-            ("mxfp8", mxfp8[component], MXFP8_SPEC),
-        ):
-            expected = quantization_additions(
-                "fp8-rowwise/1" if name == "fp8" else "mxfp8/1",
-                quantization,
-                "dit",
-            )
+        for name, target, spec in (("fp8", fp8[component], FP8_SPEC),):
+            expected = quantization_additions("fp8-rowwise/1", quantization, "dit")
             if (
                 set(target.drop) != dynamic | set(source_only_keys()) | selected
                 or set(target.add) != set(shapes) | selected
@@ -250,7 +241,6 @@ def main() -> None:
         "retable-adaln",
         "turbo-lora",
         "fp8",
-        "mxfp8",
         "int8",
     }:
         raise RuntimeError(f"package callables changed: {sorted(jobs)}")

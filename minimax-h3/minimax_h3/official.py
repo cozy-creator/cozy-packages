@@ -1585,8 +1585,7 @@ def _dit_spec(
         if "table_keys" not in extension:
             raise ConformanceError(
                 f"model component {component!r} is missing its modulation table row labels; "
-                "regenerate the lane with minimax-h3-tools/bf16-pruned, fp8-pruned or "
-                "mxfp8-pruned",
+                "regenerate the lane with minimax-h3-tools/bf16-pruned or fp8-pruned",
                 code="artifact_config",
                 fields=[component, "cozy_h3", "table_keys"],
             )

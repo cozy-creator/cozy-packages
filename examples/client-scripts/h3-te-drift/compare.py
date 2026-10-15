@@ -1,6 +1,6 @@
 """Compare `encode_text` outputs of several lanes against one reference lane, on this computer.
 
-    python compare.py prompt-names.json bf16=bf16/<run>-states.bin fp8=... mxfp8=...
+    python compare.py prompt-names.json bf16=bf16/<run>-states.bin fp8=...
 
 The first lane is the reference. Prints per hidden state, across prompts: mean and worst
 per-token cosine, mean and worst relative L2, the mean relative L2 without token 0 (Qwen's

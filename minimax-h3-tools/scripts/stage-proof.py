@@ -191,7 +191,6 @@ def main() -> None:
     for failure, retained in (
         ("tables:ref2va", slots[:1]),
         ("quantize:fp8-pruned", slots[:2]),
-        ("quantize:mxfp8-pruned", slots[:3]),
     ):
         recorder = Recorder()
         try:
@@ -230,7 +229,7 @@ def main() -> None:
         assert list(result) == list(slots)
         assert recorder.events == []
     print(
-        f"H3 stage commits PASS lanes={len(slots)} table/FP8/MXFP8 interruption, "
+        f"H3 stage commits PASS lanes={len(slots)} table/FP8 interruption, "
         "completed receipt replay, full no-work replay"
     )
 

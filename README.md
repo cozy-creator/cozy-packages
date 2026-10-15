@@ -14,7 +14,7 @@ dependencies or qualifying a worker image.
 | path | responsibility |
 |---|---|
 | `minimax-h3/` | MiniMax H3 dual-task package; the owner's hub binding selects FULL or AdaLN-pruned weights |
-| `sdxl/` | SDXL text-to-image package plus the family's `fp8`/`mxfp8` quantizer jobs (se-008, cr-073, se-023) |
+| `sdxl/` | SDXL text-to-image package plus the family's `int8`/`fp8` quantizer jobs (se-008, cr-073, se-023) |
 | `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
 | `minimax-h3-tools/` | H3 timestep-table and structural precompute jobs (cr-071) |
 | `qwen-image-2/` | Qwen-Image-2.1 reference image generation; optional white background and native Runtime execution (research model licence) |
@@ -92,7 +92,7 @@ quantized lanes.
 ## Quantization
 
 Each family package owns its quantization recipe; `cozy_runtime.derive` owns the encodings
-(`fp8-rowwise/1`, `mxfp8/1`), the checkpoint transaction and the round-trip tripwire. A
+(`int8-convrot256/1`, `fp8-rowwise/1`), the checkpoint transaction and the round-trip tripwire. A
 quantizer is a job that takes the family's model and declares one weights output named for the
 lane it writes:
 
@@ -105,7 +105,7 @@ async def fp8(ctx: Context, *, source: SdxlModel, max_relative_frobenius: float 
 app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=16 << 30),), accelerator=False)
 ```
 
-`cozy model quantize <model> --fp8` (or `--mxfp8`) finds that job by its output name and runs
+`cozy model quantize <model> --int8` (or `--fp8`) finds that job by its output name and runs
 it on the machine holding the checkpoint; `cozy run <package>/fp8 <model> <org/model>` is the
 same run. SDXL encodes the UNet's block-aligned rank-2 weights, Anima its transformer's; every
 other component inherits unchanged. H3 uses `h3_tables.operations.quantize`, which binds its
@@ -298,8 +298,7 @@ does not interpolate a curve or carry a second model port. The hub selects the l
 from the resolved default or explicit override (Model bindings above); model computation
 and environment variables do not choose one.
 
-The release has exactly four lanes: `bf16-full`, `bf16-adaln-pruned`, `fp8-adaln-pruned`, and
-`mxfp8-adaln-pruned`. The production binding is `paul/minimax-h3@1.0.0-rc.2` on
+The release has three lanes: `bf16-full`, `bf16-adaln-pruned` and `fp8-adaln-pruned`. The production binding is `paul/minimax-h3@1.0.0-rc.2` on
 `fp8-adaln-pruned` for H100, B200 and 5090, in that order. `adaln-curve` is reserved for
 approximate community curve artifacts and is not a lane in this release.
 

@@ -211,7 +211,7 @@ def generate(
 # ------------------------------------------------------------------ quantized lanes
 
 # The Anima recipes: which weights each lane encodes; every other tensor inherits unchanged.
-# `cozy model quantize <model> --int8|--fp8|--mxfp8` runs the job whose weights output is
+# `cozy model quantize <model> --int8|--fp8` runs the job whose weights output is
 # that lane. `cozy_runtime.derive` owns the encodings and the round-trip tripwire.
 _LANE_BYTES = 16 << 30
 _QUANTIZER = (  # the Runtime code and native libraries that decide a lane's bytes
@@ -244,17 +244,6 @@ async def fp8(
     return _quantize(ctx, tel, source, "fp8", "fp8-rowwise/1", max_relative_frobenius)
 
 
-@invocable(memoize=True, memo_dependencies=_QUANTIZER)
-async def mxfp8(
-    ctx: Context,
-    *,
-    source: AnimaModel,
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """MXFP8 DiT weights from one BF16/F16 source; everything else inherits."""
-    return _quantize(ctx, tel, source, "mxfp8", "mxfp8/1", max_relative_frobenius)
-
 
 #: The int8 lane: every attention and MLP linear of the 28 DiT blocks and of the Qwen3 text
 #: encoder's 28 layers. The AdaLN modulation, embeddings, the text conditioner and the VAE keep
@@ -280,4 +269,3 @@ async def int8(ctx: Context, *, source: AnimaModel, tel: Telemetry) -> ModelArti
 
 app.job(int8, name="int8", weights=(WeightsOutput("int8", max_new_bytes=_LANE_BYTES),), accelerator=False)
 app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
-app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),), accelerator=False)

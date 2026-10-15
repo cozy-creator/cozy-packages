@@ -16,13 +16,12 @@ ingested or already fetched the input, its objects are in the pod Store and noth
 | `bf16-full` | a full-precision H3 checkpoint: the converted `MiniMaxAI/MiniMax-H3` release or a `bf16-full` lane | `bf16-full` | source-only rows dropped, video VAE decode operands f16 |
 | `bf16-pruned` | same | `bf16-pruned` | AdaLN tables replace the 106 modulation rows per DiT; CUDA |
 | `fp8-pruned` | same | `fp8-pruned` | tables + both DiTs and the conditioner's 350 decoder linears `fp8-rowwise/1`; CUDA; every serving rung |
-| `mxfp8-pruned` | same | `mxfp8-pruned` | grandfathered; native only on sm120 |
 | `turbo-lora` | the converted `alibaba-pai/MiniMax-H3-Acc-LoRAs` release (one fl2va and one ref2va component) | `pdd8` | `model.base=<full-precision H3>`; reads its modulation weights and heads only |
 | `retable` | an AdaLN-pruned lane | `adaln-pruned`, `tables` | `model.full=<full-precision H3>`; recomputes tables only |
-| `fp8`, `mxfp8` | an AdaLN-pruned lane | `fp8`, `mxfp8` | `cozy model quantize`; H3's recipe: both DiTs and the text conditioner's 350 decoder linears, encoding what is still plain; CPU |
+| `fp8`, `int8` | an AdaLN-pruned lane | `fp8`, `int8` | `cozy model quantize`; H3's recipe: both DiTs and the text conditioner's 350 decoder linears, encoding what is still plain; CPU |
 
-`cozy model quantize <org>/minimax-h3@<release>/<pruned lane> --fp8|--mxfp8 --rental=NAME` runs
-`fp8`/`mxfp8`. The conditioner keeps `embed_tokens` and its vision tower at bf16
+`cozy model quantize <org>/minimax-h3@<release>/<pruned lane> --fp8|--int8 --rental=NAME` runs
+`fp8`/`int8`. The conditioner keeps `embed_tokens` and its vision tower at bf16
 (`lanes.TEXT_ENCODER_KEEP`); a component already carrying the requested encoding is inherited
 and one carrying the other encoding refuses, so `fp8-pruned --fp8` encodes only the conditioner.
 
@@ -66,7 +65,6 @@ of the community licence, which is a reviewed act rather than a caller choice.
 | `bf16-full` | full | none — every component inherited |
 | `bf16-pruned` | AdaLN-pruned | none |
 | `fp8-pruned` | AdaLN-pruned | both DiTs and the conditioner's decoder linears `fp8-rowwise/1` |
-| `mxfp8-pruned` | AdaLN-pruned | both DiTs and the conditioner's decoder linears `mxfp8/1` |
 
 A component a lane does not name is **inherited by reference**: TensorFS copies its tensor
 metadata and ObjectRefs unchanged through the zero-read/zero-hash inherit gate, so the
@@ -81,11 +79,8 @@ member — an import-time check proves the three agree, and refuses a lane that 
 audio VAE, that uses an encoding with no rung on the cards we serve, or whose declared byte
 ceiling disagrees with its treatments.
 
-Two components are refused outright. **`mxfp8/1` on any new lane**: `RowwiseNativeLeaf`
-predicates `cuda.sm89+`, but `MicroScaledNativeLeaf` predicates the EQUALITY `cuda.sm120`,
-so mxfp8 executes on no H100/H200/B200 and degrades to dequant plus a bf16 GEMM;
-`mxfp8-pruned` is grandfathered by name and nothing else may join it. **The
-`audio_vae`, by name**: 637 of its 1,087 rows are rank-3 — including the BigVGAN decoder's
+A lane may only encode `fp8-rowwise/1` or `int8-convrot256/1` (`SERVABLE_ENCODINGS`). One component
+is refused outright. **The `audio_vae`, by name**: 637 of its 1,087 rows are rank-3 — including the BigVGAN decoder's
 344 `weight_norm` `weight_g`/`weight_v` parameters — and the rank-2 encoding cannot
 represent any of them; the only six rank-2 float weights the component carries are the
 `pre_block` ENCODER attention/MLP linears — so a shape rule does not refuse
@@ -100,11 +95,10 @@ pre-norm conditioner without rewriting any retained payload. Each pruned task th
 replaces 106 dynamic AdaLN rows with 51 BF16 timestep-table rows carrying the union of
 every schedule in the task plan (30, 40 and 50 evaluations: 315 block rows and 207
 final-normalization rows, 1,020,515,328 table bytes), so one pruned checkpoint serves every
-served step count. FP8 and MXFP8 are independent children of those pruned BF16 task
-components and never derive from each other.
+served step count. FP8 is a child of those pruned BF16 task components.
 
 The ordinary `retable` job recomputes only those tables for an existing AdaLN-pruned
-checkpoint of any encoding: `pruned` (the checkpoint to inherit, BF16, FP8 or MXFP8) and
+checkpoint of any encoding: `pruned` (the checkpoint to inherit, BF16, FP8 or int8) and
 `full` (the complete BF16 checkpoint whose modulation weights the rows are computed from).
 Every non-table tensor is inherited by reference and nothing is requantized, so widening the
 plan's schedule set costs table bytes only. It emits two outputs from one table pass:
@@ -118,13 +112,13 @@ modulation weights for both DiTs and `full` carries the exact modulation weights
 The package declares no GPU, SM, VRAM, or host-RAM guess. Creator derives accelerator-class work
 from the typed model inputs; exact artifact residency and measured request/scratch envelopes drive
 fit. The job opens the three pruned-output transactions together, computes each task's timestep tables once,
-and writes the exact same table bytes to every active output. FP8 and MXFP8 then read the
-original BF16 DiTs independently through their own caller-owned transactions. There is no
+and writes the exact same table bytes to every active output. FP8 then reads the
+original BF16 DiTs through its own caller-owned transaction. There is no
 workflow graph and no nested job invocation. Tensorhub owns final retention or publication;
 the job receives no publisher credential or store path.
 
 Each checkpoint commits as soon as its computation finishes: full BF16 first, pruned
-BF16 after both table passes, FP8 after both FP8 passes, then MXFP8. A retry replays
+BF16 after both table passes, FP8 after both FP8 passes. A retry replays
 retained native receipts and computes only the remaining outputs. Terminal owner
 abandonment can release those outputs; a receipt alone is not retained payload custody.
 A local commit does not imply remote custody; Creator still verifies uploads before

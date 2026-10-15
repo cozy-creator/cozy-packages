@@ -29,7 +29,7 @@ What it adds over cr-008b's corpus fixture, which it is otherwise faithful to (i
   * AN OUTPUT-INTEGRITY FLOOR. A decode that produced NaNs, or a flat field with no
     picture in it, is a failure this package reports rather than a PNG it publishes.
 
-The `int8`, `fp8` and `mxfp8` jobs state this family's quantization recipes and call
+The `int8` and `fp8` jobs state this family's quantization recipes and call
 `cozy_runtime.derive`, which owns the encodings.
 
 Code states CAPABILITY; bindings state SELECTION. Nothing here names a repo, release,
@@ -632,7 +632,7 @@ def generate(
 # ------------------------------------------------------------------ quantized lanes
 
 # The SDXL recipes: which weights each lane encodes; every other tensor inherits unchanged.
-# `cozy model quantize <model> --int8|--fp8|--mxfp8` runs the job whose weights output is
+# `cozy model quantize <model> --int8|--fp8` runs the job whose weights output is
 # that lane. `cozy_runtime.derive` owns the encodings and the round-trip tripwire.
 _LANE_BYTES = 16 << 30
 _QUANTIZER = (  # the Runtime code and native libraries that decide a lane's bytes
@@ -664,17 +664,6 @@ async def fp8(
     """Row-wise FP8 UNet weights from one BF16/F16 source; everything else inherits."""
     return _quantize(ctx, tel, source, "fp8", "fp8-rowwise/1", max_relative_frobenius)
 
-
-@invocable(memoize=True, memo_dependencies=_QUANTIZER)
-async def mxfp8(
-    ctx: Context,
-    *,
-    source: SdxlModel,
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """MXFP8 UNet weights from one BF16/F16 source; everything else inherits."""
-    return _quantize(ctx, tel, source, "mxfp8", "mxfp8/1", max_relative_frobenius)
 
 
 #: The int8 lane: every transformer-block linear of the UNet whose input width is a multiple of
@@ -714,4 +703,3 @@ async def int8(ctx: Context, *, source: SdxlModel, tel: Telemetry) -> ModelArtif
 
 app.job(int8, name="int8", weights=(WeightsOutput("int8", max_new_bytes=_LANE_BYTES),), accelerator=False)
 app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
-app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
