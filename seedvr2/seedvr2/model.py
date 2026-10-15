@@ -95,7 +95,7 @@ def build(config: Config) -> Graph:
     return Graph(config)
 
 
-class RestorationModel(Model[Graph]):
+class RestorationModel(Model[Graph], encoded_leaves="accept"):
     """Each phase declares the components it uses, so the Runtime places each on its own:
     the VAE's activations take the room the transformer's weights held while it ran."""
 
