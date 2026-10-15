@@ -102,7 +102,7 @@ from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate_image as generate_reference
 from birefnet import RemoveBackgroundOutput
 from birefnet import remove_background
-from character_describer import CaptionImagesOutput, caption_images
+from character_describer import DescribeCharacterOutput, describe_character
 from seedvr2 import Resolution as RestorationResolution
 from seedvr2 import UpscaleOutput as RestorationOutput
 from seedvr2 import upscale as restore_video
@@ -1748,29 +1748,26 @@ async def _create_references(
 async def _describe_characters(
     references: list[StoryReference], tel: Telemetry
 ) -> tuple[list[StoryReference], list[str]]:
-    """One identity sentence for each supplied character the author did not describe.
+    """One identity sentence for each supplied character the author did not describe: one call
+    each, so TensorD spreads them over the run's GPUs. Descriptions only help, so a failed one
+    warns and keeps that reference as written."""
+    describe = cast(Callable[..., Awaitable[DescribeCharacterOutput]], describe_character)
+    warnings: list[str] = []
 
-    Descriptions only help, so a failure warns and keeps the references as written.
-    """
-    pending = [
-        index for index, ref in enumerate(references)
-        if ref.kind == "character" and ref.image is not None and not ref.description.strip()
-    ]
-    if not pending:
-        return references, []
-    describe = cast(Callable[..., Awaitable[CaptionImagesOutput]], caption_images)
-    described = list(references)
-    try:
-        with tel.scope("Describing characters"):
-            result = await describe(images=[references[index].image for index in pending])
-        for caption in result.captions:
-            index = pending[caption.index]
-            described[index] = replace(described[index], description=caption.text)
-            tel.log("h3 character description", subject=described[index].name, description=caption.text[:400])
-    except Exception as exc:
-        tel.log("h3 character descriptions skipped", level="warning", error=str(exc)[:400])
-        return references, [f"Character descriptions were skipped: {str(exc)[:200]}"]
-    return described, []
+    async def one(reference: StoryReference) -> StoryReference:
+        if reference.kind != "character" or reference.image is None or reference.description.strip():
+            return reference
+        try:
+            with tel.scope(f"Describing {reference.name}"):
+                result = await describe(image=reference.image)
+        except Exception as exc:
+            tel.log("h3 character description skipped", level="warning", subject=reference.name, error=str(exc)[:400])
+            warnings.append(f"{reference.name}'s description was skipped: {str(exc)[:200]}")
+            return reference
+        tel.log("h3 character description", subject=reference.name, description=result.description[:400])
+        return replace(reference, description=result.description)
+
+    return list(await asyncio.gather(*map(one, references))), warnings
 
 
 async def long_form_cuts(

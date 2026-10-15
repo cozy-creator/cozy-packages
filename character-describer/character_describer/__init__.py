@@ -45,25 +45,19 @@ SCENE_OR_POSE = re.compile(
 MAX_NEW_TOKENS = 160
 
 
-class CaptionImagesInput(msgspec.Struct):
-    images: Annotated[
-        list[ImageAsset],
+class DescribeCharacterInput(msgspec.Struct):
+    image: Annotated[
+        ImageAsset,
         AssetBound(
             max_bytes=64 << 20,
             max_decoded_bytes=256 << 20,
             media_types=("image/png", "image/jpeg", "image/webp"),
         ),
-        msgspec.Meta(min_length=1, max_length=12),
     ]
 
 
-class Caption(msgspec.Struct):
-    index: int
-    text: Annotated[str, msgspec.Meta(min_length=1, max_length=2048)]
-
-
-class CaptionImagesOutput(msgspec.Struct):
-    captions: list[Caption]
+class DescribeCharacterOutput(msgspec.Struct):
+    description: Annotated[str, msgspec.Meta(min_length=1, max_length=2048)]
 
 
 @invocable(memoize=True)
@@ -80,24 +74,20 @@ app.job(normalize, weights=(WeightsOutput("model", max_new_bytes=64 << 20),), ac
     memoize=True,
     memo_version="identity-v3",
 )
-def caption_images(
+def describe_character(
     ctx: Context,
-    payload: CaptionImagesInput,
+    payload: DescribeCharacterInput,
     model: Describer,
     decoder: MediaDecoder,
     tel: Telemetry,
-) -> CaptionImagesOutput:
-    """Describe every supplied character independently, in request order."""
-    captions: list[Caption] = []
-    total = len(payload.images)
-    for index, asset in enumerate(payload.images):
-        ctx.raise_if_cancelled()
-        with tel.stage(f"describing character {index + 1}", overall_range=(index / total, (index + 1) / total)):
-            text = _describe(model, cast(Image, decoder.value(asset)), tel)
-        if not text:
-            raise UnsupportedInput("the character description names no appearance", code="output_integrity")
-        captions.append(Caption(index=index, text=text))
-    return CaptionImagesOutput(captions=captions)
+) -> DescribeCharacterOutput:
+    """Describe one supplied character's appearance in one sentence."""
+    ctx.raise_if_cancelled()
+    with tel.stage("describing character"):
+        text = _describe(model, cast(Image, decoder.value(payload.image)), tel)
+    if not text:
+        raise UnsupportedInput("the character description names no appearance", code="output_integrity")
+    return DescribeCharacterOutput(text)
 
 
 def _describe(model: Describer, image: Image, tel: Telemetry) -> str:
