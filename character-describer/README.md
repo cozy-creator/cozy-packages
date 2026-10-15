@@ -12,24 +12,21 @@ description.
 cozy run fidika/character-describer/describe_character --asset image=./character.png --await
 ```
 
-The default model is Qwen3.5-9B (`qwen3.5-9b@0.1.0/bf16`), chosen over Qwen3.5-4B,
+The default model is Qwen3.5-9B (`qwen3.5-9b@0.2.0/bf16`), chosen over Qwen3.5-4B,
 JoyCaption Beta One and Qwen3-VL-2B in a side-by-side test (tracker se-066).
 
 ## Model preparation
 
-`normalize` loads the raw upstream weights exactly as Transformers does (renames, ties,
-casts, constructor buffers) and adds the upstream configuration and processor files that
-ship in `character_describer/upstream/`. Inference never downloads anything.
+The served checkpoint is the plain upload: TensorFS keeps the repository's `config.json` as the
+construction config and its tokenizer, processor and chat template as assets. Parameters load in
+their stored dtype (Qwen3.5 keeps `A_log` and its gated norms in f32). Inference never downloads
+anything.
 
 ```sh
-cozy run ./character-describer/normalize \
-  model.source=hf://Qwen/Qwen3.5-9B@c202236235762e1c871ad0ccb60c8ee5ba337b9a/model.safetensors.index.json \
-  --source-profile source=as-is/1 --upload-to <account>/qwen3.5-9b --rental <name> --await
-cozy model publish <account>/qwen3.5-9b --release 0.1.0 --lane bf16=sha256:<checkpoint> --default-lane bf16
+cozy model upload hf://Qwen/Qwen3.5-9B@c202236235762e1c871ad0ccb60c8ee5ba337b9a <account>/qwen3.5-9b \
+  --rental <name> --await
+cozy model publish <account>/qwen3.5-9b --release 0.2.0 --lane bf16=sha256:<checkpoint> --default-lane bf16
 ```
-
-The same recipe serves any Transformers image-text model whose upstream files replace
-`upstream/`; that is how the alternatives were compared.
 
 ## The int8 lane
 
@@ -38,7 +35,8 @@ The same recipe serves any Transformers image-text model whose upstream files re
 16 GB card; the vision tower, embeddings and LM head keep their bytes.
 
 ```sh
-cozy model quantize <account>/qwen3.5-9b@0.1.0/bf16 --int8 --rental <name> --await
-cozy model publish <account>/qwen3.5-9b --release 0.1.0 --lane int8=sha256:<checkpoint>
+cozy run ./character-describer/int8 model.source=<account>/qwen3.5-9b@0.2.0/bf16 \
+  --upload-to <account>/qwen3.5-9b --rental <name> --await
+cozy model publish <account>/qwen3.5-9b --release 0.2.0 --lane int8=sha256:<checkpoint>
 ```
 

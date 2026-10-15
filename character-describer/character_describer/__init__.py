@@ -20,9 +20,8 @@ from cozy_runtime.author import (
     invocable,
 )
 from cozy_runtime.derive.operations import QuantizationPlan, quantize_into
-from cozy_runtime.derive.quantization import QuantizationSource
 
-from .vlm import Describer, prepare
+from .vlm import Describer
 
 app = App()
 
@@ -61,14 +60,6 @@ class DescribeCharacterOutput(msgspec.Struct):
     description: Annotated[str, msgspec.Meta(min_length=1, max_length=2048)]
 
 
-@invocable(memoize=True)
-async def normalize(ctx: Context, *, source: QuantizationSource, tel: Telemetry) -> ModelArtifact:
-    """Complete raw upstream weights with the processor and configuration shipped here."""
-    return prepare(source, ctx, tel)
-
-
-app.job(normalize, weights=(WeightsOutput("model", max_new_bytes=64 << 20),), accelerator=False)
-
 #: The int8 lane: every projection of the 32 language layers (gated-delta-net and attention)
 #: and their MLPs. The vision tower, embeddings, the decay/gate projections, norms and the LM
 #: head keep their source bytes.
@@ -94,7 +85,7 @@ app.job(int8, weights=(WeightsOutput("int8", max_new_bytes=24 << 30),), accelera
 
 
 @app.entrypoint(
-    defaults={"model": [{"gpu": "*", "gpus": 1, "lane": "qwen3.5-9b@0.1.0/bf16"}]},
+    defaults={"model": [{"gpu": "*", "gpus": 1, "lane": "qwen3.5-9b@0.2.0/bf16"}]},
     memoize=True,
     memo_version="identity-v3",
 )
