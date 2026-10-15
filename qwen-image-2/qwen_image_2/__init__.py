@@ -26,7 +26,7 @@ from .model import QwenImage21Model
 from .quantize import int8
 
 app = App()
-app.job(int8, weights=(WeightsOutput("int8", max_new_bytes=24 << 30),), accelerator=False)
+app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=24 << 30),), accelerator=False)
 Background = Literal["normal", "white"]
 
 

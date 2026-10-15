@@ -94,6 +94,10 @@ assert rgb_image(pixels).getpixel((0, 0)) == (255, 0, 0)
 surfaces = {surface.name: surface for surface in describe(app)}
 assert set(surfaces) == {"generate_image", "int8"}, sorted(surfaces)
 surface = surfaces["generate_image"]
-assert surface.kind == "entrypoint"
-assert {binding.param for binding in surface.model_bindings} == {"model"}
+assert not surface.weights_outputs and surface.accelerator
+assert [(b.param, b.weights) for b in surface.model_bindings] == [("model", False)]
+quantizer = surfaces["int8"]
+assert [o.name for o in quantizer.weights_outputs] == ["int8"] and not quantizer.accelerator
+assert [(b.param, b.weights) for b in quantizer.model_bindings] == [("source", True)]
+assert quantizer.memoize is None
 print("qwen-image-2: 27 buckets, defaults, seeds, hardcut refusals and PNG pixels passed")
