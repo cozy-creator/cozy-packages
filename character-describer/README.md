@@ -1,15 +1,15 @@
 # Character describer
 
-`caption_images` describes each supplied character image in one sentence: identity, hair,
-face, clothing and carried or worn items, never the background, pose or style. Images are
-described independently, in request order, with greedy decoding. A caption that names a
-setting or pose word anyway is regenerated once with those words pointed out, and any clause
-that still names one is dropped. A request takes 1 to 12
-PNG, JPEG or WebP images of up to 64 MiB each; each caption carries its image's `index`.
-MiniMax-H3 uses it to fill a supplied character's missing description.
+`describe_character` describes one supplied character image in one sentence: identity, hair,
+face, clothing and carried or worn items, never the background, pose or style, with greedy
+decoding. A caption that names a setting or pose word anyway is regenerated once with those
+words pointed out, and any clause that still names one is dropped. It takes one PNG, JPEG or
+WebP image of up to 64 MiB. Describe several characters with one call each: TensorD runs them
+on all of the run's GPUs at once. MiniMax-H3 uses it to fill a supplied character's missing
+description.
 
 ```sh
-cozy run fidika/character-describer/caption_images --asset images.0=./character.png --await
+cozy run fidika/character-describer/describe_character --asset image=./character.png --await
 ```
 
 The default model is Qwen3.5-9B (`qwen3.5-9b@0.1.0/bf16`), chosen over Qwen3.5-4B,
