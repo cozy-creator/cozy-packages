@@ -19,6 +19,7 @@ from cozy_runtime.author import (
     WeightsOutput,
     invocable,
 )
+from cozy_runtime.derive.operations import QuantizationPlan, quantize_into
 from cozy_runtime.derive.quantization import QuantizationSource
 
 from .vlm import Describer, prepare
@@ -67,6 +68,29 @@ async def normalize(ctx: Context, *, source: QuantizationSource, tel: Telemetry)
 
 
 app.job(normalize, weights=(WeightsOutput("model", max_new_bytes=64 << 20),), accelerator=False)
+
+#: The int8 lane: every projection of the 32 language layers (gated-delta-net and attention)
+#: and their MLPs. The vision tower, embeddings, the decay/gate projections, norms and the LM
+#: head keep their source bytes.
+INT8 = QuantizationPlan(
+    components=("model",),
+    include=(
+        "model.model.language_model.layers.*.linear_attn.in_proj_[qz]*.weight",
+        "model.model.language_model.layers.*.linear_attn.out_proj.weight",
+        "model.model.language_model.layers.*.self_attn.[qkvo]_proj.weight",
+        "model.model.language_model.layers.*.mlp.*_proj.weight",
+    ),
+    output_precision="preserve",
+)
+
+
+@invocable(memoize=True, memo_version="character-describer-int8/1")
+async def int8(ctx: Context, *, source: Describer, tel: Telemetry) -> ModelArtifact:
+    """The int8 lane (`int8-convrot256/1`): W8A8 on int8 tensor cores; see `INT8`."""
+    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8-convrot256/1", output="int8")
+
+
+app.job(int8, weights=(WeightsOutput("int8", max_new_bytes=24 << 30),), accelerator=False)
 
 
 @app.entrypoint(

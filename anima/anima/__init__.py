@@ -8,6 +8,7 @@ from enum import Enum, IntEnum
 from typing import Annotated
 
 import cozy_runtime.derive as derive
+from cozy_runtime.derive.operations import QuantizationPlan, quantize_into
 import msgspec
 import torch
 from cozy_runtime.author import (
@@ -209,8 +210,8 @@ def generate(
 
 # ------------------------------------------------------------------ quantized lanes
 
-# The Anima recipe: encode the DiT's GEMM weights; every other component inherits
-# unchanged. `cozy model quantize <model> --fp8|--mxfp8` runs the job whose weights output is
+# The Anima recipes: which weights each lane encodes; every other tensor inherits unchanged.
+# `cozy model quantize <model> --int8|--fp8|--mxfp8` runs the job whose weights output is
 # that lane. `cozy_runtime.derive` owns the encodings and the round-trip tripwire.
 _LANE_BYTES = 16 << 30
 _QUANTIZER = (  # the Runtime code and native libraries that decide a lane's bytes
@@ -255,5 +256,28 @@ async def mxfp8(
     return _quantize(ctx, tel, source, "mxfp8", "mxfp8/1", max_relative_frobenius)
 
 
+#: The int8 lane: every attention and MLP linear of the 28 DiT blocks and of the Qwen3 text
+#: encoder's 28 layers. The AdaLN modulation, embeddings, the text conditioner and the VAE keep
+#: their source bytes.
+INT8 = QuantizationPlan(
+    components=("transformer", "text_encoder"),
+    include=(
+        "transformer.transformer_blocks.*.attn[12].to_[qkv].weight",
+        "transformer.transformer_blocks.*.attn[12].to_out.0.weight",
+        "transformer.transformer_blocks.*.ff.net.*weight",
+        "text_encoder.layers.*.self_attn.[qkvo]_proj.weight",
+        "text_encoder.layers.*.mlp.*_proj.weight",
+    ),
+    output_precision="preserve",
+)
+
+
+@invocable(memoize=True, memo_version="anima-int8/1")
+async def int8(ctx: Context, *, source: AnimaModel, tel: Telemetry) -> ModelArtifact:
+    """The int8 lane (`int8-convrot256/1`): W8A8 on int8 tensor cores; see `INT8`."""
+    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8-convrot256/1", output="int8")
+
+
+app.job(int8, name="int8", weights=(WeightsOutput("int8", max_new_bytes=_LANE_BYTES),), accelerator=False)
 app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
 app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),), accelerator=False)

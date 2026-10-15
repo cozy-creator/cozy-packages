@@ -30,3 +30,15 @@ cozy model publish <account>/qwen3.5-9b --release 0.1.0 --lane bf16=sha256:<chec
 
 The same recipe serves any Transformers image-text model whose upstream files replace
 `upstream/`; that is how the alternatives were compared.
+
+## The int8 lane
+
+`int8` writes every projection and MLP of the 32 language layers as `int8-convrot256/1`
+(W8A8 on the int8 tensor cores). The checkpoint drops from 17.5 to 11.1 GiB, so it fits a
+16 GB card; the vision tower, embeddings and LM head keep their bytes.
+
+```sh
+cozy model quantize <account>/qwen3.5-9b@0.1.0/bf16 --int8 --rental <name> --await
+cozy model publish <account>/qwen3.5-9b --release 0.1.0 --lane int8=sha256:<checkpoint>
+```
+

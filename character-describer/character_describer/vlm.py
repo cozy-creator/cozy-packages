@@ -118,8 +118,8 @@ class Pipeline:
         self.processor = _processor(members)
 
 
-class Describer(Model[Pipeline]):
-    """One greedy reply about one image."""
+class Describer(Model[Pipeline], encoded_leaves="accept"):
+    """One greedy reply about one image. Runtime may serve encoded lanes' linears natively."""
 
     pipe: Pipeline
 

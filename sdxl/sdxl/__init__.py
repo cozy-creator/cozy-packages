@@ -29,7 +29,7 @@ What it adds over cr-008b's corpus fixture, which it is otherwise faithful to (i
   * AN OUTPUT-INTEGRITY FLOOR. A decode that produced NaNs, or a flat field with no
     picture in it, is a failure this package reports rather than a PNG it publishes.
 
-The `fp8` and `mxfp8` jobs state this family's quantization recipe (the UNet) and call
+The `int8`, `fp8` and `mxfp8` jobs state this family's quantization recipes and call
 `cozy_runtime.derive`, which owns the encodings.
 
 Code states CAPABILITY; bindings state SELECTION. Nothing here names a repo, release,
@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import cozy_runtime.derive as derive
+from cozy_runtime.derive.operations import QuantizationPlan, quantize_into
 import msgspec
 import torch
 import cozy_runtime.author as cozy_author
@@ -630,8 +631,8 @@ def generate(
 
 # ------------------------------------------------------------------ quantized lanes
 
-# The SDXL recipe: encode the UNet's GEMM weights; every other component inherits
-# unchanged. `cozy model quantize <model> --fp8|--mxfp8` runs the job whose weights output is
+# The SDXL recipes: which weights each lane encodes; every other tensor inherits unchanged.
+# `cozy model quantize <model> --int8|--fp8|--mxfp8` runs the job whose weights output is
 # that lane. `cozy_runtime.derive` owns the encodings and the round-trip tripwire.
 _LANE_BYTES = 16 << 30
 _QUANTIZER = (  # the Runtime code and native libraries that decide a lane's bytes
@@ -676,5 +677,41 @@ async def mxfp8(
     return _quantize(ctx, tel, source, "mxfp8", "mxfp8/1", max_relative_frobenius)
 
 
+#: The int8 lane: every transformer-block linear of the UNet whose input width is a multiple of
+#: 256 (the rotation group), and every linear of both CLIP encoders. The 640-channel levels'
+#: self-attention, cross-attention queries, GEGLU input and projections (input width 640), the
+#: ResNet convolutions, time embeddings and the VAE keep their source bytes.
+_UNET_1280 = ("down_blocks.2", "mid_block", "up_blocks.0")
+INT8 = QuantizationPlan(
+    components=("unet", "text_encoder", "text_encoder_2"),
+    include=(
+        *(
+            f"unet.{level}.attentions.*.{key}"
+            for level in _UNET_1280
+            for key in (
+                "transformer_blocks.*.attn[12].to_[qkv].weight",
+                "transformer_blocks.*.attn[12].to_out.0.weight",
+                "transformer_blocks.*.ff.net.*weight",
+                "proj_[io]*.weight",
+            )
+        ),
+        "unet.*_blocks.1.attentions.*.transformer_blocks.*.attn2.to_[kv].weight",
+        "unet.*_blocks.1.attentions.*.transformer_blocks.*.ff.net.2.weight",
+        "text_encoder.encoder.layers.*.self_attn.*_proj.weight",
+        "text_encoder.encoder.layers.*.mlp.fc[12].weight",
+        "text_encoder_2.text_model.encoder.layers.*.self_attn.*_proj.weight",
+        "text_encoder_2.text_model.encoder.layers.*.mlp.fc[12].weight",
+    ),
+    output_precision="preserve",
+)
+
+
+@invocable(memoize=True, memo_version="sdxl-int8/1")
+async def int8(ctx: Context, *, source: SdxlModel, tel: Telemetry) -> ModelArtifact:
+    """The int8 lane (`int8-convrot256/1`): W8A8 on int8 tensor cores; see `INT8`."""
+    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8-convrot256/1", output="int8")
+
+
+app.job(int8, name="int8", weights=(WeightsOutput("int8", max_new_bytes=_LANE_BYTES),), accelerator=False)
 app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
 app.job(mxfp8, name="mxfp8", weights=(WeightsOutput("mxfp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
