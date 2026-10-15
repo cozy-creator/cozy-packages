@@ -45,7 +45,7 @@ CastDtype = Literal["bf16", "f16"]
 #: ``decode_operands`` is the video VAE's serving destination and nothing else — see
 #: ``VIDEO_VAE_NORMALISATION``.
 CastScope = Literal["component", "decode_operands"]
-Encoding = Literal["fp8-rowwise/1", "mxfp8/1"]
+Encoding = Literal["fp8-rowwise/1", "mxfp8/1", "int8-convrot256/1"]
 Modulation = Literal["full", "adaln-pruned"]
 
 #: The five components of an H3 checkpoint. Every lane declares all five: the ones it does
@@ -61,12 +61,13 @@ DIT_PLAN_COMPONENT = "dit"
 #: too, and a shape rule would happily encode them.
 DIT_COMPONENTS = frozenset(TARGET_COMPONENT.values())
 
-#: The one encoding with a rung on the cards we serve. `RowwiseNativeLeaf.device_predicate`
-#: is `cuda.sm89+`; `MicroScaledNativeLeaf.device_predicate` is the EQUALITY `cuda.sm120`,
-#: which `DeviceFacts.satisfies` tests exactly — so `mxfp8/1` executes on no H100, H200 or
-#: B200 and degrades to `cozy.mxfp8.dequant/1` plus a bf16 GEMM. A lane that cannot be
-#: served on the card we serve is not a lane, so no new one may use it.
-SERVABLE_ENCODINGS = frozenset({"fp8-rowwise/1"})
+#: The encodings with a rung on the cards we serve: `fp8-rowwise/1` (`cuda.sm89+`) and
+#: `int8-convrot256/1` (comfy-kitchen's CUTLASS int8 GEMM, sm80 and up).
+#: `MicroScaledNativeLeaf.device_predicate` is the EQUALITY `cuda.sm120`, which
+#: `DeviceFacts.satisfies` tests exactly — so `mxfp8/1` executes on no H100, H200 or B200 and
+#: degrades to `cozy.mxfp8.dequant/1` plus a bf16 GEMM. A lane that cannot be served on the
+#: card we serve is not a lane, so no new one may use it.
+SERVABLE_ENCODINGS = frozenset({"fp8-rowwise/1", "int8-convrot256/1"})
 
 #: The exact, named exception: `mxfp8-pruned` predates the rule above and is still
 #: published. It is grandfathered BY NAME, so adding any other mxfp8 lane refuses.

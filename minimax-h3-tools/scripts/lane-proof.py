@@ -412,10 +412,11 @@ def _pruned_source(dit_spec: str | None) -> SourceInspection:
 
 
 def arm_quantizer() -> None:
-    """`cozy model quantize --fp8|--mxfp8`: what H3's recipe encodes on each lane it is given."""
-    print("\narm B — the fp8/mxfp8 quantizer over pruned lanes")
+    """`cozy model quantize --fp8|--mxfp8|--int8`: what H3's recipe encodes on each lane."""
+    print("\narm B — the fp8/mxfp8/int8 quantizer over pruned lanes")
     cases = (
         ("bf16-pruned --fp8", None, "fp8-rowwise/1", [313, 313, 350]),
+        ("bf16-pruned --int8", None, "int8-convrot256/1", [313, 313, 350]),
         ("fp8-pruned --fp8", job.FP8_SPEC, "fp8-rowwise/1", [350]),
         ("mxfp8-pruned --mxfp8", job.MXFP8_SPEC, "mxfp8/1", [350]),
     )
@@ -434,6 +435,11 @@ def arm_quantizer() -> None:
         "--mxfp8 over an fp8 DiT",
         "h3_quantize_mixed",
         lambda: job._quantizer_selections(_pruned_source(job.FP8_SPEC), "mxfp8/1"),
+    )
+    _refuses(
+        "--int8 over an fp8 DiT",
+        "h3_quantize_mixed",
+        lambda: job._quantizer_selections(_pruned_source(job.FP8_SPEC), "int8-convrot256/1"),
     )
     _refuses(
         "a full-modulation source",

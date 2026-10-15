@@ -78,6 +78,7 @@ app = App()
 PLAIN_SPEC = "sha256:1fb882a7e46d0aff520f9d8a28cefd643954c19371737443101ba3c5fcc3613f"
 FP8_SPEC = "sha256:c4be0120fb4548306b134f6ee07eb2545a363bc140a005af1ef6543c790cf890"
 MXFP8_SPEC = "sha256:7e9b1ad8f2e5ddd236a4d4303042d632a96eadef4f25d44eb0fb63124cec7cfd"
+INT8_SPEC = "sha256:ac25d323baebfdf1fd0ce3fdfd9f26400ce57914fdc442d0ade8cb187aef183f"
 
 SOURCE_READ_CHUNK = 32 << 20
 SOURCE_SECTION = {"fl2va": "transformer", "ref2va": "transformer_ref"}
@@ -730,7 +731,7 @@ app.job(
 )
 
 
-#: `cozy model quantize <H3 checkpoint> --fp8|--mxfp8`: the quantized lanes' recipe over an
+#: `cozy model quantize <H3 checkpoint> --fp8|--mxfp8|--int8`: the quantized lanes' recipe over an
 #: AdaLN-pruned checkpoint. Both DiTs encode through the reviewed plan and the text
 #: conditioner's 350 decoder-layer linears through the structural selection minus
 #: `TEXT_ENCODER_KEEP` (embeddings and the vision tower stay bf16). A recipe component the source still holds
@@ -739,7 +740,7 @@ app.job(
 QUANTIZER_RECIPE: Mapping[str, tuple[str, ...]] = {
     component: treatment.keep for component, treatment in LANES["fp8-pruned"].components.items()
 }
-QUANTIZER_SPECS = {"fp8-rowwise/1": FP8_SPEC, "mxfp8/1": MXFP8_SPEC}
+QUANTIZER_SPECS = {"fp8-rowwise/1": FP8_SPEC, "mxfp8/1": MXFP8_SPEC, "int8-convrot256/1": INT8_SPEC}
 #: Both DiTs and the conditioner at most; the transaction's own accounting is exact.
 MAX_QUANTIZER_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_TEXT_ENCODER_BYTES
 
@@ -870,6 +871,18 @@ async def mxfp8(
     return _quantize_lane(ctx, tel, source, "mxfp8", "mxfp8/1", max_relative_frobenius)
 
 
+@invocable(memoize=True, memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
+async def int8(
+    ctx: Context,
+    *,
+    source: H3FullTransformer,
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """H3's recipe at `int8-convrot256/1`: W8A8 on the int8 tensor cores, the same weights as fp8."""
+    return _quantize_lane(ctx, tel, source, "int8", "int8-convrot256/1", max_relative_frobenius)
+
+
 app.job(
     fp8,
     name="fp8",
@@ -880,6 +893,12 @@ app.job(
     mxfp8,
     name="mxfp8",
     weights=(WeightsOutput("mxfp8", max_new_bytes=MAX_QUANTIZER_BYTES),),
+    accelerator=False,
+)
+app.job(
+    int8,
+    name="int8",
+    weights=(WeightsOutput("int8", max_new_bytes=MAX_QUANTIZER_BYTES),),
     accelerator=False,
 )
 
