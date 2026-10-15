@@ -25,6 +25,7 @@ from cozy_runtime.author import (
     Shape,
     Telemetry,
     UnsupportedInput,
+    Weights,
     WeightsOutput,
     invocable,
 )
@@ -211,7 +212,7 @@ def generate(
 # ------------------------------------------------------------------ quantized lanes
 
 # The Anima recipes: which weights each lane encodes; every other tensor inherits unchanged.
-# `cozy model quantize <model> --int8|--fp8` runs the job whose weights output is
+# `cozy model quantize <model> --int8|--fp8` runs the function whose weights output is
 # that lane. `cozy_runtime.derive` owns the encodings and the round-trip tripwire.
 _LANE_BYTES = 16 << 30
 _QUANTIZER = (  # the Runtime code and native libraries that decide a lane's bytes
@@ -226,17 +227,17 @@ _QUANTIZER = (  # the Runtime code and native libraries that decide a lane's byt
 
 
 def _quantize(
-    ctx: Context, tel: Telemetry, source: AnimaModel, lane: str, encoding: str, tripwire: float | None
+    ctx: Context, tel: Telemetry, source: Weights[AnimaModel], lane: str, encoding: str, tripwire: float | None
 ) -> ModelArtifact:
     plan = derive.plan(("transformer",), encoding, max_relative_frobenius=tripwire)
     return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output=lane)
 
 
-@invocable(memoize=True, memo_dependencies=_QUANTIZER)
+@invocable(memo_dependencies=_QUANTIZER)
 async def fp8(
     ctx: Context,
     *,
-    source: AnimaModel,
+    source: Weights[AnimaModel],
     max_relative_frobenius: float | None = None,
     tel: Telemetry,
 ) -> ModelArtifact:
@@ -261,11 +262,11 @@ INT8 = QuantizationPlan(
 )
 
 
-@invocable(memoize=True, memo_version="anima-int8/1")
-async def int8(ctx: Context, *, source: AnimaModel, tel: Telemetry) -> ModelArtifact:
+@invocable(memo_version="anima-int8/1")
+async def int8(ctx: Context, *, source: Weights[AnimaModel], tel: Telemetry) -> ModelArtifact:
     """The int8 lane (`int8-convrot256/1`): W8A8 on int8 tensor cores; see `INT8`."""
     return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8-convrot256/1", output="int8")
 
 
-app.job(int8, name="int8", weights=(WeightsOutput("int8", max_new_bytes=_LANE_BYTES),), accelerator=False)
-app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
+app.entrypoint(int8, name="int8", weights=(WeightsOutput("int8", max_new_bytes=_LANE_BYTES),), accelerator=False)
+app.entrypoint(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
