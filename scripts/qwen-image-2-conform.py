@@ -91,7 +91,9 @@ pixels = torch.tensor([[[[1.0]], [[-1.0]], [[-1.0]], [[-1.0]]]])
 assert rgb_image(pixels).getpixel((0, 0)) == (255, 255, 255)
 pixels[0, 3, 0, 0] = 1
 assert rgb_image(pixels).getpixel((0, 0)) == (255, 0, 0)
-(surface,) = describe(app)
-assert surface.name == "generate_image" and surface.kind == "entrypoint"
+surfaces = {surface.name: surface for surface in describe(app)}
+assert set(surfaces) == {"generate_image", "int8"}, sorted(surfaces)
+surface = surfaces["generate_image"]
+assert surface.kind == "entrypoint"
 assert {binding.param for binding in surface.model_bindings} == {"model"}
 print("qwen-image-2: 27 buckets, defaults, seeds, hardcut refusals and PNG pixels passed")
