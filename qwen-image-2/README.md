@@ -67,6 +67,18 @@ returned checkpoint digest. Upload creates the checkpoint; the separate publish
 command creates the release used by the package's default binding. Preparation and descriptor checks
 alone do not qualify GPU inference or the generated image.
 
+## The int8 lane
+
+`int8` writes the fast lane for consumer cards: every linear of the 32 DiT blocks and of the
+text encoder's 36 language layers as `int8-convrot256/1` (each 256 input channels rotated by a
+Hadamard, int8 per output row), served as W8A8 on the int8 tensor cores. Embeddings, the vision
+tower, the input/output projections, the modulation and the VAE keep their source bytes.
+
+```sh
+cozy model quantize paul/qwen-image-2.1@0.1.0/original --int8 --rental=YOUR_RENTAL --await
+cozy model publish paul/qwen-image-2.1 --release 0.1.0 --lane int8=sha256:CHECKPOINT_DIGEST
+```
+
 ## Resolution buckets
 
 Megapixels are nominal area classes, as in Anima and SDXL. Every dimension is a

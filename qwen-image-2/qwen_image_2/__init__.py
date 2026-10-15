@@ -18,12 +18,15 @@ from cozy_runtime.author import (
     Outputs,
     Shape,
     Telemetry,
+    WeightsOutput,
 )
 from PIL import Image
 
 from .model import QwenImage21Model
+from .quantize import int8
 
 app = App()
+app.job(int8, weights=(WeightsOutput("int8", max_new_bytes=24 << 30),), accelerator=False)
 Background = Literal["normal", "white"]
 
 

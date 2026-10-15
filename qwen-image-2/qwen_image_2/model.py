@@ -221,7 +221,7 @@ class _StagedPipeline(_Pipeline):
 _ENCODER_CODE = (_StagedPipeline, build_processor)
 
 
-class QwenImage21Model(Model[QwenImage21Graph]):
+class QwenImage21Model(Model[QwenImage21Graph], encoded_leaves="accept"):
     graph: QwenImage21Graph
     processor: Any
 
