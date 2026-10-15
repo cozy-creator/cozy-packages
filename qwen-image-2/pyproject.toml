@@ -5,7 +5,7 @@ description = "Cozy image generation and reference editing using Qwen-Image-2.1"
 requires-python = ">=3.12"
 dependencies = [
     # 0.24.4: the int8 lane (int8-convrot256/1, quantize_into) and fused DiT blocks.
-    "cozy-runtime[media]>=0.24.4",
+    "cozy-runtime[media]>=0.25.0",
     "diffusers==0.41.0",
     "msgspec>=0.19",
     "numpy>=1.26",
