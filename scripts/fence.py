@@ -409,7 +409,7 @@ IDENTIFIERS = (
 DIGEST_PINNED_PREFIXES = (
     "minimax-h3-tools/src/h3_tables/",
     # Native plain-tensor encoding identity, not a selected checkpoint. The CPU
-    # normalization job writes explicit source conditioning into managed tensors.
+    # normalization function writes explicit source conditioning into managed tensors.
     "seedvr2/seedvr2/normalize.py",
 )
 
@@ -553,7 +553,7 @@ def fence_no_choreography() -> Fence:
             and node.names
             and all(alias.name in own for alias in node.names)
         }
-        # This CPU conversion job ingests two explicitly granted, SHA-checked
+        # This CPU conversion function ingests two explicitly granted, SHA-checked
         # upstream conditioning tensors. It does not load inference weights.
         # Keep the exception at the safe standard-library call, not the whole file.
         source_reads = {
@@ -955,9 +955,9 @@ def _anima_progress_ladder() -> list[str]:
 
 
 def fence_interface_format() -> Fence:
-    """Every interface is an interface/1 document with at least the four root fields; a newer
-    Runtime may describe more."""
-    expected = {"application", "entrypoints", "format", "jobs"}
+    """Every interface is an interface/1 document with one `entrypoints` list (no `jobs`); a
+    newer Runtime may describe more."""
+    expected = {"application", "entrypoints", "format"}
     bad: list[str] = []
     for project in projects():
         path = project / "metadata" / "package-interface.json"
@@ -968,7 +968,9 @@ def fence_interface_format() -> Fence:
             continue
         if not expected <= set(document) or document.get("format") != "cozy.package.interface/1":
             bad.append(f"{rel(path)}: missing interface/1 root fields or format")
-    return bad, f"{len(projects())} interface/1 files carry the four root fields"
+        if "jobs" in document:
+            bad.append(f"{rel(path)}: the jobs list is retired; every function is an entrypoint")
+    return bad, f"{len(projects())} interface/1 files carry one entrypoints list"
 
 
 def fence_publication_metadata() -> Fence:

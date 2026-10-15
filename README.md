@@ -14,9 +14,9 @@ dependencies or qualifying a worker image.
 | path | responsibility |
 |---|---|
 | `minimax-h3/` | MiniMax H3 dual-task package; the owner's hub binding selects FULL or AdaLN-pruned weights |
-| `sdxl/` | SDXL text-to-image package plus the family's `int8`/`fp8` quantizer jobs (se-008, cr-073, se-023) |
+| `sdxl/` | SDXL text-to-image package plus the family's `int8`/`fp8` quantizers (se-008, cr-073, se-023) |
 | `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
-| `minimax-h3-tools/` | H3 timestep-table and structural precompute jobs (cr-071) |
+| `minimax-h3-tools/` | H3 timestep-table and structural precompute functions (cr-071) |
 | `qwen-image-2/` | Qwen-Image-2.1 reference image generation; optional white background and native Runtime execution (research model licence) |
 | `examples/` | private `main()` scripts for conversions, uploads and diagnostics; run directly with `cozy run` |
 | `*/package.toml` | the `[application]` entry point only; it carries no model bindings |
@@ -93,19 +93,21 @@ quantized lanes.
 
 Each family package owns its quantization recipe; `cozy_runtime.derive` owns the encodings
 (`int8-convrot256/1`, `fp8-rowwise/1`), the checkpoint transaction and the round-trip tripwire. A
-quantizer is a job that takes the family's model and declares one weights output named for the
-lane it writes:
+quantizer is a function that takes the family's raw checkpoint (`Weights[M]`, never constructed)
+and declares one weights output named for the lane it writes. A writer is never memoized;
+`memo_dependencies` names the code that decides its bytes, so a committed derivation replays
+only for the same code:
 
 ```python
-@invocable(memoize=True, memo_dependencies=_QUANTIZER)
-async def fp8(ctx: Context, *, source: SdxlModel, max_relative_frobenius: float | None = None, tel: Telemetry) -> ModelArtifact:
+@invocable(memo_dependencies=_QUANTIZER)
+async def fp8(ctx: Context, *, source: Weights[SdxlModel], max_relative_frobenius: float | None = None, tel: Telemetry) -> ModelArtifact:
     plan = derive.plan(("unet",), "fp8-rowwise/1", max_relative_frobenius=max_relative_frobenius)
     return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output="fp8")
 
-app.job(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=16 << 30),), accelerator=False)
+app.entrypoint(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=16 << 30),), accelerator=False)
 ```
 
-`cozy model quantize <model> --int8` (or `--fp8`) finds that job by its output name and runs
+`cozy model quantize <model> --int8` (or `--fp8`) finds that function by its output name and runs
 it on the machine holding the checkpoint; `cozy run <package>/fp8 <model> <org/model>` is the
 same run. SDXL encodes the UNet's block-aligned rank-2 weights, Anima its transformer's; every
 other component inherits unchanged. H3 uses `h3_tables.operations.quantize`, which binds its

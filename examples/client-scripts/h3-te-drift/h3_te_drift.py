@@ -27,8 +27,7 @@ from typing import Annotated, Any
 import msgspec
 import numpy as np
 import torch
-from cozy_runtime.author import App, AssetBound, Context, FileAsset, Telemetry, WeightsReader
-from cozy_runtime.derive.operations import QuantizationSource
+from cozy_runtime.author import App, AssetBound, Context, FileAsset, Telemetry, Weights
 from safetensors.torch import load
 from transformers import Qwen3VLTextConfig
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
@@ -226,13 +225,12 @@ def drift(
     return {"summary": summary, "final_per_prompt": {p: rows[p][layers[-1]] for p in rows}}
 
 
-@app.job(accelerator=True)
+@app.entrypoint
 def weight_drift(
     ctx: Context,
     payload: WeightRequest,
-    bf16: QuantizationSource,
-    fp8: QuantizationSource,
-    weights: WeightsReader,
+    bf16: Weights[Any],
+    fp8: Weights[Any],
     tel: Telemetry,
 ) -> Result:
     config = Qwen3VLTextConfig.from_dict(json.loads(payload.text_config))
@@ -252,16 +250,12 @@ def weight_drift(
         "weight_only": {},
         "errors": {},
     }
-    with (
-        weights.open(bf16) as bf16_view,
-        weights.open(fp8) as fp8_view,
-        ThreadPoolExecutor(len(LINEARS) + len(NORMS)) as pool,
-    ):
-        inputs = layer0_inputs(bf16_view, token_ids, config)
-        original = checkpoint_layers(bf16_view, pool)
+    with ThreadPoolExecutor(len(LINEARS) + len(NORMS)) as pool:
+        inputs = layer0_inputs(bf16, token_ids, config)
+        original = checkpoint_layers(bf16, pool)
         arms: dict[str, Loader] = {
             "bf16 (harness floor)": original,
-            "fp8 (ours, weights only)": checkpoint_layers(fp8_view, pool),
+            "fp8 (ours, weights only)": checkpoint_layers(fp8, pool),
             **{name: emulated(original, scheme) for name, (_, scheme, _) in COMMUNITY.items()},
         }
         for name, layer_weights in arms.items():
