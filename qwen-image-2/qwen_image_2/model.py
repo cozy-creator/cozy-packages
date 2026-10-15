@@ -25,6 +25,7 @@ from transformers import (
 )
 from transformers import initialization as transformer_init
 
+from cozy_runtime import fusion
 from cozy_runtime.author import (
     Config,
     ConformanceError,
@@ -33,6 +34,7 @@ from cozy_runtime.author import (
     ModelAssets,
     uses_components,
 )
+from cozy_runtime.author.kernels import Plan
 
 try:
     from diffusers import (
@@ -40,6 +42,7 @@ try:
         QwenImage21Pipeline,
         QwenImage21Transformer2DModel,
     )
+    from diffusers.models.transformers.transformer_qwenimage21 import QwenImage21TransformerBlock
     from diffusers.pipelines.qwenimage21.pipeline_qwenimage21 import calculate_dimensions
 except ImportError:
     # A caller that only imports this package for its call proxies (H3) may hold an older
@@ -47,6 +50,47 @@ except ImportError:
     QwenImage21Pipeline = None
 
 _Pipeline: Any = QwenImage21Pipeline or object
+
+
+def _modulation(block: Any, arguments: Mapping[str, Any]) -> fusion.Modulation:
+    """Diffusers' `_select_modulation_rows` as a row per token: a target-image token reads its
+    sample's row, the text and condition-image prefix the trailing t=0 row."""
+    table, mask = arguments["modulation"], arguments["target_token_mask"]
+    batch, tokens = arguments["hidden_states"].shape[:2]
+    samples = torch.arange(batch, device=table.device)[:, None]
+    if mask is None:
+        index = samples.expand(batch, tokens)
+    else:
+        index = torch.where(mask[None, :], samples, table.shape[0] - 1)
+    return fusion.Modulation(index.reshape(-1), *table.chunk(4, dim=-1))
+
+
+#: The 2.1 block as Runtime fuses it (scale, gate | scale, gate; tanh gates; no shift).
+BLOCK = (
+    fusion.DiTBlock(
+        QwenImage21TransformerBlock,
+        width=4096,
+        head_dim=128,
+        modulation=_modulation,
+        norms=("img_norm1", "img_norm2"),
+        norm="layer",
+        attention="attn",
+        arguments=(
+            "attention_mask",
+            "rotary_emb",
+            "layer_cache",
+            "kv_cache_mode",
+            "cache_write_slice",
+            "segments",
+            "key_valid",
+        ),
+        mlp=fusion.GatedMLP("img_mlp", gate="gate_layer", up="proj", down="out"),
+        rope=fusion.Rope("rotary_emb", interleaved=True),
+        gate="tanh",
+    )
+    if QwenImage21Pipeline is not None
+    else None
+)
 
 
 class _Progress[T]:
@@ -184,6 +228,10 @@ class QwenImage21Model(Model[QwenImage21Graph]):
     def load(self, loader: Loader) -> None:
         self.graph = loader.construct(QwenImage21Graph, factory=build_qwen_image21)
         self.processor = build_processor(loader.assets)
+
+    def execution_plan(self, plan: Plan) -> str:
+        assert BLOCK is not None
+        return fusion.install(plan, BLOCK, self.graph.components["transformer"])
 
     def _pipeline(self) -> _StagedPipeline:
         return _StagedPipeline(
