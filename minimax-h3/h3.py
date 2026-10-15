@@ -1125,10 +1125,10 @@ async def ref2va_turbo(ctx: Context, payload: ReferenceRenderInput, out: Outputs
     return ReferenceRenderOutput(result.video, result.originals, warnings + result.warnings, shown)
 
 
-app.job(fl2va, emits_media=True, accelerator=False)
-app.job(fl2va_turbo, emits_media=True, accelerator=False)
-app.job(ref2va, emits_media=True, accelerator=False)
-app.job(ref2va_turbo, emits_media=True, accelerator=False)
+app.entrypoint(fl2va, emits_media=True, accelerator=False)
+app.entrypoint(fl2va_turbo, emits_media=True, accelerator=False)
+app.entrypoint(ref2va, emits_media=True, accelerator=False)
+app.entrypoint(ref2va_turbo, emits_media=True, accelerator=False)
 
 
 
@@ -1303,7 +1303,7 @@ def _references_to_video(
 
 
 # --- long-form composition -------------------------------------------------------------
-# `long_form` is a CPU composition job. Runtime runs an ordinary serving child for each
+# `long_form` is a CPU composition function. Runtime runs an ordinary serving child for each
 # shot and owns its intermediate bytes. Its segments are not memoized.
 # Only encoded asset handles cross the loop. Assembly decodes one bounded event at a time.
 
@@ -2018,6 +2018,6 @@ async def long_form(
     )
 
 
-app.job(long_form, emits_media=True, accelerator=False)
-app.job(long_form_cuts, emits_media=True, accelerator=False)
-app.job(assemble_video, emits_media=True, accelerator=False)
+app.entrypoint(long_form, emits_media=True, accelerator=False)
+app.entrypoint(long_form_cuts, emits_media=True, accelerator=False)
+app.entrypoint(assemble_video, emits_media=True, accelerator=False)

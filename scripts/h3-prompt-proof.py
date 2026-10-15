@@ -409,7 +409,7 @@ def retention_defaults() -> None:
             (
                 "authored retention overrides remain verbatim",
                 {**wire, "references": [
-                    {**ref, "retention-analysis": authored} for ref in references
+                    {**ref, "retention_analysis": authored} for ref in references
                 ]},
                 [authored] * 3,
             ),

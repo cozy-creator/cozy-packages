@@ -41,9 +41,7 @@ class StoryReference(msgspec.Struct):
     name: str
     kind: Literal["character", "scene", "audio"]
     description: str = ""
-    retention_analysis: Annotated[str, msgspec.Meta(max_length=1024)] | None = msgspec.field(
-        default=None, name="retention-analysis"
-    )
+    retention_analysis: Annotated[str, msgspec.Meta(max_length=1024)] | None = None
     image: Annotated[
         ImageAsset | None,
         AssetBound(
@@ -182,7 +180,7 @@ def validate_references(references: Sequence[StoryReference]) -> dict[str, Story
             )
         if reference.retention_analysis is not None and not reference.retention_analysis.strip():
             raise InvalidRequest(
-                f"reference {reference.name} has blank retention-analysis; omit it for the default",
+                f"reference {reference.name} has blank retention_analysis; omit it for the default",
                 fields=["references"],
             )
         by_name[key] = reference
