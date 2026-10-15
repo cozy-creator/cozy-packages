@@ -229,7 +229,7 @@ def _bn(vae: Any, like: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return mean, std
 
 
-class Klein(Model[KleinGraph]):
+class Klein(Model[KleinGraph], encoded_leaves="accept"):
     """One Klein checkpoint: the distilled flow map (no guidance) or the base model (CFG)."""
 
     graph: KleinGraph

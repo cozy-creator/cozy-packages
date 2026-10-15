@@ -26,9 +26,11 @@ from cozy_runtime.derive.quantization import QuantizationSource
 from PIL import Image
 
 from .klein import MAX_SIDE, MIN_SIDE, PATCH, Klein, prepare_multi_reference, prepare_reference, repack
+from .quantize import int8
 from .upsampler import Upsampler, prepare
 
 app = App()
+app.job(int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
 
 
 @invocable(memoize=True)

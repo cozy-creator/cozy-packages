@@ -62,6 +62,26 @@ upsampler, `flux-3-image-klein-pup@8b069751eb5dcab23829d9c5eccb470eb8b8a4ed`, ca
 or tokenizer. `normalize_upsampler` adds BFL's files, which ship in `flux_3_klein/upsampler/`. Publish
 each normalized checkpoint as release `0.1.0`, lane `original`.
 
+## The int8 lane
+
+`int8` writes the default lane: every linear of the 43 DiT blocks, the modulation heads, the context
+embedder, the output norm and the text encoder's 32 language layers as `int8-convrot256/1`, served
+W8A8 on the int8 tensor cores. On real Klein activations each linear is 0.5–1.3% from bf16 (fp8
+row-scaled: 1.5–2.8%), and the images match bf16's. The VAE stays f32.
+
+```sh
+cozy model quantize <account>/flux-3-klein@0.1.0/original --int8 --rental=<rental> --await
+cozy model publish <account>/flux-3-klein --release 0.1.0 --lane int8=sha256:<checkpoint>
+```
+
+Do the same for `flux-3-klein-base`. Warm 1 MP seconds per step (16-step distilled; 50-step base
+with CFG), and the weights the lane holds:
+
+| card | distilled bf16 → int8 | base bf16 → int8 | weights |
+|---|---|---|---|
+| RTX 5090 | 0.245 → 0.146 | 0.496 → 0.295 | 17.6 → 9.4 GiB |
+| RTX 4090 | 0.390 → 0.255 | 0.781 → 0.506 | |
+
 ## Licence
 
 FLUX.3 Image Klein is under the FLUX Kommunity License v1.0 (`flux_3_klein/LICENSE.model.md`,
