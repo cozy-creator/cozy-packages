@@ -46,21 +46,21 @@ package against Diffusers' Flux3 modular pipelines on tiny real modules.
 
 ## Prepare the models
 
-Upload each repository as it is (no TensorFS profile matches it yet), then `normalize` it into the
-served checkpoint. That is a zero-copy derivation: transformer, text encoder and VAE, without BFL's
-`variants/` folder or the text-encoder tensors Klein never runs.
+Upload each repository as it is. The served checkpoint is the upload: TensorFS takes a Diffusers repo's
+index components (not BFL's `variants/`) and a Transformers repo's config, tokenizer, processor and chat
+template. Publish each as lane `original`.
 
 ```sh
 cozy model upload hf://black-forest-labs/flux-3-image-klein@8454017f9ebaada30c998fccd9f67a80c7580f68 \
   <account>/flux-3-klein --rental=<rental> --await
-cozy run <account>/flux-3-klein/normalize model.source=<account>/flux-3-klein#sha256:<raw> \
-  --upload-to <account>/flux-3-klein --rental=<rental> --await
+cozy model upload hf://black-forest-labs/flux-3-image-klein-base@1469d27cfb9bb1bd81d3a93f5a023b39dbf136e4 \
+  <account>/flux-3-klein-base --rental=<rental> --await
+cozy model upload hf://black-forest-labs/flux-3-image-klein-pup@8b069751eb5dcab23829d9c5eccb470eb8b8a4ed \
+  <account>/flux-3-klein-upsampler --rental=<rental> --await
 ```
 
-Do the same for `flux-3-image-klein-base@1469d27cfb9bb1bd81d3a93f5a023b39dbf136e4`. A raw upload of the
-upsampler, `flux-3-image-klein-pup@8b069751eb5dcab23829d9c5eccb470eb8b8a4ed`, carries no configuration
-or tokenizer. `normalize_upsampler` adds BFL's files, which ship in `flux_3_klein/upsampler/`. Publish
-each normalized checkpoint as release `0.1.0`, lane `original`.
+Klein never builds Qwen3-VL's vision tower, its last four layers or its head, so it never loads those
+tensors either. BFL's upsampler system prompts ship in `flux_3_klein/system_prompts.json`.
 
 ## The int8 lane
 

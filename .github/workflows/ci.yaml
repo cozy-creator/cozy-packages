@@ -95,7 +95,7 @@ jobs:
           unzip -l dist/packages/qwen-image-2/qwen_image_2-*.whl | grep -F 'qwen_image_2/Notice'
           unzip -l dist/packages/flux-3-klein/flux_3_klein-*.whl | grep -F 'flux_3_klein/LICENSE.model.md'
           unzip -l dist/packages/flux-3-klein/flux_3_klein-*.whl | grep -F 'flux_3_klein/NOTICE.model.md'
-          unzip -l dist/packages/flux-3-klein/flux_3_klein-*.whl | grep -F 'flux_3_klein/upsampler/tokenizer.json'
+          unzip -l dist/packages/flux-3-klein/flux_3_klein-*.whl | grep -F 'flux_3_klein/system_prompts.json'
 
       # Each package has its own environment; native wheel requirements are checked
       # inside each environment before its compiled import proof below. Different package versions

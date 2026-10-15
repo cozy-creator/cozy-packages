@@ -17,21 +17,14 @@ import numpy as np
 import torch
 from cozy_runtime.author import (
     Config,
-    Context,
     Loader,
     Model,
-    ModelArtifact,
     ModelAssets,
-    Telemetry,
-    UnsupportedInput,
     uses_components,
 )
-from cozy_runtime.derive.quantization import QuantizationSource
 from diffusers import AutoencoderKLFlux2, Flux3Transformer2DModel
 from diffusers.modular_pipelines.flux3.encoders import Flux3TextEncoderStep
 from PIL import Image, ImageOps
-from tensorfs.derived import Config as DerivedConfig
-from tensorfs.derived import Derivation, Target
 from tokenizers import Tokenizer
 from transformers import (
     AutoModelForImageTextToText,
@@ -73,46 +66,6 @@ def _conditioning_only(encoder: Any) -> None:
     language.norm = torch.nn.Identity()
     encoder.lm_head = torch.nn.Identity()
     del encoder.model.visual
-
-
-def _conditioning_key(key: str) -> bool:
-    """A stored text-encoder tensor `_conditioning_only` builds."""
-    if key == "model.language_model.embed_tokens.weight":
-        return True
-    prefix = "model.language_model.layers."
-    return key.startswith(prefix) and int(key[len(prefix):].split(".", 1)[0]) < max(TEXT_LAYERS)
-
-
-def repack(source: QuantizationSource, ctx: Context, tel: Telemetry) -> ModelArtifact:
-    """The served checkpoint from an as-is upload, by reference (no bytes copied): the three
-    Diffusers components without BFL's `variants/` folder or the text-encoder tensors Klein never
-    runs. Configs, tokenizer and processor files carry over."""
-    capability = ctx.tensorfs_source(source)
-    inspection = capability.inspect()
-    missing = [name for name in COMPONENTS if name not in inspection.components]
-    if missing:
-        raise UnsupportedInput(f"the Klein upload lacks components {missing}")
-    unused = tuple(sorted(k for k in inspection.components["text_encoder"] if not _conditioning_key(k)))
-    targets = {
-        name: Target(source="source", source_component=name, drop=unused if name == "text_encoder" else ())
-        for name in COMPONENTS
-    }
-    configs = {
-        name: DerivedConfig("copy", source="source", source_config=name)
-        for name in inspection.configs
-        if not name.startswith("variants")
-    }
-    order = tuple(
-        (name, key)
-        for name in COMPONENTS
-        for key in inspection.components[name]
-        if name != "text_encoder" or _conditioning_key(key)
-    )
-    with ctx.output("model").open(Derivation({"source": capability}, targets, configs, order)) as transaction:
-        if transaction.receipt is not None:
-            return ctx.adopt_model(transaction.receipt)
-        tel.log("klein repacked", dropped_text_encoder=len(unused), configs=", ".join(sorted(configs)))
-        return ctx.adopt_model(transaction.commit())
 
 
 class KleinGraph:

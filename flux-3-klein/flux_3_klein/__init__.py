@@ -15,38 +15,19 @@ from cozy_runtime.author import (
     ImageAsset,
     MediaDecoder,
     Memoize,
-    ModelArtifact,
     Outputs,
     Shape,
     Telemetry,
     WeightsOutput,
-    invocable,
 )
-from cozy_runtime.derive.quantization import QuantizationSource
 from PIL import Image
 
-from .klein import MAX_SIDE, MIN_SIDE, PATCH, Klein, prepare_multi_reference, prepare_reference, repack
+from .klein import MAX_SIDE, MIN_SIDE, PATCH, Klein, prepare_multi_reference, prepare_reference
 from .quantize import int8
-from .upsampler import Upsampler, prepare
+from .upsampler import Upsampler
 
 app = App()
 app.job(int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
-
-
-@invocable(memoize=True)
-async def normalize_upsampler(ctx: Context, *, source: QuantizationSource, tel: Telemetry) -> ModelArtifact:
-    """The servable upsampler checkpoint from BFL's raw weights (see README, Prepare the models)."""
-    return prepare(source, ctx, tel)
-
-
-@invocable(memoize=True)
-async def normalize(ctx: Context, *, source: QuantizationSource, tel: Telemetry) -> ModelArtifact:
-    """A Klein checkpoint as served, from its as-is upload (see README, Prepare the models)."""
-    return repack(source, ctx, tel)
-
-
-app.job(normalize_upsampler, weights=(WeightsOutput("model", max_new_bytes=64 << 20),), accelerator=False)
-app.job(normalize, weights=(WeightsOutput("model", max_new_bytes=16 << 20),), accelerator=False)
 
 
 class AspectRatio(Enum):
