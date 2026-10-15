@@ -211,11 +211,11 @@ def _render(
 
 _DISTILLED: dict[str, list[dict[str, str | int]]] = {
     "model": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein@0.1.0/original"}],
-    "upsampler": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-upsampler@0.1.0/original"}],
+    "upsampler": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-upsampler@0.2.0/original"}],
 }
 _BASE: dict[str, list[dict[str, str | int]]] = {
     "model": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-base@0.1.0/original"}],
-    "upsampler": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-upsampler@0.1.0/original"}],
+    "upsampler": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-upsampler@0.2.0/original"}],
 }
 _COMPONENTS = {"model": ("transformer", "text_encoder", "vae"), "upsampler": ("model",)}
 
