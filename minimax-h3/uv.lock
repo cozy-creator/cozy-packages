@@ -516,7 +516,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.36.4"
+version = "1.36.5"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },
@@ -569,7 +569,7 @@ requires-dist = [
 
 [[package]]
 name = "minimax-h3-tools"
-version = "2.15.2"
+version = "2.16.0"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime" },
@@ -579,7 +579,7 @@ dependencies = [
     { name = "torch" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/minimax-h3-tools/2.15.2/minimax_h3_tools-2.15.2-py3-none-any.whl", hash = "sha256:679c192dc014c179d5138d236278754bf9f6a025670a30d235ce33dd126f32f2" },
+    { url = "https://tensorhub.com/v1/index/fidika/minimax-h3-tools/2.16.0/minimax_h3_tools-2.16.0-py3-none-any.whl", hash = "sha256:b56973319513ac36d376ffdfd5ba4a0df51b867f5b8869e03eae8eb45053c1a8" },
 ]
 
 [[package]]
@@ -995,7 +995,7 @@ wheels = [
 
 [[package]]
 name = "seedvr2"
-version = "0.2.1"
+version = "0.3.0"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -1011,7 +1011,7 @@ dependencies = [
     { name = "torchvision" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/seedvr2/0.2.1/seedvr2-0.2.1-py3-none-any.whl", hash = "sha256:e6253df7f573c88637d9aba83214f134b83a750ec7b9d5d17d1e91a358c90ac2" },
+    { url = "https://tensorhub.com/v1/index/fidika/seedvr2/0.3.0/seedvr2-0.3.0-py3-none-any.whl", hash = "sha256:a6e61a6b67e32a80237893c6a0cbaa96b5a613c808c46951cb7ad9fb6d67819d" },
 ]
 
 [[package]]
