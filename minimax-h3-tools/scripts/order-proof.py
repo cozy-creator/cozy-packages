@@ -167,7 +167,7 @@ def main() -> None:
     ):
         raise RuntimeError("quantization changed its closed 584/313 component plan")
     # Every lane's targets now come from its catalogue row, so this proof drives the exact
-    # declaration path the job does rather than a second spelling of it.
+    # declaration path the function does rather than a second spelling of it.
     dits = _dit_structure(sections)
     pruned = _targets_of("bf16-pruned", sections, tables, full_targets, dits, quantization)
     fp8 = _targets_of("fp8-pruned", sections, tables, full_targets, dits, quantization)
@@ -228,11 +228,10 @@ def main() -> None:
     package_interface = json.loads((PROJECT / "metadata" / "package-interface.json").read_bytes())
     if "model_productions" in package_interface:
         raise RuntimeError("package retained the retired model-production graph")
-    declared = package_interface.get("jobs")
-    if not isinstance(declared, list):
-        raise TypeError("package jobs are not one interface list")
-    jobs = {str(row["name"]): row for row in declared}
-    if set(jobs) != {
+    if "jobs" in package_interface:
+        raise RuntimeError("package retained the retired jobs list")
+    functions = {str(row["name"]): row for row in package_interface["entrypoints"]}
+    if set(functions) != {
         *lane_recipes.LANES,
         "retable",
         "apply-adaln",
@@ -243,18 +242,22 @@ def main() -> None:
         "fp8",
         "int8",
     }:
-        raise RuntimeError(f"package callables changed: {sorted(jobs)}")
+        raise RuntimeError(f"package callables changed: {sorted(functions)}")
     for lane in lane_recipes.LANES:
-        job = jobs[lane]
-        if [row["path"] for row in job["models"]] != [f"{lane}.models.source"]:
-            raise RuntimeError(f"{lane} changed its one typed source slot")
-        if [output["output_id"] for output in job["weights_outputs"]] != [lane]:
+        function = functions[lane]
+        if [(row["path"], row.get("weights")) for row in function["models"]] != [
+            (f"{lane}.models.source", True)
+        ]:
+            raise RuntimeError(f"{lane} changed its one Weights source slot")
+        if [output["output_id"] for output in function["weights_outputs"]] != [lane]:
             raise RuntimeError(f"{lane} does not declare exactly its own lane output")
-        if any("required_contract" in output for output in job["weights_outputs"]):
+        if any("required_contract" in output for output in function["weights_outputs"]):
             raise RuntimeError(f"{lane} retained a publish-time tensor requirements contract")
-        if "resources" in job:
+        if "resources" in function:
             raise RuntimeError(f"{lane} should derive and measure resources, not author them")
-    retable = jobs["retable"]
+        if function["invocable"]["memoize"]:
+            raise RuntimeError(f"{lane} writes weights and so is never memoized")
+    retable = functions["retable"]
     if {row["path"] for row in retable["models"]} != {
         "retable.models.full",
         "retable.models.pruned",
@@ -264,7 +267,7 @@ def main() -> None:
     }:
         raise RuntimeError("retable changed its two typed sources or two outputs")
     print(
-        f"H3 LANE CONTRACT PASS jobs={len(jobs)} graphs=0 lanes={len(lane_recipes.LANES)} "
+        f"H3 LANE CONTRACT PASS functions={len(functions)} graphs=0 lanes={len(lane_recipes.LANES)} "
         "full_rows=3968 "
         "task_rows=583 shared_text_drop=156 quantized_per_task=313 tables_per_task=51 "
         f"table_bytes_per_task={measured_bytes} table_budget_per_task={MAX_TABLE_BYTES} "

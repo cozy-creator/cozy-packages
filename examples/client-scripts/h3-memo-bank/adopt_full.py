@@ -7,12 +7,13 @@
 # original = 1
 # ///
 """Return genuine native custody before a separate caller delegates H3 bank work."""
-from cozy_runtime.author import Context, ModelArtifact
-from cozy_runtime.derive.operations import QuantizationSource
+from typing import Any
+
+from cozy_runtime.author import Context, ModelArtifact, Weights
 from tensorfs.derived import Config, Derivation, Target
 
 
-def main(ctx: Context, *, source: QuantizationSource) -> ModelArtifact:
+def main(ctx: Context, *, source: Weights[Any]) -> ModelArtifact:
     capability = ctx.tensorfs_source(source)
     structure = capability.inspect()
     for component in ("fl2va_dit", "ref2va_dit"):

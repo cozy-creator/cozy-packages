@@ -86,7 +86,7 @@ was fabricated merely to make a dry-run appear complete.
 1. **Positive production plus compatible partial recovery.** Start the first
    `compute.py` on the full source. Observe the FL2VA bank's own native operation
    identity, then stop only that accepted operation after its first completed
-   block checkpoint. Use the normal CLI pause/retry path and an edited caller.
+   block checkpoint. Cancel it, then resubmit with an edited caller.
    An observer may hold the exact native checkpoint boundary, but must be scoped
    to this operation and must not mutate journals. Require 51 FL2VA tables, no
    repeated first-block projection/read, and 51 Ref2VA tables. FP32 time embeddings

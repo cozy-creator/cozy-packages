@@ -12,13 +12,14 @@ from contextlib import nullcontext
 from typing import Any
 
 import torch
+from cozy_runtime.author import Weights
 from cozy_runtime.derive.quantization import (
     QuantizationStats,
     prepare_quantization,
 )
 from h3_tables import job, lanes
 from h3_tables.quantization import h3_quantization_plan
-from h3_tables.source import TARGET_COMPONENT, H3FullTransformer, full_targets
+from h3_tables.source import TARGET_COMPONENT, full_targets
 from source_geometry import VIDEO_VAE_ROWS, conditioner_rows, plain
 from tensorfs.derived import Source, SourceCapability, SourceInspection
 
@@ -170,12 +171,12 @@ def invoke(recorder: Recorder, fail_at: str = "") -> Any:
     original_tf32 = torch.backends.cuda.matmul.allow_tf32
     original_precision = torch.get_float32_matmul_precision()
     try:
-        # Explicit computation seams only; all stage control stays in the lanes job.
+        # Explicit computation seams only; all stage control stays in the lanes function.
         module._write_tables = recorder.tables
         module.quantize_component_into = recorder.quantize
         module.write_cast = recorder.cast
         module.torch.cuda.is_available = lambda: True
-        source = H3FullTransformer.for_test()
+        source = Weights[Any]("sha256:" + "0" * 64)
         return job._produce_lanes(recorder, Telemetry(), source, tuple(lanes.LANES))
     finally:
         job._write_tables = original_tables

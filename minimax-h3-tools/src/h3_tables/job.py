@@ -1,4 +1,4 @@
-"""Typed jobs producing the exact MiniMax H3 checkpoint variants and their AdaLN tables."""
+"""Typed functions producing the exact MiniMax H3 checkpoint variants and their AdaLN tables."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from cozy_runtime.author import (
     ModelArtifact,
     Telemetry,
     UnsupportedInput,
+    Weights,
     WeightsOutput,
     invocable,
 )
@@ -64,11 +65,7 @@ from .order import current_order
 from .order import full_order as _full_order
 from .plans import TimestepPlan, parse_declared_plan
 from .quantization import h3_quantization_plan
-from .source import (
-    TARGET_COMPONENT,
-    H3FullTransformer,
-    inspection,
-)
+from .source import TARGET_COMPONENT, inspection
 from .source import full_targets as _full_targets
 from .source import select_full_targets as _select_full_targets
 from .source import structures as _structures
@@ -500,7 +497,7 @@ class _SharedTelemetry:
 def _produce_lanes(
     ctx: Context,
     tel: Telemetry,
-    source: H3FullTransformer,
+    source: Weights[Any],
     lanes: tuple[LaneName, ...],
     max_relative_frobenius: float | None = None,
 ) -> dict[str, ModelArtifact]:
@@ -511,7 +508,7 @@ def _produce_lanes(
     ``lanes.LANES`` and commits to its own output slot, named after the lane. A component
     no lane treats is inherited by reference, so the conditioner and both VAEs stay
     byte-shared across lanes. A fresh identical request adopts every completed table and
-    quantized tensor of a retained stopped attempt (a paused run) on the same worker.
+    quantized tensor of a canceled or failed attempt on the same machine.
     """
     requested = _requested(lanes)
     sources = {"dits": source, "shared": source}
@@ -664,23 +661,23 @@ def _produce_lanes(
 
 # One function per lane: Runtime requires a receipt for EVERY declared weights output, so a
 # function declares exactly the lane it always produces.
-@invocable(memoize=True, memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
-async def bf16_full(ctx: Context, *, source: H3FullTransformer, tel: Telemetry) -> ModelArtifact:
+@invocable(memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
+async def bf16_full(ctx: Context, *, source: Weights[Any], tel: Telemetry) -> ModelArtifact:
     """The reviewed full-precision lane: source-only rows dropped, video VAE normalised."""
     return _produce_lanes(ctx, tel, source, ("bf16-full",))["bf16-full"]
 
 
-@invocable(memoize=True, memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
-async def bf16_pruned(ctx: Context, *, source: H3FullTransformer, tel: Telemetry) -> ModelArtifact:
+@invocable(memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
+async def bf16_pruned(ctx: Context, *, source: Weights[Any], tel: Telemetry) -> ModelArtifact:
     """AdaLN-pruned BF16: 106 modulation rows per DiT replaced by timestep tables."""
     return _produce_lanes(ctx, tel, source, ("bf16-pruned",))["bf16-pruned"]
 
 
-@invocable(memoize=True, memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
+@invocable(memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
 async def fp8_pruned(
     ctx: Context,
     *,
-    source: H3FullTransformer,
+    source: Weights[Any],
     max_relative_frobenius: float | None = None,
     tel: Telemetry,
 ) -> ModelArtifact:
@@ -689,24 +686,22 @@ async def fp8_pruned(
     return lane["fp8-pruned"]
 
 
-app.job(
+app.entrypoint(
     bf16_full,
     name="bf16-full",
     weights=(WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES + MAX_VIDEO_VAE_BYTES),),
     accelerator=False,
 )
 # The pruned lanes compute AdaLN tables on the GPU.
-app.job(
+app.entrypoint(
     bf16_pruned,
     name="bf16-pruned",
     weights=(WeightsOutput("bf16-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),),
-    accelerator=True,
 )
-app.job(
+app.entrypoint(
     fp8_pruned,
     name="fp8-pruned",
     weights=(WeightsOutput("fp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),),
-    accelerator=True,
 )
 
 
@@ -771,7 +766,7 @@ def _quantizer_selections(
 def _quantize_lane(
     ctx: Context,
     tel: Telemetry,
-    source: H3FullTransformer,
+    source: Weights[Any],
     lane: str,
     encoding: _lanes.Encoding,
     max_relative_frobenius: float | None,
@@ -826,11 +821,11 @@ def _quantize_lane(
         return ctx.adopt_model(transaction.commit())
 
 
-@invocable(memoize=True, memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
+@invocable(memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
 async def fp8(
     ctx: Context,
     *,
-    source: H3FullTransformer,
+    source: Weights[Any],
     max_relative_frobenius: float | None = None,
     tel: Telemetry,
 ) -> ModelArtifact:
@@ -838,11 +833,11 @@ async def fp8(
     return _quantize_lane(ctx, tel, source, "fp8", "fp8-rowwise/1", max_relative_frobenius)
 
 
-@invocable(memoize=True, memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
+@invocable(memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
 async def int8(
     ctx: Context,
     *,
-    source: H3FullTransformer,
+    source: Weights[Any],
     max_relative_frobenius: float | None = None,
     tel: Telemetry,
 ) -> ModelArtifact:
@@ -850,13 +845,13 @@ async def int8(
     return _quantize_lane(ctx, tel, source, "int8", "int8-convrot256/1", max_relative_frobenius)
 
 
-app.job(
+app.entrypoint(
     fp8,
     name="fp8",
     weights=(WeightsOutput("fp8", max_new_bytes=MAX_QUANTIZER_BYTES),),
     accelerator=False,
 )
-app.job(
+app.entrypoint(
     int8,
     name="int8",
     weights=(WeightsOutput("int8", max_new_bytes=MAX_QUANTIZER_BYTES),),
@@ -864,7 +859,7 @@ app.job(
 )
 
 
-def _check_lane_jobs() -> None:
+def _check_lane_functions() -> None:
     """Each lane's function declares exactly the catalogue's output for that lane."""
     declared = {output.name: output for output in LANE_OUTPUTS}
     for name in LANES:
@@ -873,7 +868,7 @@ def _check_lane_jobs() -> None:
             raise ValueError(f"lane function {name!r} declares {registered}, not {declared[name]}")
 
 
-_check_lane_jobs()
+_check_lane_functions()
 
 
 def _retable_targets(
@@ -938,12 +933,12 @@ def _retable_targets(
     return bank, retabled
 
 
-@invocable(memoize=True, memo_version="h3-retable/1", memo_dependencies=LANES_MEMO)
+@invocable(memo_version="h3-retable/1", memo_dependencies=LANES_MEMO)
 async def retable(
     ctx: Context,
     *,
-    pruned: H3FullTransformer,
-    full: H3FullTransformer,
+    pruned: Weights[Any],
+    full: Weights[Any],
     tel: Telemetry,
 ) -> RetableResult:
     """Recompute one AdaLN-pruned checkpoint's tables for the current plans.
@@ -1031,31 +1026,29 @@ async def retable(
     )
 
 
-app.job(
+app.entrypoint(
     retable,
     name="retable",
     weights=(
         WeightsOutput("adaln-pruned", max_new_bytes=MAX_PRUNED_BYTES),
         WeightsOutput("tables", max_new_bytes=MAX_PRUNED_BYTES),
     ),
-    accelerator=True,
 )
 
 
 # Native output bounds include newly written construction and provenance configs.
-app.job(
+app.entrypoint(
     _adaln_operations.select_adaln_weights,
     name="select-adaln-weights",
     weights=(WeightsOutput("model", 1 << 20),),
     accelerator=False,
 )
-app.job(
+app.entrypoint(
     _adaln_operations.compute_adaln_tables,
     name="compute-adaln-tables",
     weights=(WeightsOutput("model", MAX_TABLE_BYTES),),
-    accelerator=True,
 )
-app.job(
+app.entrypoint(
     _adaln_operations.apply_adaln,
     name="apply-adaln",
     weights=(
@@ -1066,7 +1059,7 @@ app.job(
     accelerator=False,
 )
 
-app.job(
+app.entrypoint(
     _adaln_operations.retable_adaln,
     name="retable-adaln",
     weights=(WeightsOutput("model", 1 << 20),),
@@ -1076,4 +1069,4 @@ app.job(
 
 from .turbo import turbo_lora  # noqa: E402
 
-app.job(turbo_lora, name="turbo-lora", weights=(WeightsOutput("pdd8", 1 << 29),), accelerator=True)
+app.entrypoint(turbo_lora, name="turbo-lora", weights=(WeightsOutput("pdd8", 1 << 29),))

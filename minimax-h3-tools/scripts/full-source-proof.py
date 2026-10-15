@@ -9,11 +9,12 @@ resolves its treatments over each granted source exactly as `_produce_lanes` doe
 
 from __future__ import annotations
 
+import hashlib
 from collections import Counter
 from dataclasses import replace
 from typing import Any
 
-from cozy_runtime.author import canonical_json
+from cozy_runtime.author import Weights, canonical_json
 from cozy_runtime.derive.quantization import (
     prepare_quantization,
 )
@@ -23,13 +24,17 @@ from h3_tables.model_config import parse_production_config
 from h3_tables.order import current_order
 from h3_tables.order import full_order as compute_order
 from h3_tables.quantization import h3_quantization_plan
-from h3_tables.source import TARGET_COMPONENT, H3FullTransformer, full_targets
+from h3_tables.source import TARGET_COMPONENT, full_targets
 from source_geometry import VIDEO_VAE_ROWS, conditioner_rows, plain
 from tensorfs.derived import Part, Source, SourceCapability, SourceInspection, Tensor
 
 GEOMETRY = {("text_encoder", key): spec for key, spec in conditioner_rows().items()} | {
     ("video_vae", key): spec for key, spec in VIDEO_VAE_ROWS.items()
 }
+
+
+def weights(name: str) -> Weights[Any]:
+    return Weights("sha256:" + hashlib.sha256(name.encode()).hexdigest())
 
 
 class Structures:
@@ -59,7 +64,7 @@ def main() -> None:
         (component, key) for component, target in original.items() for key in target.drop
     )
     assert len(optional) == 158 and len(full_order) == 3968
-    source = H3FullTransformer.for_test(checkpoint_ref="test://complete-full")
+    source = weights("complete-full")
     sources = {"dits": source, "shared": source}
     clean = Structures({source.checkpoint_ref: full_order})
     clean_granted = module._structures(clean, sources)
@@ -70,8 +75,8 @@ def main() -> None:
         component: target.source for component, target in original.items()
     }
 
-    dits = H3FullTransformer.for_test(checkpoint_ref="test://native-dits")
-    shared = H3FullTransformer.for_test(checkpoint_ref="test://native-shared")
+    dits = weights("native-dits")
+    shared = weights("native-shared")
     native = Structures(
         {
             dits.checkpoint_ref: tuple(

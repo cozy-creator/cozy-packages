@@ -12,6 +12,7 @@ from cozy_runtime.author import (
     ModelArtifact,
     Telemetry,
     UnsupportedInput,
+    Weights,
     canonical_json,
     invocable,
 )
@@ -31,7 +32,7 @@ from .kernel import H3Topology, precompute_tables, removed_keys, source_shapes, 
 from .model_config import dual_adaln_pruned_config, dual_full_config, parse_production_config
 from .order import current_order, full_order
 from .plans import Task, TimestepPlan, parse_declared_plan
-from .source import TARGET_COMPONENT, H3FullTransformer, inspection
+from .source import TARGET_COMPONENT, inspection
 from .table_layout import TableLayout
 
 PLAIN = "sha256:1fb882a7e46d0aff520f9d8a28cefd643954c19371737443101ba3c5fcc3613f"
@@ -191,7 +192,7 @@ def _validate_generators(
 
 def _project(
     ctx: Context,
-    source: H3FullTransformer,
+    source: Weights[Any],
     task: Task,
     output: str,
     topology: H3Topology | None = None,
@@ -220,8 +221,8 @@ def _project(
         return ctx.adopt_model(transaction.commit())
 
 
-@invocable(memoize=True, memo_dependencies=ADALN)
-async def select_adaln_weights(ctx: Context, *, source: H3FullTransformer, task: Task) -> Selection:
+@invocable(memo_dependencies=ADALN)
+async def select_adaln_weights(ctx: Context, *, source: Weights[Any], task: Task) -> Selection:
     ctx.raise_if_cancelled()
     structure = inspection(ctx, source)
     pruned = _body_kind(structure)
@@ -329,11 +330,11 @@ def _compute_into(
     tel.metric("h3.adaln.reused_tables", float(len(completed)), unit="tables")
 
 
-@invocable(memoize=True, memo_dependencies=ADALN)
+@invocable(memo_dependencies=ADALN)
 async def compute_adaln_tables(
     ctx: Context,
     *,
-    source: H3FullTransformer,
+    source: Weights[Any],
     task: Task,
     plan_digest: str,
     tel: Telemetry,
@@ -382,7 +383,7 @@ async def compute_adaln_tables(
 
 
 def _bank_projection(
-    ctx: Context, bank: H3FullTransformer, task: Task, topology: H3Topology | None = None
+    ctx: Context, bank: Weights[Any], task: Task, topology: H3Topology | None = None
 ) -> str:
     structure = inspection(ctx, bank)
     value = canonical_json.decode(structure.configs[_METADATA])
@@ -428,7 +429,7 @@ def _validate_table_rows(
 
 def _require_bank_binding(
     ctx: Context,
-    bank: H3FullTransformer,
+    bank: Weights[Any],
     task: Task,
     projection: str,
     topology: H3Topology | None = None,
@@ -442,9 +443,9 @@ def _require_bank_binding(
 def _apply_adaln(
     ctx: Context,
     *,
-    source: H3FullTransformer,
-    fl2va: H3FullTransformer,
-    ref2va: H3FullTransformer,
+    source: Weights[Any],
+    fl2va: Weights[Any],
+    ref2va: Weights[Any],
     require_pruned: bool,
 ) -> ModelArtifact:
     ctx.raise_if_cancelled()
@@ -511,23 +512,23 @@ def _apply_adaln(
         return ctx.adopt_model(transaction.commit())
 
 
-@invocable(memoize=True, memo_dependencies=ADALN)
+@invocable(memo_dependencies=ADALN)
 async def apply_adaln(
     ctx: Context,
     *,
-    source: H3FullTransformer,
-    fl2va: H3FullTransformer,
-    ref2va: H3FullTransformer,
+    source: Weights[Any],
+    fl2va: Weights[Any],
+    ref2va: Weights[Any],
 ) -> ModelArtifact:
     return _apply_adaln(ctx, source=source, fl2va=fl2va, ref2va=ref2va, require_pruned=False)
 
 
-@invocable(memoize=True, memo_dependencies=ADALN)
+@invocable(memo_dependencies=ADALN)
 async def retable_adaln(
     ctx: Context,
     *,
-    source: H3FullTransformer,
-    fl2va: H3FullTransformer,
-    ref2va: H3FullTransformer,
+    source: Weights[Any],
+    fl2va: Weights[Any],
+    ref2va: Weights[Any],
 ) -> ModelArtifact:
     return _apply_adaln(ctx, source=source, fl2va=fl2va, ref2va=ref2va, require_pruned=True)
