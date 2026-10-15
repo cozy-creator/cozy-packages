@@ -3,9 +3,11 @@ and their kernels are Runtime's."""
 
 from __future__ import annotations
 
-from cozy_runtime.author import Context, ModelArtifact, Telemetry, invocable
+from cozy_runtime.author import Context, ModelArtifact, Telemetry, Weights, invocable
 from cozy_runtime.derive.operations import EncodingRule, QuantizationPlan, quantize_into
-from cozy_runtime.derive.quantization import QuantizationSource
+
+from .klein import Klein
+from .upsampler import Upsampler
 
 #: Every linear of the 43 DiT blocks, the six modulation heads, the context embedder and the output
 #: norm, and the q/k/v/o and MLP projections of the 32 text-encoder layers the pipeline reads. On real
@@ -73,8 +75,8 @@ UPSAMPLER_NVFP4 = QuantizationPlan(
 )
 
 
-@invocable(memoize=True, memo_version="flux-3-klein-int8/1")
-async def int8(ctx: Context, *, source: QuantizationSource, tel: Telemetry) -> ModelArtifact:
+@invocable(memo_version="flux-3-klein-int8/1")
+async def int8(ctx: Context, *, source: Weights[Klein], tel: Telemetry) -> ModelArtifact:
     """The int8 lane (`int8-convrot256/1`): W8A8 on int8 tensor cores, the default lane. The VAE and
     every unlisted weight keep their source precision."""
     return quantize_into(
@@ -82,8 +84,8 @@ async def int8(ctx: Context, *, source: QuantizationSource, tel: Telemetry) -> M
     )
 
 
-@invocable(memoize=True, memo_version="flux-3-klein-nvfp4/1")
-async def nvfp4(ctx: Context, *, source: QuantizationSource, tel: Telemetry) -> ModelArtifact:
+@invocable(memo_version="flux-3-klein-nvfp4/1")
+async def nvfp4(ctx: Context, *, source: Weights[Klein], tel: Telemetry) -> ModelArtifact:
     """The nvfp4 lane: the DiT blocks as W4A4 on Blackwell's FP4 tensor cores, everything else as
     the int8 lane has it."""
     return quantize_into(
@@ -91,9 +93,9 @@ async def nvfp4(ctx: Context, *, source: QuantizationSource, tel: Telemetry) -> 
     )
 
 
-@invocable(memoize=True, memo_version="flux-3-klein-upsampler-int8/1")
+@invocable(memo_version="flux-3-klein-upsampler-int8/1")
 async def upsampler_int8(
-    ctx: Context, *, source: QuantizationSource, tel: Telemetry
+    ctx: Context, *, source: Weights[Upsampler], tel: Telemetry
 ) -> ModelArtifact:
     """The upsampler's int8 lane (`int8-convrot256/1`)."""
     return quantize_into(
@@ -101,9 +103,9 @@ async def upsampler_int8(
     )
 
 
-@invocable(memoize=True, memo_version="flux-3-klein-upsampler-nvfp4/1")
+@invocable(memo_version="flux-3-klein-upsampler-nvfp4/1")
 async def upsampler_nvfp4(
-    ctx: Context, *, source: QuantizationSource, tel: Telemetry
+    ctx: Context, *, source: Weights[Upsampler], tel: Telemetry
 ) -> ModelArtifact:
     """The upsampler's 4-bit lane (`nvfp4-w4a4/1`, W4A16 for its token loop)."""
     return quantize_into(

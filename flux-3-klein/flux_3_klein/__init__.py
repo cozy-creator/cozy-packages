@@ -27,10 +27,10 @@ from .quantize import int8, nvfp4, upsampler_int8, upsampler_nvfp4
 from .upsampler import Upsampler
 
 app = App()
-app.job(int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
-app.job(nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=12 << 30),), accelerator=False)
-app.job(upsampler_int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
-app.job(upsampler_nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=8 << 30),), accelerator=False)
+app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
+app.entrypoint(nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=12 << 30),), accelerator=False)
+app.entrypoint(upsampler_int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
+app.entrypoint(upsampler_nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=8 << 30),), accelerator=False)
 
 
 class AspectRatio(Enum):
