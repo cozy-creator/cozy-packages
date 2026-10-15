@@ -1,8 +1,8 @@
 """Component-staged Qwen Image 2.1 over Diffusers' own pipeline.
 
-The architecture and sampling are Diffusers' (`QwenImage21Pipeline`, pinned by commit until
-it reaches a release). Runtime constructs and fills the modules and owns their residency;
-no Diffusers weight loader, device placement, or offload hook takes part in serving.
+The architecture and sampling are Diffusers' (`QwenImage21Pipeline`, Diffusers 0.41.0). Runtime
+constructs and fills the modules and owns their residency; no Diffusers weight loader, device
+placement, or offload hook takes part in serving.
 """
 
 from __future__ import annotations

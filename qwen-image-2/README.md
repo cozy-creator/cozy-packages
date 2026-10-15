@@ -45,7 +45,7 @@ memory demand, so compare editing benchmarks separately from text-only runs.
 The upstream model is under the Qwen Research License, for noncommercial research
 and evaluation. This wrapper is not an authorization for commercial model use.
 The licence and Notice ship in this package (`qwen_image_2/LICENSE.model.txt`, `qwen_image_2/Notice`).
-The architecture is Diffusers' (Apache-2.0), imported at the commit `pyproject.toml` pins.
+The architecture is Diffusers' (Apache-2.0), at the release `pyproject.toml` pins.
 
 
 ## Prepare the checkpoint
