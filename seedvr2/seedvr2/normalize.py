@@ -4,15 +4,14 @@ from __future__ import annotations
 
 from importlib.resources import files
 import hashlib
-from typing import Annotated
+from typing import Annotated, Any
 import torch
 from cozy_runtime.author import (
     AssetBound,
     Tree,
     Context,
-    Loader,
-    Model,
     ModelArtifact,
+    Weights,
     canonical_json,
     invocable,
 )
@@ -20,17 +19,12 @@ from tensorfs.derived import Config, Derivation, Target, Tensor, Part
 from .model import ARCHITECTURE, modules
 
 
-class Source(Model[object]):
-    def load(self, loader: Loader) -> None:
-        del loader
-
-
-@invocable(memoize=True)
+@invocable
 async def normalize(
     ctx: Context,
     *,
-    dit: Source,
-    vae: Source,
+    dit: Weights[Any],
+    vae: Weights[Any],
     conditioning: Annotated[Tree, AssetBound(max_bytes=2 << 20)],
 ) -> ModelArtifact:
     sources = {"dit": ctx.tensorfs_source(dit), "vae": ctx.tensorfs_source(vae)}
