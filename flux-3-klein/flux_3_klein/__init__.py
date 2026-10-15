@@ -23,11 +23,12 @@ from cozy_runtime.author import (
 from PIL import Image
 
 from .klein import MAX_SIDE, MIN_SIDE, PATCH, Klein, prepare_multi_reference, prepare_reference
-from .quantize import int8
+from .quantize import int8, nvfp4
 from .upsampler import Upsampler
 
 app = App()
 app.job(int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
+app.job(nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=12 << 30),), accelerator=False)
 
 
 class AspectRatio(Enum):
