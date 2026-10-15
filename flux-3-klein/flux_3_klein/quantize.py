@@ -40,6 +40,32 @@ NVFP4 = QuantizationPlan(
 )
 
 
+_LM = "model.model.language_model.layers.*"
+
+#: The upsampler's (Qwen3.5-9B) language linears and its LM head: the bytes each decoded token reads.
+#: The embedding, the vision tower and the linear-attention gates keep their source precision.
+UPSAMPLER_INT8 = QuantizationPlan(
+    components=("model",),
+    include=(
+        f"{_LM}.mlp.*_proj.weight",
+        f"{_LM}.linear_attn.in_proj_qkv.weight",
+        f"{_LM}.linear_attn.in_proj_z.weight",
+        f"{_LM}.linear_attn.out_proj.weight",
+        f"{_LM}.self_attn.[qkvo]_proj.weight",
+        "model.lm_head.weight",
+    ),
+    output_precision="preserve",
+)
+
+#: The same weights in NVFP4, served W4A16 below Blackwell and at decode: 0.56 bytes per weight,
+#: which is what puts the upsampler inside an 8 GB card.
+UPSAMPLER_NVFP4 = QuantizationPlan(
+    components=UPSAMPLER_INT8.components,
+    include=UPSAMPLER_INT8.include,
+    output_precision="preserve",
+)
+
+
 @invocable(memoize=True, memo_version="flux-3-klein-int8/1")
 async def int8(ctx: Context, *, source: QuantizationSource, tel: Telemetry) -> ModelArtifact:
     """The int8 lane (`int8-convrot256/1`): W8A8 on int8 tensor cores, the default lane. The VAE and
@@ -55,4 +81,24 @@ async def nvfp4(ctx: Context, *, source: QuantizationSource, tel: Telemetry) -> 
     the int8 lane has it."""
     return quantize_into(
         ctx, tel, source=source, plan=NVFP4, encoding="int8-convrot256/1", output="nvfp4"
+    )
+
+
+@invocable(memoize=True, memo_version="flux-3-klein-upsampler-int8/1")
+async def upsampler_int8(
+    ctx: Context, *, source: QuantizationSource, tel: Telemetry
+) -> ModelArtifact:
+    """The upsampler's int8 lane (`int8-convrot256/1`)."""
+    return quantize_into(
+        ctx, tel, source=source, plan=UPSAMPLER_INT8, encoding="int8-convrot256/1", output="int8"
+    )
+
+
+@invocable(memoize=True, memo_version="flux-3-klein-upsampler-nvfp4/1")
+async def upsampler_nvfp4(
+    ctx: Context, *, source: QuantizationSource, tel: Telemetry
+) -> ModelArtifact:
+    """The upsampler's 4-bit lane (`nvfp4-w4a4/1`, W4A16 for its token loop)."""
+    return quantize_into(
+        ctx, tel, source=source, plan=UPSAMPLER_NVFP4, encoding="nvfp4-w4a4/1", output="nvfp4"
     )
