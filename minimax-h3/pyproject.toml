@@ -5,7 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "birefnet>=0.1.0",
     "character-describer>=0.2.0",
-    "cozy-runtime[adapters,media]>=0.24.0",
+    "cozy-runtime[adapters,media]>=0.25.0",
     "cozy-eval>=0.7.3",
     # MiniMax-H3 and Qwen-Image-2.1 share one Diffusers: the release qwen-image-2 pins.
     "diffusers==0.41.0",
@@ -21,7 +21,7 @@ dependencies = [
     "safetensors>=0.8.0",
     "seedvr2>=0.2.0",
     "shellingham>=1.5.4",
-    "tensorfs>=0.3.74",
+    "tensorfs>=0.10",
     "tokenizers>=0.23.1",
     "torch>=2.14",
     "torchvision>=0.29",
