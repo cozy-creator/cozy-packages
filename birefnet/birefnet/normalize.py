@@ -5,20 +5,16 @@ from __future__ import annotations
 from importlib.resources import files
 
 import torch
-from cozy_runtime.author import Context, Loader, Model, ModelArtifact, canonical_json, invocable
+from cozy_runtime.author import Context, ModelArtifact, Weights, canonical_json, invocable
 from tensorfs.derived import Config, Derivation, Target
 
+from .model import BackgroundRemovalModel
 from .upstream.BiRefNet_config import BiRefNetConfig
 from .upstream.birefnet import BiRefNet
 
 
-class Source(Model[object]):
-    def load(self, loader: Loader) -> None:
-        del loader
-
-
-@invocable(memoize=True)
-async def normalize(ctx: Context, *, source: Source) -> ModelArtifact:
+@invocable
+async def normalize(ctx: Context, *, source: Weights[BackgroundRemovalModel]) -> ModelArtifact:
     """Add constructor configuration and order; retain original FP16 weights and buffers."""
     capability = ctx.tensorfs_source(source)
     inspection = capability.inspect()

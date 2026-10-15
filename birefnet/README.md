@@ -17,7 +17,7 @@ long-form workflow calls it for supplied character references once before the
 video segments. Supplied scenes and generated references are not processed.
 
 The source weights retain their original FP16 values and integer buffers in
-CozyTensors. The CPU `normalize` job checks the upstream architecture's tensor
+CozyTensors. The CPU `normalize` function checks the upstream architecture's tensor
 names, shapes and types, then adds its constructor configuration without rewriting
 weights. The machine downloads and converts the Hugging Face source and uploads
 the result through the ordinary run command. Inference uses one GPU at 1024×1024;

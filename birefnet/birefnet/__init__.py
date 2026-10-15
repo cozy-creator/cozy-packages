@@ -15,7 +15,7 @@ from .model import BackgroundRemovalModel
 from .normalize import normalize
 
 app = App()
-app.job(normalize, weights=(WeightsOutput("model", max_new_bytes=1 << 20),), accelerator=False)
+app.entrypoint(normalize, weights=(WeightsOutput("model", max_new_bytes=1 << 20),), accelerator=False)
 
 
 class RemoveBackgroundInput(msgspec.Struct):
