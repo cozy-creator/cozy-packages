@@ -1184,6 +1184,8 @@ class VideoAutoencoderKL(diffusers.AutoencoderKL):
         self, x: torch.Tensor, memory_state: MemoryState = MemoryState.DISABLED
     ) -> torch.Tensor:
         _x = x.to(self.device)
+        if _x.dtype == torch.uint8:  # bytes from host memory, to [-1, 1] here
+            _x = _x.to(self.dtype).div_(127.5).sub_(1)
         _x = causal_conv_slice_inputs(_x, self.slicing_sample_min_size, memory_state=memory_state)
         h = self.encoder(_x, memory_state=memory_state)
         if self.quant_conv is not None:

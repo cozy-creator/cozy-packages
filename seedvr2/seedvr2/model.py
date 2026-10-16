@@ -6,11 +6,11 @@ from typing import Any, cast
 from collections.abc import Callable
 
 
+import numpy as np
 import torch
 from omegaconf import OmegaConf
-from torchvision.transforms import functional as vision
 from PIL import Image, ImageOps
-from cozy_runtime.author import Config, Loader, Model, Telemetry, uses_components
+from cozy_runtime.author import Config, Cut, Loader, Model, Telemetry, split, uses_components
 
 from .color import Correction, correct
 from .frames import extend
@@ -65,6 +65,10 @@ VAE = dict(
 )
 
 ARCHITECTURE = "SeedVR2-7B"
+#: SeedVR's configs_7b: the VAE's latent scaling factor (no shift).
+SCALE = 0.9152
+#: Peak device bytes per element of the DiT's (t, h, w, 33) input, before Runtime measures it.
+DIT_BYTES = 0.0
 
 
 class Conditioning(torch.nn.Module):
@@ -106,12 +110,15 @@ class RestorationModel(Model[Graph], encoded_leaves="accept"):
 
     @uses_components("vae")
     def encode(self, pixels: torch.Tensor) -> torch.Tensor:
-        """One window's pixels, (c, t, h, w) in [-1, 1], to its scaled latent."""
-        return _runner(self.graph).vae_encode([pixels])[0]
+        """A window's pixels, (c, t, h, w) bytes or [-1, 1] in host memory, to its scaled latent,
+        (t, h, w, c) on the device. The VAE moves one slice of frames at a time."""
+        latent = _vae(self.graph).encode(pixels[None]).latent[0]
+        return latent.movedim(0, -1).to(_device()) * SCALE
 
     @uses_components("dit", "conditioning")
     def denoise(self, latent: torch.Tensor, latent_noise: float) -> torch.Tensor:
-        """The one-step restoration of a window's latent, conditioned on itself."""
+        """The one-step restoration of a window's latent, conditioned on itself, in the fewest
+        pieces along time that fit the device."""
         runner = _runner(self.graph)
         conditioning = cast(Conditioning, self.graph.components["conditioning"])
         noise = torch.randn_like(latent)
@@ -126,16 +133,23 @@ class RestorationModel(Model[Graph], encoded_leaves="accept"):
                 ),
             )
         condition = runner.get_condition(noise, latent_blur=latent, task="sr")
-        with torch.autocast(latent.device.type, dtype=torch.bfloat16):
-            return runner.inference(
-                [noise], [condition], [conditioning.positive], [conditioning.negative], decode=False
-            )[0]
+
+        def dit(frames: torch.Tensor) -> torch.Tensor:
+            x, c = frames.split([noise.shape[-1], condition.shape[-1]], dim=-1)
+            with torch.autocast(frames.device.type, dtype=torch.bfloat16):
+                return runner.inference(
+                    [x], [c], [conditioning.positive], [conditioning.negative], decode=False
+                )[0]
+
+        return split(dit, torch.cat([noise, condition], dim=-1), Cut(0), per_element=DIT_BYTES)
 
     @uses_components("vae")
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        """A restored latent to pixels, (c, t, h, w) in about [-1, 1]."""
+        """A restored latent to pixels, (c, t, h, w) in about [-1, 1] in host memory, one slice
+        of frames at a time."""
+        z = (latent / SCALE).movedim(-1, 0)[None].to("cpu", torch.float16)
         with torch.autocast(latent.device.type, dtype=torch.bfloat16):
-            return _runner(self.graph).vae_decode([latent])[0]
+            return _vae(self.graph).decode(z).sample[0]
 
 
 def _runner(graph: Graph) -> Any:
@@ -144,7 +158,7 @@ def _runner(graph: Graph) -> Any:
         {
             "vae": {
                 "dtype": "float16",
-                "scaling_factor": 0.9152,
+                "scaling_factor": SCALE,
                 "grouping": False,
                 "model": {"temporal_downsample_factor": 4, "spatial_downsample_factor": 8},
             },
@@ -160,11 +174,20 @@ def _runner(graph: Graph) -> Any:
         }
     )
     runner = cast(Any, VideoDiffusionInfer(cfg))
-    runner.dit, runner.vae = graph.components["dit"], graph.components["vae"]
-    runner.vae.set_causal_slicing(split_size=4, memory_device="same")
-    runner.vae.set_memory_limit(conv_max_mem=0.5, norm_max_mem=0.5)
+    runner.dit = graph.components["dit"]
     runner.configure_diffusion()
     return runner
+
+
+def _vae(graph: Graph) -> Any:
+    vae = cast(Any, graph.components["vae"])
+    vae.set_causal_slicing(split_size=4, memory_device="same")
+    vae.set_memory_limit(conv_max_mem=0.5, norm_max_mem=0.5)
+    return vae
+
+
+def _device() -> torch.device:
+    return torch.device("cuda", torch.cuda.current_device())
 
 
 def restore(
@@ -182,41 +205,47 @@ def restore(
     """One window: encode, denoise and decode, each its own component scope."""
     if not frames:
         raise ValueError("SeedVR2 restoration needs at least one frame")
-    device = torch.device("cuda", torch.cuda.current_device())
     padded = extend(frames, (1 - len(frames)) % 4)
     canvas = ((width + 15) // 16 * 16, (height + 15) // 16 * 16)
     left, top = (canvas[0] - width) // 2, (canvas[1] - height) // 2
-    pixels = torch.stack(
-        [
-            vision.to_tensor(
-                ImageOps.expand(
-                    frame.resize((width, height), Image.Resampling.LANCZOS),
-                    border=(left, top, canvas[0] - width - left, canvas[1] - height - top),
-                )
-            )
-            for frame in padded
-        ]
+    border = (left, top, canvas[0] - width - left, canvas[1] - height - top)
+    # (t, h, w, 3) bytes in host memory: the VAE takes them a slice at a time.
+    source = torch.from_numpy(
+        np.stack(
+            [
+                np.asarray(ImageOps.expand(f.resize((width, height), Image.Resampling.LANCZOS), border))
+                for f in padded
+            ]
+        )
     )
     crop = (slice(top, top + height), slice(left, left + width))
-    source = pixels[: len(frames), :, crop[0], crop[1]].mul(2).sub(1)
-    pixels = pixels.to(device=device, dtype=torch.float16).permute(1, 0, 2, 3).mul(2).sub(1)
+    device = _device()
     with torch.inference_mode(), torch.random.fork_rng(devices=[device.index or 0]):
         torch.manual_seed(seed)
+        pixels = source.permute(3, 0, 1, 2).contiguous()
         if input_noise:
-            pixels = pixels + torch.randn_like(pixels) * (0.025 * input_noise)
+            pixels = _signed(pixels, torch.float32)
+            pixels = pixels.add_(torch.randn_like(pixels) * (0.025 * input_noise)).half()
         with tel.stage("SeedVR2 VAE encode"):
             latent = model.encode(pixels)
+        del pixels
         with tel.stage("SeedVR2 denoise"):
             latent = model.denoise(latent, latent_noise)
         with tel.stage("SeedVR2 VAE decode"):
             sample = model.decode(latent)
         if sample.ndim == 3:
             sample = sample.unsqueeze(1)
-        sample = sample[:, : len(frames), crop[0], crop[1]].permute(1, 0, 2, 3).float()
-        sample = torch.cat(
-            [
-                correct(frame[None].clamp(-1, 1), source[index : index + 1].to(device), correction)
-                for index, frame in enumerate(sample)
-            ]
-        )
-    return [vision.to_pil_image(frame) for frame in sample.cpu().clamp(-1, 1).add(1).div(2)]
+        restored = []
+        for index in range(len(frames)):
+            frame = sample[:, index, crop[0], crop[1]].to(device).float().clamp(-1, 1)[None]
+            reference = _signed(source[index, crop[0], crop[1]].to(device), torch.float32)
+            frame = correct(frame, reference.permute(2, 0, 1)[None], correction)
+            # As torchvision's `to_pil_image` rounds a float frame: down.
+            image = frame[0].clamp(-1, 1).add(1).div(2).mul(255).to(torch.uint8)
+            restored.append(Image.fromarray(image.permute(1, 2, 0).cpu().numpy()))
+    return restored
+
+
+def _signed(image: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """Bytes to [-1, 1]."""
+    return image.to(dtype).div(127.5).sub(1)
