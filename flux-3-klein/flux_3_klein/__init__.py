@@ -221,9 +221,11 @@ _BASE: dict[str, list[dict[str, str | int]]] = {
     "upsampler": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-upsampler@0.2.0/original"}],
 }
 _COMPONENTS = {"model": ("transformer", "text_encoder", "vae"), "upsampler": ("model",)}
+#: Built and fetched on first use: `prompt_upsampling=False` never pulls its 17.5 GiB.
+_ON_DEMAND = ("upsampler",)
 
 
-@app.entrypoint(defaults=_DISTILLED, components=_COMPONENTS,
+@app.entrypoint(defaults=_DISTILLED, components=_COMPONENTS, on_demand=_ON_DEMAND,
                 memoize=Memoize(requires=["seed"]))
 def generate(ctx: Context, payload: GenerateInput, model: Klein, upsampler: Upsampler,
              out: Outputs, tel: Telemetry) -> ImageOutput:
@@ -233,7 +235,7 @@ def generate(ctx: Context, payload: GenerateInput, model: Klein, upsampler: Upsa
                    canvas=payload.aspect_ratio.value, steps=payload.steps, guidance=None, seed=payload.seed)
 
 
-@app.entrypoint(defaults=_BASE, components=_COMPONENTS,
+@app.entrypoint(defaults=_BASE, components=_COMPONENTS, on_demand=_ON_DEMAND,
                 memoize=Memoize(requires=["seed"]))
 def generate_base(ctx: Context, payload: GenerateBaseInput, model: Klein, upsampler: Upsampler,
                   out: Outputs, tel: Telemetry) -> ImageOutput:
@@ -244,7 +246,7 @@ def generate_base(ctx: Context, payload: GenerateBaseInput, model: Klein, upsamp
                    seed=payload.seed)
 
 
-@app.entrypoint(defaults=_DISTILLED, components=_COMPONENTS,
+@app.entrypoint(defaults=_DISTILLED, components=_COMPONENTS, on_demand=_ON_DEMAND,
                 memoize=Memoize(requires=["seed"]))
 def edit(ctx: Context, payload: EditInput, model: Klein, upsampler: Upsampler, decoder: MediaDecoder,
          out: Outputs, tel: Telemetry) -> ImageOutput:
@@ -255,7 +257,7 @@ def edit(ctx: Context, payload: EditInput, model: Klein, upsampler: Upsampler, d
                    canvas=None, steps=payload.steps, guidance=None, seed=payload.seed)
 
 
-@app.entrypoint(defaults=_BASE, components=_COMPONENTS,
+@app.entrypoint(defaults=_BASE, components=_COMPONENTS, on_demand=_ON_DEMAND,
                 memoize=Memoize(requires=["seed"]))
 def edit_base(ctx: Context, payload: EditBaseInput, model: Klein, upsampler: Upsampler, decoder: MediaDecoder,
               out: Outputs, tel: Telemetry) -> ImageOutput:
