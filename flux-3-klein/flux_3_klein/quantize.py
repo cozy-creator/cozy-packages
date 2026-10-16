@@ -4,10 +4,16 @@ and their kernels are Runtime's."""
 from __future__ import annotations
 
 from cozy_runtime.author import Context, ModelArtifact, Telemetry, Weights, invocable
-from cozy_runtime.derive.operations import EncodingRule, QuantizationPlan, quantize_into
+from cozy_runtime.derive.operations import (
+    EncodingRule,
+    QuantizationPlan,
+    SelectionPlan,
+    quantize_into,
+    select_into,
+)
 
 from .klein import Klein
-from .upsampler import Upsampler
+from .upsampler import Drafter, Upsampler
 
 #: Every linear of the 43 DiT blocks, the six modulation heads, the context embedder and the output
 #: norm, and the q/k/v/o and MLP projections of the 32 text-encoder layers the pipeline reads. On real
@@ -111,3 +117,14 @@ async def upsampler_nvfp4(
     return quantize_into(
         ctx, tel, source=source, plan=UPSAMPLER_NVFP4, encoding="nvfp4-w4a4/1", output="nvfp4"
     )
+
+
+#: The drafter's lane: Qwen3.5-9B's multi-token-prediction head alone, 0.5 GB of the 18 GB model.
+DRAFTER_HEAD = SelectionPlan(include=("model.mtp.*",))
+
+
+@invocable(memo_version="flux-3-klein-drafter-head/1")
+async def drafter_head(ctx: Context, *, source: Weights[Drafter], tel: Telemetry) -> ModelArtifact:
+    """The drafter's lane from any Qwen3.5-9B lane: its `mtp.*` (bf16 in each), the source's own
+    objects, with the model's config."""
+    return select_into(ctx, tel, source=source, plan=DRAFTER_HEAD, output="bf16")

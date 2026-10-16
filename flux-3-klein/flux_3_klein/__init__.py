@@ -23,7 +23,7 @@ from cozy_runtime.author import (
 from PIL import Image
 
 from .klein import MAX_SIDE, MIN_SIDE, PATCH, Klein, prepare_multi_reference, prepare_reference
-from .quantize import int8, nvfp4, upsampler_int8, upsampler_nvfp4
+from .quantize import drafter_head, int8, nvfp4, upsampler_int8, upsampler_nvfp4
 from .upsampler import Drafter, Upsampler
 
 app = App()
@@ -31,6 +31,7 @@ app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), a
 app.entrypoint(nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=12 << 30),), accelerator=False)
 app.entrypoint(upsampler_int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
 app.entrypoint(upsampler_nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=8 << 30),), accelerator=False)
+app.entrypoint(drafter_head, weights=(WeightsOutput("bf16", max_new_bytes=1 << 30),), accelerator=False)
 
 
 class AspectRatio(Enum):
@@ -94,8 +95,9 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 16
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
-    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (~1.3× faster); its first use downloads that
-    #: model's 11.6 GiB int8 lane.
+    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
+    #: its first use downloads the 0.5 GB head. Off by default until a 16 GB card holds the
+    #: drafted decode beside Klein on every request.
     prompt_drafting: bool = False
 
 
@@ -107,8 +109,9 @@ class GenerateBaseInput(msgspec.Struct, forbid_unknown_fields=True):
     guidance: Annotated[float, msgspec.Meta(ge=1.0, le=20.0)] = 3.5
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
-    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (~1.3× faster); its first use downloads that
-    #: model's 11.6 GiB int8 lane.
+    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
+    #: its first use downloads the 0.5 GB head. Off by default until a 16 GB card holds the
+    #: drafted decode beside Klein on every request.
     prompt_drafting: bool = False
 
 
@@ -125,8 +128,9 @@ class EditInput(msgspec.Struct, forbid_unknown_fields=True):
     steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 16
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
-    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (~1.3× faster); its first use downloads that
-    #: model's 11.6 GiB int8 lane.
+    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
+    #: its first use downloads the 0.5 GB head. Off by default until a 16 GB card holds the
+    #: drafted decode beside Klein on every request.
     prompt_drafting: bool = False
 
 
@@ -144,8 +148,9 @@ class EditBaseInput(msgspec.Struct, forbid_unknown_fields=True):
     guidance: Annotated[float, msgspec.Meta(ge=1.0, le=20.0)] = 3.5
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
-    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (~1.3× faster); its first use downloads that
-    #: model's 11.6 GiB int8 lane.
+    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
+    #: its first use downloads the 0.5 GB head. Off by default until a 16 GB card holds the
+    #: drafted decode beside Klein on every request.
     prompt_drafting: bool = False
 
 
@@ -228,8 +233,8 @@ def _render(
     return ImageOutput(asset, width, height, seed, caption)
 
 
-# Qwen3.5-9B's MTP head (`mtp.*`, bf16 in its int8 lane): BFL's upsampler checkpoint has none.
-_DRAFTER = "qwen3.5-9b@0.2.0"
+# Qwen3.5-9B's MTP head alone (`drafter_head` makes it): BFL's upsampler checkpoint has none.
+_DRAFTER = "qwen3.5-9b-mtp@0.2.0"
 _DISTILLED = {"model": "flux-3-klein@0.1.0", "upsampler": "flux-3-klein-upsampler@0.2.0", "drafter": _DRAFTER}
 _BASE = {"model": "flux-3-klein-base@0.1.0", "upsampler": "flux-3-klein-upsampler@0.2.0", "drafter": _DRAFTER}
 _COMPONENTS = {
