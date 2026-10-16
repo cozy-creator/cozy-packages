@@ -12,7 +12,7 @@
 # // See the License for the specific language governing permissions and
 # // limitations under the License.
 
-from itertools import chain
+from itertools import chain, groupby
 from typing import Callable, Dict, List, Tuple
 import einops
 import torch
@@ -84,20 +84,6 @@ def unconcat(
     return vid, txt
 
 
-def repeat_concat(
-    vid: torch.FloatTensor,  # (VL ... c)
-    txt: torch.FloatTensor,  # (TL ... c)
-    vid_len: torch.LongTensor,  # (n*b)
-    txt_len: torch.LongTensor,  # (b)
-    txt_repeat: List,  # (n)
-) -> torch.FloatTensor:  # (L ... c)
-    vid = torch.split(vid, vid_len.tolist())
-    txt = torch.split(txt, txt_len.tolist())
-    txt = [[x] * n for x, n in zip(txt, txt_repeat)]
-    txt = list(chain(*txt))
-    return torch.cat(list(chain(*zip(vid, txt))))
-
-
 def repeat_concat_idx(
     vid_len: torch.LongTensor,  # (n*b)
     txt_len: torch.LongTensor,  # (b)
@@ -105,26 +91,32 @@ def repeat_concat_idx(
 ) -> Tuple[
     Callable,
     Callable,
+    List[Tuple[int, int, int]],
 ]:
+    """Each window's video rows followed by its sample's text rows, windows ordered by length,
+    and the runs of equal-length windows: (first row, windows, rows per window)."""
     device = vid_len.device
     vid_idx = torch.arange(vid_len.sum(), device=device)
     txt_idx = torch.arange(len(vid_idx), len(vid_idx) + txt_len.sum(), device=device)
     txt_repeat_list = txt_repeat.tolist()
-    tgt_idx = repeat_concat(vid_idx, txt_idx, vid_len, txt_len, txt_repeat)
+    vid_blocks = torch.split(vid_idx, vid_len.tolist())
+    txt_blocks = list(
+        chain(*([t] * n for t, n in zip(torch.split(txt_idx, txt_len.tolist()), txt_repeat_list)))
+    )
+    lengths = [len(v) + len(t) for v, t in zip(vid_blocks, txt_blocks)]
+    order = sorted(range(len(lengths)), key=lengths.__getitem__)
+    tgt_idx = torch.cat([block for i in order for block in (vid_blocks[i], txt_blocks[i])])
     src_idx = torch.argsort(tgt_idx)
     txt_idx_len = len(tgt_idx) - len(vid_idx)
     repeat_txt_len = (txt_len * txt_repeat).tolist()
+    runs, start = [], 0
+    for length, group in groupby(lengths[i] for i in order):
+        count = sum(1 for _ in group)
+        runs.append((start, count, length))
+        start += count * length
 
     def unconcat_coalesce(all):
-        """
-        Un-concat vid & txt, and coalesce the repeated txt.
-        e.g. vid [0 1 2 3 4 5 6 7 8] -> 3 splits -> [0 1 2] [3 4 5] [6 7 8]
-             txt [9 10]
-             repeat_concat ==> [0 1 2 9 10 3 4 5 9 10 6 7 8 9 10]
-             1. argsort re-index ==> [0 1 2 3 4 5 6 7 8 9 9 9 10 10 10]
-                           split ==> vid_out [0 1 2 3 4 5 6 7 8] txt_out [9 9 9 10 10 10]
-             2. reshape & mean for each sample to coalesce the repeated txt.
-        """
+        """Un-concat vid & txt, and average each text row over the windows that repeat it."""
         vid_out, txt_out = all[src_idx].split([len(vid_idx), txt_idx_len])
         txt_out_coalesced = []
         for txt, repeat_time in zip(txt_out.split(repeat_txt_len), txt_repeat_list):
@@ -136,7 +128,8 @@ def repeat_concat_idx(
     # the difference may cumulative like torch.repeat_interleave, so we use vanilla index here.
     return (
         lambda vid, txt: torch.cat([vid, txt])[tgt_idx],
-        lambda all: unconcat_coalesce(all),
+        unconcat_coalesce,
+        runs,
     )
 
 
