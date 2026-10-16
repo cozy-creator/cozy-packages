@@ -166,19 +166,6 @@ wheels = [
 ]
 
 [[package]]
-name = "cozy-eval"
-version = "0.7.5"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "msgspec" },
-    { name = "numpy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/1d/fd/8760b75050d895170fb1d51a2c1f58344d618a79ff7987edb953c9c29505/cozy_eval-0.7.5.tar.gz", hash = "sha256:3fc1fd2d2824973f4b24ee48585a0d7b4666b4ed52e74760ec7c78dc74c84d5a", size = 1988607, upload-time = "2026-09-27T02:17:23.487Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/48/27/b5f552f3f49f7d058898f14312dbf1505fc10f74bb4070ea91716b69ffdc/cozy_eval-0.7.5-py3-none-any.whl", hash = "sha256:e21e4067914594f91ae2bce79f1d84282052871b1f60d18204cf5f64738dfccf", size = 383065, upload-time = "2026-09-27T02:17:21.623Z" },
-]
-
-[[package]]
 name = "cozy-runtime"
 version = "0.25.0"
 source = { registry = "https://pypi.org/simple" }
@@ -516,12 +503,11 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.37.0"
+version = "1.37.1"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },
     { name = "character-describer" },
-    { name = "cozy-eval" },
     { name = "cozy-runtime", extra = ["adapters", "media"] },
     { name = "diffusers" },
     { name = "hf-xet" },
@@ -546,7 +532,6 @@ dependencies = [
 requires-dist = [
     { name = "birefnet", specifier = ">=0.1.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
     { name = "character-describer", specifier = ">=0.2.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
-    { name = "cozy-eval", specifier = ">=0.7.3" },
     { name = "cozy-runtime", extras = ["adapters", "media"], specifier = ">=0.25.0" },
     { name = "diffusers", specifier = "==0.41.0" },
     { name = "hf-xet", specifier = ">=1.6.0" },
