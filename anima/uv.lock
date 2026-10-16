@@ -11,7 +11,7 @@ supported-markers = [
 
 [[package]]
 name = "anima"
-version = "0.8.0"
+version = "0.9.0"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -38,7 +38,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.24.7" },
+    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.25.0" },
     { name = "diffusers", specifier = ">=0.40.0" },
     { name = "hf-xet", specifier = ">=1.6.0" },
     { name = "msgspec", specifier = ">=0.19" },
@@ -47,7 +47,7 @@ requires-dist = [
     { name = "regex", specifier = ">=2026.7.19" },
     { name = "safetensors", specifier = ">=0.8.0" },
     { name = "shellingham", specifier = ">=1.5.4" },
-    { name = "tensorfs", specifier = ">=0.3.74" },
+    { name = "tensorfs", specifier = ">=0.10" },
     { name = "tokenizers", specifier = ">=0.23.1" },
     { name = "torch", specifier = ">=2.14" },
     { name = "torchvision", specifier = ">=0.29" },
@@ -178,7 +178,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.24.7"
+version = "0.25.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -188,10 +188,10 @@ dependencies = [
     { name = "pillow" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/95/c8/719667a1bcd53819dd0b1bc8ea5fb02b9c340c41253d1577e92efc218e6b/cozy_runtime-0.24.7.tar.gz", hash = "sha256:0a200e190fb7575fb2b2b60b97f0e2e3c84a5c6b164cb9021ebf4706621e51ff", size = 1862901, upload-time = "2026-10-16T02:27:22.301Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0d/e9/909192d741f4b92610df09c39777a246addf1eaaa1ced16a4c0d7378c828/cozy_runtime-0.25.0.tar.gz", hash = "sha256:dacd4594d34d792dd3924a2731389c656c1266ddfe04caf7a682fb6cb219f9b8", size = 1890375, upload-time = "2026-10-16T08:51:42.588Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7a/20/9ad4942de17fb423c41f78e39bc8e74dc92f5175ce1daab69cc067baf40b/cozy_runtime-0.24.7-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:e55e52edd89cefab0829612067eab6e01cd612368e09c70c35c0dcf793b12001", size = 25906856, upload-time = "2026-10-16T02:27:17.58Z" },
-    { url = "https://files.pythonhosted.org/packages/9d/00/a124af0d4fb4d3845a21374339717916cd13eecd081d235799d471f81acd/cozy_runtime-0.24.7-py3-none-any.whl", hash = "sha256:b186d6ea991e9f94201d6c8e269da77bfd7fefc8a75ba6600a7d6973ef3c49c0", size = 1003233, upload-time = "2026-10-16T02:27:20.464Z" },
+    { url = "https://files.pythonhosted.org/packages/85/5f/66983abede846cdfea4d6dcc294d7d43b73b2b7f2c4e4067d72cf3b758f0/cozy_runtime-0.25.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:e7427d090f190110c22d888863eaa3954a355c43c2a3b7ffcc122382235d8bce", size = 26119228, upload-time = "2026-10-16T08:51:38.371Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/a9/560a85266a0f6cbdd7012f8fda79574830919401855f50b0a3bdbe13264f/cozy_runtime-0.25.0-py3-none-any.whl", hash = "sha256:9c6de722075e18ddcef2fb1bac366e7724b918d1eb296ad01aa1bde83d9f84fc", size = 1008022, upload-time = "2026-10-16T08:51:41.034Z" },
 ]
 
 [package.optional-dependencies]
@@ -898,11 +898,11 @@ wheels = [
 
 [[package]]
 name = "tensorfs"
-version = "0.9.4"
+version = "0.10.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/36/90/7ad14d7bf5af579c51b93531558452fc0abbc8ee48ce65e5aa544580a311/tensorfs-0.9.4.tar.gz", hash = "sha256:68153fb0e2cab69a709ab56637da7eba20723cc21def9022ed6e6b38aab76acd", size = 1126693, upload-time = "2026-10-16T02:22:54.323Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0b/c2/2d7e9ad364099d1a3274941807523431ef53ccaaf125bed8a73a7c31c8e7/tensorfs-0.10.0.tar.gz", hash = "sha256:e1dcb0989e0ae7d365847abe079bec9818d80f6825e35a120e05216ccfbe09a2", size = 1015941, upload-time = "2026-10-16T07:12:21.191Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2c/b4/b7d35c1e6407f272cbea1e73fa95f798c1db7adc78ac2230e1b4b1f49db0/tensorfs-0.9.4-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:90613613d9fb372b51fd107065c1c33f9a2c0da08f0e67e85686d0d9c37dc26b", size = 8939537, upload-time = "2026-10-16T02:22:52.194Z" },
+    { url = "https://files.pythonhosted.org/packages/54/21/efb6e5ed5064d0681b2b501346c7884207e260c678064b3b08794844e77d/tensorfs-0.10.0-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1b12912d66f3d177dc9e31917759f852fe4e769b8a26e09db6516904dcd80596", size = 8879660, upload-time = "2026-10-16T07:12:19.192Z" },
 ]
 
 [[package]]
