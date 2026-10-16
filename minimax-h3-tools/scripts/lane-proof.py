@@ -330,10 +330,10 @@ def _refusals(granted: dict[str, SourceInspection]) -> None:
         lambda: lanes.select("audio_vae", lanes.Treatment(cast="f16"), shared),
     )
     _refuses(
-        "a lane with an unservable encoding",
+        "a lane with an encoding no lane of the vocabulary stores",
         "",
         lambda: lanes.validate_catalogue(
-            {"nvfp4-vae-adaln-pruned": lanes.Lane("adaln-pruned", {"video_vae": lanes.Treatment(encode="nvfp4/1")})}  # type: ignore[arg-type]
+            {"int4": lanes.Lane("adaln-pruned", {"fl2va_dit": lanes.Treatment(encode="int4/1")})}  # type: ignore[arg-type]
         ),
     )
     _refuses(

@@ -682,7 +682,7 @@ async def fp8_pruned(
     max_relative_frobenius: float | None = None,
     tel: Telemetry,
 ) -> ModelArtifact:
-    """AdaLN-pruned with both DiTs row-wise FP8: the lane every serving rung selects."""
+    """AdaLN-pruned with both DiTs row-wise FP8."""
     lane = _produce_lanes(ctx, tel, source, ("fp8-pruned",), max_relative_frobenius)
     return lane["fp8-pruned"]
 
