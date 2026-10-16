@@ -1,10 +1,10 @@
 [project]
 name = "character-describer"
-version = "0.5.0"
+version = "0.5.1"
 description = "One-sentence character identity descriptions from supplied reference images"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media]>=0.25.0",
+    "cozy-runtime[media]>=0.25.2",
     "msgspec>=0.19",
     "numpy>=1.26",
     "pillow>=12",
