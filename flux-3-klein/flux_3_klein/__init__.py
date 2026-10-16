@@ -94,6 +94,9 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 16
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
+    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (~1.3× faster); its first use downloads that
+    #: model's 11.6 GiB int8 lane.
+    prompt_drafting: bool = False
 
 
 class GenerateBaseInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -104,6 +107,9 @@ class GenerateBaseInput(msgspec.Struct, forbid_unknown_fields=True):
     guidance: Annotated[float, msgspec.Meta(ge=1.0, le=20.0)] = 3.5
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
+    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (~1.3× faster); its first use downloads that
+    #: model's 11.6 GiB int8 lane.
+    prompt_drafting: bool = False
 
 
 class EditInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -119,6 +125,9 @@ class EditInput(msgspec.Struct, forbid_unknown_fields=True):
     steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 16
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
+    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (~1.3× faster); its first use downloads that
+    #: model's 11.6 GiB int8 lane.
+    prompt_drafting: bool = False
 
 
 class EditBaseInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -135,6 +144,9 @@ class EditBaseInput(msgspec.Struct, forbid_unknown_fields=True):
     guidance: Annotated[float, msgspec.Meta(ge=1.0, le=20.0)] = 3.5
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
+    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (~1.3× faster); its first use downloads that
+    #: model's 11.6 GiB int8 lane.
+    prompt_drafting: bool = False
 
 
 class ImageOutput(msgspec.Struct):
@@ -172,6 +184,7 @@ def _render(
     *,
     prompt: str,
     upsample: bool,
+    draft: bool,
     images: list[Image.Image],
     size: tuple[int, int],
     canvas: str | None,
@@ -184,7 +197,9 @@ def _render(
     caption = prompt
     if upsample:
         with tel.stage("upsampling prompt", overall_range=(0.0, 0.15)):
-            caption = drafter.drafting(lambda: upsampler.upsample(prompt, images, canvas))
+            def run() -> str:
+                return upsampler.upsample(prompt, images, canvas)
+            caption = drafter.drafting(run) if draft else run()
         tel.log("upsampled prompt", caption=caption[:2000])
     ctx.raise_if_cancelled()
     references = None
@@ -230,8 +245,8 @@ _COMPONENTS = {
     "upsampler": ("model",),
     "drafter": ("model",),
 }
-#: Built and fetched on first use: `prompt_upsampling=False` never pulls the upsampler or its
-#: drafter.
+#: Built and fetched on first use: `prompt_upsampling=False` never pulls the upsampler, and
+#: `prompt_drafting=False` (the default) never pulls the drafter.
 _ON_DEMAND = ("upsampler", "drafter")
 
 
@@ -241,6 +256,7 @@ def generate(ctx: Context, payload: GenerateInput, drafter: Drafter, model: Klei
              out: Outputs, tel: Telemetry) -> ImageOutput:
     """Text to image with the distilled Klein: 16 steps, no guidance."""
     return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
+                   draft=payload.prompt_drafting,
                    images=[], size=output_size(payload.aspect_ratio, payload.megapixels, None),
                    canvas=payload.aspect_ratio.value, steps=payload.steps, guidance=None, seed=payload.seed)
 
@@ -251,6 +267,7 @@ def generate_base(ctx: Context, payload: GenerateBaseInput, drafter: Drafter, mo
                   out: Outputs, tel: Telemetry) -> ImageOutput:
     """Text to image with Klein Base: 50 steps, CFG 3.5."""
     return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
+                   draft=payload.prompt_drafting,
                    images=[], size=output_size(payload.aspect_ratio, payload.megapixels, None),
                    canvas=payload.aspect_ratio.value, steps=payload.steps, guidance=payload.guidance,
                    seed=payload.seed)
@@ -263,6 +280,7 @@ def edit(ctx: Context, payload: EditInput, drafter: Drafter, model: Klein, upsam
     """Edit or compose one to ten ordered reference images with the distilled Klein."""
     images = [cast(Image.Image, decoder.value(asset)) for asset in payload.reference_images]
     return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
+                   draft=payload.prompt_drafting,
                    images=images, size=output_size(payload.aspect_ratio, payload.megapixels, images[0]),
                    canvas=None, steps=payload.steps, guidance=None, seed=payload.seed)
 
@@ -274,5 +292,6 @@ def edit_base(ctx: Context, payload: EditBaseInput, drafter: Drafter, model: Kle
     """Edit or compose one to ten ordered reference images with Klein Base."""
     images = [cast(Image.Image, decoder.value(asset)) for asset in payload.reference_images]
     return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
+                   draft=payload.prompt_drafting,
                    images=images, size=output_size(payload.aspect_ratio, payload.megapixels, images[0]),
                    canvas=None, steps=payload.steps, guidance=payload.guidance, seed=payload.seed)
