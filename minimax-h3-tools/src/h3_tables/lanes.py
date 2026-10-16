@@ -45,7 +45,7 @@ CastDtype = Literal["bf16", "f16"]
 #: ``decode_operands`` is the video VAE's serving destination and nothing else — see
 #: ``VIDEO_VAE_NORMALISATION``.
 CastScope = Literal["component", "decode_operands"]
-Encoding = Literal["int8-convrot256/1", "fp8-rowwise/1", "nvfp4-w4a4/1"]
+Encoding = Literal["fp8-rowwise/1", "int8-convrot256/1", "nvfp4-w4a4/1"]
 Modulation = Literal["full", "adaln-pruned"]
 
 #: The five components of an H3 checkpoint. Every lane declares all five: the ones it does
