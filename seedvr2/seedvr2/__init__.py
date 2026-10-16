@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from dataclasses import replace
 from enum import StrEnum
@@ -56,13 +57,13 @@ class Tuning(msgspec.Struct, kw_only=True):
     color_correction: Correction = "lab"
     input_noise_scale: Annotated[float, msgspec.Meta(ge=0, le=1)] = 0.0
     latent_noise_scale: Annotated[float, msgspec.Meta(ge=0, le=1)] = 0.0
-    batch_size: Annotated[int, msgspec.Meta(ge=1)] = 5
+    batch_size: Annotated[int, msgspec.Meta(ge=1)] | None = None
     uniform_batch_size: bool = False
     temporal_overlap: Annotated[int, msgspec.Meta(ge=0, le=16)] = 0
     prepend_frames: Annotated[int, msgspec.Meta(ge=0, le=32)] = 0
 
     def __post_init__(self) -> None:
-        if self.batch_size % 4 != 1:
+        if self.batch_size is not None and self.batch_size % 4 != 1:
             raise ValueError(
                 f"batch_size must be 4n+1 (1, 5, 9, 13, 17, 21, ...), got {self.batch_size}"
             )
@@ -110,8 +111,9 @@ def upscale(
     out: Outputs,
     tel: Telemetry,
 ) -> UpscaleOutput:
-    """Restore with SeedVR2 7B in `batch_size` windows that share `temporal_overlap` frames."""
-    size, overlap = payload.batch_size, payload.temporal_overlap
+    """Restore with SeedVR2 7B: the whole clip as one window, or windows of at most `batch_size`
+    frames that share `temporal_overlap`. The Runtime cuts the DiT's work to fit the device."""
+    size, overlap = payload.batch_size or sys.maxsize, payload.temporal_overlap
     if overlap >= size:
         tel.log(
             "temporal_overlap is not below batch_size; using 0, as upstream does", level="warning"
@@ -121,7 +123,7 @@ def upscale(
 
     def restore(batch: list[DecodedVideoFrame], width: int, height: int) -> list[Image.Image]:
         frames = [Image.frombytes("RGB", (f.width, f.height), f.rgb) for f in batch]
-        if payload.uniform_batch_size:
+        if payload.uniform_batch_size and payload.batch_size:
             frames = extend(frames, size - len(frames))
         with tel.stage("restoring video window"):
             restored = restore_window(
