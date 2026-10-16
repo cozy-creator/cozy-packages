@@ -4,6 +4,7 @@ repository's `config.json`, and the tokenizer, processor and chat template are t
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Mapping
 from typing import Any
 
@@ -60,9 +61,26 @@ def _processor(assets: ModelAssets) -> Any:
     return processor_class(image_processor=image_processor, tokenizer=tokenizer, chat_template=chat, **extra)
 
 
+def _draft(model: torch.nn.Module, config: Config) -> Any:
+    """Qwen3.5's multi-token-prediction head where the checkpoint keeps it (`mtp.*`), as part of
+    the model's component: `lm.generate` drafts tokens with it and keeps those the model agrees
+    with. None for a checkpoint without it."""
+    text = model.config.get_text_config(decoder=True)
+    if not getattr(text, "mtp_num_hidden_layers", 0) or not config.tensor_dtype(
+        f"{COMPONENT}.mtp.fc.weight", default=""
+    ):
+        return None
+    with no_init_weights():
+        draft = lm.Draft(model.config, sys.modules[type(model).__module__])
+    model.mtp = draft.mtp.to(torch.bfloat16)
+    return draft.eval()
+
+
 class Pipeline:
     def __init__(self, config: Config) -> None:
-        self.components: dict[str, torch.nn.Module] = {COMPONENT: _construct(config.mapping(), config)}
+        model = _construct(config.mapping(), config)
+        self.draft = _draft(model, config)
+        self.components: dict[str, torch.nn.Module] = {COMPONENT: model}
 
 
 class Describer(Model[Pipeline], encoded_leaves="accept"):
@@ -105,7 +123,7 @@ class Describer(Model[Pipeline], encoded_leaves="accept"):
         stop = [token for token in dict.fromkeys(stops) if token is not None]
         out = lm.generate(
             model, inputs, max_new_tokens=max_new_tokens, stop=stop,
-            pad=processor.tokenizer.pad_token_id or stop[0],
+            pad=processor.tokenizer.pad_token_id or stop[0], draft=self.pipe.draft,
         )
         reply = processor.batch_decode(out, skip_special_tokens=True)[0]
         return " ".join(str(reply).split())

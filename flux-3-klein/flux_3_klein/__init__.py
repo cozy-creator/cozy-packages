@@ -24,7 +24,7 @@ from PIL import Image
 
 from .klein import MAX_SIDE, MIN_SIDE, PATCH, Klein, prepare_multi_reference, prepare_reference
 from .quantize import int8, nvfp4, upsampler_int8, upsampler_nvfp4
-from .upsampler import Upsampler
+from .upsampler import Drafter, Upsampler
 
 app = App()
 app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
@@ -166,6 +166,7 @@ def _render(
     ctx: Context,
     model: Klein,
     upsampler: Upsampler,
+    drafter: Drafter,
     out: Outputs,
     tel: Telemetry,
     *,
@@ -183,7 +184,7 @@ def _render(
     caption = prompt
     if upsample:
         with tel.stage("upsampling prompt", overall_range=(0.0, 0.15)):
-            caption = upsampler.upsample(prompt, images, canvas)
+            caption = drafter.drafting(lambda: upsampler.upsample(prompt, images, canvas))
         tel.log("upsampled prompt", caption=caption[:2000])
     ctx.raise_if_cancelled()
     references = None
@@ -212,35 +213,44 @@ def _render(
     return ImageOutput(asset, width, height, seed, caption)
 
 
+# Qwen3.5-9B's MTP head (`mtp.*`, bf16 in its int8 lane): BFL's upsampler checkpoint has none.
+_DRAFTER = [{"gpu": "*", "gpus": 1, "lane": "qwen3.5-9b@0.2.0/int8"}]
 _DISTILLED: dict[str, list[dict[str, str | int]]] = {
     "model": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein@0.1.0/original"}],
     "upsampler": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-upsampler@0.2.0/original"}],
+    "drafter": _DRAFTER,
 }
 _BASE: dict[str, list[dict[str, str | int]]] = {
     "model": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-base@0.1.0/original"}],
     "upsampler": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-upsampler@0.2.0/original"}],
+    "drafter": _DRAFTER,
 }
-_COMPONENTS = {"model": ("transformer", "text_encoder", "vae"), "upsampler": ("model",)}
-#: Built and fetched on first use: `prompt_upsampling=False` never pulls its 17.5 GiB.
-_ON_DEMAND = ("upsampler",)
+_COMPONENTS = {
+    "model": ("transformer", "text_encoder", "vae"),
+    "upsampler": ("model",),
+    "drafter": ("model",),
+}
+#: Built and fetched on first use: `prompt_upsampling=False` never pulls the upsampler or its
+#: drafter.
+_ON_DEMAND = ("upsampler", "drafter")
 
 
 @app.entrypoint(defaults=_DISTILLED, components=_COMPONENTS, on_demand=_ON_DEMAND,
                 memoize=Memoize(requires=["seed"]))
-def generate(ctx: Context, payload: GenerateInput, model: Klein, upsampler: Upsampler,
+def generate(ctx: Context, payload: GenerateInput, drafter: Drafter, model: Klein, upsampler: Upsampler,
              out: Outputs, tel: Telemetry) -> ImageOutput:
     """Text to image with the distilled Klein: 16 steps, no guidance."""
-    return _render(ctx, model, upsampler, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
+    return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
                    images=[], size=output_size(payload.aspect_ratio, payload.megapixels, None),
                    canvas=payload.aspect_ratio.value, steps=payload.steps, guidance=None, seed=payload.seed)
 
 
 @app.entrypoint(defaults=_BASE, components=_COMPONENTS, on_demand=_ON_DEMAND,
                 memoize=Memoize(requires=["seed"]))
-def generate_base(ctx: Context, payload: GenerateBaseInput, model: Klein, upsampler: Upsampler,
+def generate_base(ctx: Context, payload: GenerateBaseInput, drafter: Drafter, model: Klein, upsampler: Upsampler,
                   out: Outputs, tel: Telemetry) -> ImageOutput:
     """Text to image with Klein Base: 50 steps, CFG 3.5."""
-    return _render(ctx, model, upsampler, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
+    return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
                    images=[], size=output_size(payload.aspect_ratio, payload.megapixels, None),
                    canvas=payload.aspect_ratio.value, steps=payload.steps, guidance=payload.guidance,
                    seed=payload.seed)
@@ -248,21 +258,21 @@ def generate_base(ctx: Context, payload: GenerateBaseInput, model: Klein, upsamp
 
 @app.entrypoint(defaults=_DISTILLED, components=_COMPONENTS, on_demand=_ON_DEMAND,
                 memoize=Memoize(requires=["seed"]))
-def edit(ctx: Context, payload: EditInput, model: Klein, upsampler: Upsampler, decoder: MediaDecoder,
+def edit(ctx: Context, payload: EditInput, drafter: Drafter, model: Klein, upsampler: Upsampler, decoder: MediaDecoder,
          out: Outputs, tel: Telemetry) -> ImageOutput:
     """Edit or compose one to ten ordered reference images with the distilled Klein."""
     images = [cast(Image.Image, decoder.value(asset)) for asset in payload.reference_images]
-    return _render(ctx, model, upsampler, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
+    return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
                    images=images, size=output_size(payload.aspect_ratio, payload.megapixels, images[0]),
                    canvas=None, steps=payload.steps, guidance=None, seed=payload.seed)
 
 
 @app.entrypoint(defaults=_BASE, components=_COMPONENTS, on_demand=_ON_DEMAND,
                 memoize=Memoize(requires=["seed"]))
-def edit_base(ctx: Context, payload: EditBaseInput, model: Klein, upsampler: Upsampler, decoder: MediaDecoder,
+def edit_base(ctx: Context, payload: EditBaseInput, drafter: Drafter, model: Klein, upsampler: Upsampler, decoder: MediaDecoder,
               out: Outputs, tel: Telemetry) -> ImageOutput:
     """Edit or compose one to ten ordered reference images with Klein Base."""
     images = [cast(Image.Image, decoder.value(asset)) for asset in payload.reference_images]
-    return _render(ctx, model, upsampler, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
+    return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
                    images=images, size=output_size(payload.aspect_ratio, payload.megapixels, images[0]),
                    canvas=None, steps=payload.steps, guidance=payload.guidance, seed=payload.seed)
