@@ -396,10 +396,17 @@ class Klein(Model[KleinGraph], encoded_leaves="accept"):
                     act = F.silu(at_zero + target)
                     conditions = _conditions(tf, texts, text_ropes, refs, ref_rope, act, zero)
                 tokens, cond_rows = conditions
-                velocities = [
-                    _velocity(tf, x.to(torch.bfloat16), temb, cond, cond_rows, image_rope, joint, zero).float()
-                    for cond, joint in zip(tokens, joints, strict=True)
-                ]
+                image = x.to(torch.bfloat16)
+                if len(tokens) == 2 and tokens[0].shape == tokens[1].shape:
+                    # CFG texts of one length share the joint rope and rows: one call, batch 2.
+                    both = _velocity(tf, image.repeat(2, 1, 1), temb, torch.cat(tokens), cond_rows,
+                                     image_rope, joints[0], zero)
+                    velocities = list(both.float().split(1))
+                else:
+                    velocities = [
+                        _velocity(tf, image, temb, cond, cond_rows, image_rope, joint, zero).float()
+                        for cond, joint in zip(tokens, joints, strict=True)
+                    ]
                 if guidance is None:
                     (velocity,) = velocities
                 else:
