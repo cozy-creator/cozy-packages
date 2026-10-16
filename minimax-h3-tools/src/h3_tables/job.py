@@ -75,6 +75,7 @@ app = App()
 PLAIN_SPEC = "sha256:1fb882a7e46d0aff520f9d8a28cefd643954c19371737443101ba3c5fcc3613f"
 FP8_SPEC = "sha256:c4be0120fb4548306b134f6ee07eb2545a363bc140a005af1ef6543c790cf890"
 INT8_SPEC = "sha256:ac25d323baebfdf1fd0ce3fdfd9f26400ce57914fdc442d0ade8cb187aef183f"
+NVFP4_SPEC = "sha256:f2e718c521634876830f9c2647bddfbbccafc744decc88adb345d33d73bf5b1a"
 
 SOURCE_READ_CHUNK = 32 << 20
 SOURCE_SECTION = {"fl2va": "transformer", "ref2va": "transformer_ref"}
@@ -705,16 +706,32 @@ app.entrypoint(
 )
 
 
-#: `cozy model quantize <H3 checkpoint> --fp8|--int8`: the quantized lanes' recipe over an
+#: `cozy model quantize <H3 checkpoint> --fp8|--int8|--nvfp4`: the quantized lanes' recipe over an
 #: AdaLN-pruned checkpoint. Both DiTs encode through the reviewed plan and the text
 #: conditioner's 350 decoder-layer linears through the structural selection minus
 #: `TEXT_ENCODER_KEEP` (embeddings and the vision tower stay bf16). A recipe component the source still holds
 #: plain is encoded; one that already carries this encoding is inherited; one carrying
 #: another encoding refuses. Every other tensor, config and component inherits by reference.
-QUANTIZER_RECIPE: Mapping[str, tuple[str, ...]] = {
-    component: treatment.keep for component, treatment in LANES["fp8-pruned"].components.items()
+#: nvfp4 takes the DiTs minus `NVFP4_DIT_KEEP`; its conditioner is int8-convrot, because the nvfp4 leaf is
+#: W4A4 at prompt length (the published H3 conditioner is nvfp4 weights-only) and it runs once a request.
+QUANTIZER_RECIPES: Mapping[str, Mapping[str, _lanes.Treatment]] = {
+    encoding: {
+        component: _lanes.Treatment(encode=encoding, keep=treatment.keep)
+        for component, treatment in LANES["fp8-pruned"].components.items()
+    }
+    for encoding in ("fp8-rowwise/1", "int8-convrot256/1")
+} | {
+    "nvfp4-w4a4/1": {
+        **{dit: _lanes.Treatment(encode="nvfp4-w4a4/1", keep=_lanes.NVFP4_DIT_KEEP)
+           for dit in sorted(_lanes.DIT_COMPONENTS)},
+        "text_encoder": _lanes.Treatment(encode="int8-convrot256/1", keep=_lanes.TEXT_ENCODER_KEEP),
+    }
 }
-QUANTIZER_SPECS = {"fp8-rowwise/1": FP8_SPEC, "int8-convrot256/1": INT8_SPEC}
+QUANTIZER_SPECS = {
+    "fp8-rowwise/1": FP8_SPEC,
+    "int8-convrot256/1": INT8_SPEC,
+    "nvfp4-w4a4/1": NVFP4_SPEC,
+}
 #: Both DiTs and the conditioner at most; the transaction's own accounting is exact.
 MAX_QUANTIZER_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_TEXT_ENCODER_BYTES
 
@@ -736,25 +753,19 @@ def _quantizer_selections(
             )
     dit_plan = prepare_quantization(h3_quantization_plan())
     selections = []
-    for component, keep in QUANTIZER_RECIPE.items():
+    for component, treatment in QUANTIZER_RECIPES[encoding].items():
+        assert treatment.encode is not None
         encodings = {tensor.encoding for tensor in structure.components.get(component, {}).values()}
-        if QUANTIZER_SPECS[encoding] in encodings:
+        if QUANTIZER_SPECS[treatment.encode] in encodings:
             continue
         foreign = encodings - {PLAIN_SPEC}
         if foreign:
             raise UnsupportedInput(
                 f"{component} already carries another encoding ({sorted(foreign)}); quantize "
-                f"a lane whose {component} is plain or already {encoding}",
+                f"a lane whose {component} is plain or already {treatment.encode}",
                 code="h3_quantize_mixed",
             )
-        selections.append(
-            _lanes.select(
-                component,
-                _lanes.Treatment(encode=encoding, keep=keep),
-                structure,
-                dit_plan=dit_plan,
-            )
-        )
+        selections.append(_lanes.select(component, treatment, structure, dit_plan=dit_plan))
     if not selections:
         raise UnsupportedInput(
             f"every component of H3's recipe already carries {encoding}",
@@ -816,7 +827,7 @@ def _quantize_lane(
             "h3 quantize",
             lane=lane,
             encoded=",".join(selection.component for selection in selections),
-            inherited=",".join(sorted(set(QUANTIZER_RECIPE) - {s.component for s in selections})),
+            inherited=",".join(sorted(set(QUANTIZER_RECIPES[encoding]) - {s.component for s in selections})),
         )
         return ctx.adopt_model(transaction.commit())
 
@@ -831,6 +842,18 @@ async def fp8(
 ) -> ModelArtifact:
     """H3's recipe at row-wise FP8 (`fp8-rowwise/1`): DiTs and text-conditioner linears."""
     return _quantize_lane(ctx, tel, source, "fp8", "fp8-rowwise/1", max_relative_frobenius)
+
+
+@invocable(memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
+async def nvfp4(
+    ctx: Context,
+    *,
+    source: Weights[Any],
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """H3's recipe at `nvfp4-w4a4/1`: W4A4 on Blackwell's FP4 tensor cores, the same weights as int8."""
+    return _quantize_lane(ctx, tel, source, "nvfp4", "nvfp4-w4a4/1", max_relative_frobenius)
 
 
 @invocable(memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
@@ -855,6 +878,12 @@ app.entrypoint(
     int8,
     name="int8",
     weights=(WeightsOutput("int8", max_new_bytes=MAX_QUANTIZER_BYTES),),
+    accelerator=False,
+)
+app.entrypoint(
+    nvfp4,
+    name="nvfp4",
+    weights=(WeightsOutput("nvfp4", max_new_bytes=MAX_QUANTIZER_BYTES),),
     accelerator=False,
 )
 

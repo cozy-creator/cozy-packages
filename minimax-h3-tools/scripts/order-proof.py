@@ -241,6 +241,7 @@ def main() -> None:
         "turbo-lora",
         "fp8",
         "int8",
+        "nvfp4",
     }:
         raise RuntimeError(f"package callables changed: {sorted(functions)}")
     for lane in lane_recipes.LANES:

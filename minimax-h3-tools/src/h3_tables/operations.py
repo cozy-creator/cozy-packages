@@ -65,7 +65,7 @@ def quantization_plan() -> QuantizationPlan:
 async def quantize(
     *,
     source: ModelArtifact,
-    encoding: Literal["fp8-rowwise/1", "int8-convrot256/1"],
+    encoding: Literal["fp8-rowwise/1", "int8-convrot256/1", "nvfp4-w4a4/1"],
     max_relative_frobenius: float | None = None,
 ) -> ModelArtifact:
     """Quantize both reviewed DiTs through the shared Runtime operation.

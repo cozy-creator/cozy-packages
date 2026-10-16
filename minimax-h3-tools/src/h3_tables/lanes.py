@@ -45,7 +45,7 @@ CastDtype = Literal["bf16", "f16"]
 #: ``decode_operands`` is the video VAE's serving destination and nothing else — see
 #: ``VIDEO_VAE_NORMALISATION``.
 CastScope = Literal["component", "decode_operands"]
-Encoding = Literal["fp8-rowwise/1", "int8-convrot256/1"]
+Encoding = Literal["fp8-rowwise/1", "int8-convrot256/1", "nvfp4-w4a4/1"]
 Modulation = Literal["full", "adaln-pruned"]
 
 #: The five components of an H3 checkpoint. Every lane declares all five: the ones it does
@@ -62,8 +62,9 @@ DIT_PLAN_COMPONENT = "dit"
 DIT_COMPONENTS = frozenset(TARGET_COMPONENT.values())
 
 #: The encodings with a rung on the cards we serve: `fp8-rowwise/1` (`cuda.sm89+`) and
-#: `int8-convrot256/1` (comfy-kitchen's CUTLASS int8 GEMM, sm80 and up).
-SERVABLE_ENCODINGS = frozenset({"fp8-rowwise/1", "int8-convrot256/1"})
+#: `int8-convrot256/1` (comfy-kitchen's CUTLASS int8 GEMM, sm80 and up) and `nvfp4-w4a4/1`
+#: (Blackwell's FP4 tensor cores, sm100/sm120).
+SERVABLE_ENCODINGS = frozenset({"fp8-rowwise/1", "int8-convrot256/1", "nvfp4-w4a4/1"})
 
 #: Components no lane may treat, and why. This is a refusal BY NAME, not by shape, because
 #: the shape rule does not catch it. Of the audio VAE's 1,087 rows, 637 are rank-3 — 344 of
@@ -197,6 +198,23 @@ TEXT_ENCODER_KEEP: tuple[str, ...] = (
 )
 
 _TEXT_ENCODER_FP8 = Treatment(encode="fp8-rowwise/1", keep=TEXT_ENCODER_KEEP)
+
+#: nvfp4's DiT keep list, the published recipes' consensus (NVIDIA ModelOpt for Wan/LTX/Qwen-Image,
+#: Lightricks LTX-2.3, rockerBOO's H3 file): the first and last two blocks, the token refiner and
+#: the context embedder stay bf16; every other block's q/k/v/out and SwiGLU in/out are W4A4.
+NVFP4_DIT_KEEP: tuple[str, ...] = (
+    "context_embedder.weight",
+    *(
+        f"token_refiner.refiner_blocks.{block}.{leaf}.weight"
+        for block in range(2)
+        for leaf in ("attn.to_q", "attn.to_k", "attn.to_v", "attn.to_out.0", "ff.net.0.proj", "ff.net.2")
+    ),
+    *(
+        f"transformer_blocks.{block}.{leaf}.weight"
+        for block in (0, 1, 48, 49)
+        for leaf in ("attn.to_q", "attn.to_k", "attn.to_v", "attn.to_out.0", "ff.net.0.proj", "ff.net.2")
+    ),
+)
 
 #: The video VAE's stored form is NOT a lane choice, so it is not authored per row.
 #:
@@ -388,6 +406,15 @@ def select(
                     code="h3_plan_absent",
                 )
             plan, plan_component = dit_plan, DIT_PLAN_COMPONENT
+            if treatment.keep:
+                kept = set(treatment.keep)
+                missing = sorted(kept - {tensor.key for tensor in plan.tensors})
+                if missing:
+                    raise UnsupportedInput(
+                        f"{component} keep list names {missing}, which the reviewed plan never selects",
+                        code="h3_keep_unmatched",
+                    )
+                plan = replace_plan(plan, [t for t in plan.tensors if t.key not in kept])
         else:
             structural = prepare_source_quantization(structure, components=(component,))
             kept = set(treatment.keep)
@@ -435,6 +462,12 @@ def select(
             code="h3_treatment_inert",
         )
     return Selection(component, treatment, tuple(cast), plan, plan_component)
+
+
+def replace_plan(plan: ArtifactQuantizationPlan, tensors: list) -> ArtifactQuantizationPlan:
+    return ArtifactQuantizationPlan(
+        components=plan.components, configs=plan.configs, order=plan.order, tensors=tensors
+    )
 
 
 def additions(selection: Selection) -> dict[str, Tensor]:

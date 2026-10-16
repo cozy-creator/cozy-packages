@@ -411,11 +411,12 @@ def _pruned_source(dit_spec: str | None) -> SourceInspection:
 
 
 def arm_quantizer() -> None:
-    """`cozy model quantize --fp8|--int8`: what H3's recipe encodes on each lane."""
+    """`cozy model quantize --fp8|--int8|--nvfp4`: what H3's recipe encodes on each lane."""
     print("\narm B — the fp8/int8 quantizer over pruned lanes")
     cases = (
         ("bf16-pruned --fp8", None, "fp8-rowwise/1", [313, 313, 350]),
         ("bf16-pruned --int8", None, "int8-convrot256/1", [313, 313, 350]),
+        ("bf16-pruned --nvfp4", None, "nvfp4-w4a4/1", [276, 276, 350]),
         ("fp8-pruned --fp8", job.FP8_SPEC, "fp8-rowwise/1", [350]),
     )
     for name, spec, encoding, expected in cases:
