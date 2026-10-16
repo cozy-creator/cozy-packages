@@ -4,7 +4,7 @@ version = "0.3.0"
 description = "SeedVR2 7B temporally consistent video restoration"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media]>=0.25.0",
+    "cozy-runtime[media]>=0.25.1",
     "diffusers>=0.40",
     "einops>=0.8",
     "msgspec>=0.19",
