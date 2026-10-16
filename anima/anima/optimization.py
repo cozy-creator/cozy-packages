@@ -17,10 +17,13 @@ from types import MethodType
 from typing import Any
 
 import torch
-from cozy_runtime.author.kernels import native, rms_rope_split_half
+from cozy_runtime.author.kernels import int8_rows, native, quantize_once, rms_rope_split_half
+from diffusers.models.activations import GELU
+from diffusers.models.attention import FeedForward
 from diffusers.models.attention_dispatch import dispatch_attention_fn
 from diffusers.models.normalization import RMSNorm
 from diffusers.models.transformers.transformer_cosmos import (
+    CosmosAdaLayerNormZero,
     CosmosAttnProcessor2_0,
     CosmosRotaryPosEmbed,
     CosmosTransformer3DModel,
@@ -49,6 +52,18 @@ _SOURCE_DIGESTS: dict[str, tuple[Callable[..., object], str]] = {
     "CosmosTransformerBlock.forward": (
         CosmosTransformerBlock.forward,
         "c208749aa823185422d31daa08a40f374a86c13772a65179f5409f63a4703b0d",
+    ),
+    "CosmosAdaLayerNormZero.forward": (
+        CosmosAdaLayerNormZero.forward,
+        "c518f36caac8a01a4779325e7161e4050a51e9b4227274ef47c46e20bb946dd7",
+    ),
+    "FeedForward.forward": (
+        FeedForward.forward,
+        "dae2c9f53987c25ad38cacbeafb54bd72d4b780ab9772413b559a0a94c3c7058",
+    ),
+    "GELU.forward": (
+        GELU.forward,
+        "a23bf6faca366d6576b4c079870c27d9b1470013d8d1882d3f21f31f9fd527e6",
     ),
     "AnimaPrepareLatentsStep.__call__": (
         AnimaPrepareLatentsStep.__call__,
@@ -269,10 +284,11 @@ class _FusedSelfAttention:
                 "anima_optimization_rope_absent",
                 "the exact Anima Cosmos self-attention call omitted rotary embeddings",
             )
-        query, key, value = (
-            projection(hidden_states).unflatten(2, (attn.heads, -1)).transpose(1, 2)
-            for projection in (attn.to_q, attn.to_k, attn.to_v)
-        )
+        with quantize_once(hidden_states):
+            query, key, value = (
+                projection(hidden_states).unflatten(2, (attn.heads, -1)).transpose(1, 2)
+                for projection in (attn.to_q, attn.to_k, attn.to_v)
+            )
         # The kernel reads the scales by pointer, without calling the norms that own them.
         query, key = self.kernel(
             query,
@@ -306,6 +322,34 @@ def _native_rms_forward(module: Any, hidden_states: Any) -> Any:
     return output if module.bias is None else output + module.bias
 
 
+def _hooked(*modules: Any) -> bool:
+    return any(m._forward_hooks or m._forward_pre_hooks for m in modules)
+
+
+def _normed(norm: Any, hidden: Any, timestep: Any, temb: Any, consumers: tuple[Any, ...]) -> Any:
+    """`CosmosAdaLayerNormZero.forward`'s rows and gate. When every consumer is an int8 leaf the
+    rows come quantized from the norm's one pass (`int8_rows`), else as Diffusers makes them."""
+    table = norm.linear_2(norm.linear_1(norm.activation(timestep)))
+    if temb is not None:
+        table = table + temb
+    shift, scale, gate = table.chunk(3, dim=-1)
+    if table.ndim == 2:
+        shift, scale, gate = (t.unsqueeze(1) for t in (shift, scale, gate))
+    rows = int8_rows(hidden, consumers, norm="layer", eps=norm.norm.eps, scale=scale, shift=shift)
+    if rows is None:
+        rows = norm.norm(hidden) * (1 + scale) + shift
+    return rows, gate
+
+
+def _feed_forward(ff: Any, rows: Any) -> Any:
+    """`FeedForward.forward` for Cosmos' GELU MLP, its GELU folded into the down projection's
+    int8 quantization when that is an int8 leaf."""
+    up = ff.net[0].proj(rows)
+    activation = "gelu" if ff.net[0].approximate == "none" else "gelu_tanh"
+    down = int8_rows(up, (ff.net[2],), activation=activation)
+    return ff.net[2](ff.net[1](ff.net[0].gelu(up)) if down is None else down)
+
+
 def _block_forward(
     block: Any,
     hidden_states: Any,
@@ -326,16 +370,24 @@ def _block_forward(
         hidden_states = block.before_proj(hidden_states) + latents
     if extra_pos_emb is not None:
         hidden_states = hidden_states + extra_pos_emb
-    normalized, gate = block.norm1(hidden_states, embedded_timestep, temb)
-    output = block.attn1(normalized, image_rotary_emb=image_rotary_emb)
+    attn1, attn2, ff = block.attn1, block.attn2, block.ff
+    # Rows quantized in the norm's pass reach the projections through modules nothing hooks.
+    fused = not _hooked(attn1, attn2, ff, *ff.net)
+    consumers = (attn1.to_q, attn1.to_k, attn1.to_v) if fused else ()
+    normalized, gate = _normed(block.norm1, hidden_states, embedded_timestep, temb, consumers)
+    output = attn1(normalized, image_rotary_emb=image_rotary_emb)
     hidden_states = torch.addcmul(hidden_states, gate, output)
-    normalized, gate = block.norm2(hidden_states, embedded_timestep, temb)
-    output = block.attn2(
-        normalized, encoder_hidden_states=encoder_hidden_states, attention_mask=attention_mask
-    )
+    consumers = (attn2.to_q,) if fused else ()
+    normalized, gate = _normed(block.norm2, hidden_states, embedded_timestep, temb, consumers)
+    with quantize_once(encoder_hidden_states):
+        output = attn2(
+            normalized, encoder_hidden_states=encoder_hidden_states, attention_mask=attention_mask
+        )
     hidden_states = torch.addcmul(hidden_states, gate, output)
-    normalized, gate = block.norm3(hidden_states, embedded_timestep, temb)
-    hidden_states = torch.addcmul(hidden_states, gate, block.ff(normalized))
+    consumers = (ff.net[0].proj,) if fused else ()
+    normalized, gate = _normed(block.norm3, hidden_states, embedded_timestep, temb, consumers)
+    output = _feed_forward(ff, normalized) if fused else ff(normalized)
+    hidden_states = torch.addcmul(hidden_states, gate, output)
     if controlnet_residual is not None:
         if block.after_proj is not None:
             raise PlanRefusal(
@@ -381,6 +433,18 @@ def _install_transformer_plan(transformer: Any) -> None:
             raise PlanRefusal(
                 "anima_optimization_block_shape",
                 "Anima Cosmos block projections or attention processors do not match the plan",
+            )
+        norms = (block.norm1, block.norm2, block.norm3)
+        if (
+            any(type(n) is not CosmosAdaLayerNormZero for n in norms)
+            or any(n.norm.weight is not None or n.norm.bias is not None for n in norms)
+            or len(block.ff.net) != 3
+            or type(block.ff.net[0]) is not GELU
+            or type(block.ff.net[1]) is not torch.nn.Dropout
+        ):
+            raise PlanRefusal(
+                "anima_optimization_block_shape",
+                "Anima Cosmos block norms or feed-forward do not match the plan",
             )
         block.attn1.set_processor(_FusedSelfAttention(rms_rope_split_half, rope))
         block.forward = MethodType(_block_forward, block)
