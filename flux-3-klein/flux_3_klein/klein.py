@@ -2,8 +2,10 @@
 
 The modules are Diffusers' (`Flux3Transformer2DModel`, `AutoencoderKLFlux2`, the Qwen3-VL prompt
 encoding of its Flux3 modular pipeline); reference preparation and sampling follow BFL's reference
-code (`black-forest-labs/flux-3-image-klein`, `flux3/pipeline.py`, `flux3/sampling.py`). Runtime
-constructs and fills the modules and owns their residency.
+code (`black-forest-labs/flux-3-image-klein`, `flux3/pipeline.py`, `flux3/sampling.py`). The
+transformer's forward is the package's: every block is one parallel block over one token sequence,
+as in BFL's code, which Runtime fuses (`BLOCK`). Runtime constructs and fills the modules and owns
+their residency.
 """
 
 from __future__ import annotations
@@ -11,10 +13,12 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import torch
+import torch.nn.functional as F
+from cozy_runtime import fusion
 from cozy_runtime.author import (
     Config,
     Loader,
@@ -22,7 +26,12 @@ from cozy_runtime.author import (
     ModelAssets,
     uses_components,
 )
+from cozy_runtime.author.kernels import Plan
 from diffusers import AutoencoderKLFlux2, Flux3Transformer2DModel
+from diffusers.models.transformers.transformer_flux3 import (
+    Flux3ModeTransformerBlock,
+    Flux3SingleTransformerBlock,
+)
 from diffusers.modular_pipelines.flux3.encoders import Flux3TextEncoderStep
 from PIL import Image, ImageOps
 from tokenizers import Tokenizer
@@ -68,6 +77,50 @@ def _conditioning_only(encoder: Any) -> None:
     del encoder.model.visual
 
 
+class Rows(NamedTuple):
+    """A block call's adaLN: each mode's (shift, scale, gate) row and each token's row index."""
+
+    table: torch.Tensor
+    index: torch.Tensor
+
+
+class KleinBlock(Flux3ModeTransformerBlock):
+    """Every Klein block, per-mode and joint: parallel attention and SwiGLU under one adaLN, over
+    one token sequence. The joint blocks take [image, text, references] as that sequence (BFL's
+    layout) instead of Diffusers' two streams; each token reads its mode's row."""
+
+    def forward(  # type: ignore[override]
+        self, hidden_states: torch.Tensor, temb_mod: Rows, image_rotary_emb: Any
+    ) -> torch.Tensor:
+        shift, scale, gate = temb_mod.table[temb_mod.index].chunk(3, dim=-1)
+        normed = (1 + scale) * self.norm(hidden_states) + shift
+        attended = self.attn(hidden_states=normed, image_rotary_emb=image_rotary_emb)
+        return hidden_states + gate * (attended + self.ff(normed))
+
+
+def _rows(block: KleinBlock, arguments: Mapping[str, Any]) -> fusion.Modulation:
+    rows: Rows = arguments["temb_mod"]
+    shift, scale, gate = rows.table.chunk(3, dim=-1)
+    return fusion.Modulation(rows.index, scale, gate, shift_msa=shift)
+
+
+#: Klein's block as Runtime fuses it: one LayerNorm modulated by (shift, scale), q/k RMSNorm and
+#: RoPE in fp32 (repeated cos/sin pairs), `linear_in` = [gate | up], one gate on attention + MLP.
+BLOCK = fusion.DiTBlock(
+    KleinBlock,
+    width=3072,
+    head_dim=128,
+    modulation=_rows,
+    norms=("norm",),
+    norm="layer",
+    attention="attn",
+    arguments=(),
+    mlp=fusion.GatedMLP("ff", gate="linear_in", down="linear_out"),
+    rope=fusion.Rope("image_rotary_emb", interleaved=True, fp32=True),
+    shift=True,
+)
+
+
 class KleinGraph:
     def __init__(self, config: Config) -> None:
         mapping = config.mapping()
@@ -78,6 +131,9 @@ class KleinGraph:
             )
             vae = AutoencoderKLFlux2.from_config(_section(mapping, "vae"))
         _conditioning_only(text_encoder)
+        for block in transformer.modules():
+            if type(block) in (Flux3ModeTransformerBlock, Flux3SingleTransformerBlock):
+                block.__class__ = KleinBlock
         self.components: dict[str, Any] = {
             "transformer": transformer.to(dtype=torch.bfloat16),
             "text_encoder": text_encoder,
@@ -182,6 +238,63 @@ def _bn(vae: Any, like: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return mean, std
 
 
+def _embed(tf: Any, embedder: Any, t: float, device: torch.device) -> torch.Tensor:
+    """Diffusers' embedding of time `t`, scaled in bf16 as it does."""
+    now = torch.full((1,), t, device=device, dtype=torch.bfloat16)
+    return embedder(tf.time_proj(now * 1000).to(torch.bfloat16))
+
+
+def _joint(*ropes: Any) -> tuple[Any, torch.Tensor]:
+    """A joint sequence's rotary tables, and each token's row: the index of its mode."""
+    present = [rope for rope in ropes if rope is not None]
+    cos = present[0][0]
+    lengths = torch.tensor([len(rope[0]) for rope in present], device=cos.device)
+    modes = torch.arange(len(present), device=cos.device)
+    return tuple(torch.cat(axis) for axis in zip(*present, strict=True)), modes.repeat_interleave(lengths)
+
+
+def _early(blocks: Any, tokens: torch.Tensor, modulation: Any, act: torch.Tensor, rope: Any,
+           zero: torch.Tensor) -> torch.Tensor:
+    rows = Rows(modulation(act), zero)
+    for block in blocks:
+        tokens = block(tokens, rows, rope)
+    return tokens
+
+
+def _conditions(
+    tf: Any, texts: list[torch.Tensor], text_ropes: list[Any], refs: torch.Tensor | None, ref_rope: Any,
+    act: torch.Tensor, zero: torch.Tensor,
+) -> tuple[list[torch.Tensor], torch.Tensor]:
+    """Each text's [text, references] tokens after their early blocks, and the joint rows of
+    those modes. `act` is their (t = 0) embedding, activated."""
+    modes = ["txt"]
+    ref = None
+    if refs is not None:
+        modes.append("image_cond")
+        ref = _early(tf.mode_blocks["image_cond"], tf.x_embedders["image_cond"](refs),
+                     tf.early_stream_modulations["image_cond"], act, ref_rope, zero)
+    tokens = []
+    for text, rope in zip(texts, text_ropes, strict=True):
+        txt = _early(tf.txt_mode_blocks, tf.context_embedder(text), tf.early_stream_modulations["txt"],
+                     act, rope, zero)
+        tokens.append(txt if ref is None else torch.cat([txt, ref], dim=1))
+    return tokens, torch.cat([tf.single_stream_modulations[mode](act) for mode in modes])
+
+
+def _velocity(tf: Any, x: torch.Tensor, temb: torch.Tensor, cond: torch.Tensor, cond_rows: torch.Tensor,
+              image_rope: Any, joint: tuple[Any, torch.Tensor], zero: torch.Tensor) -> torch.Tensor:
+    """One transformer call: the image's early blocks, then the joint blocks over [image, cond]."""
+    act = F.silu(temb)
+    image = _early(tf.mode_blocks["image"], tf.x_embedders["image"](x), tf.early_stream_modulations["image"],
+                   act, image_rope, zero)
+    rope, index = joint
+    rows = Rows(torch.cat([tf.single_stream_modulations["image"](act), cond_rows]), index)
+    tokens = torch.cat([image, cond], dim=1)
+    for block in tf.single_transformer_blocks:
+        tokens = block(tokens, rows, rope)
+    return tf.proj_out(tf.norm_out(tokens[:, : image.shape[1]], temb[:, None]))
+
+
 class Klein(Model[KleinGraph], encoded_leaves="accept"):
     """One Klein checkpoint: the distilled flow map (no guidance) or the base model (CFG)."""
 
@@ -230,6 +343,9 @@ class Klein(Model[KleinGraph], encoded_leaves="accept"):
                 ids.append(image_ids(h // 2, w // 2, -(1 + index)))
         return torch.cat(tokens, dim=1), torch.cat(ids)
 
+    def execution_plan(self, plan: Plan) -> str:
+        return fusion.install(plan, BLOCK, self.graph.components["transformer"])
+
     @uses_components("transformer")
     def denoise(
         self,
@@ -245,38 +361,44 @@ class Klein(Model[KleinGraph], encoded_leaves="accept"):
         on_step: Callable[[int], None],
         cancel: Callable[[], None],
     ) -> torch.Tensor:
-        """BFL's Euler sampler: a flow map jumps to the next timestep; the base model takes CFG."""
-        transformer = self.graph.components["transformer"]
-        device = next(transformer.parameters()).device
+        """BFL's Euler sampler: a flow map jumps to the next timestep; the base model takes CFG.
+
+        Text and references sit at t = 0, so the base model runs their early blocks once per
+        request; a flow map adds each step's target time to every mode, so it runs them per step.
+        """
+        tf = self.graph.components["transformer"]
+        device = next(tf.parameters()).device
         rows, columns = height // PATCH, width // PATCH
-        noise = torch.randn((rows * columns, transformer.config.in_channels), generator=torch.Generator().manual_seed(seed))
+        noise = torch.randn((rows * columns, tf.config.in_channels), generator=torch.Generator().manual_seed(seed))
         x = noise.to(torch.bfloat16).float().to(device)[None]  # bf16 values, an fp32 state across steps
-        fixed: dict[str, Any] = {"img_ids": image_ids(rows, columns).to(device)}
-        if references is not None:
-            fixed["image_cond_hidden_states"] = references[0].to(device)
-            fixed["image_cond_ids"] = references[1].to(device)
         texts = [embeds] if negative is None else [negative, embeds]
-        texts = [(t.to(device=device, dtype=torch.bfloat16), text_ids(t.shape[1]).to(device)) for t in texts]
+        texts = [t.to(device=device, dtype=torch.bfloat16) for t in texts]
+        refs = None if references is None else references[0].to(device)
         timesteps = schedule(steps)
         with torch.inference_mode():
+            zero = torch.zeros(1, dtype=torch.long, device=device)
+            image_rope = tf.pos_embed(image_ids(rows, columns).to(device))
+            text_ropes = [tf.pos_embed(text_ids(t.shape[1]).to(device)) for t in texts]
+            ref_rope = None if references is None else tf.pos_embed(references[1].to(device))
+            joints = [_joint(image_rope, rope, ref_rope) for rope in text_ropes]
+            at_zero = _embed(tf, tf.timestep_embedder, 0.0, device)
+            fixed = None
+            if not self.flow_map:
+                fixed = _conditions(tf, texts, text_ropes, refs, ref_rope, F.silu(at_zero), zero)
             for step in range(steps):
                 cancel()
                 t, nxt = timesteps[step], timesteps[step + 1]
-                now = torch.full((1,), t, device=device, dtype=torch.bfloat16)
-                extra = {}
-                if self.flow_map:
-                    extra["target_timestep"] = torch.full((1,), nxt, device=device, dtype=torch.bfloat16)
+                temb = _embed(tf, tf.timestep_embedder, t, device)
+                conditions = fixed
+                if conditions is None:
+                    target = _embed(tf, tf.target_timestep_embedder, nxt, device)
+                    temb = temb + target
+                    act = F.silu(at_zero + target)
+                    conditions = _conditions(tf, texts, text_ropes, refs, ref_rope, act, zero)
+                tokens, cond_rows = conditions
                 velocities = [
-                    transformer(
-                        hidden_states=x.to(torch.bfloat16),
-                        encoder_hidden_states=text,
-                        txt_ids=ids,
-                        timestep=now,
-                        return_dict=False,
-                        **fixed,
-                        **extra,
-                    )[0].float()
-                    for text, ids in texts
+                    _velocity(tf, x.to(torch.bfloat16), temb, cond, cond_rows, image_rope, joint, zero).float()
+                    for cond, joint in zip(tokens, joints, strict=True)
                 ]
                 if guidance is None:
                     (velocity,) = velocities

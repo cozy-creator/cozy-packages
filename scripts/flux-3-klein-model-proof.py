@@ -7,6 +7,7 @@ base model with CFG), text-to-image and two references, through the Runtime test
 
 from __future__ import annotations
 
+import copy
 import json
 import sys
 from pathlib import Path
@@ -14,6 +15,10 @@ from pathlib import Path
 import numpy as np
 import torch
 from cozy_runtime.author import Config, ModelAssets
+from diffusers.models.transformers.transformer_flux3 import (
+    Flux3ModeTransformerBlock,
+    Flux3SingleTransformerBlock,
+)
 from diffusers.modular_pipelines import Flux3AutoBlocks, Flux3DistilledAutoBlocks
 from PIL import Image
 from tokenizers import Tokenizer, models, pre_tokenizers
@@ -110,7 +115,13 @@ def proof(flow_map: bool, references: list[Image.Image]) -> None:
 
     blocks = Flux3DistilledAutoBlocks() if flow_map else Flux3AutoBlocks()
     pipe = blocks.init_pipeline()
-    pipe.update_components(**built.components, tokenizer=model.processor)
+    # Diffusers' own blocks, on the same weights: Klein runs every block as one stream.
+    reference = copy.deepcopy(built.components["transformer"])
+    for block in reference.single_transformer_blocks:
+        block.__class__ = Flux3SingleTransformerBlock
+    for block in (*reference.txt_mode_blocks, *(b for m in reference.mode_blocks.values() for b in m)):
+        block.__class__ = Flux3ModeTransformerBlock
+    pipe.update_components(**{**built.components, "transformer": reference}, tokenizer=model.processor)
     rows = width // PATCH
     noise = torch.randn((rows * rows, 8), generator=torch.Generator().manual_seed(11))
     latents = noise.to(torch.bfloat16).float().view(rows, rows, 8).permute(2, 0, 1)[None]
