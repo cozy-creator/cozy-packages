@@ -20,6 +20,8 @@ import torch
 import torch.nn.functional as F
 from cozy_runtime import fusion
 from cozy_runtime.author import (
+    LIKE_PROJECTIONS,
+    AttentionContext,
     Config,
     Loader,
     Model,
@@ -295,6 +297,10 @@ def _velocity(tf: Any, x: torch.Tensor, temb: torch.Tensor, cond: torch.Tensor, 
     return tf.proj_out(tf.norm_out(tokens[:, : image.shape[1]], temb[:, None]))
 
 
+#: The blocks whose attention BFL's int8 checkpoint quantizes (`comfy_attention.config`).
+QUANTIZED_ATTENTION = ("mode_blocks.image.", "single_transformer_blocks.")
+
+
 class Klein(Model[KleinGraph], encoded_leaves="accept"):
     """One Klein checkpoint: the distilled flow map (no guidance) or the base model (CFG)."""
 
@@ -345,6 +351,13 @@ class Klein(Model[KleinGraph], encoded_leaves="accept"):
 
     def execution_plan(self, plan: Plan) -> str:
         return fusion.install(plan, BLOCK, self.graph.components["transformer"])
+
+    def choose_attention(self, context: AttentionContext) -> tuple[str, ...] | None:
+        # As BFL's int8 release: attention quantized like the linears in the image and joint
+        # blocks (comfy_kitchen_int8); the text and reference early blocks keep float attention.
+        if context.component == "transformer" and context.module_path.startswith(QUANTIZED_ATTENTION):
+            return (LIKE_PROJECTIONS,)
+        return None
 
     @uses_components("transformer")
     def denoise(

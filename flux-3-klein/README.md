@@ -67,7 +67,9 @@ tensors either. BFL's upsampler system prompts ship in `flux_3_klein/system_prom
 `int8` writes the default lane: every linear of the 43 DiT blocks, the modulation heads, the context
 embedder, the output norm and the text encoder's 32 language layers as `int8-convrot256/1`, served
 W8A8 on the int8 tensor cores. On real Klein activations each linear is 0.5–1.3% from bf16 (fp8
-row-scaled: 1.5–2.8%), and the images match bf16's. The VAE stays f32.
+row-scaled: 1.5–2.8%), and the images match bf16's. The VAE stays f32. As in BFL's int8 release,
+attention in the image and joint blocks is quantized with the linears (`LIKE_PROJECTIONS`: Runtime's
+`kitchen-int8` on RTX 30/40); the text and reference early blocks and the bf16 lane keep float attention.
 
 ```sh
 cozy model quantize <account>/flux-3-klein@0.1.0/original --int8 --rental=<rental> --await
