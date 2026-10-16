@@ -136,7 +136,7 @@ def policy_reference(image: Image.Image, n_refs: int) -> Image.Image:
     return Image.open(io.BytesIO(buffer.getvalue())).convert("RGB")
 
 
-class Upsampler(Model[UpsamplerGraph], encoded_leaves="accept"):
+class Upsampler(Model[UpsamplerGraph], encoded_leaves="accept", min_bits=4, phase="decode"):
     """Rewrites a short request, and its references when editing, into the caption Klein wants."""
 
     graph: UpsamplerGraph

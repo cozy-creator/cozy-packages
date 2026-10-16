@@ -2,7 +2,7 @@
 
 First-party package sources authored against `cozy_runtime.author`. The tracker is the design
 authority; this repository contains package schemas, model-specific computation, and deterministic
-conformance drivers. Functions declare model defaults; explicit owner overrides live on the hub (see Model bindings). Private scripts
+conformance drivers. Functions declare each model slot's default release (see Model defaults). Private scripts
 select their inputs explicitly and run without publishing code to the hub.
 
 Follow [release practices](RELEASING.md) and the
@@ -13,7 +13,7 @@ dependencies or qualifying a worker image.
 
 | path | responsibility |
 |---|---|
-| `minimax-h3/` | MiniMax H3 dual-task package; the owner's hub binding selects FULL or AdaLN-pruned weights |
+| `minimax-h3/` | MiniMax H3 dual-task package over AdaLN-pruned weights |
 | `sdxl/` | SDXL text-to-image package plus the family's `int8`/`fp8` quantizers (se-008, cr-073, se-023) |
 | `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
 | `minimax-h3-tools/` | H3 timestep-table and structural precompute functions (cr-071) |
@@ -29,9 +29,9 @@ dependencies or qualifying a worker image.
 
 ## Boundaries
 
-- Code states capability and can declare default model ladders beside a callable.
-  Runtime validates and publishes that metadata; the host resolves it before execution.
-  Owner overrides live on the hub. `package.toml` contains no binding copy.
+- Code states capability and tolerances, and can declare a default release beside a callable.
+  Runtime validates and publishes that metadata; the machine resolves it before execution.
+  `package.toml` contains no binding copy.
 - Runtime alone hydrates and decodes request assets, places model components, and encodes outputs.
   Package code receives public decoded values and never opens a request path, URL, container, or
   packet. The model package does read its own five immutable tokenizer/processor data files.
@@ -47,39 +47,27 @@ dependencies or qualifying a worker image.
 - Community implementations are research evidence only. No community node, graph, prompt parser,
   checkpoint reader, or serving dependency is present here.
 
-## Model bindings
+## Model defaults
 
-A package publishes model slots (`<callable>.models.<param>`) and optional function-authored
-default ladders. H3 declares one shared ladder beside its `fl2va` and `ref2va` decorators.
-Publishing stores those defaults in the immutable package interface, without creating mutable
-Hub binding rows. Selection precedence is per-run override, owner Hub override, then the selected
-package release's authored default. All rungs for one model argument select lanes in one release.
+A package publishes model slots (`<callable>.models.<param>`) and, beside the callable, each
+slot's default release: `defaults={"model": "sdxl@1.0.0"}`. A default names a release, never a
+lane; an org-less one names a model of the publishing account. To change a default, publish the
+package again. A request overrides one slot with `model.<param>=<org/model@release>`, and pins a
+lane with `.../<lane>`.
 
-Use `cozy package bind` to set an explicit owner override:
+The machine picks the lane: 8 bits on the GPU's most accurate native format (`int8`, else `fp8`),
+4 bits (`nvfp4`) or 16 (`bf16`) when the request says `--bits`. The package declares only its
+tolerances, as `Model` class keywords:
 
-```sh
-cozy package bind paul/minimax-h3 fl2va.models.model paul/minimax-h3@1.0.0-rc.2 \
-  --gpu H100=fp8-adaln-pruned --gpu B200=fp8-adaln-pruned --gpu 5090=fp8-adaln-pruned
-cozy package bind paul/minimax-h3 ref2va.models.model paul/minimax-h3@1.0.0-rc.2 \
-  --gpu H100=fp8-adaln-pruned --gpu B200=fp8-adaln-pruned --gpu 5090=fp8-adaln-pruned
-```
+- `min_bits=` (16, 8 or 4; default 8): the fewest bits the machine may pick by itself. A slot at
+  4 takes `nvfp4` when it decodes or its 8-bit weights exceed the GPU.
+- `phase="decode"` for an LM's token loop (the describer's and Klein's upsampler's Qwen3.5-9B).
+- `attention_bits=` (16, 8 or 4, or a mapping from a component-qualified module prefix to one;
+  default 16): the fewest bits attention may run at. H3 declares 4 on its DiTs, Klein 8 on its
+  image and joint blocks. `AttentionLayout.exact_paths` holds sites at 16.
 
-Use `cozy package unbind paul/minimax-h3 ref2va.models.model` to remove that override and
-return to the published function default. Existing valid owner overrides survive package updates.
-
-- Each `--gpu <gpu>=<lane>` is one rung and order is preference: at serve time the hub walks the
-  rungs top-down and takes the first whose `<gpu>` matches the SKU.
-- `<gpu>` is a case-insensitive in-order token-subsequence pattern over the SKU's
-  `accelerator_model`: `H100` matches `NVIDIA H100 80GB HBM3` and `NVIDIA H100 NVL`. `*` matches
-  every SKU and is allowed only as the last rung.
-- `<lane>` is the hub's lane name on that release, verbatim (`cozy model info <org/model> --json`).
-  There is no curator stamp or `profile=` prefix.
-- A request overrides one slot for that call with `model.<param>=<org/model@release>`.
-
-H3's public defaults use a wildcard GPU row for each supported execution width (1, 2, 4, 7,
-and 8). This keeps private rentals on the GPU that was actually rented; public placement can
-match the architecture and let Runtime choose its kernel and precision policy. `encode_text`
-remains a one-GPU slot because its text encoder is intentionally local to the calling worker.
+Code never reads the GPU's compute capability or name, or a kernel name, to choose
+(`scripts/fence.py` no-gpu-choice).
 
 ## SDXL sources
 
@@ -120,7 +108,7 @@ The H3 package exposes both official actions from one model generation. Its norm
 `model: H3Model` slot contains only the two DiTs, text encoder and VAEs.
 
 `long_form` defaults to `mode="turbo"`: each shot uses eight PDD evaluations, the
-published FP8-pruned base and the separate PDD-8 adapter. Omit `steps` in turbo mode.
+base release and the separate PDD-8 adapter. Omit `steps` in turbo mode.
 For standard sampling, select `mode="standard"`; omitted `steps` then means 30,
 with explicit 30/40/50 also supported. In either long-form composer, a segment's
 `turbo` defaults to `true`. Set `turbo: false` for a standard 30-step segment within
@@ -133,15 +121,14 @@ Four-GPU placement is chosen when submitting the run, not by the composition fun
 The `fl2va_turbo` and `ref2va_turbo` functions take two independent model slots:
 `base_model: H3TurboBase` holds an AdaLN-pruned five-root checkpoint, and
 `turbo_lora: H3TurboLoRA` holds only `fl2va_turbo` and `ref2va_turbo`. Both
-checkpoints must have matching DiT configurations. The package's hardware ladders
-select the FP8-pruned base and PDD-8 adapter by default; callers can select other
-compatible model bindings explicitly.
+checkpoints must have matching DiT configurations. They default to `minimax-h3@1.0.0-rc.3` and
+`minimax-h3-turbo-lora@1.0.0-audit.1`; callers can select other compatible releases explicitly.
 Each sampling scope holds its base DiT and separate overlay together. LoRA hooks
 are installed during construction, before Runtime chooses fusion or Ulysses
 execution. All three model classes declare degrees 2 and 4.
 
-H3's models state a [hardware-aware attention preference](minimax-h3/docs/attention-defaults.md)
-that Runtime applies.
+H3's DiTs declare [4-bit attention](minimax-h3/docs/attention-defaults.md); Runtime picks the
+kernel by the GPU's family.
 Turbo preserves four dense plus four sparse evaluations; regular 30-step sampling
 preserves ten dense plus twenty sparse evaluations when a sparse backend is selected.
 Explicit CLI attention pins take precedence.
@@ -296,13 +283,12 @@ two committed TimestepPlans and contain no replaced timestep/AdaLN projection de
 pruned lane carries the union of every served schedule's rows, so one checkpoint serves every
 `steps` value; a lane whose plan identity differs from the package's refuses at construction. The
 AdaLN-pruned extension inherits Diffusers' forward and changes only those projection modules; it
-does not interpolate a curve or carry a second model port. The hub selects the lane before fetch
-from the resolved default or explicit override (Model bindings above); model computation
-and environment variables do not choose one.
+does not interpolate a curve or carry a second model port. The machine selects the lane before
+fetch (Model defaults above); model computation and environment variables do not choose one.
 
-The release has three lanes: `bf16-full`, `bf16-adaln-pruned` and `fp8-adaln-pruned`. The production binding is `paul/minimax-h3@1.0.0-rc.2` on
-`fp8-adaln-pruned` for H100, B200 and 5090, in that order. `adaln-curve` is reserved for
-approximate community curve artifacts and is not a lane in this release.
+`minimax-h3@1.0.0-rc.3` serves AdaLN-pruned lanes `bf16`, `fp8`, `int8` and `nvfp4`, and the
+FULL reference lane `bf16-full`. `adaln-curve` is reserved for approximate community curve
+artifacts and is not a lane.
 
 Ref2VA preserves request order and enforces the official product bounds: at most 9 images, 3 videos,
 3 standalone audio clips, and 12 entries total. Video and audio clips are 2–15 seconds, with at most

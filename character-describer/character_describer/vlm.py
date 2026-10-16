@@ -83,7 +83,7 @@ class Pipeline:
         self.components: dict[str, torch.nn.Module] = {COMPONENT: model}
 
 
-class Describer(Model[Pipeline], encoded_leaves="accept"):
+class Describer(Model[Pipeline], encoded_leaves="accept", min_bits=4, phase="decode"):
     """One greedy reply about one image. Runtime may serve encoded lanes' linears natively."""
 
     pipe: Pipeline

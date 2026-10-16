@@ -12,8 +12,9 @@ description.
 cozy run fidika/character-describer/describe_character --asset image=./character.png --await
 ```
 
-The default model is Qwen3.5-9B (`qwen3.5-9b@0.2.0/bf16`), chosen over Qwen3.5-4B,
-JoyCaption Beta One and Qwen3-VL-2B in a side-by-side test (tracker se-066).
+The default model is Qwen3.5-9B (`qwen3.5-9b@0.2.0`), chosen over Qwen3.5-4B,
+JoyCaption Beta One and Qwen3-VL-2B in a side-by-side test (tracker se-066). Its token loop
+declares `min_bits=4, phase="decode"`: it serves the release's `nvfp4` lane where there is one.
 
 ## Model preparation
 
@@ -25,7 +26,7 @@ anything.
 ```sh
 cozy model upload hf://Qwen/Qwen3.5-9B@c202236235762e1c871ad0ccb60c8ee5ba337b9a <account>/qwen3.5-9b \
   --rental <name> --await
-cozy model publish <account>/qwen3.5-9b --release 0.2.0 --lane bf16=sha256:<checkpoint> --default-lane bf16
+cozy model publish <account>/qwen3.5-9b --release 0.2.0 --lane bf16=sha256:<checkpoint>
 ```
 
 ## The int8 lane

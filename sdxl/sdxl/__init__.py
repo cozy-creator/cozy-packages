@@ -511,7 +511,7 @@ def _request_generator(torch: Any, source: object, *, device: Any) -> Any:
     return torch.Generator(device=device).manual_seed(source.getrandbits(63))
 
 
-@app.entrypoint(memoize=Memoize(requires=["seed"]))
+@app.entrypoint(defaults={"model": "sdxl@1.0.0"}, memoize=Memoize(requires=["seed"]))
 def generate(
     ctx: Context,
     payload: Txt2ImgInput,

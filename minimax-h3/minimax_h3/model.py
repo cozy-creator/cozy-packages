@@ -10,7 +10,6 @@ from typing import Any, Literal
 
 from cozy_runtime.author import (
     AdapterCompatibility,
-    AttentionContext,
     DerivedCache,
     Loader,
     Model,
@@ -36,21 +35,6 @@ from .official import (
 )
 from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK
 
-#: Every H3 DiT's attention preference (Paul, 2026-09-27, h3a-060): Sol's sparse steps, then
-#: SageAttention2 INT8 Q/K + FP8 P/V, then FA3 BF16, then SDPA. FA3 FP8 garbles H3 output
-#: (H100 Ulysses-4 runs 1240-1252) and is never preferred. The VAEs keep Runtime's ranking.
-DIT_ATTENTION: tuple[str, ...] = ("sol-attn", "sageattention", "flash-attn3", "sdpa")
-HOPPER_DIT_ATTENTION: tuple[str, ...] = ("sol-attn-sage2-fixed-kmean", *DIT_ATTENTION)
-#: Datacenter Blackwell (SM100/SM103): Sol's sparse steps, its dense rows on FA4 FP8 with Q/K
-#: Hadamard-rotated (205 ms against cuDNN BF16's 267 per B200 call), the exact paths on BF16.
-DATACENTER_BLACKWELL_DIT_ATTENTION: tuple[str, ...] = ("sol-attn", "flash-attn4-fp8", "sdpa")
-BLACKWELL_DIT_ATTENTION: tuple[str, ...] = (
-    "kitchen-sol-producer-fp4-fixed-means-shared-qkv",
-    "kitchen-sol-producer-fp4-lowmem-shared-qkv",
-    "kitchen-sol-fp4-lowmem",
-    *DIT_ATTENTION,
-)
-DIT_COMPONENTS: frozenset[str] = frozenset({"fl2va_dit", "ref2va_dit"})
 #: Reference latents one generation keeps (`ReferenceMemo`), least recently used first out. A
 #: 2048-edge image reference is ~6 MB of float32 latents, a 5 s video reference ~25 MB.
 REFERENCE_MEMO_ENTRIES = 256
@@ -79,7 +63,13 @@ def condition_references(model: H3Model, task: Task, state: Any, *, tel: Telemet
 
 @placeable("text_encoder")
 @sequence_parallel(degrees=(2, 4, 7, 8))
-class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept"):
+class H3Model(
+    Model[OfficialH3Pipeline],
+    encoded_leaves="accept",
+    # The DiTs' attention holds at 4 bits (fp4 where the GPU has it); the VAEs and the text
+    # encoder keep exact attention.
+    attention_bits={"fl2va_dit": 4, "ref2va_dit": 4},
+):
     """H3 is head-shardable at every divisor of its 56 attention heads up to eight GPUs.
 
     The upstream `_cp_plan` shards the packed sequence itself with `tensor_split`, so any
@@ -123,19 +113,6 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept"):
         for component in self.pipe.components.values():
             producer.retain_rotary(component)
         return glue.install(self, self.pipe, plan)
-
-    def choose_attention(self, context: AttentionContext) -> tuple[str, ...] | None:
-        if context.component not in DIT_COMPONENTS:
-            return None
-        # H3's automatic Kitchen choice requires Runtime's compatible reviewed wheel.
-        # Other packages and explicit choices may still opt into source builds.
-        if "kitchen-sol-fp4-lowmem" in context.prebuilt:
-            return BLACKWELL_DIT_ATTENTION
-        if "sol-attn-sage2-fixed-kmean" in context.eligible:
-            return HOPPER_DIT_ATTENTION
-        if "flash-attn4-fp8" in context.eligible:
-            return DATACENTER_BLACKWELL_DIT_ATTENTION
-        return DIT_ATTENTION
 
     # Published interfaces (paul/minimax-h3) name these two scopes in `component_use`; they
     # stay until that package is republished. The runtime no longer calls `Model.warm`.

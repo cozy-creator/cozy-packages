@@ -59,12 +59,12 @@ cozy model upload \
   hf://Qwen/Qwen-Image-2.1@790c92633540aa0cb11d9abf19eb46d861714758 \
   paul/qwen-image-2.1 --rental=YOUR_RENTAL --await
 cozy model publish paul/qwen-image-2.1 --release 0.1.0 \
-  --lane original=sha256:CHECKPOINT_DIGEST
+  --lane bf16=sha256:CHECKPOINT_DIGEST
 ```
 
 Replace `YOUR_RENTAL` and `CHECKPOINT_DIGEST` with the selected rental name and
 returned checkpoint digest. Upload creates the checkpoint; the separate publish
-command creates the release used by the package's default binding. Preparation and descriptor checks
+command creates the package's default release. Preparation and descriptor checks
 alone do not qualify GPU inference or the generated image.
 
 ## The int8 lane
@@ -75,7 +75,7 @@ Hadamard, int8 per output row), served as W8A8 on the int8 tensor cores. Embeddi
 tower, the input/output projections, the modulation and the VAE keep their source bytes.
 
 ```sh
-cozy model quantize paul/qwen-image-2.1@0.1.0/original --int8 --rental=YOUR_RENTAL --await
+cozy model quantize paul/qwen-image-2.1@0.1.0/bf16 --int8 --rental=YOUR_RENTAL --await
 cozy model publish paul/qwen-image-2.1 --release 0.1.0 --lane int8=sha256:CHECKPOINT_DIGEST
 ```
 
@@ -132,7 +132,7 @@ image = await generate_image(
 
 The Hub package is `<account>/qwen-image-2`, e.g. `paul/qwen-image-2` on the local
 Hub and `fidika/qwen-image-2` on tensorhub.com; its callable is `generate_image`. The
-default model is the org-relative `qwen-image-2.1@0.1.0/original`: the publishing
+default model is the org-relative `qwen-image-2.1@0.1.0`: the publishing
 account's `qwen-image-2.1` model.
 Installing the wheel alone does not turn GPU execution into an in-process call;
 Cozy supplies the managed caller when composing package functions.

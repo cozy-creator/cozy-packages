@@ -86,7 +86,7 @@ app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=24 << 30),), a
 
 
 @app.entrypoint(
-    defaults={"model": [{"gpu": "*", "gpus": 1, "lane": "qwen3.5-9b@0.2.0/bf16"}]},
+    defaults={"model": "qwen3.5-9b@0.2.0"},
     memoize=True,
     memo_version="identity-v4",
 )
