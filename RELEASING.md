@@ -9,7 +9,8 @@ task publish -- qwen-image-2
 It fast-forwards the checkout to `origin/master`, runs the package's CPU conformance
 (`task conform -- <package>`), and publishes a `git archive` of it to each of `HUBS`.
 Then, in dependency order, each package whose `uv.lock` holds a republished package is
-relocked to it (`cozy package lock --tensorhub tensorhub --upgrade-package <it>`),
+relocked to it (`cozy package lock --tensorhub tensorhub --upgrade-package <it>`, plus
+`cozy-runtime` or `tensorfs` when its floor is above the dependent's lock),
 patch-bumped, conformed, pushed to master and published the same way. A failed
 conformance stops the cascade before that package is committed. A dependent whose
 master version is unpublished stops it too: its merged changes are not released yet.

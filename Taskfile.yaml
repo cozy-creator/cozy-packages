@@ -43,6 +43,11 @@ tasks:
         ver() { grep -m1 '^version = ' "$1/pyproject.toml" | cut -d'"' -f2; }
         deps() { awk -F'"' '/^name = /{n=$2} /^source = / && /\/v1\/index\//{print n}' "$1/uv.lock"; }
         pinned() { for q in $up; do grep -A1 -x "name = \"$q\"" "$1/uv.lock" | grep -qx "version = \"$(ver "$q")\"" || return 1; done; }
+        locked() { grep -A1 -x "name = \"$2\"" "$1/uv.lock" | sed -n 's/^version = "\(.*\)"$/\1/p'; }
+        floor() { grep -oE "\"$2(\[[^]]*\])?>=[0-9][0-9.]*" "$1/pyproject.toml" | head -1 | sed 's/.*>=//'; }
+        # A callee whose Runtime/TensorFS floor is above what the dependent locks takes the dependent's lock up too.
+        raised() { for q in $up; do for d in cozy-runtime tensorfs; do f=$(floor "$q" "$d"); l=$(locked "$1" "$d")
+          [ -n "$f" ] && [ -n "$l" ] && [ "$(printf '%s\n' "$f" "$l" | sort -V | head -1)" != "$f" ] && echo "$d"; done; done | sort -u; }
         published() {
           i=$(grep -om1 'https://[^"]*/v1/index/[^/]*/simple/' "$1/uv.lock"); a=${i%/simple/}
           cozy package info "${a##*/}/$1" --tensorhub "${i%%/v1/*}" --json | jq -e --arg v "$(ver "$1")" 'any(.releases[]; .release == $v)' >/dev/null
@@ -69,7 +74,7 @@ tasks:
           published "$p" || { echo "$p $(ver "$p") on master is unpublished; release it first: task publish -- $p" >&2; exit 1; }
           if pinned "$p"; then ship "$p"; continue; fi
           uv version -q --bump patch --frozen --project "$p"
-          (cd "$p" && cozy package lock --tensorhub {{.LOCK_HUB}} $(printf ' --upgrade-package=%s' $up))
+          (cd "$p" && cozy package lock --tensorhub {{.LOCK_HUB}} $(printf ' --upgrade-package=%s' $up $(raised "$p")))
           pinned "$p" || { echo "$p: the relock did not take $up at their released versions" >&2; exit 1; }
           release "$p"
         done
