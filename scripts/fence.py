@@ -740,18 +740,17 @@ def gpu_choices(label: str, source: str) -> list[str]:
     for node in ast.walk(ast.parse(source, filename=label)):
         if isinstance(node, ast.Attribute) and node.attr in GPU_READS:
             bad.append(f"{label}:{node.lineno}: reads the GPU ({node.attr})")
-        tested = isinstance(node, ast.Compare) or (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in ("startswith", "endswith")
+        prefix = isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and (
+            node.func.attr in ("startswith", "endswith")
         )
-        bad += [
-            f"{label}:{node.lineno}: chooses by the name {leaf.value!r}"
-            for leaf in (ast.walk(node) if tested else ())
-            if isinstance(leaf, ast.Constant)
-            and isinstance(leaf.value, str)
-            and GPU_NAMES.search(leaf.value)
-        ]
+        if isinstance(node, ast.Compare) or (isinstance(node, ast.Call) and prefix):
+            bad += [
+                f"{label}:{node.lineno}: chooses by the name {leaf.value!r}"
+                for leaf in ast.walk(node)
+                if isinstance(leaf, ast.Constant)
+                and isinstance(leaf.value, str)
+                and GPU_NAMES.search(leaf.value)
+            ]
     return bad
 
 
