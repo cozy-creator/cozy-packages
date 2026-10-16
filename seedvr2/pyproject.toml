@@ -28,4 +28,4 @@ build-backend = "hatchling.build"
 packages = ["seedvr2"]
 
 [tool.uv]
-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'", "sys_platform == 'linux' and platform_machine == 'aarch64'"]

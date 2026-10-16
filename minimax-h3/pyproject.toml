@@ -49,7 +49,7 @@ only-include = [
 ]
 
 [tool.uv]
-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'", "sys_platform == 'linux' and platform_machine == 'aarch64'"]
 
 # qwen-image-2 is this account's own package on the target Tensorhub, never PyPI. Creator
 # writes the `tensorhub` index for the command's Hub and account; lock with `cozy package lock`.
