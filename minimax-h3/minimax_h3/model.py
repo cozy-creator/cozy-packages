@@ -41,6 +41,9 @@ from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK
 #: (H100 Ulysses-4 runs 1240-1252) and is never preferred. The VAEs keep Runtime's ranking.
 DIT_ATTENTION: tuple[str, ...] = ("sol-attn", "sageattention", "flash-attn3", "sdpa")
 HOPPER_DIT_ATTENTION: tuple[str, ...] = ("sol-attn-sage2-fixed-kmean", *DIT_ATTENTION)
+#: Datacenter Blackwell (SM100/SM103): Sol's sparse steps, its dense rows on FA4 FP8 with Q/K
+#: Hadamard-rotated (205 ms against cuDNN BF16's 267 per B200 call), the exact paths on BF16.
+DATACENTER_BLACKWELL_DIT_ATTENTION: tuple[str, ...] = ("sol-attn", "flash-attn4-fp8", "sdpa")
 BLACKWELL_DIT_ATTENTION: tuple[str, ...] = (
     "kitchen-sol-producer-fp4-fixed-means-shared-qkv",
     "kitchen-sol-producer-fp4-lowmem-shared-qkv",
@@ -130,6 +133,8 @@ class H3Model(Model[OfficialH3Pipeline], encoded_leaves="accept"):
             return BLACKWELL_DIT_ATTENTION
         if "sol-attn-sage2-fixed-kmean" in context.eligible:
             return HOPPER_DIT_ATTENTION
+        if "flash-attn4-fp8" in context.eligible:
+            return DATACENTER_BLACKWELL_DIT_ATTENTION
         return DIT_ATTENTION
 
     # Published interfaces (paul/minimax-h3) name these two scopes in `component_use`; they
