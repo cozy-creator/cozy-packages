@@ -17,15 +17,11 @@ from typing import Any
 
 import torch
 import transformers
+from cozy_runtime import lm
 from cozy_runtime.author import Config, Loader, Model, ModelAssets, UnsupportedInput, uses_components
 from PIL import Image, ImageOps
 from tokenizers import Tokenizer
-from transformers import (
-    AutoConfig,
-    AutoModelForImageTextToText,
-    LogitsProcessorList,
-    PreTrainedTokenizerFast,
-)
+from transformers import AutoConfig, AutoModelForImageTextToText, PreTrainedTokenizerFast
 from transformers.initialization import no_init_weights
 
 COMPONENT = "model"
@@ -76,20 +72,6 @@ class UpsamplerGraph:
         self.components: dict[str, torch.nn.Module] = {COMPONENT: _construct(config.mapping())}
 
 
-class _PresencePenalty:
-    """vLLM's presence penalty: subtract `penalty` from every token already generated."""
-
-    def __init__(self, prompt_length: int, penalty: float) -> None:
-        self.prompt_length, self.penalty = prompt_length, penalty
-
-    def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
-        generated = input_ids[:, self.prompt_length:]
-        if generated.shape[1]:
-            seen = torch.zeros_like(scores, dtype=torch.bool).scatter_(1, generated, True)
-            scores = scores - self.penalty * seen.to(scores.dtype)
-        return scores
-
-
 def _floor(value: float) -> int:
     return max(REFERENCE_MULTIPLE, int(math.floor(value / REFERENCE_MULTIPLE)) * REFERENCE_MULTIPLE)
 
@@ -132,12 +114,15 @@ class Upsampler(Model[UpsamplerGraph], encoded_leaves="accept"):
     #: BFL's system prompts (`system_prompts.json` of its repository), by task.
     system_prompts: dict[str, str]
 
+    def execution_plan(self, plan: Any) -> str:
+        return lm.install(plan, self.graph.components[COMPONENT])
+
     def load(self, loader: Loader) -> None:
         self.graph = loader.construct(UpsamplerGraph, factory=UpsamplerGraph)
         self.processor = _processor(loader.assets)
         self.system_prompts = json.loads(files(__package__).joinpath("system_prompts.json").read_bytes())
 
-    @uses_components(COMPONENT, memoize=True, memo_dependencies=(policy_reference, _PresencePenalty))
+    @uses_components(COMPONENT, memoize=True, memo_dependencies=(policy_reference,))
     def upsample(self, prompt: str, images: list[Image.Image], canvas: str | None) -> str:
         if len(images) > MAX_REFERENCES:
             raise UnsupportedInput(f"the upsampler takes at most {MAX_REFERENCES} references")
@@ -164,17 +149,11 @@ class Upsampler(Model[UpsamplerGraph], encoded_leaves="accept"):
             inputs["pixel_values"] = inputs["pixel_values"].to(model.dtype)
         tokenizer = processor.tokenizer
         stops = [tokenizer.convert_tokens_to_ids(token) for token in STOP_TOKENS]
-        length = inputs["input_ids"].shape[1]
-        with torch.inference_mode():
-            out = model.generate(
-                **inputs,
-                max_new_tokens=MAX_NEW_TOKENS,
-                do_sample=False,
-                eos_token_id=stops,
-                pad_token_id=tokenizer.pad_token_id,
-                logits_processor=LogitsProcessorList([_PresencePenalty(length, PRESENCE_PENALTY[task])]),
-            )
-        caption = str(tokenizer.decode(out[0, length:], skip_special_tokens=True)).strip()
+        out = lm.generate(
+            model, inputs, max_new_tokens=MAX_NEW_TOKENS, stop=stops, pad=tokenizer.pad_token_id,
+            presence_penalty=PRESENCE_PENALTY[task],
+        )
+        caption = str(tokenizer.decode(out[0], skip_special_tokens=True)).strip()
         if not caption:
             raise UnsupportedInput("the prompt upsampler returned an empty caption", code="output_integrity")
         return caption

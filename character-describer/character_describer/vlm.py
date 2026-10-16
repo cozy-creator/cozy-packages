@@ -9,6 +9,7 @@ from typing import Any
 
 import torch
 import transformers
+from cozy_runtime import lm
 from cozy_runtime.author import Config, Loader, Model, ModelAssets, uses_components
 from PIL.Image import Image
 from tokenizers import Tokenizer
@@ -77,6 +78,9 @@ class Describer(Model[Pipeline], encoded_leaves="accept"):
             model = self.pipe.components[COMPONENT]
             model.generation_config = GenerationConfig(**json.loads(loader.assets.read("generation_config.json")))
 
+    def execution_plan(self, plan: Any) -> str:
+        return lm.install(plan, self.pipe.components[COMPONENT])
+
     def unload(self, loader: Loader) -> None:
         del self.pipe
 
@@ -99,10 +103,9 @@ class Describer(Model[Pipeline], encoded_leaves="accept"):
         configured = model.generation_config.eos_token_id
         stops = [*(configured if isinstance(configured, list) else [configured]), processor.tokenizer.eos_token_id]
         stop = [token for token in dict.fromkeys(stops) if token is not None]
-        with torch.inference_mode():
-            out = model.generate(
-                **inputs, max_new_tokens=max_new_tokens, do_sample=False,
-                eos_token_id=stop, pad_token_id=processor.tokenizer.pad_token_id or stop[0],
-            )
-        reply = processor.batch_decode(out[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)[0]
+        out = lm.generate(
+            model, inputs, max_new_tokens=max_new_tokens, stop=stop,
+            pad=processor.tokenizer.pad_token_id or stop[0],
+        )
+        reply = processor.batch_decode(out, skip_special_tokens=True)[0]
         return " ".join(str(reply).split())

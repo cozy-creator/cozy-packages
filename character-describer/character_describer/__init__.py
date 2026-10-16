@@ -87,7 +87,7 @@ app.job(int8, weights=(WeightsOutput("int8", max_new_bytes=24 << 30),), accelera
 @app.entrypoint(
     defaults={"model": [{"gpu": "*", "gpus": 1, "lane": "qwen3.5-9b@0.2.0/bf16"}]},
     memoize=True,
-    memo_version="identity-v3",
+    memo_version="identity-v4",
 )
 def describe_character(
     ctx: Context,
