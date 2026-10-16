@@ -4209,6 +4209,7 @@ def arm_attention_scope() -> None:
             step=0,
             dense_until_step=10,
             dense_paths=("token_refiner", "transformer_blocks.0", "transformer_blocks.1"),
+            exact_paths=("token_refiner", "transformer_blocks.1", "transformer_blocks.45", "transformer_blocks.49"),
         ),
     )
 
