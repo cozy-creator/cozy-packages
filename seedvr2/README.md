@@ -10,8 +10,8 @@ Resolution defines the maximum 16:9 canvas; source-aspect output fits inside it.
 padding meets the model's 16-pixel grid and is cropped from the result. Audio is decoded and
 re-encoded by Runtime with its source clock; it is not copied byte-for-byte. `aspect_ratio=16:9`
 outputs exactly 1920×1080, 2560×1440 or 3840×2160 using Pillow letterboxing; the subject is never
-stretched. VAE passes run over 512-pixel tiles, so memory follows the tile, not the frame; 1080p
-also runs on a 24 GB RTX 3090.
+stretched. The Runtime sizes the VAE's tiles and the DiT's pieces from the GPU's free memory, and
+frames stay in host memory between passes, so a whole clip restores on an 8 GB card.
 
 ## Tuning
 
@@ -23,7 +23,7 @@ also runs on a 24 GB RTX 3090.
 | `color_correction` | `lab` | `lab`, `wavelet`, `wavelet_adaptive`, `hsv`, `adain` or `none`: match the restoration's colour to the source. Upstream defaults to `wavelet` and recommends `lab` for fidelity; we measured `lab` closest. |
 | `latent_noise_scale` | 0 | 0–1: noise on the conditioning latent; softens excessive invented detail. Try 0.1–0.2. |
 | `input_noise_scale` | 0 | 0–1: noise on the input frames; reduces artifacts at high resolutions. |
-| `batch_size` | 5 | frames per temporal window; must be 4n+1 (1, 5, 9, 13, 17, …). |
+| `batch_size` | whole clip | most frames per temporal window; must be 4n+1 (1, 5, 9, 13, 17, …). The DiT runs each window in the fewest pieces that fit the GPU. |
 | `temporal_overlap` | 0 | 0–16 frames shared and crossfaded between windows. |
 | `prepend_frames` | 0 | 0–32 mirrored frames restored before the start, then dropped. |
 | `uniform_batch_size` | false | pad the last window to `batch_size`. |
@@ -41,7 +41,7 @@ H3 run 5515: execution time, and colour fidelity against the source after area-s
 | 5574 | `none`, 17/5 windows | 426 s | 3.90 | 30.29 dB | 1.15 / 1.16 | 2.53 | 4.72 |
 | 5575 | `wavelet`, 17/5 | 426 s | 2.92 | 31.70 dB | 1.02 / 1.03 | 2.53 | 4.12 |
 | 5576 | `lab`, 17/5 | 430 s | 2.87 | 31.89 dB | 1.00 / 0.99 | 2.52 | 4.06 |
-| 5588 | `lab`, `batch_size` 5 (defaults) | 332 s | 2.64 | 32.25 dB | 1.00 / 0.99 | 2.47 | 3.34 |
+| 5588 | `lab`, `batch_size` 5 (the 0.3 default) | 332 s | 2.64 | 32.25 dB | 1.00 / 0.99 | 2.47 | 3.34 |
 | 5587 | `lab`, 17/5, `input_noise_scale` 0.2 | 424 s | 2.83 | 32.03 dB | 1.00 / 0.99 | 2.45 | 3.96 |
 | 5585 | `lab`, 17/5, `latent_noise_scale` 0.1 | 433 s | 2.64 | 32.31 dB | 1.00 / 0.99 | 2.35 | 3.70 |
 | 5586 | `lab`, 17/5, `latent_noise_scale` 0.2 | 427 s | 2.54 | 32.40 dB | 1.00 / 0.99 | 2.21 | 3.43 |

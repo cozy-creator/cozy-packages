@@ -21,6 +21,7 @@ tasks:
           anima) $py scripts/anima-conform.py ;;
           qwen-image-2) $py scripts/qwen-image-2-conform.py; $py scripts/qwen-image-2-model-proof.py ;;
           flux-3-klein) $py scripts/flux-3-klein-model-proof.py ;;
+          seedvr2) $py scripts/seedvr2-model-proof.py ;;
           minimax-h3) for s in conform prompt-proof turbo-cp-proof reference-fidelity-proof; do $py "scripts/h3-$s.py"; done; $py scripts/h3-assembly-proof.py assembly ;;
           minimax-h3-tools) for s in order stage full-source table-metadata; do PYTHONPATH=$p/src $py "$p/scripts/$s-proof.py"; done; PYTHONPATH=$p/src $py scripts/tensorfs_seeds.py ;;
         esac
