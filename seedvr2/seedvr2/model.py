@@ -67,8 +67,9 @@ VAE = dict(
 ARCHITECTURE = "SeedVR2-7B"
 #: SeedVR's configs_7b: the VAE's latent scaling factor (no shift).
 SCALE = 0.9152
-#: Peak device bytes per element of the DiT's (t, h, w, 33) input, before Runtime measures it.
-DIT_BYTES = 0.0
+#: Peak device bytes per element of the DiT's (t, h, w, 33) input, before Runtime measures it:
+#: ComfyUI's 0.55 GiB per megapixel latent frame (`SEEDVR2_CHUNK_GIB_PER_MPX_FRAME`).
+DIT_BYTES = 0.55 * 2**30 * 64 / 33 / 1e6
 
 
 class Conditioning(torch.nn.Module):
