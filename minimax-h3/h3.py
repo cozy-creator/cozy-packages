@@ -1304,7 +1304,8 @@ def _references_to_video(
 
 # --- long-form composition -------------------------------------------------------------
 # `long_form` is a CPU composition function. Runtime runs an ordinary serving child for each
-# shot and owns its intermediate bytes. Its segments are not memoized.
+# shot and owns its intermediate bytes. A segment is memoized on its full inputs, the previous
+# segment's context included, so a resubmitted long_form skips the segments it already finished.
 # Only encoded asset handles cross the loop. Assembly decodes one bounded event at a time.
 
 class SegmentOutput(msgspec.Struct):
@@ -1592,6 +1593,7 @@ def _render_motion(
 @invocable(
     defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
     components={"base_model": _REF2VA, "turbo_lora": ("ref2va_turbo",)},
+    memoize=True,
 )
 async def motion_segment(
     ctx: Context,
