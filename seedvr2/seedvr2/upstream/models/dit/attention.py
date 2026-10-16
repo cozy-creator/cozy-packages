@@ -12,61 +12,50 @@
 # // See the License for the specific language governing permissions and
 # // limitations under the License.
 
+"""Window attention as one Runtime attention site: the Runtime picks its kernel."""
+
+from __future__ import annotations
+
 import torch
-import torch.nn.functional as F
-from torch import nn
+from diffusers.models.attention import AttentionModuleMixin
+from diffusers.models.attention_dispatch import dispatch_attention_fn
 
-def pytorch_varlen_attention(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q=None, max_seqlen_k=None, dropout_p=0.0, softmax_scale=None, causal=False, deterministic=False):
-    """
-    A PyTorch-based implementation of variable-length attention to replace flash_attn_varlen_func.
-    It processes each sequence in the batch individually.
-    
-    NOTE: max_seqlen_q and max_seqlen_k are accepted for API compatibility but not used.
-    PyTorch's scaled_dot_product_attention automatically handles variable sequence lengths.
-    
-    COMPILE OPTIMIZATION: Uses torch.tensor_split to avoid .item() graph breaks
-    """
-    # Split q, k, v using cumulative sequence lengths
-    # NOTE: torch.tensor_split requires int64 dtype and CPU device (PyTorch requirements)
-    q_splits = list(torch.tensor_split(q, cu_seqlens_q[1:-1].long().cpu(), dim=0))
-    k_splits = list(torch.tensor_split(k, cu_seqlens_k[1:-1].long().cpu(), dim=0))
-    v_splits = list(torch.tensor_split(v, cu_seqlens_k[1:-1].long().cpu(), dim=0))
+#: (first row, windows, rows per window): consecutive windows of one length.
+Runs = list[tuple[int, int, int]]
 
-    # Process each sequence
-    output_splits = []
-    for q_i, k_i, v_i in zip(q_splits, k_splits, v_splits):
-        # Reshape for torch's scaled_dot_product_attention which expects (batch, heads, seq, dim).
-        # Here, we treat each sequence as a batch of 1.
-        q_i = q_i.permute(1, 0, 2).unsqueeze(0) # (1, heads, seq_len_q, head_dim)
-        k_i = k_i.permute(1, 0, 2).unsqueeze(0) # (1, heads, seq_len_k, head_dim)
-        v_i = v_i.permute(1, 0, 2).unsqueeze(0) # (1, heads, seq_len_k, head_dim)
 
-        # Use PyTorch's built-in scaled dot-product attention.
-        output_i = F.scaled_dot_product_attention(
-            q_i, k_i, v_i, 
-            dropout_p=dropout_p if not deterministic else 0.0,
-            is_causal=causal
-        )
+class WindowAttnProcessor:
+    """Each run of equal-length windows is one batched call of the selected kernel."""
 
-        # Reshape the output back to the original format (seq_len, heads, head_dim)
-        output_i = output_i.squeeze(0).permute(1, 0, 2)
-        output_splits.append(output_i)
-    
-    # Concatenate all outputs
-    return torch.cat(output_splits, dim=0)
+    _attention_backend = None
+    _parallel_config = None
 
-class TorchAttention(nn.Module):
-    def tflops(self, args, kwargs, output) -> float:
-        assert len(args) == 0 or len(args) > 2, "query, key should both provided by args / kwargs"
-        q = kwargs.get("query") or args[0]
-        k = kwargs.get("key") or args[1]
-        b, h, sq, d = q.shape
-        b, h, sk, d = k.shape
-        return b * h * (4 * d * (sq / 1e6) * (sk / 1e6))
+    def __call__(
+        self, attn: WindowAttention, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, runs: Runs
+    ) -> torch.Tensor:
+        out = torch.empty_like(q)
+        for start, count, length in runs:
+            rows = slice(start, start + count * length)
+            out[rows] = dispatch_attention_fn(
+                *(x[rows].view(count, length, *x.shape[1:]) for x in (q, k, v)),
+                backend=self._attention_backend,
+                parallel_config=self._parallel_config,
+            ).flatten(0, 1)
+        return out
 
-    def forward(self, *args, **kwargs):
-        return F.scaled_dot_product_attention(*args, **kwargs)
 
-class FlashAttentionVarlen(nn.Module):
-    def forward(self, **kwargs):
-        return pytorch_varlen_attention(**kwargs)
+class WindowAttention(torch.nn.Module, AttentionModuleMixin):
+    _default_processor_cls = WindowAttnProcessor
+    _available_processors = [WindowAttnProcessor]
+    #: Q, K and V reach the kernel in bfloat16, whatever the projections' lane.
+    activation_dtype = torch.bfloat16
+
+    def __init__(self, heads: int, head_dim: int) -> None:
+        super().__init__()
+        self.heads, self.head_dim = heads, head_dim
+        self.set_processor(WindowAttnProcessor())
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, runs: Runs) -> torch.Tensor:
+        """(rows, heads, head_dim) windows, laid out as `runs` says, to their outputs."""
+        dtype = self.activation_dtype
+        return self.processor(self, q.to(dtype), k.to(dtype), v.to(dtype), runs)
