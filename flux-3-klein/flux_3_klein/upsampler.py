@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from importlib.resources import files
 from typing import Any
 
@@ -23,8 +23,11 @@ from PIL import Image, ImageOps
 from tokenizers import Tokenizer
 from transformers import AutoConfig, AutoModelForImageTextToText, PreTrainedTokenizerFast
 from transformers.initialization import no_init_weights
+from transformers.models.qwen3_5 import modeling_qwen3_5
 
 COMPONENT = "model"
+#: The drafter's component in Qwen3.5-9B's lane; only its MTP head (`mtp.*`) is built.
+DRAFT = "model"
 MAX_NEW_TOKENS = 3584
 MAX_REFERENCES = 10
 PRESENCE_PENALTY = {"t2i": 1.5, "i2i": 0.0}
@@ -65,6 +68,33 @@ def _processor(assets: ModelAssets) -> Any:
         tokenizer=tokenizer,
         chat_template=assets.read("chat_template.jinja").decode(),
     )
+
+
+class DrafterGraph:
+    def __init__(self, config: Config) -> None:
+        # The head's checkpoint is its tensors alone: the upsampler's config describes it.
+        mapping = config.mapping() or json.loads(
+            files(__package__).joinpath("draft_config.json").read_bytes()
+        )
+        with no_init_weights():
+            head = lm.Draft(AutoConfig.for_model(**mapping), modeling_qwen3_5)
+        self.components: dict[str, torch.nn.Module] = {DRAFT: head.to(torch.bfloat16).eval()}
+
+
+class Drafter(Model[DrafterGraph], encoded_leaves="accept"):
+    """Qwen3.5-9B's multi-token-prediction head (BFL's upsampler is that model fine-tuned, its
+    head left out). The upsampler drafts tokens with it and keeps the ones its own decode
+    agrees with: ~1.9 tokens a step."""
+
+    graph: DrafterGraph
+
+    def load(self, loader: Loader) -> None:
+        self.graph = loader.construct(DrafterGraph, factory=DrafterGraph)
+
+    @uses_components(DRAFT)
+    def drafting(self, body: Callable[[], str]) -> str:
+        with lm.drafting(self.graph.components[DRAFT]):
+            return body()
 
 
 class UpsamplerGraph:
