@@ -61,6 +61,8 @@ class Tuning(msgspec.Struct, kw_only=True):
     uniform_batch_size: bool = False
     temporal_overlap: Annotated[int, msgspec.Meta(ge=0, le=16)] = 0
     prepend_frames: Annotated[int, msgspec.Meta(ge=0, le=32)] = 0
+    profile: bool = False  # DEV ONLY: torch profiler tables in the run log
+    vae_limit: float = 0.5  # DEV ONLY: the VAE's own conv/norm memory limit, GiB; 0 = none
 
     def __post_init__(self) -> None:
         if self.batch_size is not None and self.batch_size % 4 != 1:
@@ -136,6 +138,8 @@ def upscale(
                 correction=payload.color_correction,
                 input_noise=payload.input_noise_scale,
                 latent_noise=payload.latent_noise_scale,
+                profile=payload.profile,
+                vae_limit=payload.vae_limit,
             )
         return restored[: len(batch)]
 

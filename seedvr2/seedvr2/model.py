@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 from typing import Any, cast
 from collections.abc import Callable
 
@@ -67,6 +69,7 @@ VAE = dict(
 ARCHITECTURE = "SeedVR2-7B"
 #: SeedVR's configs_7b: the VAE's latent scaling factor (no shift).
 SCALE = 0.9152
+VAE_LIMIT: float | None = 0.5  # DEV ONLY
 #: Peak device bytes per element of the DiT's (t, h, w, 33) input, before Runtime measures it:
 #: ComfyUI's 0.55 GiB per megapixel latent frame (`SEEDVR2_CHUNK_GIB_PER_MPX_FRAME`).
 DIT_BYTES = 0.55 * 2**30 * 64 / 33 / 1e6
@@ -183,7 +186,7 @@ def _runner(graph: Graph) -> Any:
 def _vae(graph: Graph) -> Any:
     vae = cast(Any, graph.components["vae"])
     vae.set_causal_slicing(split_size=4, memory_device="same")
-    vae.set_memory_limit(conv_max_mem=0.5, norm_max_mem=0.5)
+    vae.set_memory_limit(conv_max_mem=VAE_LIMIT, norm_max_mem=VAE_LIMIT)
     return vae
 
 
@@ -202,10 +205,14 @@ def restore(
     correction: Correction,
     input_noise: float,
     latent_noise: float,
+    profile: bool = False,
+    vae_limit: float = 0.5,
 ) -> list[Image.Image]:
     """One window: encode, denoise and decode, each its own component scope."""
     if not frames:
         raise ValueError("SeedVR2 restoration needs at least one frame")
+    global VAE_LIMIT
+    VAE_LIMIT = vae_limit or None
     padded = extend(frames, (1 - len(frames)) % 4)
     canvas = ((width + 15) // 16 * 16, (height + 15) // 16 * 16)
     left, top = (canvas[0] - width) // 2, (canvas[1] - height) // 2
@@ -227,12 +234,12 @@ def restore(
         if input_noise:
             pixels = _signed(pixels, torch.float32)
             pixels = pixels.add_(torch.randn_like(pixels) * (0.025 * input_noise)).half()
-        with tel.stage("SeedVR2 VAE encode"):
+        with tel.stage("SeedVR2 VAE encode"), _profiled(tel, "encode", profile):
             latent = model.encode(pixels)
         del pixels
-        with tel.stage("SeedVR2 denoise"):
+        with tel.stage("SeedVR2 denoise"), _profiled(tel, "denoise", profile):
             latent = model.denoise(latent, latent_noise)
-        with tel.stage("SeedVR2 VAE decode"):
+        with tel.stage("SeedVR2 VAE decode"), _profiled(tel, "decode", profile):
             sample = model.decode(latent)
         if sample.ndim == 3:
             sample = sample.unsqueeze(1)
@@ -250,3 +257,24 @@ def restore(
 def _signed(image: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
     """Bytes to [-1, 1]."""
     return image.to(dtype).div(127.5).sub(1)
+
+
+@contextlib.contextmanager
+def _profiled(tel: Telemetry, name: str, on: bool) -> Any:
+    """DEV ONLY: the top CUDA ops of one phase, as log lines."""
+    if not on:
+        yield
+        return
+    from torch.profiler import ProfilerActivity, profile
+
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+        yield
+        torch.cuda.synchronize()
+    rows = sorted(prof.key_averages(), key=lambda e: -e.device_time_total)[:25]
+    total = sum(e.self_device_time_total for e in prof.key_averages()) / 1e3
+    tel.log(f"profile {name}: self device total {total:.0f} ms")
+    for e in rows:
+        tel.log(
+            f"profile {name}: {e.key[:70]} self_dev={e.self_device_time_total / 1e3:.0f}ms "
+            f"dev={e.device_time_total / 1e3:.0f}ms cpu={e.cpu_time_total / 1e3:.0f}ms n={e.count}"
+        )
