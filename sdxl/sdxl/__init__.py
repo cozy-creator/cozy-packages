@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import cozy_runtime.derive as derive
+from cozy_runtime import graphs
 from cozy_runtime.derive.operations import QuantizationPlan, quantize_into
 import msgspec
 import torch
@@ -388,13 +389,14 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
         unet = self.pipe.components["unet"]
         if step == 0:
             unet.begin_denoise_request(total_steps, hidiffusion)
-        with torch.inference_mode():
-            return unet(
+        with torch.inference_mode(), graphs.graphed(unet) as call:
+            return call(
                 latents,
                 timestep,
                 encoder_hidden_states=prompt,
                 added_cond_kwargs={"text_embeds": text_embeds, "time_ids": time_ids},
-            ).sample
+                return_dict=False,
+            )[0]
 
     @uses_components("vae")
     def decode(self, latents: Any) -> Any:
