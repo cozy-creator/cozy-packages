@@ -68,7 +68,7 @@ wheels = [
 
 [[package]]
 name = "birefnet"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -83,7 +83,7 @@ dependencies = [
     { name = "transformers" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/birefnet/0.3.0/birefnet-0.3.0-py3-none-any.whl", hash = "sha256:c4e53a220b594c2f16da5ca1929a1ffc9ffdf2683cf0926145a3f212c9ac478c" },
+    { url = "https://tensorhub.com/v1/index/fidika/birefnet/0.4.0/birefnet-0.4.0-py3-none-any.whl", hash = "sha256:04796e078d29bbc39524b2596da13b6a6277700fea946199301433280e9de4b8" },
 ]
 
 [[package]]
@@ -138,7 +138,7 @@ wheels = [
 
 [[package]]
 name = "character-describer"
-version = "0.7.0"
+version = "0.8.0"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -152,7 +152,7 @@ dependencies = [
     { name = "transformers" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/character-describer/0.7.0/character_describer-0.7.0-py3-none-any.whl", hash = "sha256:ef6bcf9f33e33c6640b754fced9d14599fda53531950a6ff8c71a1160ca67d9b" },
+    { url = "https://tensorhub.com/v1/index/fidika/character-describer/0.8.0/character_describer-0.8.0-py3-none-any.whl", hash = "sha256:5d23a6f8006303ee8a22a5f6d290aad0e93c0cdea639c667a94105c7b990d2ae" },
 ]
 
 [[package]]
@@ -209,7 +209,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.26.4"
+version = "0.27.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -219,10 +219,10 @@ dependencies = [
     { name = "pillow" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6b/b3/c7a839798cb6a7cf978bdc8606fe9b7421ec2a340f1a9009cd37b83220af/cozy_runtime-0.26.4.tar.gz", hash = "sha256:ad3bf5afe33fa8778a79430c0b4284fced19f5f834578e4f92dee1d2dc67b3a4", size = 1935001, upload-time = "2026-10-17T02:30:35.85Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/2d/f46f14665835e0419a81d3ff0f43a292f8dceee2f05980f413825b91f46f/cozy_runtime-0.27.0.tar.gz", hash = "sha256:26f39c6f9096d862ddba684a30dae861a5f756a993c359e8e60bb12afb8f092d", size = 1985222, upload-time = "2026-10-17T14:35:35.283Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/24/0c/5a451d1dd376fe4df3de99e60cb3a765f9e17bb7a0c5330a39667354a76e/cozy_runtime-0.26.4-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:ae21bcd33acf33237f53bc6bc5a2b6c65c22982771c285b79389e69e787366aa", size = 26153917, upload-time = "2026-10-17T02:30:31.625Z" },
-    { url = "https://files.pythonhosted.org/packages/c4/19/22528594cdf3b54db137d8001723a5aa28456a6517c005678092a0b22af3/cozy_runtime-0.26.4-py3-none-any.whl", hash = "sha256:7eb328f52dc6cfab18ba62bd3d84c1f9b8ea4e7f069498c6e95c02c851c7d9c7", size = 1022453, upload-time = "2026-10-17T02:30:34.385Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/3b/11ecb7aae6eb606dc974d5fa72273552b31fc6749cd490e3119f67f70886/cozy_runtime-0.27.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:db39fceb58dc738fcdea60cae1368167c3d0af8c44e4619f0ac4e4eb406b373a", size = 26174038, upload-time = "2026-10-17T14:35:30.644Z" },
+    { url = "https://files.pythonhosted.org/packages/06/ed/a8bd8954743177cdead98c33c7b9f0c978cc749b6674971f50cd982fdf25/cozy_runtime-0.27.0-py3-none-any.whl", hash = "sha256:f8f9dba15923eaf4df9cd6088d62e08257a0b27cb98b8065b53f91c31bb507d2", size = 1042571, upload-time = "2026-10-17T14:35:33.512Z" },
 ]
 
 [package.optional-dependencies]
@@ -580,7 +580,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.41.5"
+version = "1.42.0"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },
@@ -607,9 +607,9 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "birefnet", specifier = ">=0.1.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
-    { name = "character-describer", specifier = ">=0.7.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
-    { name = "cozy-runtime", extras = ["adapters", "media"], specifier = ">=0.26.0" },
+    { name = "birefnet", specifier = ">=0.4.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
+    { name = "character-describer", specifier = ">=0.8.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
+    { name = "cozy-runtime", extras = ["adapters", "media"], specifier = ">=0.27.0" },
     { name = "diffusers", specifier = "==0.41.0" },
     { name = "hf-xet", specifier = ">=1.6.0" },
     { name = "minimax-h3-tools", specifier = ">=2.15.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
@@ -617,10 +617,10 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pydantic-core", specifier = ">=2.46.4" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "qwen-image-2", specifier = ">=0.6.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
+    { name = "qwen-image-2", specifier = ">=0.9.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
     { name = "regex", specifier = ">=2026.7.19" },
     { name = "safetensors", specifier = ">=0.8.0" },
-    { name = "seedvr2", specifier = ">=0.2.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
+    { name = "seedvr2", specifier = ">=0.6.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
     { name = "shellingham", specifier = ">=1.5.4" },
     { name = "tensorfs", specifier = ">=0.10" },
     { name = "tokenizers", specifier = ">=0.23.1" },
@@ -631,7 +631,7 @@ requires-dist = [
 
 [[package]]
 name = "minimax-h3-tools"
-version = "2.22.1"
+version = "2.22.2"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime" },
@@ -641,7 +641,7 @@ dependencies = [
     { name = "torch" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/minimax-h3-tools/2.22.1/minimax_h3_tools-2.22.1-py3-none-any.whl", hash = "sha256:61d6a8c0db765aab500b0b069934e1e584e5ffbcb5cdb3621d4cf2026746fae9" },
+    { url = "https://tensorhub.com/v1/index/fidika/minimax-h3-tools/2.22.2/minimax_h3_tools-2.22.2-py3-none-any.whl", hash = "sha256:a97c6845bfa1f070e7ab6b9ccc45ad9ebe15f4b7d1d1071d1ca4484b1d046053" },
 ]
 
 [[package]]
@@ -1042,7 +1042,7 @@ wheels = [
 
 [[package]]
 name = "qwen-image-2"
-version = "0.8.0"
+version = "0.9.0"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -1057,7 +1057,7 @@ dependencies = [
     { name = "transformers" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/qwen-image-2/0.8.0/qwen_image_2-0.8.0-py3-none-any.whl", hash = "sha256:6ead06a0e9fe84efc195eceae78c5964330752f506714e96db451891de0ddcbb" },
+    { url = "https://tensorhub.com/v1/index/fidika/qwen-image-2/0.9.0/qwen_image_2-0.9.0-py3-none-any.whl", hash = "sha256:b7bbe184f55fc8c8180e2504fe863bb152befef620f37ae174ce57f749ea6e5c" },
 ]
 
 [[package]]
@@ -1143,7 +1143,7 @@ wheels = [
 
 [[package]]
 name = "seedvr2"
-version = "0.5.0"
+version = "0.6.0"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -1159,7 +1159,7 @@ dependencies = [
     { name = "torchvision" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/seedvr2/0.5.0/seedvr2-0.5.0-py3-none-any.whl", hash = "sha256:7cda4f5b65fa16b8e4f9ee4c21bc328ce39a078f53517d53f1fe6a8f809fed8b" },
+    { url = "https://tensorhub.com/v1/index/fidika/seedvr2/0.6.0/seedvr2-0.6.0-py3-none-any.whl", hash = "sha256:2dea7feca36626b3d47251f18926053dc3ca120dc782bccd496cc3339d403398" },
 ]
 
 [[package]]
