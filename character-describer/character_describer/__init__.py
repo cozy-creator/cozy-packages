@@ -61,6 +61,23 @@ class DescribeCharacterOutput(msgspec.Struct):
     description: Annotated[str, msgspec.Meta(min_length=1, max_length=2048)]
 
 
+class DescribeCharactersInput(msgspec.Struct):
+    images: Annotated[
+        list[ImageAsset],
+        AssetBound(
+            max_bytes=64 << 20,
+            max_decoded_bytes=256 << 20,
+            media_types=("image/png", "image/jpeg", "image/webp"),
+        ),
+        msgspec.Meta(min_length=1, max_length=16),
+    ]
+
+
+class DescribeCharactersOutput(msgspec.Struct):
+    #: One per image, in order; empty where the image shows no character's appearance.
+    descriptions: list[Annotated[str, msgspec.Meta(max_length=2048)]]
+
+
 #: The int8 lane: every projection of the 32 language layers (gated-delta-net and attention)
 #: and their MLPs. The vision tower, embeddings, the decay/gate projections, norms and the LM
 #: head keep their source bytes.
@@ -100,24 +117,48 @@ def describe_character(
     """Describe one supplied character's appearance in one sentence."""
     ctx.raise_if_cancelled()
     with tel.stage("describing character"):
-        text = _describe(model, cast(Image, decoder.value(payload.image)), tel)
+        (text,) = _describe(model, [cast(Image, decoder.value(payload.image))], tel)
     if not text:
         raise UnsupportedInput("the character description names no appearance", code="output_integrity")
     return DescribeCharacterOutput(text)
 
 
-def _describe(model: Describer, image: Image, tel: Telemetry) -> str:
-    text = model.describe(image, IDENTITY_PROMPT, max_new_tokens=MAX_NEW_TOKENS)
-    words = sorted({word.lower() for word in SCENE_OR_POSE.findall(text)})
-    if not words:
-        return text
-    tel.log("description named setting or pose; regenerating", words=", ".join(words), first=text[:400])
-    retry = (
-        f'{IDENTITY_PROMPT} An earlier answer was "{text}". It mentioned {", ".join(words)}, which '
+@app.entrypoint(
+    defaults={"model": "qwen3.5-9b@0.2.0"},
+    memoize=True,
+    memo_version="identity-batch-v1",
+)
+def describe_characters(
+    ctx: Context,
+    payload: DescribeCharactersInput,
+    model: Describer,
+    decoder: MediaDecoder,
+    tel: Telemetry,
+) -> DescribeCharactersOutput:
+    """Describe each supplied character's appearance in one sentence, all images in one pass."""
+    ctx.raise_if_cancelled()
+    with tel.stage("describing characters"):
+        texts = _describe(model, [cast(Image, decoder.value(image)) for image in payload.images], tel)
+    return DescribeCharactersOutput(texts)
+
+
+def _describe(model: Describer, images: list[Image], tel: Telemetry) -> list[str]:
+    texts = model.describe(images, [IDENTITY_PROMPT] * len(images), max_new_tokens=MAX_NEW_TOKENS)
+    named = {i: sorted({w.lower() for w in SCENE_OR_POSE.findall(text)}) for i, text in enumerate(texts)}
+    named = {i: words for i, words in named.items() if words}
+    if not named:
+        return texts
+    for i, words in named.items():
+        tel.log("description named setting or pose; regenerating", words=", ".join(words), first=texts[i][:400])
+    retries = [
+        f'{IDENTITY_PROMPT} An earlier answer was "{texts[i]}". It mentioned {", ".join(words)}, which '
         "describe the pose or surroundings, not the character. Rewrite it without them."
-    )
-    text = model.describe(image, retry, max_new_tokens=MAX_NEW_TOKENS)
-    return strip_scene_or_pose(text)
+        for i, words in named.items()
+    ]
+    again = model.describe([images[i] for i in named], retries, max_new_tokens=MAX_NEW_TOKENS)
+    for i, text in zip(named, again, strict=True):
+        texts[i] = strip_scene_or_pose(text)
+    return texts
 
 
 def strip_scene_or_pose(text: str) -> str:
