@@ -23,7 +23,7 @@ from importlib.resources import files
 from pathlib import Path
 from threading import Event, get_ident
 from types import SimpleNamespace
-from typing import Any, Literal, cast, get_type_hints
+from typing import Any, Literal, NamedTuple, cast, get_type_hints
 
 import msgspec
 import numpy as np
@@ -145,9 +145,7 @@ from minimax_h3.turbo import (  # noqa: E402
     OVERLAY_KWARG,
     TURBO_BANK,
     LoRAFactors,
-    TurboHeads,
     TurboOverlay,
-    TurboSchedule,
     _LoRAHook,
 )
 from minimax_h3.vae_tiles import TileBatchedVideoVAE  # noqa: E402
@@ -164,7 +162,6 @@ from h3_tables.order import current_order, full_order  # noqa: E402
 from h3_tables.plans import TASKS, parse_plan  # noqa: E402
 from h3_tables.source import official_full_specs  # noqa: E402
 from h3_tables.table_layout import TableLayout  # noqa: E402
-from h3_tables.turbo import collapse_head_bank, pdd_head_plan, pdd_time_grid  # noqa: E402
 
 import h3 as package  # noqa: E402
 from gates import MediaFacts, refuse_before_encode  # noqa: E402
@@ -209,31 +206,15 @@ VECTOR_DIGESTS = {
 }
 BLOCK_ROWS = 315
 FINAL_ROWS = 207
-# PDD-8 (alibaba-pai/MiniMax-H3-Acc-LoRAs rev 335001fb): one fixed 8-evaluation schedule per
-# trunk, stamped with the trunk, whose tables the turbo overlay components are keyed to.
+# lightx2v 8-step (lightx2v/Minimax-h3-Turbo@a29e57d1): one fixed schedule per trunk at its
+# training shifts, stamped with the trunk, whose tables the turbo overlay components carry.
 TURBO_PLAN_DIGESTS = {
     "fl2va_turbo": "d2eb1605c1c1e01a4c5fdaaf1912ab43f33d9ce4772febf1c75b9bbfc8f7ba9d",
-    "ref2va_turbo": "896a10881805e3047f6df514dd4e70fcea078837469eeb22ce67f0bd3f679cb7",
+    "ref2va_turbo": "de82396318950cecce36718db968d96be07a662c69f33565f5989ae97bc524bc",
 }
+TURBO_VIDEO_SHIFTS = {"fl2va_turbo": 12.0, "ref2va_turbo": 6.0}
 TURBO_BLOCK_ROWS = 26
 TURBO_FINAL_ROWS = 17
-#: The adapter file's header, read 2026-09-08: what the overlay's destinations must match.
-PDD_HEADER: dict[str, Any] = {
-    "lora_rank": 64,
-    "lora_alpha": 64.0,
-    "pdd_num_steps": 32,
-    "pdd_block_size": 4,
-    "lora_targets": "to_q,to_k,to_v,to_out.0,ff.net.0.proj,ff.net.2,adaln_proj.linear",
-}
-#: Per-family factor shapes in that file at the release widths, `[rank, in]` / `[out, rank]`.
-PDD_FACTOR_SHAPES = {
-    "to_q": ((64, 5376), (7168, 64)),
-    "to_k": ((64, 5376), (7168, 64)),
-    "to_v": ((64, 5376), (7168, 64)),
-    "to_out.0": ((64, 7168), (5376, 64)),
-    "ff.net.0.proj": ((64, 5376), (28672, 64)),
-    "ff.net.2": ((64, 14336), (5376, 64)),
-}
 ASSET_DIGESTS = {
     "tokenizer/merges.txt": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
     "tokenizer/tokenizer_config.json": (
@@ -3268,35 +3249,10 @@ def tiny_dit() -> Any:
     ).eval()
 
 
-# --- PDD-8 turbo -------------------------------------------------------------------------
-# The reference (`minimax_h3_pdd.py`, alibaba-pai/MiniMax-H3-Acc-LoRAs rev 335001fb) is the
-# oracle: its LoRA wrapper, its 32-interval head bank and its per-step plan, transcribed
-# here so a turbo forward of OUR construction is held to a forward of the reference's.
-
-
-def reference_pdd_plan(step_sizes: Any, start: int, block_size: int) -> Any:
-    plan = torch.zeros(1, step_sizes.shape[0], dtype=step_sizes.dtype)
-    span = step_sizes[start : start + block_size].sum()
-    plan[0, start : start + block_size] = step_sizes[start : start + block_size] / span
-    return plan
-
-
-class ReferenceParallelHead(torch.nn.Module):  # type: ignore[misc]
-    def __init__(self, source: Any, num_steps: int) -> None:
-        super().__init__()
-        self.num_steps = num_steps
-        self.weight = torch.nn.Parameter(
-            source.weight.detach()[None].repeat(num_steps, 1, 1).clone()
-        )
-        self.bias = torch.nn.Parameter(source.bias.detach()[None].repeat(num_steps, 1).clone())
-        self.plan = torch.zeros(1, num_steps)
-        self.plan[0, 0] = 1.0
-
-    def forward(self, hidden_states: Any) -> Any:
-        plan = self.plan.to(device=self.weight.device, dtype=self.weight.dtype)
-        weight = torch.einsum("pn,noi->poi", plan, self.weight).flatten(0, 1)
-        bias = torch.einsum("pn,no->po", plan, self.bias).flatten()
-        return torch.nn.functional.linear(hidden_states, weight, bias)
+# --- lightx2v turbo ------------------------------------------------------------------------
+# lightx2v's MiniMax-H3 Turbo LoRAs (lightx2v/Minimax-h3-Turbo@a29e57d1) are plain PEFT
+# adapters, `y = base(x) + (alpha/rank) * B(A(x))`, on the six attention and MLP families,
+# sampled by the ordinary Euler loop. The oracle is that wrapper over the official DiT.
 
 
 class ReferenceLoRALinear(torch.nn.Module):  # type: ignore[misc]
@@ -3357,25 +3313,26 @@ TURBO_CONFIG = {
 TURBO_RANK, TURBO_ALPHA = 4, 4.0
 
 
-def turbo_layout() -> tuple[Any, TurboSchedule, tuple[float, ...], tuple[tuple[int, int], ...]]:
-    plan = canonical_timestep_plan("fl2va_turbo")
+class TurboGrid(NamedTuple):
+    video: tuple[float, ...]
+    audio: tuple[float, ...]
+
+
+def turbo_layout(
+    task: str = "fl2va_turbo",
+) -> tuple[Any, TurboGrid, tuple[float, ...], tuple[tuple[int, int], ...]]:
+    plan = canonical_timestep_plan(cast(Any, task))
     (schedule,) = plan.schedules
     timesteps, block_keys = plan.table_layout()
-    return (
-        plan,
-        TurboSchedule(schedule.video_timesteps, schedule.audio_timesteps),
-        timesteps,
-        block_keys,
-    )
+    return plan, TurboGrid(schedule.video_timesteps, schedule.audio_timesteps), timesteps, block_keys
 
 
-def tiny_overlay(config: Mapping[str, Any]) -> Any:
-    _, schedule, timesteps, block_keys = turbo_layout()
+def tiny_overlay(config: Mapping[str, Any], task: str = "fl2va_turbo") -> Any:
+    _, _, timesteps, block_keys = turbo_layout(task)
     return TurboOverlay.from_official_config(
         config,
         rank=TURBO_RANK,
         alpha=TURBO_ALPHA,
-        schedule=schedule,
         table_timesteps=timesteps,
         table_block_keys=block_keys,
         block_table_dtype=torch.float32,
@@ -3393,9 +3350,9 @@ def tiny_pruned_dit(config: Mapping[str, Any], task: str = "fl2va") -> Any:
 def fill_tables(
     source: Any, tables: Any, timesteps: Sequence[float], keys: Sequence[tuple[int, int]]
 ) -> None:
-    """Table rows from a dynamic (possibly adapter-wrapped) modulation path, the way the
-    producer computes them: `adaln_proj(temb)` and `norm_out.linear(silu(temb))` at the
-    plan's exact timesteps, gathered in the plan's table order."""
+    """Table rows from the dynamic modulation path, the way the producer computes them:
+    `adaln_proj(temb)` and `norm_out.linear(silu(temb))` at the plan's exact timesteps,
+    gathered in the plan's table order."""
     with torch.no_grad():
         temb = source.time_embedder(source.time_proj(torch.tensor(timesteps, dtype=torch.float32)))
         sparse = torch.tensor([row * 3 + tag for row, tag in keys])
@@ -3408,11 +3365,11 @@ def fill_tables(
         tables.norm_out.table.copy_(final.reshape(len(timesteps), 2, -1))
 
 
-def turbo_forward(step: int, schedule: TurboSchedule, seed: int = 11) -> dict[str, Any]:
+def turbo_forward(step: int, grid: TurboGrid, seed: int = 11) -> dict[str, Any]:
     """One packed sequence at turbo evaluation `step`: text and a target video row at the
     video timestep, a clean condition video row, and a target audio row at the audio one."""
     clean = _as_float32(0.999)
-    distinct = sorted({schedule.video[step], schedule.audio[step], clean})
+    distinct = sorted({grid.video[step], grid.audio[step], clean})
     torch.manual_seed(seed)
     return {
         "hidden_states": torch.randn(1, 2, 2),
@@ -3421,10 +3378,10 @@ def turbo_forward(step: int, schedule: TurboSchedule, seed: int = 11) -> dict[st
         "timestep": torch.tensor(distinct, dtype=torch.float32),
         "timestep_indices": torch.tensor(
             [
-                distinct.index(schedule.video[step]),
-                distinct.index(schedule.video[step]),
+                distinct.index(grid.video[step]),
+                distinct.index(grid.video[step]),
                 distinct.index(clean),
-                distinct.index(schedule.audio[step]),
+                distinct.index(grid.audio[step]),
             ]
         ),
         "token_tags": torch.tensor([1, 0, 0, 2]),
@@ -3439,38 +3396,34 @@ def turbo_forward(step: int, schedule: TurboSchedule, seed: int = 11) -> dict[st
 
 
 def arm_turbo_plan() -> None:
-    print("\n== PDD-8: the turbo plan is the reference grid read at its block boundaries ==")
-    grids = {"video": 12.0, "audio": 3.0}
-    steps = PDD_HEADER["pdd_num_steps"]
-    block = PDD_HEADER["pdd_block_size"]
-    check("eight evaluations", steps // block, 8)
+    print("\n== lightx2v: each turbo plan is the official 8-step grid at its training shifts ==")
     check("turbo_steps() reads both plans", official.turbo_steps(), 8)
-    for task in ("fl2va_turbo", "ref2va_turbo"):
+    for task, video_shift in TURBO_VIDEO_SHIFTS.items():
         plan = canonical_timestep_plan(cast(Any, task))
         check(f"{task} plan is stamped with its trunk", plan.task, task.removesuffix("_turbo"))
         check(f"{task} canonical plan digest", plan.digest, TURBO_PLAN_DIGESTS[task])
         committed = files("minimax_h3").joinpath("timestep-plans", f"{task}.json").read_bytes()
         check(f"{task} committed semantic identity", timestep_plan_digest(committed), plan.digest)
+        check(f"{task} shifts", (plan.video_shift, plan.audio_shift), (video_shift, 3.0))
         check(f"{task} one fixed schedule", plan.steps, (8,))
         (schedule,) = plan.schedules
         check(f"{task} nfe + 1 grid points", schedule.sigma_grid_points, 9)
-        for modality, shift in grids.items():
+        for modality, shift in (("video", video_shift), ("audio", 3.0)):
             scheduler = MiniMaxH3Scheduler(shift=shift)
             scheduler.set_timesteps(9)
-            official_sigmas = scheduler.sigmas.float()
+            sigmas = torch.tensor(getattr(schedule, f"{modality}_sigmas"))
             check(
                 f"{task} {modality} sigmas are the scheduler's own at nine points",
-                torch.equal(official_sigmas, torch.tensor(getattr(schedule, f"{modality}_sigmas"))),
+                torch.equal(scheduler.sigmas.float(), sigmas),
                 True,
             )
-            reference = 1.0 - pdd_time_grid(shift, steps)[::block]
-            gap = (reference.float() - official_sigmas).abs().max().item()
+            # lightx2v `_make_schedule`: float32 linspace through the flow shift.
+            base = torch.linspace(1.0, 0.0, 9, dtype=torch.float32)
             check(
-                f"{task} {modality} grid equals the reference's block boundaries to float32",
-                gap <= 1.5e-7,
+                f"{task} {modality} sigmas are lightx2v's own, bit for bit",
+                torch.equal(shift * base / (1.0 + (shift - 1.0) * base), sigmas),
                 True,
             )
-            observe(f"{task} {modality} float64-vs-float32 boundary gap", f"{gap:.3e}")
         document = json.loads(plan.canonical_bytes())
         check(
             f"{task} turbo table rows",
@@ -3485,101 +3438,13 @@ def arm_turbo_plan() -> None:
         set(TURBO_PLAN_DIGESTS.values()) & set(PLAN_DIGESTS.values()),
         {"x"},
     )
-    _, turbo, _, _ = turbo_layout()
-    check("the two grids share only the origin", set(turbo.video) & set(turbo.audio), {0.0})
-    for modality, shift in grids.items():
-        plan = pdd_head_plan(shift, steps, block)
-        step_sizes = pdd_time_grid(shift, steps).diff()
-        check(
-            f"{modality} head plan rows are the reference's per-block plans",
-            all(
-                torch.equal(plan[index], reference_pdd_plan(step_sizes, index * block, block)[0])
-                for index in range(steps // block)
-            ),
-            True,
-        )
-        check(
-            f"{modality} head plan rows sum to one",
-            torch.allclose(plan.sum(1), torch.ones(8, dtype=torch.float64)),
-            True,
-        )
-    refusal(
-        "a grid the block does not divide refuses", lambda: pdd_head_plan(12.0, 30, 4), "ValueError"
-    )
-    refusal(
-        "grids meeting away from the origin refuse",
-        lambda: TurboSchedule((0.0, 0.5, 0.7), (0.0, 0.5, 0.9)),
-        "ValueError",
-    )
-    refusal(
-        "timesteps naming no evaluation refuse",
-        lambda: turbo.step(torch.tensor([0.123])),
-        "artifact_config",
-    )
-    check("the origin names evaluation zero", turbo.step(torch.tensor([0.0, 0.999])), 0)
-    check(
-        "every evaluation is named by its own pair",
-        [turbo.step(torch.tensor([turbo.video[k], turbo.audio[k]])) for k in range(8)],
-        list(range(8)),
-    )
-
-
-def arm_turbo_heads() -> None:
-    print("\n== PDD-8: the 32-head bank collapses to one head per evaluation ==")
-    torch.manual_seed(5)
-    bank = torch.randn(32, 5, 7).bfloat16().float()
-    bias = torch.randn(32, 5).bfloat16().float()
-    plan = pdd_head_plan(12.0, 32, 4)
-    weight, fused_bias = collapse_head_bank(bank, bias, plan)
-    check("collapsed shapes", (tuple(weight.shape), tuple(fused_bias.shape)), ((8, 5, 7), (8, 5)))
-    heads = TurboHeads(8, 5, 7)
-    with torch.no_grad():
-        heads.weight.copy_(weight)
-        heads.bias.copy_(fused_bias)
-    x = torch.randn(3, 7)
-    step_sizes = pdd_time_grid(12.0, 32).diff()
-    agree = []
-    for step in range(8):
-        reference = torch.nn.Linear(7, 5)
-        head = ReferenceParallelHead(reference, 32)
-        with torch.no_grad():
-            head.weight.copy_(bank)
-            head.bias.copy_(bias)
-        head.plan = reference_pdd_plan(step_sizes, step * 4, 4).float()
-        agree.append(torch.allclose(head(x), heads(x, step), rtol=1e-6, atol=1e-6))
-    check("collapsed heads equal the reference's per-step einsum form", agree, [True] * 8)
-    red(
-        "a neighbouring evaluation's head differs",
-        torch.allclose(heads(x, 1), heads(x, 2), rtol=1e-6, atol=1e-6),
-        True,
-    )
-    refusal(
-        "a bank the plan does not describe refuses",
-        lambda: collapse_head_bank(bank[:31], bias[:31], plan),
-        "ValueError",
-    )
-    # Odd sequence lengths put partition boundaries inside projection tiles. Small
-    # CPU GEMMs may happen to agree without tiling, so also observe their real
-    # reduction shapes; accelerator evidence covers the differing numeric kernels.
-    x = torch.randn(1, 7, 3079).transpose(1, 2)
-    with _GemmRows() as operations:
-        expected = heads(x, 7)
-        for degree in (2, 4):
-            actual = torch.cat(
-                [heads(part.clone(), 7) for part in x.tensor_split(degree, dim=1)], dim=1
-            )
-            check(
-                f"ragged degree {degree} heads preserve FP32 values",
-                torch.allclose(actual, expected, rtol=1e-6, atol=1e-6),
-                True,
-            )
-    check("head partitions use one GEMM row shape", set(operations.rows), {1024})
-    check("head tiles use row-major operands", set(operations.strides), {(7, 1)})
-    with _GemmRows() as untiled:
-        for degree in (1, 2, 4):
-            for part in x.tensor_split(degree, dim=1):
-                F.linear(part, heads.weight[7], heads.bias[7])
-    red("whole-shard projection changes GEMM row shapes", len(set(untiled.rows)), 1)
+    # FL2VA's turbo grid sits on the base 40-step grid (1/8 = 5/40); Ref2VA's shift-6 grid does
+    # not, which is why the overlay carries its own tables.
+    _, fl2va, _, _ = turbo_layout("fl2va_turbo")
+    _, ref2va, _, _ = turbo_layout("ref2va_turbo")
+    base40 = set(canonical_timestep_plan("fl2va").schedule(40).video_timesteps)
+    check("fl2va turbo timesteps are base 40-step rows", set(fl2va.video) <= base40, True)
+    check("ref2va turbo timesteps miss the base tables", (set(ref2va.video) - {0.0}) & base40, set())
 
 
 class _GemmRows(TorchDispatchMode):  # type: ignore[misc]
@@ -3620,7 +3485,7 @@ class _Allocations(TorchDispatchMode):  # type: ignore[misc]
 
 
 def arm_turbo_lora() -> None:
-    print("\n== PDD-8: the low-rank update accumulates in place ==")
+    print("\n== lightx2v: the low-rank update accumulates in place ==")
     rows, width, out_features, rank = 20_000, 64, 48, 8
     # The Runtime's fixed GEMM row count: 256 through 0.18.x, 4096 from 0.19 (TensorD #26:
     # 256-row chunks cost 7.6% of a dense step on an RTX PRO 6000).
@@ -3692,30 +3557,20 @@ def arm_turbo_lora() -> None:
     )
 
 
-def arm_turbo_forward() -> None:
-    print("\n== PDD-8: a turbo forward equals the reference adapter over the official DiT ==")
+def _turbo_forward_case(task: str) -> None:
     torch.manual_seed(7)
     full = MiniMaxH3Transformer3DModel(**TURBO_CONFIG).eval()
     reference = copy.deepcopy(full)
-    targets = str(PDD_HEADER["lora_targets"]).split(",")
-    sites = reference_add_lora(reference, targets, TURBO_RANK, TURBO_ALPHA)
-    check("the reference wraps every family, the tabled one included", sites, 3 * 6 + 2)
-    reference.proj_out = ReferenceParallelHead(reference.proj_out, 32)
-    reference.audio_proj_out = ReferenceParallelHead(reference.audio_proj_out, 32)
+    sites = reference_add_lora(reference, LORA_FAMILIES, TURBO_RANK, TURBO_ALPHA)
+    check(f"{task}: the reference wraps the six families on every block", sites, 3 * 6)
     torch.manual_seed(9)
     with torch.no_grad():
         for module in reference.modules():
             if isinstance(module, ReferenceLoRALinear):
                 module.lora_down.copy_(torch.randn_like(module.lora_down).bfloat16().float())
                 module.lora_up.copy_((torch.randn_like(module.lora_up) * 0.3).bfloat16().float())
-        for head in (reference.proj_out, reference.audio_proj_out):
-            head.weight.add_(torch.randn_like(head.weight) * 0.2)
-            head.bias.add_(torch.randn_like(head.bias) * 0.2)
-            head.weight.copy_(head.weight.bfloat16().float())
-            head.bias.copy_(head.bias.bfloat16().float())
 
-    base_plan = canonical_timestep_plan("fl2va")
-    base_timesteps, base_keys = base_plan.table_layout()
+    base_timesteps, base_keys = canonical_timestep_plan("fl2va").table_layout()
     pruned = tiny_pruned_dit(TURBO_CONFIG)
     shared = {
         name: value
@@ -3723,86 +3578,70 @@ def arm_turbo_forward() -> None:
         if name in pruned.state_dict() and pruned.state_dict()[name].shape == value.shape
     }
     check(
-        "the pruned DiT keeps the official heads by name",
+        f"{task}: the pruned DiT keeps the official heads by name",
         pruned.load_state_dict(shared, strict=False).unexpected_keys,
         [],
     )
     check(
-        "pruned destinations are the base's: no turbo key enters the DiT",
+        f"{task}: pruned destinations are the base's: no turbo key enters the DiT",
         [name for name in pruned.state_dict() if "lora" in name or "turbo" in name],
         [],
     )
     fill_tables(full, pruned, base_timesteps, base_keys)
 
-    _, schedule, turbo_timesteps, turbo_keys = turbo_layout()
-    overlay = tiny_overlay(TURBO_CONFIG)
+    _, grid, turbo_timesteps, turbo_keys = turbo_layout(task)
+    overlay = tiny_overlay(TURBO_CONFIG, task)
     with torch.no_grad():
         for path, factors in overlay.lora_sites():
             site = reference.get_submodule(path)
             factors.lora_down.copy_(site.lora_down)
             factors.lora_up.copy_(site.lora_up)
-        fill_tables(reference, overlay, turbo_timesteps, turbo_keys)
-        for name, shift in (("proj_out", 12.0), ("audio_proj_out", 3.0)):
-            bank = getattr(reference, name)
-            weight, bias = collapse_head_bank(bank.weight, bank.bias, pdd_head_plan(shift, 32, 4))
-            getattr(overlay, name).weight.copy_(weight)
-            getattr(overlay, name).bias.copy_(bias)
+        # lightx2v leaves AdaLN alone: the overlay's tables are the base's own rows.
+        fill_tables(full, overlay, turbo_timesteps, turbo_keys)
     paths = [path for path, _ in overlay.lora_sites()]
-    families = sorted({next(f for f in LORA_FAMILIES if path.endswith(f)) for path in paths})
     check(
-        "the overlay's LoRA sites are exactly the six inference families on every block",
-        (len(paths), sorted(set(families)), any("adaln_proj" in path for path in paths)),
-        (3 * 6, sorted(LORA_FAMILIES), False),
+        f"{task}: the overlay's LoRA sites are exactly the six families on every block",
+        (len(paths), sorted({next(f for f in LORA_FAMILIES if p.endswith(f)) for p in paths})),
+        (3 * 6, sorted(LORA_FAMILIES)),
     )
     check(
-        "every site resolves to one official linear of the DiT",
+        f"{task}: every site resolves to one official linear of the DiT",
         all(isinstance(pruned.get_submodule(path), torch.nn.Linear) for path in paths),
         True,
     )
     check(
-        "overlay state-dict keys are the adapter file's, minus the tabled slice, plus the tables",
+        f"{task}: overlay state-dict keys are the factors and the tables, no heads",
         {
             name.replace("transformer_blocks.1.", "transformer_blocks.0.")
             for name in overlay.state_dict()
         },
         {
             *(
-                f"transformer_blocks.0.{family}.{end}"
-                for family in [f"attn.{f}" for f in LORA_FAMILIES[:4]] + list(LORA_FAMILIES[4:])
-                for end in ("lora_down", "lora_up")
-            ),
-            *(
-                f"token_refiner.refiner_blocks.0.{family}.{end}"
+                f"{prefix}.0.{family}.{end}"
+                for prefix in ("transformer_blocks", "token_refiner.refiner_blocks")
                 for family in [f"attn.{f}" for f in LORA_FAMILIES[:4]] + list(LORA_FAMILIES[4:])
                 for end in ("lora_down", "lora_up")
             ),
             "transformer_blocks.0.adaln_proj.table",
             "norm_out.table",
-            "proj_out.weight",
-            "proj_out.bias",
-            "audio_proj_out.weight",
-            "audio_proj_out.bias",
         },
     )
     pruned.install_lora_consumers()
 
-    base_forward = turbo_forward(0, schedule)
+    base_forward = turbo_forward(0, grid)
     before = pruned(**base_forward)
     check(
-        "with the overlay attached, a forward naming no bank is the base's",
+        f"{task}: with the overlay attached, a forward naming no bank is the base's",
         all(
             torch.allclose(a, b, rtol=2e-5, atol=2e-6)
             for a, b in zip(before, full(**base_forward), strict=True)
         ),
         True,
     )
-    video_steps = pdd_time_grid(12.0, 32).diff()
-    audio_steps = pdd_time_grid(3.0, 32).diff()
+    selector = {ATTENTION_KWARG: TURBO_BANK, OVERLAY_KWARG: overlay}
     agree, hooked = [], []
     for step in range(8):
-        forward = turbo_forward(step, schedule)
-        reference.proj_out.plan = reference_pdd_plan(video_steps, step * 4, 4).float()
-        reference.audio_proj_out.plan = reference_pdd_plan(audio_steps, step * 4, 4).float()
+        forward = turbo_forward(step, grid)
         with torch.no_grad():
             want = reference(**forward)
             seen: list[int] = []
@@ -3811,92 +3650,57 @@ def arm_turbo_forward() -> None:
                     sum(isinstance(hook, _LoRAHook) for hook in module._forward_hooks.values())
                 )
             )
-            got = pruned(
-                **forward, attention_kwargs={ATTENTION_KWARG: TURBO_BANK, OVERLAY_KWARG: overlay}
-            )
+            got = pruned(**forward, attention_kwargs=selector)
             handle.remove()
         hooked.append(seen)
         agree.append(
             all(torch.allclose(a, b, rtol=2e-5, atol=2e-6) for a, b in zip(got, want, strict=True))
         )
+    check(f"{task}: all eight evaluations equal the reference adapter", agree, [True] * 8)
+    check(f"{task}: one LoRA hook stood on a site during each turbo forward", hooked, [[1]] * 8)
     check(
-        "all eight evaluations equal the reference (video and audio velocities)", agree, [True] * 8
-    )
-    check("one LoRA hook stood on a site during each turbo forward", hooked, [[1]] * 8)
-    check(
-        "one permanent hook per site remains installed",
-        sum(
-            isinstance(hook, _LoRAHook)
-            for module in pruned.modules()
-            for hook in module._forward_hooks.values()
-        ),
-        len(paths),
-    )
-    check(
-        "after eight turbo forwards a base forward is bit-identical to before",
+        f"{task}: after eight turbo forwards a base forward is bit-identical to before",
         all(torch.equal(a, b) for a, b in zip(pruned(**base_forward), before, strict=True)),
         True,
     )
-
-    # Red: the tabled slice. Turbo tables from the UNADAPTED modulation path lack the
-    # adaln_proj LoRA the producer bakes in, and the reference notices.
-    stale = tiny_overlay(TURBO_CONFIG)
+    stale = tiny_overlay(TURBO_CONFIG, task)
     stale.load_state_dict(overlay.state_dict())
-    fill_tables(full, stale, turbo_timesteps, turbo_keys)
     with torch.no_grad():
         for block in stale.transformer_blocks:
             block.adaln_proj.table.zero_()
         stale.norm_out.table.zero_()
-    forward = turbo_forward(3, schedule)
-    reference.proj_out.plan = reference_pdd_plan(video_steps, 12, 4).float()
-    reference.audio_proj_out.plan = reference_pdd_plan(audio_steps, 12, 4).float()
-    with torch.no_grad():
+        forward = turbo_forward(3, grid)
+        got = pruned(**forward, attention_kwargs={**selector, OVERLAY_KWARG: stale})
         want = reference(**forward)
-        got = pruned(
-            **forward, attention_kwargs={ATTENTION_KWARG: TURBO_BANK, OVERLAY_KWARG: stale}
-        )
     red(
-        "tables without the adaln_proj slice do not reproduce the reference",
+        f"{task}: an overlay without its tables does not reproduce the reference",
         all(torch.allclose(a, b, rtol=2e-5, atol=2e-6) for a, b in zip(got, want, strict=True)),
         True,
     )
-
     refusal(
-        "a turbo forward at a base-only timestep refuses",
+        f"{task}: a turbo forward at a base-only timestep refuses",
         lambda: pruned(
             **{**base_forward, "timestep": torch.tensor([0.0, 0.5])},
-            attention_kwargs={ATTENTION_KWARG: TURBO_BANK},
+            attention_kwargs=selector,
         ),
         "artifact_config",
     )
     check(
-        "a refused turbo forward leaves the DiT disarmed for the next base forward",
+        f"{task}: a refused turbo forward leaves the DiT disarmed for the next base forward",
         all(torch.equal(a, b) for a, b in zip(pruned(**base_forward), before, strict=True)),
         True,
     )
     refusal(
-        "an unknown bank refuses",
+        f"{task}: an unknown bank refuses",
         lambda: pruned(**base_forward, attention_kwargs={ATTENTION_KWARG: "draft"}),
         "artifact_config",
     )
-    # Every turbo boundary sits on the base's 40-step grid (1/8 = 5/40), so the base tables
-    # DO hold the turbo timesteps: a forward that names no bank at one is the base's own
-    # 40-step evaluation, which is why the bank is named per call and never inferred.
-    check(
-        "the turbo timesteps are base 40-step rows",
-        set(schedule.video) <= set(canonical_timestep_plan("fl2va").schedule(40).video_timesteps),
-        True,
-    )
-    with torch.no_grad():
-        forward = turbo_forward(3, schedule)
-        check(
-            "without the bank, a forward at a turbo timestep is the official base forward",
-            all(
-                torch.allclose(a, b, rtol=2e-5, atol=2e-6)
-                for a, b in zip(pruned(**forward), full(**forward), strict=True)
-            ),
-            True,
-        )
+
+
+def arm_turbo_forward() -> None:
+    print("\n== lightx2v: a turbo forward equals the reference adapter over the official DiT ==")
+    for task in TURBO_VIDEO_SHIFTS:
+        _turbo_forward_case(task)
 
 
 def turbo_h3_config() -> dict[str, Any]:
@@ -3916,14 +3720,12 @@ def turbo_h3_config() -> dict[str, Any]:
         overlay["cozy_h3"] = {
             "task": trunk,
             "modulation": "adaln-pruned",
-            "distillation": "pdd",
+            "distillation": "lightx2v",
             "table_keys": canonical_json.decode(
                 canonical_timestep_plan(cast(Any, f"{trunk}_turbo")).canonical_bytes()
             )["table_keys"],
-            "lora_rank": PDD_HEADER["lora_rank"],
-            "lora_alpha": PDD_HEADER["lora_alpha"],
-            "pdd_num_steps": PDD_HEADER["pdd_num_steps"],
-            "pdd_block_size": PDD_HEADER["pdd_block_size"],
+            "lora_rank": 128,
+            "lora_alpha": 8.0,
         }
         document[f"{trunk}_turbo"] = overlay
     return cast(dict[str, Any], document)
@@ -3940,7 +3742,7 @@ def arm_turbo_state() -> None:
                 parameter.normal_(0, 0.02)
     dit.install_lora_consumers()
     dit.set_attention_backend("native")
-    forward = turbo_forward(0, overlay.schedule)
+    forward = turbo_forward(0, turbo_layout()[1])
     original = {ATTENTION_KWARG: TURBO_BANK}
     state = PipelineState()
     state.set("attention_kwargs", original)
@@ -4042,16 +3844,15 @@ def arm_turbo_artifact() -> None:
         "artifact_config",
     )
     for field, value in (
-        ("lora_rank", 32),
-        ("lora_alpha", 32.0),
-        ("pdd_num_steps", 16),
-        ("pdd_block_size", 2),
+        ("lora_rank", 64),
+        ("lora_alpha", 64.0),
+        ("distillation", "pdd"),
         ("task", "ref2va"),
     ):
         changed = copy.deepcopy(overlay_only)
         changed["fl2va_turbo"]["cozy_h3"][field] = value
         refusal(
-            f"unsupported PDD {field} refuses",
+            f"unsupported turbo {field} refuses",
             partial(official._overlay_spec, changed, "fl2va"),
             "artifact_config",
         )
@@ -4076,7 +3877,12 @@ def arm_turbo_artifact() -> None:
             1,
         )
         check(f"{trunk} overlay has independent weights", id(dit) != id(overlay), True)
-        check(f"{trunk} overlay head geometry", tuple(overlay.proj_out.weight.shape), (8, 96, 5376))
+        check(f"{trunk} overlay carries no heads", hasattr(overlay, "proj_out"), False)
+        check(
+            f"{trunk} overlay table geometry",
+            tuple(overlay.transformer_blocks[0].adaln_proj.table.shape),
+            (TURBO_BLOCK_ROWS, 6, 5376),
+        )
 
 
 def arm_attention_scope() -> None:
@@ -4367,7 +4173,6 @@ ARMS = {
     "attention-scope": arm_attention_scope,
     "checkpoint-table-layout": arm_checkpoint_table_layout,
     "turbo-plan": arm_turbo_plan,
-    "turbo-heads": arm_turbo_heads,
     "turbo-lora": arm_turbo_lora,
     "turbo-forward": arm_turbo_forward,
     "turbo-state": arm_turbo_state,
