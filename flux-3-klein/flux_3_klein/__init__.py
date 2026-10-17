@@ -96,9 +96,8 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
     #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
-    #: its first use downloads the 0.5 GB head. Off by default until a 16 GB card holds the
-    #: drafted decode beside Klein on every request.
-    prompt_drafting: bool = False
+    #: its first use downloads the 0.5 GB head.
+    prompt_drafting: bool = True
 
 
 class GenerateBaseInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -110,9 +109,8 @@ class GenerateBaseInput(msgspec.Struct, forbid_unknown_fields=True):
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
     #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
-    #: its first use downloads the 0.5 GB head. Off by default until a 16 GB card holds the
-    #: drafted decode beside Klein on every request.
-    prompt_drafting: bool = False
+    #: its first use downloads the 0.5 GB head.
+    prompt_drafting: bool = True
 
 
 class EditInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -129,9 +127,8 @@ class EditInput(msgspec.Struct, forbid_unknown_fields=True):
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
     #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
-    #: its first use downloads the 0.5 GB head. Off by default until a 16 GB card holds the
-    #: drafted decode beside Klein on every request.
-    prompt_drafting: bool = False
+    #: its first use downloads the 0.5 GB head.
+    prompt_drafting: bool = True
 
 
 class EditBaseInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -149,9 +146,8 @@ class EditBaseInput(msgspec.Struct, forbid_unknown_fields=True):
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
     #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
-    #: its first use downloads the 0.5 GB head. Off by default until a 16 GB card holds the
-    #: drafted decode beside Klein on every request.
-    prompt_drafting: bool = False
+    #: its first use downloads the 0.5 GB head.
+    prompt_drafting: bool = True
 
 
 class ImageOutput(msgspec.Struct):
@@ -243,7 +239,7 @@ _COMPONENTS = {
     "drafter": ("model",),
 }
 #: Built and fetched on first use: `prompt_upsampling=False` never pulls the upsampler, and
-#: `prompt_drafting=False` (the default) never pulls the drafter.
+#: `prompt_drafting=False` never pulls the drafter.
 _ON_DEMAND = ("upsampler", "drafter")
 
 
