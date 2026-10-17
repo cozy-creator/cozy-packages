@@ -31,7 +31,7 @@ so the workflow copies the global information into it.
 - `context_frames`: global picture window for `long_form` (0, 22, 39 or 56; default 22).
 - `mode` (`turbo` or `standard`) and `steps` (standard only).
 
-Both long-form composers default to Turbo: eight PDD evaluations per segment.
+Both long-form composers default to Turbo: lightx2v's 8-step LoRA, eight evaluations per segment.
 The top-level `mode` applies to every segment. `mode: standard` uses 30 steps by
 default; its optional `steps` selects 30, 40 or 50. Omit `steps` with `mode: turbo`.
 There is no per-segment sampling override.
@@ -258,7 +258,7 @@ A segment delivers at least its `duration_s`: the native grid snaps it up, and n
 sampled after the carried frames is discarded. A carried picture of 22/39/56 frames allows
 at most 14/13/12 new seconds, and carried sound alone (a one-second head) 14; longer
 segments are shortened and reported. `long_form_cuts`
-renders independent segments. Turbo uses eight PDD evaluations, and standard allows
+renders independent segments. Turbo uses eight evaluations, and standard allows
 30/40/50 steps.
 
 Outputs arrive as they are made. Prepared and generated reference images are published in

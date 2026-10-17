@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PDD forward parity at Ulysses degrees 2/4 on CPU Gloo and tiny real H3 weights.
+"""lightx2v turbo forward parity at Ulysses degrees 2/4 on CPU Gloo and tiny real H3 weights.
 
 This checks package hooks, full component scopes and CP math. Runtime's follower
 transport and real uneven NCCL layouts have their own integration gates.
@@ -38,8 +38,7 @@ def rank(rank: int, degree: int, rendezvous: str) -> None:
     pipe = object.__new__(fixture["official"].OfficialH3Pipeline)
     pipe.components = {"fl2va_dit": dit, "fl2va_turbo": overlay}
     model = fixture["package"].H3TurboBase.for_test(pipe=pipe)
-    schedule = overlay.schedule
-    inputs = fixture["turbo_forward"](0, schedule)
+    inputs = fixture["turbo_forward"](0, fixture["turbo_layout"]()[1])
     inputs["attention_kwargs"] = {
         fixture["ATTENTION_KWARG"]: fixture["TURBO_BANK"],
         fixture["OVERLAY_KWARG"]: overlay,
@@ -66,7 +65,7 @@ def rank(rank: int, degree: int, rendezvous: str) -> None:
         assert dit._arming is None
         assert model._cozy_active is None
         if rank == 0:
-            print(f"PDD Ulysses degree {degree}: full scope, permanent hooks, output parity")
+            print(f"turbo Ulysses degree {degree}: full scope, permanent hooks, output parity")
     finally:
         torch.distributed.destroy_process_group()
 
@@ -81,7 +80,7 @@ def main() -> None:
         rank(args.rank, args.degree, args.rendezvous)
         return
     for degree in (2, 4):
-        with tempfile.TemporaryDirectory(prefix="pdd-cp-") as directory:
+        with tempfile.TemporaryDirectory(prefix="turbo-cp-") as directory:
             children = [
                 subprocess.Popen(
                     [

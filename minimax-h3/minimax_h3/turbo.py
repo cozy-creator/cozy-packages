@@ -1,13 +1,10 @@
-"""PDD-8 turbo overlay over the AdaLN-pruned MiniMax-H3 DiT.
+"""lightx2v 8-step turbo overlay over the AdaLN-pruned MiniMax-H3 DiT.
 
-Parallel Decoding Distillation (arXiv 2607.26004; `alibaba-pai/MiniMax-H3-Acc-LoRAs`) is a
-rank-64 LoRA on seven linear families plus a bank of per-interval output heads, sampled on a
-32-point grid four intervals at a time: eight transformer evaluations. On a pruned lane six of
-the families are ordinary modules and apply here, as `y += (alpha/rank) * up(down(x))` over
-the fp8 base; the seventh, `adaln_proj.linear`, has no module to attach to and is baked into
-the turbo AdaLN tables by the producer. The head bank collapses offline to one head per
-evaluation because the reference's per-step fusion is linear in the weights and its plan
-depends only on the fixed grid.
+lightx2v's MiniMax-H3 Turbo LoRAs (`lightx2v/Minimax-h3-Turbo`: fl2v 8-step v1.0, ref2v 8-step
+v1.0 768p) are rank-128, alpha-8 adapters on six linear families of every block and token-refiner
+block, sampled by the ordinary Euler loop at eight evaluations. They leave AdaLN and the heads
+alone, so the overlay carries the base model's own AdaLN tables at the turbo plan's timesteps,
+which the pruned base does not hold, and the base heads serve unchanged.
 
 The overlay is one component per task beside the DiT it patches. Nothing here changes the
 DiT's own parameters or its destination names: the base functions see the same construction
@@ -32,14 +29,10 @@ OVERLAY_KWARG = "cozy_h3_overlay"
 TURBO_BANK = "turbo"
 #: The families applied at inference, as the checkpoint names them under a block.
 LORA_FAMILIES = ("to_q", "to_k", "to_v", "to_out.0", "ff.net.0.proj", "ff.net.2")
-#: The family the producer bakes into the turbo tables; refused on the overlay by name.
-TABLED_FAMILY = "adaln_proj.linear"
 #: Rows per LoRA GEMM. Fixed, so a row's update never depends on how many rows a rank holds
 #: (Ulysses), and large enough that kernel launches stop mattering (TensorD #26: 256-row
 #: chunks cost 7.6% of a dense step on an RTX PRO 6000, one GEMM pair per site 3.3%).
 _LORA_ROW_CHUNK = 4096
-#: Fix the FP32 projection's GEMM shape across Ulysses sequence partitions.
-_HEAD_ROW_CHUNK = 1024
 
 
 class LoRAFactors(nn.Module):  # type: ignore[misc]
@@ -125,64 +118,12 @@ class TurboTables(nn.Module):  # type: ignore[misc]
             self.register_buffer("table_index", index, persistent=False)
 
 
-class TurboHeads(nn.Module):  # type: ignore[misc]
-    """One collapsed head per transformer evaluation, selected by the step being served."""
-
-    def __init__(self, evaluations: int, out_features: int, in_features: int) -> None:
-        super().__init__()
-        self.weight = nn.Parameter(
-            torch.empty(evaluations, out_features, in_features, dtype=torch.float32)
-        )
-        self.bias = nn.Parameter(torch.empty(evaluations, out_features, dtype=torch.float32))
-
-    def forward(self, hidden_states: torch.Tensor, step: int) -> torch.Tensor:
-        inputs = hidden_states.reshape(-1, hidden_states.shape[-1])
-        weight, bias = self.weight[step], self.bias[step]
-        output = hidden_states.new_empty((*hidden_states.shape[:-1], weight.shape[0]))
-        flat = output.view(-1, weight.shape[0])
-        for start in range(0, int(inputs.shape[0]), _HEAD_ROW_CHUNK):
-            rows = inputs[start : start + _HEAD_ROW_CHUNK].contiguous()
-            count = rows.shape[0]
-            # Changing M selects different FP32 reduction kernels even with TF32
-            # disabled. Full tiles and tails must execute the same projection.
-            if count < _HEAD_ROW_CHUNK:
-                rows = F.pad(rows, (0, 0, 0, _HEAD_ROW_CHUNK - count))
-            flat[start : start + count].copy_(F.linear(rows, weight, bias)[:count])
-        return output
-
-
-class TurboSchedule:
-    """The exact float32 timesteps of the one turbo schedule, and the step each pair names."""
-
-    def __init__(self, video_timesteps: Sequence[float], audio_timesteps: Sequence[float]) -> None:
-        video, audio = tuple(video_timesteps), tuple(audio_timesteps)
-        if len(video) != len(audio) or not video:
-            raise ValueError("a turbo schedule pairs one audio timestep with every video one")
-        # The step is read off the timesteps a forward presents, so the two grids may only
-        # meet at the shared origin: any other shared value would make a step ambiguous.
-        if set(video) & set(audio) != {0.0} or len(set(video)) != len(video):
-            raise ValueError("turbo video and audio grids must share only the origin")
-        self.video = video
-        self.audio = audio
-        self.evaluations = len(video)
-
-    def step(self, timestep: torch.Tensor) -> int:
-        present = set(timestep.detach().to(torch.float32).cpu().tolist())
-        steps = [index for index, value in enumerate(self.video) if value in present]
-        if len(steps) != 1 or self.audio[steps[0]] not in present:
-            raise ConformanceError(
-                f"timesteps {sorted(present)} do not name one turbo evaluation",
-                code="artifact_config",
-            )
-        return steps[0]
-
-
 class TurboOverlay(nn.Module):  # type: ignore[misc]
     """Everything one task's turbo function adds to its trunk DiT, under the DiT's own paths.
 
     State-dict keys are the checkpoint's: `transformer_blocks.{i}.attn.to_q.lora_down`,
     `token_refiner.refiner_blocks.{i}.ff.net.2.lora_up`, `transformer_blocks.{i}.adaln_proj.table`,
-    `norm_out.table`, `proj_out.weight` — so a LoRA site's path here IS its path on the DiT.
+    `norm_out.table` — so a LoRA site's path here IS its path on the DiT.
     """
 
     present = True
@@ -195,11 +136,8 @@ class TurboOverlay(nn.Module):  # type: ignore[misc]
         ffn_dim: int,
         num_layers: int,
         num_refiner_layers: int,
-        video_out: int,
-        audio_out: int,
         rank: int,
         alpha: float,
-        schedule: TurboSchedule,
         table_timesteps: Sequence[float],
         table_block_keys: Sequence[tuple[int, int]],
         block_table_dtype: torch.dtype,
@@ -233,7 +171,6 @@ class TurboOverlay(nn.Module):  # type: ignore[misc]
         index = torch.full((len(table_timesteps), 3), -1, dtype=torch.int64)
         for table_row, (timestep_row, modality_tag) in enumerate(table_block_keys):
             index[timestep_row, modality_tag] = table_row
-        self.schedule = schedule
         self.register_buffer(
             "timesteps", torch.tensor(tuple(table_timesteps), dtype=torch.float32), persistent=False
         )
@@ -257,8 +194,6 @@ class TurboOverlay(nn.Module):  # type: ignore[misc]
         self.norm_out = TurboTables(
             torch.empty(len(table_timesteps), 2, hidden_size, dtype=final_table_dtype)
         )
-        self.proj_out = TurboHeads(schedule.evaluations, video_out, hidden_size)
-        self.audio_proj_out = TurboHeads(schedule.evaluations, audio_out, hidden_size)
 
     @classmethod
     def from_official_config(
@@ -267,26 +202,19 @@ class TurboOverlay(nn.Module):  # type: ignore[misc]
         *,
         rank: int,
         alpha: float,
-        schedule: TurboSchedule,
         table_timesteps: Sequence[float],
         table_block_keys: Sequence[tuple[int, int]],
         block_table_dtype: torch.dtype,
         final_table_dtype: torch.dtype,
     ) -> TurboOverlay:
-        patch = 1
-        for value in config["patch_size"]:
-            patch *= int(value)
         return cls(
             hidden_size=int(config["hidden_size"]),
             inner_dim=int(config["num_attention_heads"]) * int(config["attention_head_dim"]),
             ffn_dim=int(config["ffn_dim"]),
             num_layers=int(config["num_layers"]),
             num_refiner_layers=int(config["num_refiner_layers"]),
-            video_out=int(config["in_channels"]) * patch,
-            audio_out=int(config["audio_in_channels"]),
             rank=rank,
             alpha=alpha,
-            schedule=schedule,
             table_timesteps=table_timesteps,
             table_block_keys=table_block_keys,
             block_table_dtype=block_table_dtype,
@@ -315,8 +243,7 @@ class TurboArming:
     """What one DiT forward under the turbo bank reads: set by the DiT's pre-hook from the
     forward's own `attention_kwargs`, cleared by its forward hook, never request state."""
 
-    __slots__ = ("overlay", "step")
+    __slots__ = ("overlay",)
 
-    def __init__(self, overlay: TurboOverlay, step: int) -> None:
+    def __init__(self, overlay: TurboOverlay) -> None:
         self.overlay = overlay
-        self.step = step
