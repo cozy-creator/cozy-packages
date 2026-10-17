@@ -88,7 +88,7 @@ from .continuation import (
     align_context_rows,
     export_context,
 )
-from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK, TurboOverlay
+from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK, TurboOverlay, TurboSchedule
 from .vae_tiles import TileBatchedVideoVAE, encode_condition
 
 #: A trunk is one DiT and its conditioning workflow; a task is one served function — the
@@ -156,10 +156,7 @@ _OVERLAY_CONFIG_SECTIONS = {"fl2va_turbo", "ref2va_turbo"}
 _DIT_COMPONENT: dict[Trunk, str] = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
 _OVERLAY_COMPONENT: dict[Trunk, str] = {"fl2va": "fl2va_turbo", "ref2va": "ref2va_turbo"}
 _DIFFUSERS_DIT: dict[Trunk, str] = {"fl2va": "transformer", "ref2va": "transformer_ref"}
-#: lightx2v's MiniMax-H3 Turbo LoRAs: rank 128, alpha 8, on both trunks.
-_DISTILLATION = "lightx2v"
-_LORA_RANK = 128
-_LORA_ALPHA = 8.0
+_DISTILLATION = "pdd"
 _ASSETS = Path(__file__).resolve().parent
 #: The dry warm forward (`warm_dit`): rows per modality, and the modality tags the DiT
 #: reads off `token_tags`. Eight rows is the smallest count that still runs both patch
@@ -841,7 +838,6 @@ class OfficialH3Pipeline:
         for trunk in _TRUNKS:
             _validate_model_contract(pipes[trunk], dits[trunk], video_vae, audio_vae)
         tokenizer, processor = _processor()
-        plans = {task: canonical_timestep_plan(task) for task in _TASKS}
 
         for workflow, task in _WORKFLOW_TASKS.items():
             pipes[workflow].register_components(
@@ -850,8 +846,8 @@ class OfficialH3Pipeline:
                 processor=processor,
                 vae=video_vae,
                 audio_vae=audio_vae,
-                scheduler=MiniMaxH3Scheduler(shift=plans[task].video_shift),
-                audio_scheduler=MiniMaxH3Scheduler(shift=plans[task].audio_shift),
+                scheduler=MiniMaxH3Scheduler(shift=12.0),
+                audio_scheduler=MiniMaxH3Scheduler(shift=3.0),
                 **{_DIFFUSERS_DIT[_TRUNK[task]]: dits[_TRUNK[task]]},
             )
 
@@ -871,7 +867,9 @@ class OfficialH3Pipeline:
         self.sample_rate = int(audio_vae.config.sampling_rate)
         self._blocks = blocks
         self._pipes = pipes
-        self._plans: dict[Task, TimestepPlan] = plans
+        self._plans: dict[Task, TimestepPlan] = {
+            task: canonical_timestep_plan(task) for task in _TASKS
+        }
         self._dit_specs = dit_specs
         self._intake = _IntakeLengths()
 
@@ -1343,14 +1341,12 @@ class OfficialH3Pipeline:
         _validate_sol_dense_steps(sol_dense_steps)
         _settle_intake(state)
         blocks = self._blocks[self._workflow(task, state)].sub_blocks
-        plan = self._plans[task]
         scoped = _ScopedPipeline(
             self._pipes[self._workflow(task, state)],
             self.components[_DIT_COMPONENT[_TRUNK[task]]],
             overrides={
-                # Each plan names its own shifts: lightx2v's Ref2VA turbo trains at video 6.
-                "scheduler": MiniMaxH3Scheduler(shift=plan.video_shift),
-                "audio_scheduler": MiniMaxH3Scheduler(shift=plan.audio_shift),
+                "scheduler": MiniMaxH3Scheduler(shift=12.0),
+                "audio_scheduler": MiniMaxH3Scheduler(shift=3.0),
                 "max_duration": _CEILING_S,
             },
         )
@@ -1369,6 +1365,7 @@ class OfficialH3Pipeline:
 
         # The receipt names the schedule the official blocks actually built, proven
         # against the plan by exact float32 equality of both modality vectors.
+        plan = self._plans[task]
         schedule = plan.executed(_float_tuple(state.timesteps), _float_tuple(state.audio_timesteps))
         if _BANK[task] is None:
             layout = self._dit_specs[_TRUNK[task]][2]
@@ -1517,7 +1514,12 @@ class OfficialH3TurboLoRA:
             )
         self.specs = {trunk: _overlay_spec(mapping, trunk) for trunk in _TRUNKS}
         overlays = {
-            trunk: _build_overlay(*self.specs[trunk]) for trunk in _TRUNKS
+            trunk: _build_overlay(
+                self.specs[trunk][0],
+                canonical_timestep_plan("fl2va_turbo" if trunk == "fl2va" else "ref2va_turbo"),
+                self.specs[trunk][1],
+            )
+            for trunk in _TRUNKS
         }
         _validate_dual_topology(overlays, _OVERLAY_COMPONENT)
         self.components = {_OVERLAY_COMPONENT[trunk]: value for trunk, value in overlays.items()}
@@ -1676,12 +1678,12 @@ def _build_dit(config: Mapping[str, Any], structure: str, layout: TableLayout | 
 def _overlay_spec(
     mapping: Mapping[str, object], trunk: Trunk
 ) -> tuple[dict[str, Any], TableLayout]:
-    """Only lightx2v's rank-128 8-step overlay is supported."""
+    """Only the released rank-64 PDD-8 adapter is supported."""
     component = _OVERLAY_COMPONENT[trunk]
     section = _section(mapping, component)
     extension = section.pop("cozy_h3", None)
     if not isinstance(extension, dict):
-        raise ConformanceError("missing turbo overlay metadata", code="artifact_config")
+        raise ConformanceError("missing PDD metadata", code="artifact_config")
     extension = dict(extension)
     layout = TableLayout.parse(extension.pop("table_keys", None))
     task: Task = "fl2va_turbo" if trunk == "fl2va" else "ref2va_turbo"
@@ -1690,12 +1692,14 @@ def _overlay_spec(
         "task": trunk,
         "modulation": "adaln-pruned",
         "distillation": _DISTILLATION,
-        "lora_rank": _LORA_RANK,
-        "lora_alpha": _LORA_ALPHA,
+        "lora_rank": 64,
+        "lora_alpha": 64.0,
+        "pdd_num_steps": 32,
+        "pdd_block_size": 4,
     }
     if not section or extension != expected:
         raise ConformanceError(
-            f"artifact config {component!r} is not the lightx2v rank-128 turbo overlay",
+            f"artifact config {component!r} is not the released rank-64 PDD-8 overlay",
             code="artifact_config",
             fields=[component, "cozy_h3"],
         )
@@ -1704,12 +1708,16 @@ def _overlay_spec(
     return section, layout
 
 
-def _build_overlay(config: Mapping[str, Any], layout: TableLayout) -> TurboOverlay:
+def _build_overlay(
+    config: Mapping[str, Any], plan: TimestepPlan, layout: TableLayout
+) -> TurboOverlay:
+    (schedule,) = plan.schedules
     timesteps, block_keys = layout.timesteps, layout.block_keys
     overlay = TurboOverlay.from_official_config(
         config,
-        rank=_LORA_RANK,
-        alpha=_LORA_ALPHA,
+        rank=64,
+        alpha=64.0,
+        schedule=TurboSchedule(schedule.video_timesteps, schedule.audio_timesteps),
         table_timesteps=timesteps,
         table_block_keys=block_keys,
         block_table_dtype=torch.bfloat16,

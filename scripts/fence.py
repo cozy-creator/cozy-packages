@@ -200,7 +200,7 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "Retire when a public native asset fixture supplies these grants. "
     ),
     ("scripts/h3-turbo-cp-proof.py", "cozy_runtime.internal.parallel"): (
-        "Verify actual turbo LoRA hooks and component scopes under Runtime's Ulysses installation. "
+        "Verify actual PDD hooks and component scopes under Runtime's Ulysses installation. "
     ),
     ("scripts/h3-adaln-interface-proof.py", "cozy_runtime.author._executor_requests"): (
         "Answer the broker's typed child calls as a fake worker; retire with a public "

@@ -193,7 +193,7 @@ if (
 ):
     raise ValueError("H3 task plans declare different supported step counts")
 DEFAULT_STEPS = 30  # Static and imported descriptors must expose the same default.
-#: lightx2v 8-step: what the turbo functions run, fixed by their plans and absent from their wire.
+#: PDD-8: what the turbo functions run, fixed by their plans and absent from their wire.
 TURBO_STEPS = turbo_steps()
 Steps = Annotated[
     Literal[SUPPORTED_STEPS],  # type: ignore[valid-type]
@@ -885,7 +885,7 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
 
 #: The releases every H3 callable defaults to; the machine picks each lane from the GPU.
 _MODEL = "minimax-h3@1.0.0-rc.3"
-_TURBO_LORA = "minimax-h3-lightx2v@1.0.0"
+_TURBO_LORA = "minimax-h3-turbo-lora@1.0.0-audit.1"
 
 
 #: The components each task runs. A machine downloads these first and the rest behind the
@@ -930,7 +930,7 @@ async def generate_fl2va_turbo(
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
-    """`fl2va` under lightx2v's 8-step LoRA: the same keyframes and prompt, eight evaluations."""
+    """`fl2va` under PDD-8: the same keyframes and prompt, eight transformer evaluations."""
     return _keyframes_to_video(
         ctx,
         "fl2va_turbo",
@@ -981,7 +981,7 @@ async def generate_ref2va_turbo(
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
-    """`ref2va` under lightx2v's 8-step LoRA: the same references and prompt, eight evaluations."""
+    """`ref2va` under PDD-8: the same references and prompt, eight transformer evaluations."""
     _reference_policy(assets)
     return _references_to_video(
         ctx,
@@ -1396,10 +1396,10 @@ class CutInput(ReferenceClipInput, kw_only=True):
 
 
 def _sampling(payload: CutInput | MotionInput, turbo_lora: H3TurboLoRA) -> H3TurboLoRA | None:
-    """The segment's sampler over the one shared construction: the turbo LoRA, or none."""
+    """The segment's sampler over the one shared construction: the PDD adapter, or none."""
     if payload.turbo:
         if payload.steps != TURBO_STEPS:
-            raise InvalidRequest("turbo segments require eight evaluations")
+            raise InvalidRequest("turbo segments require eight PDD evaluations")
         return turbo_lora
     if payload.steps not in SUPPORTED_STEPS:
         raise InvalidRequest("standard segments require 30, 40 or 50 steps")
@@ -1620,7 +1620,7 @@ def segment_sampling(
     turbo = payload.mode == "turbo"
     if turbo and payload.steps is not None:
         raise InvalidRequest(
-            "turbo fixes eight evaluations; omit steps or select mode=standard",
+            "turbo fixes eight PDD evaluations; omit steps or select mode=standard",
             fields=["mode", "steps"],
         )
     return turbo, TURBO_STEPS if turbo else payload.steps or DEFAULT_STEPS

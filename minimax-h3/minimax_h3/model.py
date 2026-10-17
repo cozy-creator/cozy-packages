@@ -216,9 +216,8 @@ class H3TurboBase(H3Model, encoded_leaves="accept"):
 
 
 @sequence_parallel(degrees=(2, 4, 7, 8))
-class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept", min_bits=16):
-    """lightx2v's turbo LoRA factors and tables, replicated beside the base on every CP rank.
-    Its one lane is bf16: the factors bake into whatever lane the base serves."""
+class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
+    """Independent PDD weights, replicated alongside the base on every CP rank."""
 
     pipe: OfficialH3TurboLoRA
 

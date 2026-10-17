@@ -7,8 +7,8 @@ transformer graph, including attention, feed-forward, RoPE, input/output project
 and packed-row indexing, stays upstream code.
 
 A turbo overlay (`turbo.py`) attaches beside the DiT and is served per forward: the forward
-that names its bank in `attention_kwargs` reads the overlay's tables and low-rank factors
-through the same modules; every other forward reads the base tables it always did.
+that names its bank in `attention_kwargs` reads the overlay's tables, heads and low-rank
+factors through the same modules; every other forward reads the base tables it always did.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from typing import Any, ClassVar, cast
 import torch
 from diffusers import MiniMaxH3Transformer3DModel
 from torch import nn
+from torch.nn import functional as F
 
 from cozy_runtime.author import ConformanceError
 
@@ -38,10 +39,11 @@ class _Armed:
     """One module's turbo source for the forward in flight; a plain object, so placing it
     on a module registers nothing and the DiT's state dict is what it was."""
 
-    __slots__ = ("source",)
+    __slots__ = ("source", "step")
 
-    def __init__(self, source: Any) -> None:
+    def __init__(self, source: Any, step: int = 0) -> None:
         self.source = source
+        self.step = step
 
 
 class _AdaLNPrunedTimestepLookup(nn.Module):  # type: ignore[misc]
@@ -143,6 +145,25 @@ class _AdaLNPrunedOutputTable(nn.Module):  # type: ignore[misc]
         )
 
 
+class _SelectableHead(nn.Linear):  # type: ignore[misc]
+    """The official output head, or the turbo evaluation's collapsed head when armed."""
+
+    def __init__(self, in_features: int, out_features: int) -> None:
+        super().__init__(in_features, out_features, bias=True)
+        self._armed: _Armed | None = None
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if self._armed is None:
+            return F.linear(hidden_states, self.weight, self.bias)
+        return cast(torch.Tensor, self._armed.source(hidden_states, self._armed.step))
+
+
+def _projection_base(module: object) -> object:
+    """Public PEFT wrappers keep the model-owned selectable head as their base layer."""
+    get_base = getattr(module, "get_base_layer", None)
+    return get_base() if callable(get_base) else module
+
+
 class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ignore[misc]
     """Official MiniMax-H3 transformer with only its exact modulation source replaced."""
 
@@ -173,6 +194,9 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
             hidden_size=int(self.config.hidden_size),
             timestep_count=len(table_timesteps),
         )
+        for name in ("proj_out", "audio_proj_out"):
+            head = cast(nn.Linear, getattr(self, name))
+            setattr(self, name, _SelectableHead(head.in_features, head.out_features))
         self._arming: TurboArming | None = None
         self._lora_hooks_installed = False
         self.register_forward_pre_hook(self._arm, with_kwargs=True)
@@ -243,7 +267,7 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
                         code="artifact_config",
                         fields=["attention_kwargs", ATTENTION_KWARG],
                     )
-                self._engage(overlay)
+                self._engage(overlay, overlay.schedule.step(timestep))
                 tables = overlay
             global_rows = self.time_proj.rows(timestep)
             row_timesteps = global_rows.index_select(0, timestep_indices)
@@ -269,12 +293,20 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
             return args, {**kwargs, "attention_kwargs": cleaned}
         return None
 
-    def _engage(self, overlay: TurboOverlay) -> None:
-        self._arming = TurboArming(overlay)
+    def _engage(self, overlay: TurboOverlay, step: int) -> None:
+        self._arming = TurboArming(overlay, step)
         self.time_proj._armed = _Armed(overlay)
         for block, source in zip(self.transformer_blocks, overlay.transformer_blocks, strict=True):
             block.adaln_proj._armed = _Armed(source.adaln_proj)
         self.norm_out._armed = _Armed(overlay.norm_out)
+        for name in ("proj_out", "audio_proj_out"):
+            head = _projection_base(getattr(self, name))
+            if not isinstance(head, _SelectableHead):
+                raise ConformanceError(
+                    f"{name} is {type(head).__name__}, which cannot serve a turbo head",
+                    code="artifact_config",
+                )
+            head._armed = _Armed(getattr(overlay, name), step)
 
     def _release(self) -> None:
         """Every forward starts disarmed, whatever the previous one left behind."""
@@ -283,6 +315,10 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
         for block in self.transformer_blocks:
             block.adaln_proj._armed = None
         self.norm_out._armed = None
+        for name in ("proj_out", "audio_proj_out"):
+            head = _projection_base(getattr(self, name))
+            if isinstance(head, _SelectableHead):
+                head._armed = None
 
     def _disarm(self, module: nn.Module, args: tuple[Any, ...], output: Any) -> None:
         del module, args, output
