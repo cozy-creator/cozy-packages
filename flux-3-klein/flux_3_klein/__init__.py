@@ -229,17 +229,9 @@ def _render(
 
 
 # Qwen3.5-9B's MTP head (`mtp.*`, bf16 in its int8 lane): BFL's upsampler checkpoint has none.
-_DRAFTER = [{"gpu": "*", "gpus": 1, "lane": "qwen3.5-9b@0.2.0/int8"}]
-_DISTILLED: dict[str, list[dict[str, str | int]]] = {
-    "model": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein@0.1.0/original"}],
-    "upsampler": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-upsampler@0.2.0/original"}],
-    "drafter": _DRAFTER,
-}
-_BASE: dict[str, list[dict[str, str | int]]] = {
-    "model": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-base@0.1.0/original"}],
-    "upsampler": [{"gpu": "*", "gpus": 1, "lane": "flux-3-klein-upsampler@0.2.0/original"}],
-    "drafter": _DRAFTER,
-}
+_DRAFTER = "qwen3.5-9b@0.2.0"
+_DISTILLED = {"model": "flux-3-klein@0.1.0", "upsampler": "flux-3-klein-upsampler@0.2.0", "drafter": _DRAFTER}
+_BASE = {"model": "flux-3-klein-base@0.1.0", "upsampler": "flux-3-klein-upsampler@0.2.0", "drafter": _DRAFTER}
 _COMPONENTS = {
     "model": ("transformer", "text_encoder", "vae"),
     "upsampler": ("model",),

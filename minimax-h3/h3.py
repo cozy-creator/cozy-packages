@@ -837,75 +837,9 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
     return float(bad / int(value.numel()))
 
 
-_DEFAULT_MODEL_LADDER: list[dict[str, str | int]] = [
-    # Prefer the widest declared degree that fits each known architecture. The final
-    # wildcard keeps an unlisted private rental usable at the single-GPU width.
-    {"gpu": "H100", "gpus": 8, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "H100", "gpus": 7, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "H100", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "H100", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "H100", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "H200", "gpus": 8, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "H200", "gpus": 7, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "H200", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "H200", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "H200", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "B200", "gpus": 8, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "B200", "gpus": 7, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "B200", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "B200", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "B200", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "Blackwell", "gpus": 8, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "Blackwell", "gpus": 7, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "Blackwell", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "Blackwell", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "Blackwell", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "RTX PRO 6000", "gpus": 8, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "RTX PRO 6000", "gpus": 7, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "RTX PRO 6000", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "RTX PRO 6000", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "RTX PRO 6000", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "5090", "gpus": 8, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "5090", "gpus": 7, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "5090", "gpus": 4, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "5090", "gpus": 2, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "5090", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "*", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-]
-
-_DEFAULT_TURBO_LORA_LADDER: list[dict[str, str | int]] = [
-    {"gpu": "H100", "gpus": 8, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "H100", "gpus": 7, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "H100", "gpus": 4, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "H100", "gpus": 2, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "H100", "gpus": 1, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "H200", "gpus": 8, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "H200", "gpus": 7, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "H200", "gpus": 4, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "H200", "gpus": 2, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "H200", "gpus": 1, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "B200", "gpus": 8, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "B200", "gpus": 7, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "B200", "gpus": 4, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "B200", "gpus": 2, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "B200", "gpus": 1, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "Blackwell", "gpus": 8, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "Blackwell", "gpus": 7, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "Blackwell", "gpus": 4, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "Blackwell", "gpus": 2, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "Blackwell", "gpus": 1, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "RTX PRO 6000", "gpus": 8, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "RTX PRO 6000", "gpus": 7, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "RTX PRO 6000", "gpus": 4, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "RTX PRO 6000", "gpus": 2, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "RTX PRO 6000", "gpus": 1, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "5090", "gpus": 8, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "5090", "gpus": 7, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "5090", "gpus": 4, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "5090", "gpus": 2, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "5090", "gpus": 1, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-    {"gpu": "*", "gpus": 1, "lane": "minimax-h3-turbo-lora@1.0.0-audit.1/pdd8"},
-]
+#: The releases every H3 callable defaults to; the machine picks each lane from the GPU.
+_MODEL = "minimax-h3@1.0.0-rc.3"
+_TURBO_LORA = "minimax-h3-turbo-lora@1.0.0-audit.1"
 
 
 #: The components each task runs. A machine downloads these first and the rest behind the
@@ -913,21 +847,13 @@ _DEFAULT_TURBO_LORA_LADDER: list[dict[str, str | int]] = [
 _FL2VA = ("text_encoder", "fl2va_dit", "video_vae", "audio_vae")
 _REF2VA = ("text_encoder", "ref2va_dit", "video_vae", "audio_vae")
 
-#: `encode_text` stages the text encoder alone, which every card holds on one GPU.
-_ENCODE_TEXT_LADDER: list[dict[str, str | int]] = [
-    {"gpu": "H100", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "H200", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "B200", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "RTX PRO 6000", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-    {"gpu": "5090", "gpus": 1, "lane": "minimax-h3@1.0.0-rc.3/fp8-pruned"},
-]
-app.entrypoint(defaults={"model": _ENCODE_TEXT_LADDER}, components={"model": ("text_encoder",)})(
+app.entrypoint(defaults={"model": _MODEL}, components={"model": ("text_encoder",)})(
     encode_text
 )
 
 
 @invocable(
-    defaults={"model": _DEFAULT_MODEL_LADDER},
+    defaults={"model": _MODEL},
     components={"model": _FL2VA},
     memoize=True,
 )
@@ -944,7 +870,7 @@ async def generate_fl2va(
 
 
 @invocable(
-    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
+    defaults={"base_model": _MODEL, "turbo_lora": _TURBO_LORA},
     components={"base_model": _FL2VA, "turbo_lora": ("fl2va_turbo",)},
     memoize=True,
 )
@@ -973,7 +899,7 @@ async def generate_fl2va_turbo(
 
 
 @invocable(
-    defaults={"model": _DEFAULT_MODEL_LADDER},
+    defaults={"model": _MODEL},
     components={"model": _REF2VA},
     memoize=True,
 )
@@ -993,7 +919,7 @@ async def generate_ref2va(
 
 
 @invocable(
-    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
+    defaults={"base_model": _MODEL, "turbo_lora": _TURBO_LORA},
     components={"base_model": _REF2VA, "turbo_lora": ("ref2va_turbo",)},
     memoize=True,
 )
@@ -1461,7 +1387,7 @@ def _render_cut(
 
 # Both sampling modes use one turbo-capable construction, reused by every segment.
 @invocable(
-    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
+    defaults={"base_model": _MODEL, "turbo_lora": _TURBO_LORA},
     components={"base_model": _REF2VA, "turbo_lora": ("ref2va_turbo",)},
 )
 async def cut_segment(
@@ -1591,7 +1517,7 @@ def _render_motion(
 
 
 @invocable(
-    defaults={"base_model": _DEFAULT_MODEL_LADDER, "turbo_lora": _DEFAULT_TURBO_LORA_LADDER},
+    defaults={"base_model": _MODEL, "turbo_lora": _TURBO_LORA},
     components={"base_model": _REF2VA, "turbo_lora": ("ref2va_turbo",)},
     memoize=True,
 )

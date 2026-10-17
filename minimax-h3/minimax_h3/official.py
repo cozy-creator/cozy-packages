@@ -164,7 +164,7 @@ _WARM_ROWS = 8
 _WARM_VIDEO_TAG, _WARM_TEXT_TAG, _WARM_AUDIO_TAG = 0, 1, 2
 
 # NVIDIA's H3 sparse policy protects conditioning and the initial sensitive work.
-# This supplies semantics only; backend selection still requires explicit policy.
+# This supplies semantics only; Runtime chooses the kernels.
 _DENSE_ATTENTION_PATHS = ("token_refiner", "transformer_blocks.0", "transformer_blocks.1")
 #: Layers whose dense rows keep BF16 attention when the dense kernel quantizes: the text
 #: refiner, and the blocks whose key channel outliers a per-head FP8 scale cannot carry

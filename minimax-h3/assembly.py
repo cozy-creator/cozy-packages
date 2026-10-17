@@ -929,7 +929,7 @@ async def assemble_video(
     """Join one or more completed shots into one deterministic MP4.
 
     Registered by `h3` as a CPU function (`accelerator=False`): assembly is run-to-completion
-    CPU work with no ladder to price against. The videos ride as asset
+    CPU work with no model slot. The videos ride as asset
     references, so a caller names `long_form`'s reported digests and nothing re-uploads.
     """
     return assemble(payload, decoder=decoder, out=out, tel=tel, check=ctx.raise_if_cancelled)

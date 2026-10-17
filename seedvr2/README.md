@@ -71,4 +71,4 @@ cozy model upload 'hf://numz/SeedVR2_comfyUI@09ced71023636e9bc8cdf9cdecfb2625d1e
 cozy run ./seedvr2/normalize model.dit=paul/seedvr2-7b-dit-raw#sha256:DIT_CHECKPOINT model.vae=paul/seedvr2-vae-raw#sha256:VAE_CHECKPOINT conditioning=conditioning --input-tree conditioning=/path/to/upstream/constants --upload-to=paul/seedvr2-7b --tensorhub local --await
 ```
 
-Publish the result as `seedvr2-7b`, the default lane `seedvr2-7b@0.1.0/original`.
+Publish the result as `seedvr2-7b@0.1.0`, lane `bf16`: the package's default release.

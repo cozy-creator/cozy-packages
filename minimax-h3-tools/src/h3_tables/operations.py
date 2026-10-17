@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from importlib.resources import files
-from typing import Literal, cast
+from typing import cast
 
 from cozy_runtime.author import (
     ModelArtifact,
@@ -25,6 +25,7 @@ from .adaln_operations import (
     retable_adaln,
     select_adaln_weights,
 )
+from .lanes import Encoding
 from .model_config import parse_production_config
 from .order import current_order, full_order
 from .quantization import h3_quantization_plan
@@ -65,7 +66,7 @@ def quantization_plan() -> QuantizationPlan:
 async def quantize(
     *,
     source: ModelArtifact,
-    encoding: Literal["fp8-rowwise/1", "int8-convrot256/1", "nvfp4-w4a4/1"],
+    encoding: Encoding,
     max_relative_frobenius: float | None = None,
 ) -> ModelArtifact:
     """Quantize both reviewed DiTs through the shared Runtime operation.

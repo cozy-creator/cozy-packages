@@ -14,7 +14,7 @@ than as a convention someone remembers:
                           enumerates the exceptions a driver has EARNED, with the reason;
                           `PACKAGE_INTERNALS` the few a package module has, with what retires them.
   2. no-direct-artifact-loading
-                          Runtime validates source-authored default ladders. Package code
+                          Runtime validates source-authored default releases. Package code
                           still cannot fetch weights or bypass the verified model loader.
   3. top-level-imports    every import is at module scope (Paul, 2026-09-08): an import
                           under a def or class hides a dependency from the file's head.
@@ -34,8 +34,8 @@ than as a convention someone remembers:
                           typed bindings and settings; the executor ERASES `COZY_*`/token
                           env anyway, so an env read is a channel that never works in
                           production.
-  9. no-package-bindings  package.toml carries no [bindings]: callable decorators own
-                          authored defaults; explicit owner overrides live on the hub.
+  9. no-package-bindings  package.toml carries no [bindings]: a callable's `defaults=` names
+                          each slot's release; there are no owner overrides (xs-042).
 10. interface-minimality
                           committed interface/1 files carry no retired unused facts.
  11. h3-adaln-pruned-vocabulary
@@ -60,6 +60,9 @@ than as a convention someone remembers:
 17. model-execution-ownership
                           modeled packages select Runtime's complete execution capability; package
                           metadata never falsely claims TensorFS as a direct dependency.
+18. no-gpu-choice        package code never reads the GPU's compute capability or name, and never
+                          compares a card or stand-in kernel name, to choose anything: packages
+                          declare tolerances, the machine and Runtime choose by family (xs-042 §4).
 
     nice -n 19 .venv/bin/python scripts/fence.py
 """
@@ -392,7 +395,7 @@ def fence_top_level_imports() -> Fence:
 
 
 #: Direct artifact-loading spellings. Release references are allowed declarative data;
-#: Runtime's descriptor validation owns their default-ladder shape and argument binding.
+#: Runtime's descriptor validation owns their shape and argument binding.
 IDENTIFIERS = (
     (re.compile(r"\bsha256:[0-9a-f]{16}"), "a checkpoint digest"),
     (re.compile(r"\bfrom_pretrained\b"), "a from_pretrained call (the loader constructs)"),
@@ -403,8 +406,7 @@ IDENTIFIERS = (
 #: Digest spellings a package has EARNED, with the reason. minimax-h3-tools is the H3
 #: structural precompute (cr-071): its whole job is attesting the exact plan/config/
 #: topology bytes it derives from, so a `sha256:` there is a self-integrity pin over its
-#: own committed assets and expected outputs — never a model-selection binding, which
-#: lives on the hub. Scoped to the checkpoint-digest shape only; every other
+#: own committed assets and expected outputs — never a model selection. Scoped to the checkpoint-digest shape only; every other
 #: identifier rule applies to these files unchanged.
 DIGEST_PINNED_PREFIXES = (
     "minimax-h3-tools/src/h3_tables/",
@@ -694,17 +696,79 @@ def fence_no_env() -> Fence:
 
 
 def fence_no_package_bindings() -> Fence:
-    """Model selection is the owner's hub binding, never a default shipped in source."""
+    """A slot's default is its callable's `defaults=` release, never package.toml metadata."""
 
     bad: list[str] = []
     manifests = sorted(p for p in ROOT.rglob("package.toml") if ours(p))
     for path in manifests:
         if "bindings" in tomllib.loads(path.read_text()):
             bad.append(
-                f"{rel(path)}: [bindings] is not package metadata; bind the slot on the hub with "
-                "`cozy package bind <package> <slot> org/model@release --gpu <gpu>=<lane> ...`"
+                f"{rel(path)}: [bindings] is not package metadata; name the slot's release in "
+                "its callable's `defaults=`"
             )
     return bad, f"{len(manifests)} package.toml files carry no [bindings]"
+
+
+#: What a package reads to choose by GPU (xs-042 §4): the device's compute capability or name,
+#: or a card or stand-in kernel name compared against something. A package declares tolerances
+#: (`min_bits`, `phase`, `attention_bits`, `exact_paths`); the lane and kernel follow the family.
+GPU_READS = frozenset(
+    {"get_device_capability", "get_device_name", "get_device_properties", "get_arch_list"}
+)
+GPU_NAMES = re.compile(
+    r"\b(?:[ABHL]\d{2,3}S?|RTX|GeForce|Blackwell|Hopper|Ampere|sm_?\d{2,3}[a-z]?|[2-5]0[5-9]0"
+    r"|sdpa|flash[-_]?attn\w*|sage\w*|sol[-_]attn\w*|kitchen[-_][\w-]+|cudnn\w*)\b",
+    re.IGNORECASE,
+)
+#: Capability reads a package has EARNED: a floor its own kernels need, never a choice.
+GPU_FLOORS = {"minimax-h3/minimax_h3/glue.py": "the fused glue's sm80 floor (bf16 tensor cores)"}
+ARM_GPU_CHOICES = (
+    "major, _ = torch.cuda.get_device_capability()\n",
+    "if 'H100' in torch.cuda.get_device_name(0): pass\n",
+    "if 'flash-attn4-fp8' in context.eligible: pass\n",
+    "fast = name.startswith('NVIDIA RTX 5090')\n",
+)
+ARM_GPU_DECLARATIONS = (
+    "register(Producer('kitchen-sol-producer-fast-shared-qkv', 'kitchen-sol'))\n",
+    "class M(Model, attention_bits={'fl2va_dit': 4}): pass\n",
+    "if device.type != 'cuda': pass\n",
+)
+
+
+def gpu_choices(label: str, source: str) -> list[str]:
+    bad: list[str] = []
+    for node in ast.walk(ast.parse(source, filename=label)):
+        if isinstance(node, ast.Attribute) and node.attr in GPU_READS:
+            bad.append(f"{label}:{node.lineno}: reads the GPU ({node.attr})")
+        prefix = isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and (
+            node.func.attr in ("startswith", "endswith")
+        )
+        if isinstance(node, ast.Compare) or (isinstance(node, ast.Call) and prefix):
+            bad += [
+                f"{label}:{node.lineno}: chooses by the name {leaf.value!r}"
+                for leaf in ast.walk(node)
+                if isinstance(leaf, ast.Constant)
+                and isinstance(leaf.value, str)
+                and GPU_NAMES.search(leaf.value)
+            ]
+    return bad
+
+
+def fence_no_gpu_choice() -> Fence:
+    bad = [f"a planted GPU choice passes: {s!r}" for s in ARM_GPU_CHOICES if not gpu_choices("a", s)]
+    bad += [f"a declaration fails: {s!r}" for s in ARM_GPU_DECLARATIONS if gpu_choices("a", s)]
+    modules = [path for path in package_modules() if "/upstream/" not in str(path)]
+    for path in modules:
+        floor = rel(path) in GPU_FLOORS
+        bad += [
+            f"{line} — declare a tolerance; Runtime chooses by the GPU's family"
+            for line in gpu_choices(rel(path), path.read_text())
+            if not (floor and "reads the GPU" in line)
+        ]
+    return bad, (
+        f"{len(modules)} modules choose nothing by GPU; {len(ARM_GPU_CHOICES)} planted choices "
+        f"fire, {len(ARM_GPU_DECLARATIONS)} declarations do not, {len(GPU_FLOORS)} recorded floor"
+    )
 
 
 #: The Anima model card's negative prompt, spelled here independently of the package so a
@@ -1119,6 +1183,7 @@ FENCES = (
     ("h3-official-hardcut", fence_h3_official_hardcut),
     ("env-free-packages", fence_no_env),
     ("no-package-bindings", fence_no_package_bindings),
+    ("no-gpu-choice", fence_no_gpu_choice),
     ("anima-defaults", fence_anima_defaults),
     ("step-progress", fence_step_progress),
     ("interface-format", fence_interface_format),

@@ -76,10 +76,11 @@ A treatment is a dtype `cast` over the component's float32 rows, an `encode` ove
 block-aligned rank-2 float weights, or both; `keep` names exact keys the encoding must not
 select. Adding a lane is one catalogue row, one `WeightsOutput` line and one `LaneName`
 member — an import-time check proves the three agree, and refuses a lane that treats the
-audio VAE, that uses an encoding with no rung on the cards we serve, or whose declared byte
+audio VAE, that uses an encoding no lane of the vocabulary stores, or whose declared byte
 ceiling disagrees with its treatments.
 
-A lane may only encode `fp8-rowwise/1` or `int8-convrot256/1` (`SERVABLE_ENCODINGS`). One component
+A lane encodes only as the vocabulary's encoded lanes do (`LANE_ENCODINGS`): int8
+`int8-convrot256/1`, fp8 `fp8-rowwise/1`, nvfp4 `nvfp4-w4a4/1`. One component
 is refused outright. **The `audio_vae`, by name**: 637 of its 1,087 rows are rank-3 — including the BigVGAN decoder's
 344 `weight_norm` `weight_g`/`weight_v` parameters — and the rank-2 encoding cannot
 represent any of them; the only six rank-2 float weights the component carries are the

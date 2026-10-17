@@ -100,7 +100,7 @@ def output_sizes(
 
 
 @app.entrypoint(
-    defaults={"model": [{"gpu": "*", "gpus": 1, "lane": "seedvr2-7b@0.1.0/original"}]},
+    defaults={"model": "seedvr2-7b@0.1.0"},
     memoize=True,
 )
 def upscale(

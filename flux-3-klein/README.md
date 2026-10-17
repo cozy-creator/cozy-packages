@@ -32,7 +32,8 @@ BFL's prompt upsampler is a Qwen3.5-9B fine-tune. It turns a short request, plus
 editing, into the full caption Klein is trained on. It runs first, as its own memoized stage, with
 BFL's system prompts and decoding: greedy, presence penalty 1.5 for text-to-image and 0 for edits.
 Text-to-image also tells it the canvas (`TARGET CANVAS: 16:9`). Set `prompt_upsampling=false` to send
-the prompt as typed, which then should be a full scene caption.
+the prompt as typed, which then should be a full scene caption. Its token loop declares
+`min_bits=4, phase="decode"`, so it serves the release's `nvfp4` lane where there is one.
 
 ## Sampling
 
@@ -48,7 +49,7 @@ package against Diffusers' Flux3 modular pipelines on tiny real modules.
 
 Upload each repository as it is. The served checkpoint is the upload: TensorFS takes a Diffusers repo's
 index components (not BFL's `variants/`) and a Transformers repo's config, tokenizer, processor and chat
-template. Publish each as lane `original`.
+template. Publish each as lane `bf16`.
 
 ```sh
 cozy model upload hf://black-forest-labs/flux-3-image-klein@8454017f9ebaada30c998fccd9f67a80c7580f68 \
@@ -68,11 +69,11 @@ tensors either. BFL's upsampler system prompts ship in `flux_3_klein/system_prom
 embedder, the output norm and the text encoder's 32 language layers as `int8-convrot256/1`, served
 W8A8 on the int8 tensor cores. On real Klein activations each linear is 0.5–1.3% from bf16 (fp8
 row-scaled: 1.5–2.8%), and the images match bf16's. The VAE stays f32. As in BFL's int8 release,
-attention in the image and joint blocks is quantized with the linears (`LIKE_PROJECTIONS`: Runtime's
-`kitchen-int8` on RTX 30/40); the text and reference early blocks and the bf16 lane keep float attention.
+the image and joint blocks declare 8-bit attention (`attention_bits`; Runtime's `kitchen-int8` on
+RTX 30/40); the text and reference early blocks, and `--bits=16`, keep exact attention.
 
 ```sh
-cozy model quantize <account>/flux-3-klein@0.1.0/original --int8 --rental=<rental> --await
+cozy model quantize <account>/flux-3-klein@0.1.0/bf16 --int8 --rental=<rental> --await
 cozy model publish <account>/flux-3-klein --release 0.1.0 --lane int8=sha256:<checkpoint>
 ```
 

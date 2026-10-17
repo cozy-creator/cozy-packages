@@ -61,10 +61,13 @@ DIT_PLAN_COMPONENT = "dit"
 #: too, and a shape rule would happily encode them.
 DIT_COMPONENTS = frozenset(TARGET_COMPONENT.values())
 
-#: The encodings with a rung on the cards we serve: `fp8-rowwise/1` (`cuda.sm89+`) and
-#: `int8-convrot256/1` (comfy-kitchen's CUTLASS int8 GEMM, sm80 and up) and `nvfp4-w4a4/1`
-#: (Blackwell's FP4 tensor cores, sm100/sm120).
-SERVABLE_ENCODINGS = frozenset({"fp8-rowwise/1", "int8-convrot256/1", "nvfp4-w4a4/1"})
+#: What each encoded lane of the vocabulary (`bf16 fp16 int8 fp8 nvfp4`) stores. Runtime serves
+#: every one from sm80 and picks the kernel by the GPU's family, so no card refuses a lane here.
+LANE_ENCODINGS: Mapping[str, Encoding] = {
+    "int8": "int8-convrot256/1",
+    "fp8": "fp8-rowwise/1",
+    "nvfp4": "nvfp4-w4a4/1",
+}
 
 #: Components no lane may treat, and why. This is a refusal BY NAME, not by shape, because
 #: the shape rule does not catch it. Of the audio VAE's 1,087 rows, 637 are rank-3 — 344 of
@@ -304,11 +307,10 @@ def validate_catalogue(lanes: Mapping[str, Lane] = LANES) -> None:
                 )
             if component not in COMPONENT_MAX_NEW_BYTES:
                 raise ValueError(f"lane {name!r} treats unknown component {component!r}")
-            if treatment.encode is not None and treatment.encode not in SERVABLE_ENCODINGS:
+            if treatment.encode is not None and treatment.encode not in LANE_ENCODINGS.values():
                 raise ValueError(
-                    f"lane {name!r} encodes {component} as {treatment.encode}, which has no "
-                    f"rung on the cards we serve; servable encodings are "
-                    f"{sorted(SERVABLE_ENCODINGS)}"
+                    f"lane {name!r} encodes {component} as {treatment.encode}, which no lane of "
+                    f"the vocabulary stores: {dict(LANE_ENCODINGS)}"
                 )
             if component in DIT_COMPONENTS and treatment.cast is not None:
                 raise ValueError(

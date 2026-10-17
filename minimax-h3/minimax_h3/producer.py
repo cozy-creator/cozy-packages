@@ -45,8 +45,6 @@ from .turbo import _LoRAHook
 FAST = "kitchen-sol-producer-fast-shared-qkv"
 FP4_LOWMEM = "kitchen-sol-producer-fp4-lowmem-shared-qkv"
 FIXED_MEANS = "kitchen-sol-producer-fp4-fixed-means-shared-qkv"
-#: The recipe that shards over Ulysses; its statistics and replays key per module instance.
-CP_NAMES = frozenset({FIXED_MEANS})
 CHUNK = 4096
 _ROTARY_HOOK = "cozy_cp_producer_rotary"
 
@@ -189,12 +187,13 @@ def produce(
 ) -> torch.Tensor:
     """One H3 attention module call at a site `name` is selected for."""
     attn, layout, state = call.module, call.layout, call.state
-    parallel = call.group is not None
-    if parallel and name not in CP_NAMES:
+    parallel, sharded = call.group is not None, PRODUCERS[name].context_parallel
+    if parallel and not sharded:
         raise ValueError("This H3 chunked producer requires one GPU")
     if attention_mask is not None:
         raise ValueError("H3 producer serves unmasked noncausal attention only")
-    key = (call.component, call.path, id(attn)) if name in CP_NAMES else (call.component, call.path)
+    # A recipe that shards over Ulysses keys its statistics and replays per module instance.
+    key = (call.component, call.path, id(attn)) if sharded else (call.component, call.path)
     if not sparse_step(layout, call.path):
         state.statistics.pop(key, None)
         state.replay_inputs.pop(key, None)
@@ -242,7 +241,7 @@ def _produce(
 ) -> tuple[torch.Tensor, bool]:
     attn, layout, state = call.module, call.layout, call.state
     prior_mean, prior_scale = previous_statistics(
-        state, key, layout.step, geometry, replay_safe=name in CP_NAMES
+        state, key, layout.step, geometry, replay_safe=PRODUCERS[name].context_parallel
     )
     output, mean, scale = call.kernel.sol_attn_chunked(
         chunks,
@@ -400,7 +399,7 @@ class _RetainRotary(ModelHook):  # type: ignore[misc]  # untyped Diffusers hook 
             return output
         backends = (getattr(m.processor, "_attention_backend", None) for m in self.modules)
         names = (_BACKENDS.get(str(getattr(backend, "value", backend))) for backend in backends)
-        if any(name in CP_NAMES for name in names):
+        if any(name is not None and PRODUCERS[name].context_parallel for name in names):
             if (
                 not isinstance(output, tuple)
                 or len(output) != 2
