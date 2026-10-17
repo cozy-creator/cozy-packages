@@ -97,7 +97,7 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt_upsampling: bool = True
     #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
     #: its first use downloads the 0.5 GB head.
-    prompt_drafting: bool = True
+    prompt_drafting: bool = False
 
 
 class GenerateBaseInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -110,7 +110,7 @@ class GenerateBaseInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt_upsampling: bool = True
     #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
     #: its first use downloads the 0.5 GB head.
-    prompt_drafting: bool = True
+    prompt_drafting: bool = False
 
 
 class EditInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -128,7 +128,7 @@ class EditInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt_upsampling: bool = True
     #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
     #: its first use downloads the 0.5 GB head.
-    prompt_drafting: bool = True
+    prompt_drafting: bool = False
 
 
 class EditBaseInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -147,7 +147,7 @@ class EditBaseInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt_upsampling: bool = True
     #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
     #: its first use downloads the 0.5 GB head.
-    prompt_drafting: bool = True
+    prompt_drafting: bool = False
 
 
 class ImageOutput(msgspec.Struct):
