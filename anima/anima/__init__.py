@@ -174,12 +174,10 @@ def generate(
         raise UnsupportedInput(
             "cfg_interval_start must not exceed cfg_interval_stop", code="cfg_interval"
         )
-    # One forward for both CFG conditions when the stage has room for two (counting weights
-    # the runtime may unmap, as ComfyUI does), else two. Decided before the stage, for the
-    # whole request; FBCache keeps a cache per condition, so it runs them apart. A request
-    # with no uncond pass asks nothing: its peak is one item's.
+    # Both CFG conditions in one forward: short of memory, the Runtime cuts its rows. FBCache
+    # keeps a cache per condition, so it runs them apart.
     guided = payload.guidance > 1.0 and payload.cfg_interval_start < payload.cfg_interval_stop
-    batched = guided and payload.first_block_cache <= 0.0 and model.batch_fits("render")
+    batched = guided and payload.first_block_cache <= 0.0
     with _Phases(tel) as phases:
         images = model.render(
             payload.quality_prefix + payload.prompt,
