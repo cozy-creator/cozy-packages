@@ -47,9 +47,9 @@ REFERENCE_VIDEO = VideoPreparation(min_seconds=2, max_seconds=15, excess="trunca
 REFERENCE_AUDIO = AudioPreparation(min_seconds=2, max_seconds=15, excess="refuse")
 #: A reference video's upload: a source of any length is admitted and truncated, not refused.
 VIDEO_MAX_BYTES = 1 << 30
-#: Retained-read bounds. A video reads at source resolution on the 24-fps clock: 15 s of 1080p
-#: is 2.2 GB, of 4K 9 GB; memory is Runtime's to budget. A prepared image is at most 16,777,216
-#: RGB8 pixels; audio is 15 s, mono or stereo.
+#: Read bounds. A video streams, one decoded frame at a time, straight to its motion size
+#: (`read_reference_video`), so a frame of any real source fits. A prepared image is at most
+#: 16,777,216 RGB8 pixels; audio is 15 s, mono or stereo.
 VIDEO_READ_BYTES = 16 << 30
 IMAGE_READ_BYTES = 64 << 20
 AUDIO_READ_BYTES = 64 << 20

@@ -89,6 +89,7 @@ from minimax_h3.official import (
     denoise_rows,
     frames_for,
     reference_image_vision_tokens,
+    read_reference_video,
     reference_video_vision_tokens,
     turbo_steps,
     validate_reference_policy,
@@ -498,10 +499,10 @@ def assets_to_h3_refs(
     """Check every reference from its header and size the vision budget, then read each.
 
     Durations are Runtime's (`REFERENCE_VIDEO`/`REFERENCE_AUDIO`): `probe().duration` is the
-    length a read returns, so a truncated clip is budgeted at 15 s. A video reads at source
-    resolution on the 24-fps clock, and only the call's `frames`, which is all the official
-    pipeline keeps of it; the pipeline resolves its canvas. `video_audio` says, per video in
-    packed order, whether it keeps its soundtrack.
+    length a read returns, so a truncated clip is budgeted at 15 s. A video streams straight to
+    its motion size on the 24-fps clock (`read_reference_video`), keeping only the call's
+    `frames`, which is all the official pipeline keeps of it; its soundtrack is decoded only
+    where `video_audio` (per video in packed order, `use_audio`) says so.
     """
     audio_duration = Fraction(0)
     video_tokens = 0
@@ -538,7 +539,8 @@ def assets_to_h3_refs(
         if isinstance(reference, ImageAsset):
             prepared.append(pipe.image_reference(reference.read()))
         elif isinstance(reference, VideoAsset):
-            clip = reference.read(end=window, fps=FPS, audio=keeps[index])
+            with reference.stream(end=window, audio=keeps[index]) as events:
+                clip = read_reference_video(events, frames=frames, audio=keeps[index])
             prepared.append(pipe.video_reference(clip))
         else:
             prepared.append(pipe.audio_reference(reference.read()))
