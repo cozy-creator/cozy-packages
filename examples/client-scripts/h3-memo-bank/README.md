@@ -61,7 +61,7 @@ existing worker when the root authorizes the paid phase:
 cozy run /ABSOLUTE/PATH/adopt_full.py \
   'model.source=paul/minimax-h3#sha256:f1e86cb6b4935fbf9e79d90ee87366b6d13e2280b1846b4e9bfa0a00242793eb' \
   --dry-run --json
-# Later: replace --dry-run with --rental ROOT_OWNED_WORKER --await.
+# Later: replace --dry-run with --on ROOT_OWNED_WORKER.
 # Retain stdout as adoption.json, then:
 python3 prepare_callers.py adoption.json
 cozy run ~/.cozy/outputs/h3-bank-qualification/compute.py --dry-run --json

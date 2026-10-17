@@ -14,9 +14,9 @@ Use the distilled functions for generation. The base checkpoint is meant for fin
 
 ```sh
 cozy run fidika/flux-3-klein/generate prompt='A lighthouse on a basalt cliff in a winter storm' \
-  aspect_ratio=16:9 seed=7 --await
+  aspect_ratio=16:9 seed=7
 cozy run fidika/flux-3-klein/edit prompt='Make it night, the lamp lit' \
-  --asset reference_images.0=lighthouse.png --await
+  --asset reference_images.0=lighthouse.png
 ```
 
 Fields: `prompt`, `seed` (random when omitted, returned), `steps`, and `prompt_upsampling`
@@ -53,11 +53,11 @@ template. Publish each as lane `bf16`.
 
 ```sh
 cozy model upload hf://black-forest-labs/flux-3-image-klein@8454017f9ebaada30c998fccd9f67a80c7580f68 \
-  <account>/flux-3-klein --rental=<rental> --await
+  <account>/flux-3-klein --on <machine>
 cozy model upload hf://black-forest-labs/flux-3-image-klein-base@1469d27cfb9bb1bd81d3a93f5a023b39dbf136e4 \
-  <account>/flux-3-klein-base --rental=<rental> --await
+  <account>/flux-3-klein-base --on <machine>
 cozy model upload hf://black-forest-labs/flux-3-image-klein-pup@8b069751eb5dcab23829d9c5eccb470eb8b8a4ed \
-  <account>/flux-3-klein-upsampler --rental=<rental> --await
+  <account>/flux-3-klein-upsampler --on <machine>
 ```
 
 Klein never builds Qwen3-VL's vision tower, its last four layers or its head, so it never loads those
@@ -73,7 +73,7 @@ the image and joint blocks declare 8-bit attention (`attention_bits`; Runtime's 
 RTX 30/40); the text and reference early blocks, and `--bits=16`, keep exact attention.
 
 ```sh
-cozy model quantize <account>/flux-3-klein@0.1.0/bf16 --int8 --rental=<rental> --await
+cozy model quantize <account>/flux-3-klein@0.1.0/bf16 --int8 --on <machine>
 cozy model publish <account>/flux-3-klein --release 0.1.0 --lane int8=sha256:<checkpoint>
 ```
 

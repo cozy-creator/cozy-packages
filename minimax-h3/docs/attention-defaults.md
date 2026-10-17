@@ -25,7 +25,7 @@ showed visible artifacts and stays an explicit experiment.
 A pin takes precedence over the rules:
 
 ```sh
-cozy run fidika/minimax-h3/fl2va_turbo --input=clip.json --rental=my-machine \
+cozy run fidika/minimax-h3/fl2va_turbo --input clip.json --on my-machine \
   --attention-kernel=fl2va_dit=kitchen-sol-producer-fp4-lowmem-shared-qkv
 ```
 

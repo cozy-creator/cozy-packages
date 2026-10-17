@@ -73,7 +73,7 @@ inside this package repository.
   Direct Runtime tests supplement this evidence; they do not replace it.
 
 Use `cozy package install <owner/package>` and `cozy run <owner/package/function>`
-for the public package path; use `cozy run ./script.py --rental=<name>` for a private
+for the public package path; use `cozy run ./script.py --on <name>` for a private
 script. Preserve user inputs, existing packages and active rentals during testing.
 
 These are acceptance requirements, not a claim that isolation already passes.
