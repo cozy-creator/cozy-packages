@@ -32,7 +32,6 @@ from cozy_runtime.author import (
     DecodedAudioChunk,
     DecodedAudioFormat,
     DecodedMediaHeader,
-    DecodedVideo,
     DecodedVideoFormat,
     DecodedVideoFrame,
     FileAsset,
@@ -84,12 +83,14 @@ from minimax_h3.official import (
     MAX_VIDEO_REFERENCES,
     REFERENCE_IMAGE_SHORT_EDGE,
     OfficialH3Pipeline,
+    ReferenceClip,
     ReferencePolicyFacts,
     ScheduleFacts,
     Task,
     assert_duration_envelope,
     denoise_rows,
     frames_for,
+    read_reference_video,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
     turbo_steps,
@@ -107,6 +108,7 @@ from seedvr2 import UpscaleOutput as RestorationOutput
 from seedvr2 import upscale as restore_video
 from story import (
     FILE,
+    UNBOUNDED,
     SegmentCall,
     StoryReference,
     compile_segments,
@@ -126,15 +128,20 @@ _MIN_REFERENCE_DURATION = Fraction(2, 1)
 _MAX_REFERENCE_DURATION = Fraction(15, 1)
 
 
+#: A render call's references as handles: it decodes each itself, a video straight onto the
+#: call's canvas and clock (`read_reference_video`), never retaining a full-size frame.
 ReferenceAssets = Annotated[
-    Assets[Mixed],
+    Assets[
+        Annotated[ImageAsset, AssetBound(max_decoded_bytes=UNBOUNDED)]
+        | Annotated[VideoAsset, AssetBound(max_decoded_bytes=UNBOUNDED)]
+        | Annotated[AudioAsset, AssetBound(max_decoded_bytes=UNBOUNDED)]
+    ],
     AssetLimits(
         images=MAX_IMAGE_REFERENCES,
         videos=MAX_VIDEO_REFERENCES,
         audio=MAX_AUDIO_REFERENCES,
         total=MAX_REFERENCES,
     ),
-    ImagePreparation(max_edge=8192, max_pixels=16_777_216),
     msgspec.Meta(min_length=1),
 ]
 # Direct ref2va takes either attached assets or named `references`; the wire field is required,
@@ -427,10 +434,24 @@ def resolve_reference_sizing(
     )
 
 
+def _read_reference(
+    references: ReferenceAssets, decoder: MediaDecoder, frames: int, index: int
+) -> Image | ReferenceClip | DecodedAudio:
+    """Decode one reference: a video as a stream onto the call's canvas and first `frames`."""
+    handle = references[index]
+    if isinstance(handle, VideoAsset):
+        with decoder.stream_video(handle) as stream:
+            return read_reference_video(stream, frames=frames)
+    if isinstance(handle, AudioAsset):
+        return decoder.decode_audio(handle)
+    return cast(Image, decoder.value(handle))
+
+
 def assets_to_h3_refs(
     references: ReferenceAssets,
     *,
     pipe: OfficialH3Pipeline,
+    read: Callable[[int], Image | ReferenceClip | DecodedAudio],
 ) -> tuple[list[Any], ReferenceSizing]:
     prepared: list[Any] = []
     video_duration = Fraction(0)
@@ -438,9 +459,10 @@ def assets_to_h3_refs(
     video_tokens = 0
     images: list[ImageSizing] = []
 
-    for index, reference in enumerate(references):
+    for index in range(len(references)):
         info = references.info(index)
         field = info.id
+        reference = read(index)
         if isinstance(reference, Image):
             image = reference
             _validate_ratio(image.width, image.height, field)
@@ -449,7 +471,7 @@ def assets_to_h3_refs(
             )
             images.append(ImageSizing(field, image.width, image.height, requested))
             prepared.append(pipe.image_reference(image))
-        elif isinstance(reference, DecodedVideo):
+        elif isinstance(reference, ReferenceClip):
             video = reference
             _validate_video(video, field)
             video_duration += video.duration
@@ -486,7 +508,7 @@ def _validate_audio(audio: DecodedAudio, field: str) -> None:
     _validate_duration(audio.duration, field)
 
 
-def _validate_video(video: DecodedVideo, field: str) -> None:
+def _validate_video(video: ReferenceClip, field: str) -> None:
     _validate_ratio(video.width, video.height, field)
     _validate_duration(video.duration, field)
     if video.pixel_aspect_ratio != 1:
@@ -495,9 +517,12 @@ def _validate_video(video: DecodedVideo, field: str) -> None:
             code="reference_policy",
             fields=[field],
         )
-    # Frame and soundtrack clock alignment belong to the model's video_reference.
-    if video.soundtrack is not None:
-        _validate_audio_channels(video.soundtrack, field)
+    if video.soundtrack is not None and int(video.soundtrack.shape[0]) not in (1, 2):
+        raise UnsupportedInput(
+            f"{field} audio must be mono or stereo, got {int(video.soundtrack.shape[0])} channels",
+            code="reference_policy",
+            fields=[field],
+        )
 
 
 def _validate_audio_aggregate(duration: Fraction) -> None:
@@ -911,12 +936,13 @@ async def generate_ref2va(
     payload: StandardClipInput,
     assets: ReferenceAssets,
     model: H3Model,
+    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
     _reference_policy(assets)
     return _references_to_video(
-        ctx, "ref2va", payload, assets, model, out, tel, steps=payload.steps
+        ctx, "ref2va", payload, assets, decoder, model, out, tel, steps=payload.steps
     )
 
 
@@ -932,6 +958,7 @@ async def generate_ref2va_turbo(
     assets: ReferenceAssets,
     base_model: H3TurboBase,
     turbo_lora: H3TurboLoRA,
+    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
@@ -942,6 +969,7 @@ async def generate_ref2va_turbo(
         "ref2va_turbo",
         payload,
         assets,
+        decoder,
         base_model,
         out,
         tel,
@@ -1152,6 +1180,7 @@ def _references_to_video(
     task: Task,
     payload: ClipInput,
     assets: ReferenceAssets,
+    decoder: MediaDecoder,
     model: H3Model,
     out: Outputs,
     tel: Telemetry,
@@ -1166,7 +1195,10 @@ def _references_to_video(
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
-        references, sizing = assets_to_h3_refs(assets, pipe=model.pipe)
+        frames = frames_for(payload.duration_s) if delivery is None else delivery.sample_frames
+        references, sizing = assets_to_h3_refs(
+            assets, pipe=model.pipe, read=partial(_read_reference, assets, decoder, frames)
+        )
         tel.log(
             "h3 reference sizing",
             images=sizing.summary,
@@ -1351,6 +1383,7 @@ def _render_cut(
     ctx: Context,
     payload: CutInput,
     assets: ReferenceAssets,
+    decoder: MediaDecoder,
     model: H3Model,
     out: Outputs,
     tel: Telemetry,
@@ -1370,6 +1403,7 @@ def _render_cut(
         task,
         payload,
         assets,
+        decoder,
         model,
         out,
         tel,
@@ -1392,11 +1426,13 @@ async def cut_segment(
     assets: ReferenceAssets,
     base_model: H3TurboBase,
     turbo_lora: H3TurboLoRA,
+    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> SegmentOutput:
     lora = _sampling(payload, turbo_lora)
-    return _render_cut(ctx, payload, assets, base_model, out, tel, steps=payload.steps, turbo_lora=lora)
+    return _render_cut(ctx, payload, assets, decoder, base_model, out, tel, steps=payload.steps,
+                       turbo_lora=lora)
 
 
 app.entrypoint(internal=True)(cut_segment)
@@ -1445,6 +1481,7 @@ def _render_motion(
     ctx: Context,
     payload: MotionInput,
     assets: ReferenceAssets,
+    decoder: MediaDecoder,
     model: H3Model,
     out: Outputs,
     tel: Telemetry,
@@ -1491,6 +1528,7 @@ def _render_motion(
         task,
         ClipInput(prompt=payload.prompt, seed=payload.seed, duration_s=payload.duration_s),
         assets,
+        decoder,
         model,
         out,
         tel,
@@ -1523,11 +1561,12 @@ async def motion_segment(
     assets: ReferenceAssets,
     base_model: H3TurboBase,
     turbo_lora: H3TurboLoRA,
+    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> MotionOutput:
     lora = _sampling(payload, turbo_lora)
-    return _render_motion(ctx, payload, assets, base_model, out, tel, turbo_lora=lora)
+    return _render_motion(ctx, payload, assets, decoder, base_model, out, tel, turbo_lora=lora)
 
 
 app.entrypoint(internal=True)(motion_segment)

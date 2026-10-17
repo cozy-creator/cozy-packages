@@ -37,7 +37,9 @@ from cozy_runtime.author import (
     Config,
     Context,
     DecodedAudio,
+    DecodedAudioChunk,
     DecodedVideo,
+    DecodedVideoFrame,
     Image,
     ImageAsset,
     Mixed,
@@ -116,7 +118,6 @@ from minimax_h3.official import (  # noqa: E402
     REFERENCE_IMAGE_SHORT_EDGE,
     OfficialH3Pipeline,
     ScheduleFacts,
-    _aligned_soundtrack,
     _apply_transformer_dtype,
     _apply_video_vae_dtype,
     _artifact_sections,
@@ -127,7 +128,6 @@ from minimax_h3.official import (  # noqa: E402
     _ScopedPipeline,
     _validate_dual_dit_topology,
     _validate_model_contract,
-    _video_at_24fps,
     canonical_timestep_plan,
     denoise_rows,
     frames_for,
@@ -1969,18 +1969,39 @@ def _audio(seconds: int, *, rate: int = 4, start: Fraction = Fraction(0)) -> Any
 
 
 def _video(seconds: int, *, soundtrack: Any | None = None) -> Any:
-    frames = tuple(bytes([index, 0, 0]) for index in range(seconds))
-    return DecodedVideo(
+    """A read reference clip: the policy reads only its geometry, length and soundtrack."""
+    track = None if soundtrack is None else torch.zeros((soundtrack.channels, soundtrack.sample_count))
+    return official.ReferenceClip(
+        frames=torch.zeros((1, 3, 32, 32), dtype=torch.uint8),
         width=1,
         height=1,
-        frame_count=seconds,
-        frames_rgb=frames,
-        frame_pts=tuple(range(seconds)),
-        frame_durations=(1,) * seconds,
-        time_base=Fraction(1),
+        duration=Fraction(seconds),
         pixel_aspect_ratio=Fraction(1),
-        soundtrack=soundtrack,
+        soundtrack=track,
+        sample_rate=0 if soundtrack is None else soundtrack.sample_rate,
     )
+
+
+def _events(seconds: int, *, audio_start: Fraction | None = None, size: tuple[int, int] = (64, 36)) -> list[Any]:
+    """A one-frame-per-second clip as decoded media events, with an optional mono track."""
+    width, height = size
+    video = [
+        DecodedVideoFrame(
+            width=width, height=height, rgb=bytes([index * 40 % 256]) * (width * height * 3),
+            pts=index, duration=1, time_base=Fraction(1), pixel_aspect_ratio=Fraction(1),
+            color_primaries=1, color_transfer=1, color_matrix=1, color_range=1,
+        )
+        for index in range(seconds)
+    ]
+    if audio_start is None:
+        return video
+    samples = 4 * seconds
+    chunk = DecodedAudioChunk(
+        channels=1, sample_count=samples, sample_rate=4, channel_layout="mono",
+        channel_names=("FC",), pcm_f32le=(struct.pack(f"<{samples}f", *([1.0] * samples)),),
+        pts=int(audio_start * 4), time_base=Fraction(1, 4),
+    )
+    return [chunk, *video]
 
 
 def tiny_video_vae() -> Any:
@@ -2070,17 +2091,17 @@ def arm_media() -> None:
         "reference_policy",
     )
 
-    video = _video(2, soundtrack=_audio(1, start=Fraction(1, 2)))
-    frames = _video_at_24fps(video)
-    check("two exact seconds resample to 48 frames", tuple(frames.shape), (48, 3, 1, 1))
-    aligned = _aligned_soundtrack(video)
-    assert aligned is not None
-    check("soundtrack aligns to the full video origin", tuple(aligned.shape), (1, 8))
-    check(
-        "half-second audio offset becomes two silent samples",
-        aligned[0, :2].tolist(),
-        [0.0, 0.0],
-    )
+    clip = official.read_reference_video(_events(2, audio_start=Fraction(1, 2)), frames=362)
+    check("two exact seconds resample to 48 frames on the canvas",
+          tuple(clip.frames.shape), (48, 3, 768, 1344))
+    check("each second holds its own frame", (int(clip.frames[23].max()), int(clip.frames[24].max())), (0, 40))
+    check("geometry and length come from the source", (clip.width, clip.height, clip.duration), (64, 36, 2))
+    assert clip.soundtrack is not None
+    check("soundtrack aligns to the full video origin", tuple(clip.soundtrack.shape), (1, 8))
+    check("half-second audio offset becomes two silent samples", clip.soundtrack[0, :3].tolist(), [0.0, 0.0, 1.0])
+    short = official.read_reference_video(_events(15), frames=124)
+    check("only the call's frames are kept, the length is the whole clip",
+          (int(short.frames.shape[0]), short.duration), (124, 15))
 
     class Pipe:
         @staticmethod
@@ -2095,19 +2116,6 @@ def arm_media() -> None:
         def audio_reference(value: Any) -> Any:
             return value
 
-    class PreparedMedia:
-        """Decoded values isolate H3 policy; Runtime owns the real decoder proofs."""
-
-        def __init__(self, references: list[Any], values: list[Any]) -> None:
-            self.inputs = Assets[Mixed](references)
-            self.values = values
-
-        def __iter__(self) -> Any:
-            return iter(self.values)
-
-        def info(self, index: int) -> Any:
-            return self.inputs.info(index)
-
     def decode(
         references: list[Any],
         videos: list[Any],
@@ -2117,7 +2125,7 @@ def arm_media() -> None:
         by_kind = {"image": iter(images or []), "video": iter(videos), "audio": iter(audios)}
         values = [next(by_kind[reference.kind]) for reference in references]
         return package.assets_to_h3_refs(
-            cast(Any, PreparedMedia(references, values)), pipe=cast(Any, Pipe())
+            cast(Any, Assets[Mixed](references)), pipe=cast(Any, Pipe()), read=values.__getitem__
         )[0]
 
     video_ref = VideoAsset("sha256:" + "1" * 64)
@@ -2294,7 +2302,7 @@ def arm_media() -> None:
         for index, fidelity in enumerate(fidelity_hints)
     ]
     actual_references, actual_sizing = package.assets_to_h3_refs(
-        cast(Any, PreparedMedia(actual_inputs, [image] * 4)), pipe=cast(Any, Pipe())
+        cast(Any, Assets[Mixed](actual_inputs)), pipe=cast(Any, Pipe()), read=([image] * 4).__getitem__
     )
     check(
         "public per-occurrence fidelity reaches H3 sizing",
