@@ -10,7 +10,15 @@ from itertools import pairwise
 from typing import Annotated, Literal, NamedTuple
 
 import msgspec
-from cozy_runtime.author import AssetBound, AudioAsset, ImageAsset, InvalidRequest, VideoAsset
+from cozy_runtime.author import (
+    AssetBound,
+    AudioAsset,
+    AudioPreparation,
+    ImageAsset,
+    InvalidRequest,
+    VideoAsset,
+    VideoPreparation,
+)
 
 from minimax_h3.official import MAX_VIDEO_REFERENCES, Task, validate_reference_policy
 
@@ -33,10 +41,17 @@ _TOKEN = re.compile(r"<([^<>\n]+)>")
 _MEDIA = re.compile(r"\s*(picture|audio|video)\s+(\d+)\s*", re.IGNORECASE)
 _SHOT = re.compile(r"\[Shot\s*(\d+)\]", re.IGNORECASE)
 _CUT = re.compile(r"\bcut(?:s|ting)?\b", re.IGNORECASE)
-#: Runtime asks every decodable input for a decoded-size bound and refuses one above its own
-#: hard ceiling, so reference media declare that ceiling: each call decodes them straight to
-#: the size it uses (a video as a stream), so no real input comes near it.
-UNBOUNDED = 2 << 30
+#: Reference clips: a video longer than 15 s is truncated to its first 15 s (Runtime records the
+#: adjustment); audio outside 2-15 s refuses. Every input that carries a reference declares these.
+REFERENCE_VIDEO = VideoPreparation(min_seconds=2, max_seconds=15, excess="truncate")
+REFERENCE_AUDIO = AudioPreparation(min_seconds=2, max_seconds=15, excess="refuse")
+#: A reference video's upload: a source of any length is admitted and truncated, not refused.
+VIDEO_MAX_BYTES = 1 << 30
+#: Retained-read bounds. A video reads at source resolution on the 24-fps clock: 15 s of 1080p
+#: is 2.2 GB. A prepared image is at most 16,777,216 RGB8 pixels; audio is 15 s, mono or stereo.
+VIDEO_READ_BYTES = 8 << 30
+IMAGE_READ_BYTES = 64 << 20
+AUDIO_READ_BYTES = 64 << 20
 #: Each kind's file field, its H3 reference kind and its `<Picture|Audio|Video N>` label.
 FILE = {"character": "image", "background": "image", "audio": "audio", "video": "video"}
 _SLOT = {"character": "picture", "background": "picture", "audio": "audio", "video": "video"}
@@ -62,24 +77,27 @@ class StoryReference(msgspec.Struct):
         ImageAsset | None,
         AssetBound(
             max_bytes=64 << 20,
-            max_decoded_bytes=UNBOUNDED,
+            max_decoded_bytes=256 << 20,
             media_types=("image/png", "image/jpeg", "image/webp"),
         ),
     ] = None
     audio: Annotated[
         AudioAsset | None,
-        AssetBound(max_bytes=256 << 20, max_decoded_bytes=UNBOUNDED),
+        AssetBound(max_bytes=256 << 20, max_decoded_bytes=AUDIO_READ_BYTES),
+        REFERENCE_AUDIO,
     ] = None
     video: Annotated[
         VideoAsset | None,
-        AssetBound(max_bytes=256 << 20, max_decoded_bytes=UNBOUNDED),
+        AssetBound(max_bytes=VIDEO_MAX_BYTES, max_decoded_bytes=VIDEO_READ_BYTES),
+        REFERENCE_VIDEO,
     ] = None
     #: A video's own sound: dropped unless set, so the clip guides motion alone.
     use_audio: bool = False
     #: A character's voice: a timbre reference wherever the character is named.
     voice: Annotated[
         AudioAsset | None,
-        AssetBound(max_bytes=256 << 20, max_decoded_bytes=UNBOUNDED),
+        AssetBound(max_bytes=256 << 20, max_decoded_bytes=AUDIO_READ_BYTES),
+        REFERENCE_AUDIO,
     ] = None
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
 

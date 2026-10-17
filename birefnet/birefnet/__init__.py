@@ -8,7 +8,7 @@ import msgspec
 from PIL import Image
 
 from cozy_runtime.author import (
-    App, AssetBound, Context, ImageAsset, MediaDecoder, Outputs, Telemetry, WeightsOutput,
+    App, AssetBound, Context, ImageAsset, Outputs, Telemetry, WeightsOutput,
 )
 
 from .model import BackgroundRemovalModel
@@ -53,14 +53,12 @@ def remove_background(
     ctx: Context,
     payload: RemoveBackgroundInput,
     model: BackgroundRemovalModel,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> RemoveBackgroundOutput:
     ctx.raise_if_cancelled()
     with tel.stage("reading reference", overall_range=(0.0, 0.1)):
-        image = decoder.value(payload.image)
-        assert isinstance(image, Image.Image)
+        image = payload.image.read()
     with tel.stage("removing background", overall_range=(0.1, 0.9)):
         mask = model.mask(image)
     ctx.raise_if_cancelled()

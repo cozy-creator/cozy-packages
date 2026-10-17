@@ -11,9 +11,12 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
+import shutil
 import struct
 import sys
 import tempfile
+import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
@@ -25,10 +28,12 @@ from threading import Event, get_ident
 from types import SimpleNamespace
 from typing import Any, Literal, cast, get_type_hints
 
+import av
 import msgspec
 import numpy as np
 import torch
 from cozy_runtime.author import (
+    App,
     Artifact,
     Assets,
     AttentionLayout,
@@ -37,26 +42,25 @@ from cozy_runtime.author import (
     Config,
     Context,
     DecodedAudio,
-    DecodedAudioChunk,
     DecodedVideo,
-    DecodedVideoFrame,
-    Image,
     ImageAsset,
-    Mixed,
+    InvalidRequest,
+    Invocation,
     VideoAsset,
     attention_scope,
     canonical_json,
+    decode_request,
     describe,
 )
-from cozy_runtime.author._assets import asset_dec_hook
+from cozy_runtime.author import attempt as kernel_attempt
 from cozy_runtime.author._attention_scope import _ACTIVE_LAYOUT
 from cozy_runtime.author._demand import normalize
 from cozy_runtime.author.fakes import (
     fake_attempt,
     fake_input,
-    fake_media_decoder,
     fake_outputs,
     fake_telemetry,
+    granted_input,
 )
 from cozy_runtime.internal.derive import derive
 from diffusers import (
@@ -77,6 +81,7 @@ from diffusers.modular_pipelines.minimax_h3.before_denoise import (
     MiniMaxH3Ref2VAPrepareLayoutStep,
     MiniMaxH3SetTimestepsStep,
 )
+from diffusers.modular_pipelines.minimax_h3.modular_pipeline import resolve_canvas_size
 from diffusers.modular_pipelines.minimax_h3.denoise import (
     MiniMaxH3LoopDenoiser,
 )
@@ -118,6 +123,7 @@ from minimax_h3.official import (  # noqa: E402
     REFERENCE_IMAGE_SHORT_EDGE,
     OfficialH3Pipeline,
     ScheduleFacts,
+    _aligned_soundtrack,
     _apply_transformer_dtype,
     _apply_video_vae_dtype,
     _artifact_sections,
@@ -126,6 +132,7 @@ from minimax_h3.official import (  # noqa: E402
     _dit_specs,
     _processor,
     _ScopedPipeline,
+    _frames,
     _validate_dual_dit_topology,
     _validate_model_contract,
     canonical_timestep_plan,
@@ -167,6 +174,7 @@ from h3_tables.table_layout import TableLayout  # noqa: E402
 from h3_tables.turbo import collapse_head_bank, pdd_head_plan, pdd_time_grid  # noqa: E402
 
 import h3 as package  # noqa: E402
+from story import StoryReference, compile_segments  # noqa: E402
 from gates import MediaFacts, refuse_before_encode  # noqa: E402
 from h3_order import construction_order, encode_order  # noqa: E402
 
@@ -1987,41 +1995,117 @@ def _audio(seconds: int, *, rate: int = 4, start: Fraction = Fraction(0)) -> Any
     )
 
 
-def _video(seconds: int, *, soundtrack: Any | None = None) -> Any:
-    """A read reference clip: the policy reads only its geometry, length and soundtrack."""
-    track = None if soundtrack is None else torch.zeros((soundtrack.channels, soundtrack.sample_count))
-    return official.ReferenceClip(
-        frames=torch.zeros((1, 3, 32, 32), dtype=torch.uint8),
+def _clocked(slots: int, *, soundtrack: Any | None = None, repeat: int = 1) -> Any:
+    """A clip as `VideoAsset.read(fps=24)` returns it: one slot per 1/24 s, and a source frame
+    that fills `repeat` slots repeated by reference."""
+    distinct = [bytes([index, 0, 0]) for index in range(-(-slots // repeat))]
+    return DecodedVideo(
         width=1,
         height=1,
-        duration=Fraction(seconds),
+        frame_count=slots,
+        frames_rgb=tuple(distinct[slot // repeat] for slot in range(slots)),
+        frame_pts=tuple(range(slots)),
+        frame_durations=(1,) * slots,
+        time_base=Fraction(1, FPS),
         pixel_aspect_ratio=Fraction(1),
-        soundtrack=track,
-        sample_rate=0 if soundtrack is None else soundtrack.sample_rate,
+        soundtrack=soundtrack,
     )
 
 
-def _events(seconds: int, *, audio_start: Fraction | None = None, size: tuple[int, int] = (64, 36)) -> list[Any]:
-    """A one-frame-per-second clip as decoded media events, with an optional mono track."""
+def mp4_clip(
+    path: Path,
+    *,
+    size: tuple[int, int],
+    fps: int,
+    seconds: float,
+    sample_rate: int = 48000,
+    channels: int = 2,
+    sound: bool = True,
+) -> Path:
+    """H.264 frames of flat luma `(index * 37) % 256` and AAC from 0, encoded here with PyAV."""
     width, height = size
-    video = [
-        DecodedVideoFrame(
-            width=width, height=height, rgb=bytes([index * 40 % 256]) * (width * height * 3),
-            pts=index, duration=1, time_base=Fraction(1), pixel_aspect_ratio=Fraction(1),
-            color_primaries=1, color_transfer=1, color_matrix=1, color_range=1,
-        )
-        for index in range(seconds)
-    ]
-    if audio_start is None:
-        return video
-    samples = 4 * seconds
-    chunk = DecodedAudioChunk(
-        channels=1, sample_count=samples, sample_rate=4, channel_layout="mono",
-        channel_names=("FC",), pcm_f32le=(struct.pack(f"<{samples}f", *([1.0] * samples)),),
-        pts=int(audio_start * 4), time_base=Fraction(1, 4),
-    )
-    return [chunk, *video]
+    with av.open(str(path), "w", format="mp4") as out:
+        video = out.add_stream("libx264", rate=fps)
+        video.width, video.height, video.pix_fmt = width, height, "yuv420p"
+        video.options = {"preset": "ultrafast", "crf": "30", "threads": "2"}
+        layout = "stereo" if channels == 2 else "mono"
+        audio = out.add_stream("aac", rate=sample_rate, layout=layout) if sound else None
+        for index in range(round(seconds * fps)):
+            frame = av.VideoFrame(width, height, "yuv420p")
+            chroma = frame.planes[1].line_size * (height // 2)
+            frame.planes[0].update(bytes([(index * 37) % 256]) * frame.planes[0].line_size * height)
+            frame.planes[1].update(bytes([128]) * chroma)
+            frame.planes[2].update(bytes([128]) * chroma)
+            frame.pts = index
+            for packet in video.encode(frame):
+                out.mux(packet)
+        for packet in video.encode():
+            out.mux(packet)
+        if audio is not None:
+            total = round(seconds * sample_rate)
+            tone = 0.2 * np.sin(2 * np.pi * 440 * np.arange(total, dtype=np.float32) / sample_rate)
+            wave = np.repeat(tone.astype(np.float32)[None], channels, axis=0)
+            for offset in range(0, total, 1024):
+                chunk = av.AudioFrame.from_ndarray(
+                    np.ascontiguousarray(wave[:, offset : offset + 1024]), format="fltp", layout=layout
+                )
+                chunk.sample_rate, chunk.pts = sample_rate, offset
+                chunk.time_base = Fraction(1, sample_rate)
+                for packet in audio.encode(chunk):
+                    out.mux(packet)
+            for packet in audio.encode():
+                out.mux(packet)
+    return path
 
+
+class ReferencesSeen(msgspec.Struct):
+    warnings: list[str]
+
+
+#: What `read_references` hands back beside its wire result: the prepared references and sizing.
+READ: dict[str, Any] = {}
+
+
+def read_references(
+    payload: package.ReferenceRenderInput, assets: package.DirectReferenceAssets
+) -> ReferencesSeen:
+    """Direct ref2va's reference path, run by the real kernel: hydration under H3's declared
+    preparations and bounds, `assets_to_h3_refs`, and the truncation warnings."""
+    READ["prepared"], READ["sizing"] = package.assets_to_h3_refs(
+        assets, pipe=READ["pipe"], frames=READ["frames"], video_audio=READ["video_audio"]
+    )
+    return ReferencesSeen(package._direct_truncations(payload, assets))
+
+
+REFERENCES = App()
+REFERENCES.entrypoint(read_references, accelerator=False)
+
+
+def run_references(
+    sources: Sequence[Path | tuple[Path, str, str]],
+    *,
+    pipe: Any,
+    frames: int = MAX_FRAMES,
+    video_audio: Sequence[bool] = (),
+    work: Path,
+) -> tuple[Any, Any, Any]:
+    """Each source (or `(path, label, fidelity)`) as one `assets` occurrence of a call;
+    `video_audio` says, per video, whether it keeps its sound (`use_audio`)."""
+    READ.clear()
+    READ.update(pipe=pipe, frames=frames, video_audio=tuple(video_audio))
+    grants, wire = {}, []
+    for index, source in enumerate(sources):
+        path, label, fidelity = source if isinstance(source, tuple) else (source, "", "auto")
+        key = f"assets.{index}.asset"
+        grants[key] = granted_input(path, input_id=key, order=index)
+        wire.append({"asset": grants[key].digest, "label": label, "fidelity": fidelity})
+    name = f"references-{len(list(work.iterdir()))}"
+    return kernel_attempt(
+        REFERENCES.get("read_references"),
+        {"prompt": "x", "duration_s": DEFAULT_DURATION_S, "assets": wire},
+        # As the executor runs it: each field's declared bound, no narrower deployment cap.
+        Invocation(name, work / name, time.monotonic() + 600, assets=grants, max_input_bytes=None),
+    )
 
 def tiny_video_vae() -> Any:
     """The real tile-batched VAE class at toy widths, random weights."""
@@ -2110,19 +2194,27 @@ def arm_media() -> None:
         "reference_policy",
     )
 
-    clip = official.read_reference_video(_events(2, audio_start=Fraction(1, 2)), frames=362)
-    check("two exact seconds resample to 48 frames on the canvas",
-          tuple(clip.frames.shape), (48, 3, 768, 1344))
-    check("each second holds its own frame", (int(clip.frames[23].max()), int(clip.frames[24].max())), (0, 40))
-    check("geometry and length come from the source", (clip.width, clip.height, clip.duration), (64, 36, 2))
-    assert clip.soundtrack is not None
-    check("soundtrack aligns to the full video origin", tuple(clip.soundtrack.shape), (1, 8))
-    check("half-second audio offset becomes two silent samples", clip.soundtrack[0, :3].tolist(), [0.0, 0.0, 1.0])
-    silent = official.read_reference_video(_events(2, audio_start=Fraction(1, 2)), frames=48, audio=False)
-    check("a clip without use_audio keeps no soundtrack", silent.soundtrack, None)
-    short = official.read_reference_video(_events(15), frames=124)
-    check("only the call's frames are kept, the length is the whole clip",
-          (int(short.frames.shape[0]), short.duration), (124, 15))
+    clip = _clocked(48, soundtrack=_audio(1, start=Fraction(1, 2)))
+    frames = _frames(clip)
+    check("a constant-clock read becomes (T, H, W, 3) uint8 frames", frames.shape, (48, 1, 1, 3))
+    check(
+        "a source frame repeated by reference fills each of its slots",
+        _frames(_clocked(48, repeat=3))[:, 0, 0, 0].tolist(),
+        [slot // 3 for slot in range(48)],
+    )
+    refusal(
+        "a read off the 24-fps clock refuses",
+        lambda: _frames(replace(clip, time_base=Fraction(1, 30))),
+        "reference_policy",
+    )
+    aligned = _aligned_soundtrack(clip)
+    assert aligned is not None
+    check("soundtrack aligns to the full video origin", tuple(aligned.shape), (1, 8))
+    check(
+        "half-second audio offset becomes two silent samples",
+        aligned[0, :2].tolist(),
+        [0.0, 0.0],
+    )
 
     class Pipe:
         @staticmethod
@@ -2137,17 +2229,43 @@ def arm_media() -> None:
         def audio_reference(value: Any) -> Any:
             return value
 
+    root = Path(tempfile.mkdtemp(prefix="h3-references-"))
+    fixtures = fake_outputs(fake_attempt("h3-reference-fixtures", spool=root / "spool"))
+    media: dict[str, Path] = {}
+    for name, seconds, sound in (
+        ("v1s", 1, False), ("v2", 2, False), ("v7", 7, True), ("v10", 10, True),
+        ("v20", 20, True),
+    ):
+        media[name] = mp4_clip(root / f"{name}.mp4", size=(32, 32), fps=24, seconds=seconds, sound=sound)
+    for seconds in (2, 4, 5, 6, 10, 16):
+        saved = fixtures.save_audio(
+            np.zeros((2, seconds * 16000), np.float32), sample_rate=16000
+        )
+        media[f"a{seconds}"] = root / f"a{seconds}.flac"
+        media[f"a{seconds}"].write_bytes(saved.read_bytes())
+    still = fixtures.save_image(PILImage.new("RGB", (32, 32), (90, 30, 200)), format="png")
+    media["image"] = root / "image.png"
+    media["image"].write_bytes(still.read_bytes())
+    work = root / "calls"
+    work.mkdir()
+
     def decode(
-        references: list[Any],
-        videos: list[Any],
-        audios: list[Any],
-        images: list[Any] | None = None,
+        *names: str, frames: int = MAX_FRAMES, video_audio: Sequence[bool] = ()
     ) -> list[Any]:
-        by_kind = {"image": iter(images or []), "video": iter(videos), "audio": iter(audios)}
-        values = [next(by_kind[reference.kind]) for reference in references]
-        return package.assets_to_h3_refs(
-            cast(Any, Assets[Mixed](references)), pipe=cast(Any, Pipe()), read=values.__getitem__
-        )[0]
+        _, outcome, _ = run_references(
+            [media[name] for name in names],
+            pipe=Pipe(),
+            frames=frames,
+            video_audio=video_audio or [True] * sum(name.startswith("v") for name in names),
+            work=work,
+        )
+        if outcome.terminal != "succeeded":
+            raise InvalidRequest(str(outcome.message), code=outcome.code, fields=outcome.fields)
+        return list(READ["prepared"])
+
+    def refused(*names: str) -> tuple[str, tuple[str, ...]]:
+        _, outcome, _ = run_references([media[name] for name in names], pipe=Pipe(), work=work)
+        return outcome.code, tuple(outcome.fields)
 
     video_ref = VideoAsset("sha256:" + "1" * 64)
     audio_ref = AudioAsset("sha256:" + "2" * 64)
@@ -2174,11 +2292,9 @@ def arm_media() -> None:
             (0, 1),
         ),
     ]:
-        roles = package._keyframe_roles(Assets[Image](inputs))
+        roles = package._keyframe_roles(Assets(inputs))
         check(f"FL2VA {description}", roles, expected)
-    image = PILImage.frombytes("RGB", (32, 32), bytes(32 * 32 * 3))
-    mixed_video, mixed_audio = _video(2), _audio(2)
-    mixed = Assets[Mixed](
+    mixed: Assets[ImageAsset | VideoAsset | AudioAsset] = Assets(
         [image_ref.with_label("Alice"), video_ref, audio_ref, image_ref.with_label("アリス")]
     )
     policy = package.preflight_reference_media(
@@ -2195,21 +2311,14 @@ def arm_media() -> None:
         [mixed.info(index).position for index in range(len(mixed))],
         [0, 1, 2, 3],
     )
-    prepared = decode(
-        [image_ref, video_ref, audio_ref, image_ref],
-        videos=[mixed_video],
-        audios=[mixed_audio],
-        images=[image, image],
-    )
+    prepared = decode("image", "v7", "a2", "image")
     check(
         "model adapter preserves mixed order and both uses of one image",
-        all(
-            actual is expected
-            for actual, expected in zip(
-                prepared, [image, mixed_video, mixed_audio, image], strict=True
-            )
+        (
+            [type(value).__name__ for value in prepared],
+            prepared[0].tobytes() == prepared[3].tobytes(),
         ),
-        True,
+        (["Image", "DecodedVideo", "DecodedAudio", "Image"], True),
     )
     refusal(
         "metadata preflight refuses audio-only before decoding",
@@ -2217,53 +2326,62 @@ def arm_media() -> None:
             package.StandardClipInput(
                 prompt="An audio-only reference.", duration_s=DEFAULT_DURATION_S
             ),
-            Assets[Mixed]([audio_ref]),
+            Assets([audio_ref]),
         ),
         "reference_policy",
     )
     check(
-        "14s of soundtracked video plus 2s standalone audio fit their separate caps",
-        len(
-            decode(
-                [video_ref, video_ref, audio_ref],
-                videos=[_video(7, soundtrack=_audio(7)), _video(7, soundtrack=_audio(7))],
-                audios=[_audio(2)],
-            )
-        ),
+        "videos have no total cap: two 10 s soundtracked clips and 10 s of audio",
+        [round(value.duration) for value in decode("v10", "v10", "a10")],
+        [10, 10, 10],
+    )
+    check(
+        "standalone audio admits its exact 15-second total",
+        len(decode("v2", "a10", "a5")),
         3,
-    )
-    check(
-        "both reference modalities admit their exact independent 15-second boundary",
-        len(
-            decode(
-                [video_ref, video_ref, audio_ref, audio_ref],
-                videos=[
-                    _video(10, soundtrack=_audio(10)),
-                    _video(5, soundtrack=_audio(5)),
-                ],
-                audios=[_audio(10), _audio(5)],
-            )
-        ),
-        4,
-    )
-    refusal(
-        "soundtracks ride the video cap: 16 seconds of soundtracked video refuse as video",
-        lambda: decode(
-            [video_ref, video_ref],
-            videos=[_video(8, soundtrack=_audio(8)), _video(8, soundtrack=_audio(8))],
-            audios=[],
-        ),
-        "reference_policy",
     )
     refusal(
         "16 seconds of standalone audio refuse against the audio modality cap",
-        lambda: decode(
-            [video_ref, audio_ref, audio_ref, audio_ref],
-            videos=[_video(2)],
-            audios=[_audio(6), _audio(6), _audio(4)],
-        ),
+        lambda: decode("v2", "a6", "a6", "a4"),
         "reference_policy",
     )
+    check("a 16-second audio refuses at hydration, naming it", refused("v2", "a16"),
+          ("media_too_long", ("assets.1.asset",)))
+    check("a 1-second video refuses at hydration, naming it", refused("v1s", "image"),
+          ("media_too_short", ("assets.0.asset",)))
+    check(
+        "a video keeps its soundtrack only with use_audio",
+        [value.soundtrack is None for value in decode("v7", "v7", video_audio=(False, True))],
+        [True, False],
+    )
+    clips = [
+        StoryReference("Ann", "character", description="A woman in red."),
+        StoryReference("Kick", "video", video=VideoAsset("sha256:" + "5" * 64)),
+        StoryReference("Flip", "video", video=VideoAsset("sha256:" + "6" * 64)),
+    ]
+    check(
+        "only a video some call attaches can carry a truncation warning",
+        [
+            name
+            for name, _ in package.named_videos(
+                clips, compile_segments(["<Ann> kicks as in <Kick>."], clips)
+            )
+        ],
+        ["<Kick>"],
+    )
+    long_clip = decode("v20")[0]
+    check(
+        "a 20-second video reads its first 15 s on the 24-fps clock, soundtrack included",
+        (long_clip.frame_count, long_clip.duration, long_clip.soundtrack.duration),
+        (360, Fraction(15), Fraction(15)),
+    )
+    short_call = decode("v20", frames=DEFAULT_FRAMES)[0]
+    check(
+        "a call reads only the frames the official pipeline keeps",
+        (short_call.frame_count, short_call.soundtrack.duration),
+        (DEFAULT_FRAMES, Fraction(DEFAULT_FRAMES, FPS)),
+    )
+
 
     def sizing(
         fidelities: list[str], *, default: int = 1024, video_tokens: int = 0
@@ -2318,13 +2436,12 @@ def arm_media() -> None:
         "high",
         "auto",
     )
-    actual_inputs = [
-        image_ref.with_label(f"ref-{index}").with_fidelity(fidelity)
-        for index, fidelity in enumerate(fidelity_hints)
-    ]
-    actual_references, actual_sizing = package.assets_to_h3_refs(
-        cast(Any, Assets[Mixed](actual_inputs)), pipe=cast(Any, Pipe()), read=([image] * 4).__getitem__
+    run_references(
+        [(media["image"], f"ref-{index}", fidelity) for index, fidelity in enumerate(fidelity_hints)],
+        pipe=Pipe(),
+        work=work,
     )
+    actual_references, actual_sizing = READ["prepared"], READ["sizing"]
     check(
         "public per-occurrence fidelity reaches H3 sizing",
         actual_sizing.edges,
@@ -2422,10 +2539,7 @@ def arm_media() -> None:
         ),
         ("h264", DEFAULT_FRAMES, "aac", True),
     )
-    decoded = fake_media_decoder(attempt).value(
-        fake_input(finished.video, attempt=attempt.request_id, max_decoded_bytes=1 << 30)
-    )
-    assert isinstance(decoded, DecodedVideo)
+    decoded = fake_input(finished.video, attempt=attempt, max_decoded_bytes=1 << 30).read()
     played = torch.stack(
         [
             torch.frombuffer(bytearray(frame), dtype=torch.uint8).reshape(64, 96, 3)
@@ -2519,6 +2633,114 @@ def arm_media() -> None:
     check("longest single-shot cell", (MAX_FRAMES, FPS), (362, 24))
     check("eight-shot de-duplicated frame count", 8 * MAX_FRAMES - 7, 2889)
     check("eight-shot exact duration", Fraction(8 * MAX_FRAMES - 7, FPS), Fraction(2889, 24))
+
+
+def _limited_rgb(luma: int) -> int:
+    """The RGB value a flat limited-range luma with neutral chroma decodes to."""
+    return max(0, min(255, round((luma - 16) * 255 / 219)))
+
+
+def arm_reference_media() -> None:
+    """Reference videos through the real kernel and Runtime handles, at full size.
+
+    A 20 s 1920x1080 30 fps clip with AAC is truncated by Runtime to its first 15 s (the
+    adjustment row and the warning log), budgeted at 15 s, and reaches the official pipeline
+    at source resolution on the 24-fps clock with 15 s of sound; a 2-minute 1080p60 source
+    reads the same way; a 2560x1080 clip is resized once, by the official normalization.
+    """
+    print("\n== reference videos: Runtime truncation, source resolution, one official resize ==")
+    pipe = meta_h3_pipeline()
+    root = Path(tempfile.mkdtemp(prefix="h3-reference-media-"))
+    work = root / "calls"
+    work.mkdir()
+    try:
+        for seconds, fps in ((20, 30), (120, 60)):
+            source = mp4_clip(root / f"{seconds}s.mp4", size=(1920, 1080), fps=fps, seconds=seconds)
+            result, outcome, record = run_references(
+                [(source, "Kick", "auto")], pipe=pipe, video_audio=[True], work=work
+            )
+            check(f"{seconds} s {fps} fps 1080p: the reference call succeeds", outcome.terminal, "succeeded")
+            if outcome.terminal != "succeeded":
+                fail(f"{seconds} s reference call", repr(outcome))
+                continue
+            (reference,) = READ["prepared"]
+            check(
+                f"{seconds} s: 360 frames of 15 s at source resolution reach the pipeline",
+                (reference.frames.shape, str(reference.frames.dtype), reference.fps),
+                ((360, 1080, 1920, 3), "uint8", float(FPS)),
+            )
+            # Each frame fills the 24-fps slots from its start to the next one's, rounded half up.
+            last = next(
+                index
+                for index in range(15 * fps)
+                if math.floor(Fraction(index * FPS, fps) + Fraction(1, 2)) <= 359
+                < math.floor(Fraction((index + 1) * FPS, fps) + Fraction(1, 2))
+            )
+            check(
+                f"{seconds} s: the last slot is source frame {last}, by the 24-fps clock rule",
+                abs(int(reference.frames[359, 540, 960, 0]) - _limited_rgb(last * 37 % 256)) <= 3,
+                True,
+            )
+            check(
+                f"{seconds} s: Runtime records the truncation as a policy adjustment",
+                [
+                    (row.kind, row.field, float(str(row.requested)), row.applied, row.source)
+                    for row in result.adjustments
+                ],
+                [("adjusted", "assets.0.asset", float(seconds), 15, "policy")],
+            )
+            check(
+                f"{seconds} s: Runtime logs the truncation as a warning",
+                [o.name for o in record.ring if o.kind == "log" and o.value == "warn"],
+                ["input video truncated"],
+            )
+            check(
+                f"{seconds} s: H3's own result warns",
+                result.result.warnings,
+                [f"Reference video Kick is {seconds:.1f} s long; H3 used its first 15 s."],
+            )
+            check(
+                f"{seconds} s: the vision budget counts the 15 s Runtime keeps",
+                READ["sizing"].video_tokens,
+                reference_video_vision_tokens(1920, 1080, Fraction(15)),
+            )
+            check(
+                f"{seconds} s: the soundtrack is 15 s, stereo, at the audio VAE's rate",
+                (tuple(reference.audio.shape), reference.sample_rate),
+                ((2, 15 * pipe.sample_rate), pipe.sample_rate),
+            )
+            del reference
+            READ.clear()
+        wide = mp4_clip(root / "wide.mp4", size=(2560, 1080), fps=24, seconds=3, sound=False)
+        result, outcome, _ = run_references([wide], pipe=pipe, frames=DEFAULT_FRAMES, work=work)
+        check("2560x1080: the reference call succeeds", outcome.terminal, "succeeded")
+        (reference,) = READ["prepared"]
+        check(
+            "2560x1080: the clip reaches the pipeline unresized, with no adjustment",
+            (reference.frames.shape, result.adjustments, result.result.warnings),
+            ((72, 1080, 2560, 3), (), []),
+        )
+        state = pipe.start_ref2va(
+            prompt="A dancer spins.",
+            references=[reference],
+            generator=torch.Generator().manual_seed(7),
+            steps=DEFAULT_STEPS,
+            frames=DEFAULT_FRAMES,
+            reference_image_short_edges=[],
+        )
+        normalized = state.normalized_references[0].frames
+        height, width = (int(v) for v in resolve_canvas_size(2560, 1080, *official.CANVAS))
+        once = np.asarray(
+            PILImage.fromarray(reference.frames[0]).resize((width, height), PILImage.Resampling.LANCZOS)
+        )
+        check(
+            "2560x1080: the official normalization puts it on its canvas with one LANCZOS resize",
+            (normalized.shape, bool(np.array_equal(normalized[0], once))),
+            ((72, height, width, 3), True),
+        )
+        READ.clear()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def arm_video_stream() -> None:
@@ -2882,14 +3104,13 @@ def arm_interface() -> None:
         cells = {
             (seconds, count): dict(
                 normalize(
-                    msgspec.convert(
+                    decode_request(
+                        cast(type[Any], surfaces[name].payload_type),
                         {
                             "prompt": "a garden",
                             "duration_s": seconds,
                             "assets": [{"asset": f"input:{i}"} for i in range(count)],
                         },
-                        type=surfaces[name].payload_type,
-                        dec_hook=asset_dec_hook,
                     )
                 ).values
             )
@@ -4395,6 +4616,7 @@ ARMS = {
     "adaln-pruned": arm_adaln_pruned,
     "processor": arm_processor,
     "media": arm_media,
+    "reference-media": arm_reference_media,
     "video-stream": arm_video_stream,
     "gates": arm_output_gates,
     "vae-tiles": arm_vae_tiles,

@@ -188,17 +188,6 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "Normalize H3's real request types into the demand features staged admission keys "
         "measured peaks on (Runtime #756/#764). Retire with a public normalization API."
     ),
-    ("scripts/h3-conform.py", "cozy_runtime.author._assets"): (
-        "Decode asset occurrences for that normalization, as the wire decoder does."
-    ),
-    ("scripts/h3-assembly-proof.py", "cozy_runtime.author._assets"): (
-        "Bind native codec fixtures and their file-state guards to the author invocation. "
-        "Retire when a public native asset fixture supports changed-input controls. "
-    ),
-    ("scripts/h3-progressive-join-proof.py", "cozy_runtime.author._assets"): (
-        "Bind native progressive codec fixtures and their file-state guards to the author invocation. "
-        "Retire when a public native asset fixture supplies these grants. "
-    ),
     ("scripts/h3-turbo-cp-proof.py", "cozy_runtime.internal.parallel"): (
         "Verify actual PDD hooks and component scopes under Runtime's Ulysses installation. "
     ),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import secrets
 from enum import Enum, IntEnum
-from typing import Annotated, cast
+from typing import Annotated
 
 import msgspec
 from cozy_runtime.author import (
@@ -13,7 +13,6 @@ from cozy_runtime.author import (
     AssetBound,
     Context,
     ImageAsset,
-    MediaDecoder,
     Memoize,
     Outputs,
     Shape,
@@ -268,10 +267,10 @@ def generate_base(ctx: Context, payload: GenerateBaseInput, drafter: Drafter, mo
 
 @app.entrypoint(defaults=_DISTILLED, components=_COMPONENTS, on_demand=_ON_DEMAND,
                 memoize=Memoize(requires=["seed"]))
-def edit(ctx: Context, payload: EditInput, drafter: Drafter, model: Klein, upsampler: Upsampler, decoder: MediaDecoder,
-         out: Outputs, tel: Telemetry) -> ImageOutput:
+def edit(ctx: Context, payload: EditInput, drafter: Drafter, model: Klein, upsampler: Upsampler, out: Outputs,
+         tel: Telemetry) -> ImageOutput:
     """Edit or compose one to ten ordered reference images with the distilled Klein."""
-    images = [cast(Image.Image, decoder.value(asset)) for asset in payload.reference_images]
+    images = [asset.read() for asset in payload.reference_images]
     return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
                    draft=payload.prompt_drafting,
                    images=images, size=output_size(payload.aspect_ratio, payload.megapixels, images[0]),
@@ -280,10 +279,10 @@ def edit(ctx: Context, payload: EditInput, drafter: Drafter, model: Klein, upsam
 
 @app.entrypoint(defaults=_BASE, components=_COMPONENTS, on_demand=_ON_DEMAND,
                 memoize=Memoize(requires=["seed"]))
-def edit_base(ctx: Context, payload: EditBaseInput, drafter: Drafter, model: Klein, upsampler: Upsampler, decoder: MediaDecoder,
-              out: Outputs, tel: Telemetry) -> ImageOutput:
+def edit_base(ctx: Context, payload: EditBaseInput, drafter: Drafter, model: Klein, upsampler: Upsampler, out: Outputs,
+              tel: Telemetry) -> ImageOutput:
     """Edit or compose one to ten ordered reference images with Klein Base."""
-    images = [cast(Image.Image, decoder.value(asset)) for asset in payload.reference_images]
+    images = [asset.read() for asset in payload.reference_images]
     return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
                    draft=payload.prompt_drafting,
                    images=images, size=output_size(payload.aspect_ratio, payload.megapixels, images[0]),
