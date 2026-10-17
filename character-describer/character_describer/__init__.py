@@ -1,4 +1,5 @@
-"""One-sentence character identity descriptions from supplied reference images."""
+"""Descriptions of supplied references for video prompts: a character's identity in one
+sentence, a place's look, a motion clip's people, beats and camera; and plain text writing."""
 
 from __future__ import annotations
 
@@ -6,15 +7,19 @@ import re
 from typing import Annotated
 
 import msgspec
+from PIL import Image as PILImage
 from PIL.Image import Image
 from cozy_runtime.author import (
     App,
     AssetBound,
     Context,
+    DecodedVideoFrame,
     ImageAsset,
     ModelArtifact,
     Telemetry,
     UnsupportedInput,
+    VideoAsset,
+    VideoPreparation,
     Weights,
     WeightsOutput,
     invocable,
@@ -43,6 +48,31 @@ SCENE_OR_POSE = re.compile(
     re.IGNORECASE,
 )
 MAX_NEW_TOKENS = 160
+PLACE_PROMPT = (
+    "Describe only the place in this image, in exactly one concise sentence: the kind of place, "
+    "its architecture, materials, colors, furnishings and lighting. Say nothing about any person, "
+    "character or animal, and nothing about the camera, image quality or art style. Return only the "
+    "sentence, without a label or introduction."
+)
+#: A clip is watched as video: about 2 fps, at least 16 and at most 32 frames (a 3 s chop still
+#: gets 16), each at most 448 px on its long edge.
+CLIP_FPS = 2
+CLIP_FRAMES = (16, 32)
+CLIP_EDGE = 448
+CLIP_SECONDS = 15
+CLIP_PROMPT = (
+    "This clip's motion will be performed again by other characters in another place. Describe "
+    "its structure, not its story, in exactly these four parts, each starting on its own line:\n"
+    "PEOPLE: one line per person, \"P1: <where in the frame at the start> - <build, hair, "
+    "clothing>\".\n"
+    "BEATS: one line per beat in time order, \"<start>-<end> s: <who does what to whom>; <which "
+    "way each person turns, falls or moves>; <each person's facing relative to the camera>\".\n"
+    "CAMERA: the framing and each camera move with its time.\n"
+    "CUTS: the time of each cut, or none.\n"
+    "Name people only as P1, P2 and so on. Describe only what is visible; do not guess names, "
+    "intentions or the place's story."
+)
+CLIP_TOKENS = 700
 
 
 class DescribeCharacterInput(msgspec.Struct):
@@ -75,6 +105,33 @@ class DescribeCharactersInput(msgspec.Struct):
 class DescribeCharactersOutput(msgspec.Struct):
     #: One per image, in order; empty where the image shows no character's appearance.
     descriptions: list[Annotated[str, msgspec.Meta(max_length=2048)]]
+
+
+class DescribeClipInput(msgspec.Struct):
+    video: Annotated[
+        VideoAsset,
+        AssetBound(max_bytes=1 << 30, max_decoded_bytes=16 << 30),
+        VideoPreparation(min_seconds=1, max_seconds=CLIP_SECONDS, excess="truncate"),
+    ]
+
+
+class DescribeClipOutput(msgspec.Struct):
+    description: Annotated[str, msgspec.Meta(min_length=1, max_length=8192)]
+    #: The frames the model watched, at their seconds.
+    seconds: list[float]
+
+
+class WriteTextsInput(msgspec.Struct):
+    prompts: Annotated[
+        list[Annotated[str, msgspec.Meta(min_length=1, max_length=65536)]],
+        msgspec.Meta(min_length=1, max_length=16),
+    ]
+    max_new_tokens: Annotated[int, msgspec.Meta(ge=1, le=4096)] = 1024
+
+
+class WriteTextsOutput(msgspec.Struct):
+    #: One reply per prompt, in order.
+    texts: list[str]
 
 
 #: The int8 lane: every projection of the 32 language layers (gated-delta-net and attention)
@@ -137,6 +194,95 @@ def describe_characters(
     with tel.stage("describing characters"):
         texts = _describe(model, [image.read() for image in payload.images], tel)
     return DescribeCharactersOutput(texts)
+
+
+@app.entrypoint(
+    defaults={"model": "qwen3.5-9b@0.2.0"},
+    memoize=True,
+    memo_version="place-batch-v1",
+)
+def describe_places(
+    ctx: Context,
+    payload: DescribeCharactersInput,
+    model: Describer,
+    tel: Telemetry,
+) -> DescribeCharactersOutput:
+    """Describe each supplied place in one sentence, people left out, all images in one pass."""
+    ctx.raise_if_cancelled()
+    with tel.stage("describing places"):
+        images = [image.read() for image in payload.images]
+        texts = model.describe(images, [PLACE_PROMPT] * len(images), max_new_tokens=MAX_NEW_TOKENS)
+    return DescribeCharactersOutput(texts)
+
+
+@app.entrypoint(
+    defaults={"model": "qwen3.5-9b@0.2.0"},
+    memoize=True,
+    memo_version="clip-v1",
+)
+def describe_clip(
+    ctx: Context,
+    payload: DescribeClipInput,
+    model: Describer,
+    tel: Telemetry,
+) -> DescribeClipOutput:
+    """A motion clip's people, beats, camera and cuts, watched as timestamped video."""
+    ctx.raise_if_cancelled()
+    with tel.stage("reading clip"):
+        frames, seconds = clip_frames(payload.video)
+    with tel.stage("describing clip"):
+        text = model.describe_video(frames, seconds, CLIP_PROMPT, max_new_tokens=CLIP_TOKENS)
+    tel.log("clip described", frames=len(frames), description=text[:2000])
+    if not text:
+        raise UnsupportedInput("the clip description is empty", code="output_integrity")
+    return DescribeClipOutput(text, seconds)
+
+
+@app.entrypoint(
+    defaults={"model": "qwen3.5-9b@0.2.0"},
+    memoize=True,
+    memo_version="write-v1",
+)
+def write_texts(
+    ctx: Context,
+    payload: WriteTextsInput,
+    model: Describer,
+    tel: Telemetry,
+) -> WriteTextsOutput:
+    """One greedy reply per text prompt, all in one pass."""
+    ctx.raise_if_cancelled()
+    with tel.stage("writing"):
+        texts = model.write(list(payload.prompts), max_new_tokens=payload.max_new_tokens)
+    return WriteTextsOutput(texts)
+
+
+def clip_frames(video: VideoAsset) -> tuple[list[Image], list[float]]:
+    """About `CLIP_FPS` frames a second, `CLIP_FRAMES` at least and at most, an even count,
+    each the frame showing at the middle of its slot, at most `CLIP_EDGE` px long."""
+    duration = float(video.probe().duration)
+    count = min(max(round(duration * CLIP_FPS), CLIP_FRAMES[0]), CLIP_FRAMES[1])
+    count += count % 2
+    seconds = [(index + 0.5) * duration / count for index in range(count)]
+    frames: list[Image] = []
+    with video.stream(end=duration, audio=False) as events:
+        for event in events:
+            if not isinstance(event, DecodedVideoFrame):
+                continue
+            end = float(event.start_time + event.duration * event.time_base)
+            picture = None
+            while len(frames) < count and seconds[len(frames)] < end:
+                if picture is None:
+                    picture = PILImage.frombuffer("RGB", (event.width, event.height), event.rgb, "raw", "RGB", 0, 1)
+                    scale = CLIP_EDGE / max(picture.size)
+                    if scale < 1:
+                        picture = picture.resize(
+                            (round(picture.width * scale), round(picture.height * scale)), PILImage.Resampling.LANCZOS
+                        )
+                frames.append(picture)
+    if not frames:
+        raise UnsupportedInput("the clip has no frames", code="media_decode")
+    frames += [frames[-1]] * (count - len(frames))
+    return frames, seconds
 
 
 def _describe(model: Describer, images: list[Image], tel: Telemetry) -> list[str]:

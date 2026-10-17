@@ -16,6 +16,7 @@ from PIL.Image import Image
 from tokenizers import Tokenizer
 from transformers import AutoConfig, AutoModelForImageTextToText, GenerationConfig, PreTrainedTokenizerFast
 from transformers.initialization import no_init_weights
+from transformers.video_utils import VideoMetadata
 
 COMPONENT = "model"
 DTYPES = {"bf16": torch.bfloat16, "f16": torch.float16, "f32": torch.float32}
@@ -106,16 +107,48 @@ class Describer(Model[Pipeline], encoded_leaves="accept", min_bits=4, phase="dec
     def describe(self, images: list[Image], prompts: list[str], *, max_new_tokens: int) -> list[str]:
         """One greedy reply per image and its prompt, all at once: one prefill over the rows,
         left-padded, and one decode of them together."""
+        texts = [self._chat(_messages(self.processor, prompt)) for prompt in prompts]
+        replies = self._generate(self._inputs(text=texts, images=images), max_new_tokens)
+        return [" ".join(reply.split()) for reply in replies]
+
+    @uses_components(COMPONENT)
+    def describe_video(self, frames: list[Image], seconds: list[float], prompt: str, *, max_new_tokens: int) -> str:
+        """One greedy reply about frames watched as one video, each block stamped with its
+        `<t seconds>` as the processor writes them. Line breaks are kept."""
+        content = [{"type": "video"}, {"type": "text", "text": prompt}]
+        # The processor stamps a block with frame index / fps: millisecond indices keep the seconds.
+        metadata = VideoMetadata(
+            total_num_frames=len(frames), fps=1000.0, frames_indices=[round(t * 1000) for t in seconds]
+        )
+        inputs = self._inputs(
+            text=[self._chat([{"role": "user", "content": content}])], videos=[frames],
+            video_metadata=[metadata], do_sample_frames=False,
+        )
+        (reply,) = self._generate(inputs, max_new_tokens)
+        return reply.strip()
+
+    @uses_components(COMPONENT)
+    def write(self, prompts: list[str], *, max_new_tokens: int) -> list[str]:
+        """One greedy reply per text prompt, all at once. Line breaks are kept."""
+        texts = [self._chat([{"role": "user", "content": [{"type": "text", "text": p}]}]) for p in prompts]
+        return [reply.strip() for reply in self._generate(self._inputs(text=texts), max_new_tokens)]
+
+    def _chat(self, messages: list[dict[str, Any]]) -> str:
+        return self.processor.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=False, enable_thinking=False
+        )
+
+    def _inputs(self, **kwargs: Any) -> Any:
         model = self.pipe.components[COMPONENT]
-        processor = self.processor
-        texts = [
-            processor.apply_chat_template(_messages(processor, prompt), add_generation_prompt=True,
-                                          tokenize=False, enable_thinking=False)
-            for prompt in prompts
-        ]
-        processor.tokenizer.padding_side = "left"
-        inputs = processor(text=texts, images=images, padding=True, return_tensors="pt").to(model.device)
-        inputs["pixel_values"] = inputs["pixel_values"].to(model.dtype)
+        self.processor.tokenizer.padding_side = "left"
+        inputs = self.processor(padding=True, return_tensors="pt", **kwargs).to(model.device)
+        for name in ("pixel_values", "pixel_values_videos"):
+            if name in inputs:
+                inputs[name] = inputs[name].to(model.dtype)
+        return inputs
+
+    def _generate(self, inputs: Any, max_new_tokens: int) -> list[str]:
+        model, processor = self.pipe.components[COMPONENT], self.processor
         configured = model.generation_config.eos_token_id
         stops = [*(configured if isinstance(configured, list) else [configured]), processor.tokenizer.eos_token_id]
         stop = [token for token in dict.fromkeys(stops) if token is not None]
@@ -123,7 +156,7 @@ class Describer(Model[Pipeline], encoded_leaves="accept", min_bits=4, phase="dec
             model, inputs, max_new_tokens=max_new_tokens, stop=stop,
             pad=processor.tokenizer.pad_token_id or stop[0], draft=self.pipe.draft,
         )
-        return [" ".join(str(reply).split()) for reply in processor.batch_decode(out, skip_special_tokens=True)]
+        return [str(reply) for reply in processor.batch_decode(out, skip_special_tokens=True)]
 
 
 def _messages(processor: Any, prompt: str) -> list[dict[str, Any]]:
