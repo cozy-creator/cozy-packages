@@ -2096,9 +2096,9 @@ def arm_media() -> None:
     check("square image demand", reference_image_vision_tokens(2048, 2048), 4096)
     check("4:1 image demand", reference_image_vision_tokens(4000, 1000), 16384)
     check(
-        "15-second 16:9 video demand",
+        "15-second 16:9 video demand at motion size",
         reference_video_vision_tokens(1920, 1080, Fraction(15)),
-        15120,
+        900,
     )
     package.resolve_reference_sizing([], default=1024, video_tokens=32768)
     observe("vision capacity boundary")

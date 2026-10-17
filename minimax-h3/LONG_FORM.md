@@ -115,6 +115,8 @@ A `kind: video` reference guides action: choreography, timing, a fight's beats. 
 character, it goes only to the calls whose text names it, so one clip can guide one segment
 or several. Per call: at most three clips, 2–15 s each, 15 s in all, square pixels; any
 resolution or frame rate, since each is decoded straight onto the call's canvas at 24 fps.
+A clip guides at a quarter of the canvas edge and only during the dense denoise steps, so a
+15 s render with a 12 s clip costs ~1.1x the render without one (5.5x at the full sizing).
 A clip's sound is dropped unless the reference sets `use_audio: true`; then it conditions
 the audio and takes the next `<Audio N>` after the call's audio references. Each clip gains
 `<Video k> (motion and choreography): attribute_transfer`, which transfers its movement and
