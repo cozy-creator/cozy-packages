@@ -85,8 +85,8 @@ be missing. Text before the first heading counts as the description. Headings ma
 case, with `_`, `-` or a space between words.
 
 1. **References.** Name them as `<Name>` (any case; `_`, `-` and space alike). Each segment
-   gets every background, and the characters, audio and videos it names. An audio reference
-   whose description names a character (a voice) follows that character. Backgrounds come
+   gets every background, and the characters, audio and videos it names. A character's
+   `voice` goes wherever the character does. Backgrounds come
    first, in the global order; then the rest in the order the text first names them, with
    videos last.
 2. **Numbering.** `<Picture k>`, `<Audio k>` and `<Video k>` count each kind over that
@@ -97,13 +97,8 @@ case, with `_`, `-` or a space between words.
 3. **Sections.** The workflow adds `subject_definitions` (one line per attached
    reference), `retention_analysis` (one line per attached reference, with the
    `[Shot N]` markers that name it), and the global `style` (when set),
-   `overall_soundscape` and `non_diegetic_music`. Audio follows MiniMax's guide: a voice
-   is `<Audio k> is the voice-timbre reference for <Name> (Sx).`, reusing the speaker ID
-   the text gives that character (none if it gives none), with
-   `<Audio k>: reference - <Name>'s voice follows <Audio k>'s timbre and delivery without
-   copying the original signal.`; other audio defaults to `reference`. A reference's own
-   `retention_analysis` replaces its default line, e.g. `fully_copy - ...` to reuse music.
-   A `summary` that opens with `[task types]` gains `audio reference` or `audio reuse`.
+   `overall_soundscape` and `non_diegetic_music`. Audio follows MiniMax's guide (see
+   [Voices and audio](#voices-and-audio)).
    - Existing subject, retention, and soundscape sections gain the global content.
    - If the section is missing, it is added in the order above, under the canonical heading.
    - A body of `N/A` gives way to described global content in those sections.
@@ -151,6 +146,24 @@ Segment 2 sends `throw.mp4` as its `<Video 1>`. Attach files by path in the requ
 cozy run fidika/minimax-h3/long_form --input fight.json \
   --asset references.3.video=kick.mp4 --asset references.4.video=throw.mp4 --await
 ```
+
+## Voices and audio
+
+A character's `voice` (2–15 s of clean speech) is a timbre reference: the character speaks
+new lines in that voice rather than replaying the clip. It renders as
+`<Audio k> is the voice-timbre reference for <Name> (Sx).` and
+`<Audio k>: reference - <Name>'s voice follows <Audio k>'s timbre and delivery without
+copying the original signal.` The speaker ID is the one the text gives that character
+(`<Name> (S1) says ...`); with none in the text, none is added. Write the new line as
+`<Name> (S1) says <d>[English] ...</d>`.
+
+A `kind: audio` reference is used as is: `partially_copy`, its signal copied into the
+segment with other sounds around it, such as a dialogue line or a piece of music. When the
+clip carries a character's words, write those exact words where the character says them,
+`<Name> (S1) says <d>[English] the exact words</d>`, so the lips follow them. The
+reference's own `retention_analysis` replaces the default, e.g. `fully_copy - ...` for the
+whole track, or `reference - ...` to borrow only its style. A `summary` that opens with
+`[task types]` gains `audio reference` or `audio reuse` to match.
 
 ## Unwanted speech
 
@@ -206,13 +219,13 @@ A reference has:
 
 - `name` and `kind` (`character`, `background`, `audio` or `video`);
 - its file: `image` (a character or background), `audio` or `video`;
-- optional `description`, `retention_analysis` and `seed`.
+- optional `description`, `retention_analysis` and `seed`, and on a character `voice`.
 
 A supplied image skips generation. Otherwise Qwen-Image-2.1 generates the image once
 from the description. Names normalise: whitespace collapses and `<`/`>` are dropped. Two
 names that match the same token are refused. Attach files with a JSON path, or with
-`--asset references.0.image=...`, `--asset references.3.audio=...` or
-`--asset references.4.video=...`. Audio references are 2–15 s each, 15 s in total, at most
+`--asset references.0.image=...`, `--asset references.0.voice=...`,
+`--asset references.3.audio=...` or `--asset references.4.video=...`. Audio references are 2–15 s each, 15 s in total, at most
 three. Allowed: up to nine images and twelve image and audio references in all; videos count
 per call. An audio-only set is refused.
 

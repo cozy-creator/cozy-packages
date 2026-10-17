@@ -291,14 +291,9 @@ def coffee(lab: dict[str, Any]) -> None:
     references = [
         {"name": "Subject 1", "kind": "background", "description": "A coffee shop with a brick wall."},
         {"name": "Subject 2", "kind": "character", "description": "A fluffy white Samoyed."},
-        {"name": "Subject 3", "kind": "character", "description": "A young blonde woman."},
+        {"name": "Subject 3", "kind": "character", "description": "A young blonde woman.",
+         "voice": "sha256:" + "c" * 64},
         {"name": "Subject 4", "kind": "character", "description": "A young man in a hoodie."},
-        {
-            "name": "Voice",
-            "kind": "audio",
-            "description": "The voice timbre of <Subject 3> (S1).",
-            "audio": "sha256:" + "c" * 64,
-        },
     ]
     got = calls(
         h3.LongFormInput,
@@ -311,7 +306,7 @@ def coffee(lab: dict[str, Any]) -> None:
         },
     )
     shots = "(appears in [Shot 1], [Shot 2])"
-    voice = "<Audio 1> is the voice-timbre reference for <Subject 3> (S1). The voice timbre of <Subject 3> (S1)."
+    voice = "<Audio 1> is the voice-timbre reference for <Subject 3> (S1)."
     follows = ("<Audio 1>: reference - <Subject 3>'s voice follows <Audio 1>'s timbre and delivery without "
                "copying the original signal.\n")
     definitions = (
@@ -335,7 +330,7 @@ def coffee(lab: dict[str, Any]) -> None:
         "coffee-shop segment: each named reference, the scene first, the voice after its character",
         got[0][1:],
         (
-            ["Subject 1", "Subject 2", "Subject 3", "Voice", "Subject 4"],
+            ["Subject 1", "Subject 2", "Subject 3", "Subject 3's voice", "Subject 4"],
             ["Segment 1: <Video 1>, <Video 2> match no reference; left as written."],
         ),
     )
@@ -346,14 +341,14 @@ def coffee(lab: dict[str, Any]) -> None:
             "subject_definitions:\n"
             "<Subject 1> is the background shown in <Picture 1>. A coffee shop with a brick wall.\n"
             "<Subject 3> is the character shown in <Picture 2>. A young blonde woman.\n"
-            f"{voice}\n"
+            "<Audio 1> is the voice-timbre reference for <Subject 3>.\n"
             "<Subject 2> is the character shown in <Picture 3>. A fluffy white Samoyed.\n\n"
             f"retention_analysis:\n<Subject 1>: fully_preserved - {SCENE}.\n"
             f"<Subject 3>: fully_preserved - {PERSON}.\n"
             f"{follows}"
             f"<Subject 2>: fully_preserved - {PERSON}.\n\n"
             "<Subject 3> waves goodbye to <Subject 2>.\n\nnon_diegetic_music:\nN/A",
-            ["Subject 1", "Subject 3", "Voice", "Subject 2"],
+            ["Subject 1", "Subject 3", "Subject 3's voice", "Subject 2"],
             [],
         ),
     )
@@ -403,7 +398,7 @@ def retention_defaults() -> None:
         f"fully_preserved - {SCENE}.",
         "fully_preserved - keep the face, hair, and outfit of the referenced character. "
         "Ignore the white background.",
-        "reference - its sound guides the target audio without copying the original signal.",
+        "partially_copy - <Audio 1> is copied into the target audio, with other sounds around it.",
     ]
     authored = "reference - retain only the authored details, including the blue backdrop."
     for job in (h3.LongFormInput, h3.LongFormCutsInput):
@@ -709,34 +704,46 @@ async def videos() -> None:
 
 
 def voices() -> None:
-    """Audio follows MiniMax's guide (§2.4, §4.2, §5.4): a voice is a timbre `reference` for its
-    character, reusing the text's `(Sx)`; other audio defaults to `reference`."""
-    refs = [{"name": "Ann", "kind": "character", "description": "A woman in red."},
-            {"name": "Ann voice", "kind": "audio", "audio": "sha256:" + "1" * 64,
-             "description": "The voice of <Ann>."},
-            {"name": "Rain", "kind": "audio", "audio": "sha256:" + "2" * 64},
+    """Audio follows MiniMax's guide (§2.4, §4.2, §5.4): a character's `voice` is a timbre
+    `reference` reusing the text's `(Sx)`; standalone audio is `partially_copy` unless told."""
+    refs = [{"name": "Ann", "kind": "character", "description": "A woman in red.",
+             "voice": "sha256:" + "1" * 64},
+            {"name": "Line", "kind": "audio", "audio": "sha256:" + "2" * 64},
             {"name": "Theme", "kind": "audio", "audio": "sha256:" + "3" * 64,
-             "retention_analysis": "fully_copy - <Theme> is reused 1:1 as the score."}]
+             "retention_analysis": "reference - only the tempo of <Theme> guides the score."},
+            {"name": "Beach", "kind": "background", "description": "An empty beach."}]
     got = calls(h3.LongFormInput, {"references": refs, "segments": [
         {"prompt": "summary:\n[reference generation] <Ann> speaks.\n\ndetailed_description:\n"
-                   "[Shot 1] <Ann> (S1) says <d>[English] Hello there.</d> <Rain> falls.",
+                   "[Shot 1] <Ann> (S1) says <d>[English] Hello there.</d> Then <Line> plays.",
          "duration_s": 5},
-        {"prompt": "<Ann> hums over <Theme>.", "duration_s": 5},
+        {"prompt": "summary:\n[reference generation] <Ann> hums.\n\n<Ann> hums over <Theme>.",
+         "duration_s": 5},
+        {"prompt": "A gull calls over <Line>.", "duration_s": 5},
     ]})
-    voice = "<Audio 1> is the voice-timbre reference for <Ann> (S1). The voice of <Ann>."
     follows = ("<Audio 1>: reference - <Ann>'s voice follows <Audio 1>'s timbre and delivery "
                "without copying the original signal.")
-    check("a voice reuses the text's speaker ID and is a timbre reference",
-          (voice in definition_lines(got[0][0]), follows in retention_lines(got[0][0])), (True, True))
-    check("other audio defaults to reference",
-          "<Audio 2>: reference - its sound guides the target audio without copying the original signal."
+    check("a voice follows its character, reusing the text's speaker ID",
+          (got[0][1], "<Audio 1> is the voice-timbre reference for <Ann> (S1)." in definition_lines(got[0][0]),
+           follows in retention_lines(got[0][0])),
+          (["Beach", "Ann", "Ann's voice", "Line"], True, True))
+    check("standalone audio is copied as is by default",
+          "<Audio 2>: partially_copy - <Audio 2> is copied into the target audio, with other sounds around it."
           in retention_lines(got[0][0]), True)
-    check("the summary gains the audio task type", "[reference generation + audio reference]" in got[0][0], True)
+    check("the summary gains both audio task types",
+          "[reference generation + audio reference + audio reuse]" in got[0][0], True)
     check("without a speaker ID in the text, none is invented",
-          "<Audio 1> is the voice-timbre reference for <Ann>. The voice of <Ann>." in definition_lines(got[1][0]),
-          True)
-    check("an authored fully_copy is kept",
-          "<Audio 2>: fully_copy - <Theme> is reused 1:1 as the score." in retention_lines(got[1][0]), True)
+          "<Audio 1> is the voice-timbre reference for <Ann>." in definition_lines(got[1][0]), True)
+    check("an authored retention line is kept",
+          ("<Audio 2>: reference - only the tempo of <Theme> guides the score." in retention_lines(got[1][0]),
+           "[reference generation + audio reference]" in got[1][0]), (True, True))
+    check("a voice never attaches without its character", "Ann's voice" in got[2][1], False)
+    try:
+        validate_references(request(list[StoryReference], [
+            {"name": "Rain", "kind": "audio", "audio": "sha256:" + "4" * 64, "voice": "sha256:" + "5" * 64}]))
+    except InvalidRequest:
+        print("  ok   only a character takes a voice")
+    else:
+        raise AssertionError("a voice on audio accepted")
 
 
 if __name__ == "__main__":
