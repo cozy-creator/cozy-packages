@@ -216,8 +216,8 @@ def arm_census() -> None:
     ceilings = {output.name: output.max_new_bytes for output in job.LANE_OUTPUTS}
     shipped = {
         "bf16-full": 12884967424,
-        "bf16-pruned": 15032516608,
-        "fp8-pruned": 83751993344 + (56 << 30),
+        "bf16": 15032516608,
+        "fp8": 83751993344 + (56 << 30),
     }
     if ceilings != shipped:
         _fail(f"lane ceilings changed: {ceilings}")
@@ -414,10 +414,10 @@ def arm_quantizer() -> None:
     """`cozy model quantize --fp8|--int8|--nvfp4`: what H3's recipe encodes on each lane."""
     print("\narm B — the fp8/int8 quantizer over pruned lanes")
     cases = (
-        ("bf16-pruned --fp8", None, "fp8-rowwise/1", [313, 313, 350]),
-        ("bf16-pruned --int8", None, "int8-convrot256/1", [313, 313, 350]),
-        ("bf16-pruned --nvfp4", None, "nvfp4-w4a4/1", [276, 276, 350]),
-        ("fp8-pruned --fp8", job.FP8_SPEC, "fp8-rowwise/1", [350]),
+        ("bf16 --fp8", None, "fp8-rowwise/1", [313, 313, 350]),
+        ("bf16 --int8", None, "int8-convrot256/1", [313, 313, 350]),
+        ("bf16 --nvfp4", None, "nvfp4-w4a4/1", [276, 276, 350]),
+        ("fp8 --fp8", job.FP8_SPEC, "fp8-rowwise/1", [350]),
     )
     for name, spec, encoding, expected in cases:
         selections = job._quantizer_selections(_pruned_source(spec), encoding)  # type: ignore[arg-type]
