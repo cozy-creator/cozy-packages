@@ -838,6 +838,7 @@ class OfficialH3Pipeline:
         for trunk in _TRUNKS:
             _validate_model_contract(pipes[trunk], dits[trunk], video_vae, audio_vae)
         tokenizer, processor = _processor()
+        plans = {task: canonical_timestep_plan(task) for task in _TASKS}
 
         for workflow, task in _WORKFLOW_TASKS.items():
             pipes[workflow].register_components(
@@ -846,8 +847,8 @@ class OfficialH3Pipeline:
                 processor=processor,
                 vae=video_vae,
                 audio_vae=audio_vae,
-                scheduler=MiniMaxH3Scheduler(shift=12.0),
-                audio_scheduler=MiniMaxH3Scheduler(shift=3.0),
+                scheduler=MiniMaxH3Scheduler(shift=plans[task].video_shift),
+                audio_scheduler=MiniMaxH3Scheduler(shift=plans[task].audio_shift),
                 **{_DIFFUSERS_DIT[_TRUNK[task]]: dits[_TRUNK[task]]},
             )
 
@@ -1345,8 +1346,8 @@ class OfficialH3Pipeline:
             self._pipes[self._workflow(task, state)],
             self.components[_DIT_COMPONENT[_TRUNK[task]]],
             overrides={
-                "scheduler": MiniMaxH3Scheduler(shift=12.0),
-                "audio_scheduler": MiniMaxH3Scheduler(shift=3.0),
+                "scheduler": MiniMaxH3Scheduler(shift=self._plans[task].video_shift),
+                "audio_scheduler": MiniMaxH3Scheduler(shift=self._plans[task].audio_shift),
                 "max_duration": _CEILING_S,
             },
         )
