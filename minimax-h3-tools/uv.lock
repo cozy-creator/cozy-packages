@@ -3,8 +3,8 @@ revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15' and platform_machine == 'x86_64' and sys_platform == 'linux'",
-    "python_full_version < '3.15' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version >= '3.15' and platform_machine == 'aarch64' and sys_platform == 'linux'",
+    "python_full_version < '3.15' and platform_machine == 'x86_64' and sys_platform == 'linux'",
     "python_full_version < '3.15' and platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
 supported-markers = [
@@ -298,7 +298,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3-tools"
-version = "2.19.0"
+version = "2.20.0"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime" },
