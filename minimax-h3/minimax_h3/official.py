@@ -88,6 +88,7 @@ from .continuation import (
     align_context_rows,
     export_context,
 )
+from .reference_rows import ReferencePlan, ReferenceRows
 from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK, TurboOverlay, TurboSchedule
 from .vae_tiles import TileBatchedVideoVAE, encode_condition
 
@@ -948,6 +949,7 @@ class OfficialH3Pipeline:
         context: AVContext | None = None,
         delivery: ContinuationPlan | None = None,
         expected_context_provenance: str | None = None,
+        reference_plan: ReferencePlan = ReferencePlan(),
     ) -> Any:
         """``reference_image_short_edges`` is one resolved edge per image reference, in
         packed order; the official setup step resizes each image to its own."""
@@ -974,6 +976,8 @@ class OfficialH3Pipeline:
             references=list(references),
             image_short_edges=tuple(reference_image_short_edges),
         )
+        state.set("normalized_references", reference_plan.scale_videos(state.normalized_references))
+        state.set("reference_plan", reference_plan)
         if context is not None and context.canvas not in (None, (state.height, state.width)):
             raise InvalidRequest(
                 "continuation canvas differs from this render", code="h3_continuation"
@@ -1374,8 +1378,16 @@ class OfficialH3Pipeline:
         facts = ScheduleFacts.of(plan, schedule)
         loop = blocks["denoise.denoise"]
         block_state = loop.get_block_state(state)
+        plan, rows = state.get("reference_plan"), None
+        if plan is not None:
+            rows = ReferenceRows(
+                state.normalized_references, state.condition_latents, tuple(scoped.patch_size), block_state
+            )
+            plan.thin(rows, block_state)
         for index, timestep in enumerate(block_state.timesteps):
             cancel()
+            if rows is not None:
+                plan.release(rows, block_state, index)
             with attention_scope(
                 _attention_layout(block_state, index, sol_dense_steps=sol_dense_steps)
             ):
