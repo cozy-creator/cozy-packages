@@ -580,7 +580,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.38.2"
+version = "1.39.0"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },
@@ -608,7 +608,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "birefnet", specifier = ">=0.1.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
-    { name = "character-describer", specifier = ">=0.2.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
+    { name = "character-describer", specifier = ">=0.6.1", index = "https://tensorhub.com/v1/index/fidika/simple/" },
     { name = "cozy-runtime", extras = ["adapters", "media"], specifier = ">=0.26.0" },
     { name = "diffusers", specifier = "==0.41.0" },
     { name = "hf-xet", specifier = ">=1.6.0" },

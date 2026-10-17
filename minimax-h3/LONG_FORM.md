@@ -26,7 +26,7 @@ so the workflow copies the global information into it.
   `null` inherits the shared score; blank or `N/A` requests no score. An explicit
   segment field replaces an inline music section. Without that field, inline music
   takes precedence over the shared score. This applies to both long-form composers.
-- `segments`: the ordered calls.
+- `segments`: the ordered calls. Each may carry its own `videos` (see [Action videos](#action-videos)).
 - `context_frames`: global picture window for `long_form` (0, 22, 39 or 56; default 22).
 - `mode` (`turbo` or `standard`) and `steps` (standard only).
 
@@ -89,11 +89,11 @@ case, with `_`, `-` or a space between words.
    first, in the global order; then the rest in the order the text first names them.
 2. **Numbering.** `<Picture k>` and `<Audio k>` count each kind over that attached set.
    A global `<Picture N>` or `<Audio N>` in the text also names its reference and is
-   renumbered to match. A token that matches nothing, such as `<Video 1>`, stays as
-   written, with a warning.
+   renumbered to match. `<Video k>` is the segment's own k-th clip. A token that matches
+   nothing, such as `<Video 2>` in a segment with one clip, stays as written, with a warning.
 3. **Sections.** The workflow adds `subject_definitions` (one line per attached
    reference), `retention_analysis` (one line per attached reference, with the
-   `[Shot N]` markers that name it), and the global `style` (when set),
+   `[Shot N]` markers that name it, then one motion line per clip), and the global `style` (when set),
    `overall_soundscape` and `non_diegetic_music`.
    - Existing subject, retention, and soundscape sections gain the global content.
    - If the section is missing, it is added in the order above, under the canonical heading.
@@ -104,6 +104,40 @@ case, with `_`, `-` or a space between words.
 
 H3's ref2va needs an image. A segment with no scene and no named character therefore
 receives every reference, with a warning.
+
+## Action videos
+
+A segment's `videos` (up to three) guide its action: choreography, timing, a fight's beats.
+They go to that segment's H3 call only, after the shared references, as `<Video 1>`,
+`<Video 2>`… in list order, so each segment numbers its own. Each clip is 2–15 s with square
+pixels, 15 s in all per segment. A clip with sound also conditions the audio and takes the
+next `<Audio N>` after the segment's audio references; strip the track (`ffmpeg -an`) to
+guide motion alone. Each clip gains a default `retention_analysis` line:
+`<Video k> (motion and choreography): attribute_transfer`, which transfers its movement
+and keeps none of its people or setting. A `<Video k>` line of your own replaces it.
+Continuation and the global sections apply as to any segment. Direct `ref2va` and
+`ref2va_turbo` take the same `videos` beside named `references`.
+
+Write the role where you name the subject, as MiniMax's guide does:
+
+```json
+{
+  "references": [
+    {"name": "Subject 1", "kind": "character", "image": "./ann.png"},
+    {"name": "Subject 2", "kind": "character", "image": "./ben.png"},
+    {"name": "Dojo", "kind": "scene", "description": "A wooden dojo at dusk."}
+  ],
+  "segments": [
+    {"duration_s": 6, "prompt": "subject_definitions:\n<Subject 1>'s motion comes from <Video 1>.\n\ndetailed_description:\n[Shot 1] <Subject 1> attacks <Subject 2> in <Dojo> with the spinning kick of <Video 1>."},
+    {"duration_s": 6, "prompt": "subject_definitions:\n<Subject 2>'s motion comes from <Video 1>.\n\ndetailed_description:\n[Shot 1] <Subject 2> blocks and throws <Subject 1> as in <Video 1>."}
+  ]
+}
+```
+
+```sh
+cozy run fidika/minimax-h3/long_form --input fight.json \
+  --asset segments.0.videos.0=kick.mp4 --asset segments.1.videos.0=throw.mp4 --await
+```
 
 ## Unwanted speech
 

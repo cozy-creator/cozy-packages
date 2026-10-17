@@ -2823,7 +2823,7 @@ def arm_interface() -> None:
             f"{name} request fields",
             [field["name"] for field in entry["request"]["fields"]],
             fields[:3] + ["resolution", "upscale"]
-            + (["references", "style", "prepare_references", "describe_references"]
+            + (["references", "videos", "style", "prepare_references", "describe_references"]
                if name.startswith("ref2va") else [])
             + fields[3:],
         )

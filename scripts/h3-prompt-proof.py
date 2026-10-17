@@ -15,7 +15,8 @@ from types import SimpleNamespace
 from typing import Any, get_type_hints
 
 import msgspec
-from cozy_runtime.author import AudioAsset, ImageAsset, InvalidRequest
+from msgspec.structs import replace
+from cozy_runtime.author import Assets, AudioAsset, ImageAsset, InvalidRequest, Mixed, VideoAsset
 from cozy_runtime.author.fakes import fake_attempt, fake_context, fake_outputs, fake_telemetry
 from diffusers.modular_pipelines.minimax_h3.encoders import MiniMaxH3Ref2VATextEncoderStep
 
@@ -23,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
 import h3
 from minimax_h3.official import Task
 from story import (
+    MOTION,
     StoryReference,
     encoder_prompt,
     image_prompt,
@@ -91,7 +93,7 @@ def request(job: Any, wire: Any) -> Any:
     """Decode the wire as Runtime does; an asset handle stands in for granted bytes."""
 
     def handle(kind: type, value: Any) -> Any:
-        if kind in (AudioAsset, ImageAsset):
+        if kind in (AudioAsset, ImageAsset, VideoAsset):
             return kind(value)
         raise NotImplementedError(kind)
 
@@ -633,7 +635,63 @@ def opening_cuts() -> None:
           len(opening_cut_warnings([ending, "Cut to <Picture 3>."], refs, [False, True])), 1)
 
 
+async def videos() -> None:
+    """A segment's or direct call's own clips: `<Video N>` per call, after its references,
+    with a motion retention line unless the text retains that clip itself."""
+    refs = [{"name": "Ann", "kind": "character", "description": "A woman in red."},
+            {"name": "Ben", "kind": "character", "description": "A man in blue."}]
+    fight = "<Ann> spars with <Ben>; her moves come from <Video 1>."
+    own = "retention_analysis:\n<Video 1> (camera movement): weak_reference - the dolly only.\n\n"
+    motion = f"<Video 1> (motion and choreography): attribute_transfer - {MOTION}."
+
+    def retention(text: str) -> list[str]:
+        return text.split("retention_analysis:\n", 1)[1].split("\n\n", 1)[0].splitlines()
+
+    for job in (h3.LongFormInput, h3.LongFormCutsInput):
+        name = job.__name__
+        got = calls(job, {"references": refs, "segments": [
+            {"prompt": fight, "duration_s": 5, "videos": ["sha256:" + "1" * 64]},
+            {"prompt": own + fight + " Then <Video 2>.", "duration_s": 5, "videos": ["sha256:" + "2" * 64]},
+            {"prompt": "<Ben> copies <Video 1>.", "duration_s": 5},
+        ]})
+        check(f"{name}: a clip adds its motion line after the references", retention(got[0][0])[-1], motion)
+        check(f"{name}: <Video 1> names the segment's clip", got[0][2], [])
+        check(f"{name}: an authored clip line replaces the default",
+              (motion in got[1][0], retention(got[1][0])[0].startswith("<Video 1> (camera")), (False, True))
+        check(f"{name}: a clip number past the segment's clips warns", got[1][2],
+              ["Segment 2: <Video 2> match no reference; left as written."])
+        check(f"{name}: clips are per segment", got[2][2],
+              ["Segment 3: <Video 1> match no reference; left as written."])
+    try:
+        request(h3.LongFormInput, {"references": refs, "segments": [
+            {"prompt": fight, "duration_s": 5, "videos": ["sha256:" + d * 64 for d in "1234"]}]})
+    except msgspec.ValidationError:
+        print("  ok   four clips in one segment refuse")
+    else:
+        raise AssertionError("four clips accepted")
+    # Direct ref2va with named references: the same field, labels and prompt.
+    attempt = fake_attempt("h3-videos")
+    named = [{**ref, "image": "sha256:" + digit * 64} for ref, digit in zip(refs, "ab", strict=True)]
+    payload = request(h3.ReferenceRenderInput, {
+        "prompt": fight, "duration_s": 5, "references": named, "videos": ["sha256:" + "c" * 64]})
+    sent, assets, _, warnings = await h3._direct_reference_assets(
+        fake_context(), payload, Assets[Mixed](), fake_outputs(attempt), fake_telemetry(attempt))
+    check("ref2va: references, then the clip, labeled per kind",
+          [(assets.info(i).kind, assets.info(i).label) for i in range(len(assets))],
+          [("image", "Picture 1"), ("image", "Picture 2"), ("video", "Video 1")])
+    check("ref2va: the clip's motion line and no warning", (retention(sent.prompt)[-1], warnings), (motion, []))
+    try:
+        await h3._direct_reference_assets(
+            fake_context(), replace(payload, references=None),
+            Assets[Mixed]([ImageAsset("sha256:" + "d" * 64)]), fake_outputs(attempt), fake_telemetry(attempt))
+    except InvalidRequest:
+        print("  ok   videos with raw assets refuse")
+    else:
+        raise AssertionError("videos with raw assets accepted")
+
+
 if __name__ == "__main__":
+    asyncio.run(videos())
     opening_cuts()
     one_offs()
     long_form()
