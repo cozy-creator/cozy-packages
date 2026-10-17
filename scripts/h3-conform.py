@@ -2823,7 +2823,7 @@ def arm_interface() -> None:
             f"{name} request fields",
             [field["name"] for field in entry["request"]["fields"]],
             fields[:3] + ["resolution", "upscale"]
-            + (["references", "videos", "style", "prepare_references", "describe_references"]
+            + (["references", "style", "clean_references", "describe_references"]
                if name.startswith("ref2va") else [])
             + fields[3:],
         )
@@ -2831,6 +2831,13 @@ def arm_interface() -> None:
               next(f["type"] for f in entry["request"]["fields"] if f["name"] == "resolution"),
               {"literal": ["1080p", "1440p", "2160p", "768p"]})
         check(f"{name} has no GPU model slot on its CPU workflow", "models" in entry, False)
+        if name.startswith("ref2va"):
+            check(
+                f"{name} prepares and describes named characters unless told not to",
+                [f.get("default") for f in entry["request"]["fields"]
+                 if f["name"] in ("clean_references", "describe_references")],
+                [True, True],
+            )
         if name.endswith("_turbo"):
             check(
                 f"{name} has no steps on its wire: the plan fixes {package.TURBO_STEPS}",
@@ -3155,7 +3162,7 @@ def arm_interface() -> None:
                 (f["name"], f["type"])
                 for f in workflows["ref2va_turbo"]["request"]["fields"]
                 if f["name"] not in {"assets", "resolution", "upscale", "references",
-                                      "style", "prepare_references", "describe_references"}
+                                      "style", "clean_references", "describe_references"}
             ],
         )
         check(
@@ -3186,6 +3193,7 @@ def arm_interface() -> None:
             "context_frames",
             "mode",
             "steps",
+            "clean_references",
             "describe_references",
         ],
     )

@@ -215,7 +215,7 @@ Reference-image fidelity is an optional per-occurrence hint:
 cozy run paul/minimax-h3/ref2va \
   'prompt=<your H3 prompt>' duration_s=5 \
   --asset="woman=~/Pictures/woman.png" --asset-fidelity=woman=high \
-  --asset="scene=~/Pictures/scene.png" --asset-fidelity=scene=low \
+  --asset="background=~/Pictures/background.png" --asset-fidelity=background=low \
   --rental-only --await
 ```
 

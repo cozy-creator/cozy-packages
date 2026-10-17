@@ -84,7 +84,7 @@ LAB = [
     {"name": "Subject-2", "kind": "character", "description": "An adult woman in a black tactical suit."},
     {"name": "Subject-3", "kind": "character", "description": "An adult man in a grey security uniform."},
     {"name": "Subject-4", "kind": "character", "description": "An adult woman in a white lab coat."},
-    {"name": "Background", "kind": "scene", "description": "An underground laboratory with steel benches."},
+    {"name": "Background", "kind": "background", "description": "An underground laboratory with steel benches."},
 ]
 HUM = "A low hum of laboratory machinery fills the hall."
 
@@ -136,9 +136,9 @@ def calls(job: Any, wire: dict[str, Any]) -> list[tuple[str, list[str], list[str
 
 def music() -> None:
     score = "A gentle string quartet, no vocals."
-    scene = {"name": "Beach", "kind": "scene", "description": "An empty beach."}
+    scene = {"name": "Beach", "kind": "background", "description": "An empty beach."}
     prefix = (
-        "subject_definitions:\n<Beach> is the scene shown in <Picture 1>. An empty beach.\n\n"
+        "subject_definitions:\n<Beach> is the background shown in <Picture 1>. An empty beach.\n\n"
         f"retention_analysis:\n<Beach>: fully_preserved - {SCENE}.\n\n{ONE_LINE}\n\n"
     )
 
@@ -223,7 +223,7 @@ def long_form() -> None:
         "overall_soundscape": HUM,
         "segments": [{"prompt": text, "duration_s": 6} for text in segments],
     }
-    lab = f"<Background> is the scene shown in <Picture 1>. {LAB[4]['description']}"
+    lab = f"<Background> is the background shown in <Picture 1>. {LAB[4]['description']}"
     expected = [
         (
             f"subject_definitions:\n{lab}\n<Subject-4> is the character shown in <Picture 2>. "
@@ -289,16 +289,11 @@ def long_form() -> None:
 def coffee(lab: dict[str, Any]) -> None:
     """The coffee-shop prompt as a long_form segment, then a one-line prompt."""
     references = [
-        {"name": "Subject 1", "kind": "scene", "description": "A coffee shop with a brick wall."},
+        {"name": "Subject 1", "kind": "background", "description": "A coffee shop with a brick wall."},
         {"name": "Subject 2", "kind": "character", "description": "A fluffy white Samoyed."},
-        {"name": "Subject 3", "kind": "character", "description": "A young blonde woman."},
+        {"name": "Subject 3", "kind": "character", "description": "A young blonde woman.",
+         "voice": "sha256:" + "c" * 64},
         {"name": "Subject 4", "kind": "character", "description": "A young man in a hoodie."},
-        {
-            "name": "Voice",
-            "kind": "audio",
-            "description": "The voice timbre of <Subject 3> (S1).",
-            "audio": "sha256:" + "c" * 64,
-        },
     ]
     got = calls(
         h3.LongFormInput,
@@ -311,9 +306,11 @@ def coffee(lab: dict[str, Any]) -> None:
         },
     )
     shots = "(appears in [Shot 1], [Shot 2])"
-    voice = "<Audio 1> is the supplied audio reference for <Voice>. The voice timbre of <Subject 3> (S1)."
+    voice = "<Audio 1> is the voice-timbre reference for <Subject 3> (S1)."
+    follows = ("<Audio 1>: reference - <Subject 3>'s voice follows <Audio 1>'s timbre and delivery without "
+               "copying the original signal.\n")
     definitions = (
-        "<Subject 1> is the scene shown in <Picture 1>. A coffee shop with a brick wall.\n"
+        "<Subject 1> is the background shown in <Picture 1>. A coffee shop with a brick wall.\n"
         "<Subject 2> is the character shown in <Picture 2>. A fluffy white Samoyed.\n"
         f"<Subject 3> is the character shown in <Picture 3>. A young blonde woman.\n{voice}\n"
         "<Subject 4> is the character shown in <Picture 4>. A young man in a hoodie.\n"
@@ -322,7 +319,7 @@ def coffee(lab: dict[str, Any]) -> None:
         f"<Subject 1> (appears in [Shot 1]): fully_preserved - {SCENE}.\n"
         f"<Subject 2> {shots}: fully_preserved - {PERSON}.\n"
         f"<Subject 3> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - {PERSON}.\n"
-        "<Audio 1>: fully_preserved - the referenced audio signal and its supplied timing.\n"
+        f"{follows}"
         f"<Subject 4> {shots}: fully_preserved - {PERSON}.\n"
     )
     first = COFFEE.replace("vocal layer.\n", "vocal layer.\n" + definitions, 1).replace(
@@ -333,7 +330,7 @@ def coffee(lab: dict[str, Any]) -> None:
         "coffee-shop segment: each named reference, the scene first, the voice after its character",
         got[0][1:],
         (
-            ["Subject 1", "Subject 2", "Subject 3", "Voice", "Subject 4"],
+            ["Subject 1", "Subject 2", "Subject 3", "Subject 3's voice", "Subject 4"],
             ["Segment 1: <Video 1>, <Video 2> match no reference; left as written."],
         ),
     )
@@ -342,16 +339,16 @@ def coffee(lab: dict[str, Any]) -> None:
         got[1],
         (
             "subject_definitions:\n"
-            "<Subject 1> is the scene shown in <Picture 1>. A coffee shop with a brick wall.\n"
+            "<Subject 1> is the background shown in <Picture 1>. A coffee shop with a brick wall.\n"
             "<Subject 3> is the character shown in <Picture 2>. A young blonde woman.\n"
-            f"{voice}\n"
+            "<Audio 1> is the voice-timbre reference for <Subject 3>.\n"
             "<Subject 2> is the character shown in <Picture 3>. A fluffy white Samoyed.\n\n"
             f"retention_analysis:\n<Subject 1>: fully_preserved - {SCENE}.\n"
             f"<Subject 3>: fully_preserved - {PERSON}.\n"
-            "<Audio 1>: fully_preserved - the referenced audio signal and its supplied timing.\n"
+            f"{follows}"
             f"<Subject 2>: fully_preserved - {PERSON}.\n\n"
             "<Subject 3> waves goodbye to <Subject 2>.\n\nnon_diegetic_music:\nN/A",
-            ["Subject 1", "Subject 3", "Voice", "Subject 2"],
+            ["Subject 1", "Subject 3", "Subject 3's voice", "Subject 2"],
             [],
         ),
     )
@@ -378,7 +375,7 @@ def coffee(lab: dict[str, Any]) -> None:
         orphan[1:],
         (
             ["Subject-1", "Subject-2"],
-            ["Segment 1 names no character and there is no scene, so it receives all 2 references."],
+            ["Segment 1 names no character and there is no background, so it receives all 2 of its image and audio references."],
         ),
     )
 
@@ -386,7 +383,7 @@ def coffee(lab: dict[str, Any]) -> None:
 def retention_defaults() -> None:
     references = [
         {"name": "Hero", "kind": "character", "description": "A courier in a teal coat."},
-        {"name": "Depot", "kind": "scene", "description": "A wet train platform."},
+        {"name": "Depot", "kind": "background", "description": "A wet train platform."},
         {"name": "Voice", "kind": "audio", "audio": "sha256:" + "c" * 64},
     ]
     wire: dict[str, Any] = {
@@ -401,13 +398,13 @@ def retention_defaults() -> None:
         f"fully_preserved - {SCENE}.",
         "fully_preserved - keep the face, hair, and outfit of the referenced character. "
         "Ignore the white background.",
-        "fully_preserved - the referenced audio signal and its supplied timing.",
+        "partially_copy - <Audio 1> is copied into the target audio, with other sounds around it.",
     ]
     authored = "reference - retain only the authored details, including the blue backdrop."
     for job in (h3.LongFormInput, h3.LongFormCutsInput):
         name = job.__name__
         for label, payload, expected in (
-            ("character default; scene and audio unchanged", wire, defaults),
+            ("character default; background and audio unchanged", wire, defaults),
             (
                 "authored retention overrides remain verbatim",
                 {**wire, "references": [
@@ -428,7 +425,7 @@ def style() -> None:
     look = "Soft watercolor animation with muted pastel colors."
     kite = [
         {"name": "Kite", "kind": "character", "description": "A red paper kite."},
-        {"name": "Beach", "kind": "scene", "description": "An empty sandy beach."},
+        {"name": "Beach", "kind": "background", "description": "An empty sandy beach."},
     ]
     texts = [
         "summary:\n<Kite> climbs.\n\ndetailed_description:\n[Shot 1] <Kite> climbs.",
@@ -440,7 +437,7 @@ def style() -> None:
         "segments": [{"prompt": text, "duration_s": 5} for text in texts],
     }
     definitions = (
-        "subject_definitions:\n<Beach> is the scene shown in <Picture 1>. An empty sandy beach.\n"
+        "subject_definitions:\n<Beach> is the background shown in <Picture 1>. An empty sandy beach.\n"
         "<Kite> is the character shown in <Picture 2>. A red paper kite.\n\n"
     )
     retention = f"<Beach>: fully_preserved - {SCENE}.\n<Kite>{{}}: fully_preserved - {PERSON}.\n\n"
@@ -489,7 +486,7 @@ async def references() -> None:
     supplied = ImageAsset("sha256:" + "a" * 64)
     generated = ImageAsset("sha256:" + "b" * 64)
     hero = StoryReference("Hero", "character", "An adult woman in a teal coat.", image=supplied)
-    depot = StoryReference("Depot", "scene", "A wet train platform.")
+    depot = StoryReference("Depot", "background", "A wet train platform.")
     made: list[str] = []
 
     async def generate(reference: StoryReference) -> ImageAsset:
@@ -497,7 +494,7 @@ async def references() -> None:
         return generated
 
     check("a supplied image is reused", await resolve_reference_images([hero], generate), {"Hero": supplied})
-    scene_prompt = image_prompt(StoryReference("Depot", "scene", "A wet train platform."))
+    scene_prompt = image_prompt(StoryReference("Depot", "background", "A wet train platform."))
     for forbidden in ("no people", "human figures", "silhouettes", "human-like subjects"):
         check(f"scene generation explicitly excludes {forbidden}", forbidden in scene_prompt.lower(), True)
     mixed = await resolve_reference_images([hero, depot], generate)
@@ -509,7 +506,7 @@ async def references() -> None:
         removed.append(reference.name)
         return prepared
 
-    scene = StoryReference("Scene", "scene", image=supplied)
+    scene = StoryReference("Scene", "background", image=supplied)
     voice = AudioAsset("sha256:" + "d" * 64)
     audio = StoryReference("Voice", "audio", audio=voice)
     missing_character = StoryReference("Courier", "character", "An adult courier in red.")
@@ -534,7 +531,7 @@ async def references() -> None:
     for names in (["<>"], [" "], ["Subject 1", "SUBJECT-1"]):
         try:
             validate_references(
-                request(list[StoryReference], [{"name": n, "kind": "scene", "description": "A place."} for n in names])
+                request(list[StoryReference], [{"name": n, "kind": "background", "description": "A place."} for n in names])
             )
         except (msgspec.ValidationError, InvalidRequest):
             print(f"  ok   {names} refuses")
@@ -554,7 +551,7 @@ async def references() -> None:
         raise AssertionError("unreachable")
 
     try:
-        await resolve_reference_images([depot, StoryReference("Other", "scene", "Garden")], failing)
+        await resolve_reference_images([depot, StoryReference("Other", "background", "Garden")], failing)
     except ValueError:
         check("a failed generation cancels its siblings", cancelled.is_set(), True)
     else:
@@ -619,7 +616,7 @@ async def reference_order() -> None:
 
 def opening_cuts() -> None:
     refs = [StoryReference("Ann", "character", "A woman."), StoryReference("Ben", "character", "A man."),
-            StoryReference("Cal", "character", "A boy."), StoryReference("Hall", "scene", "A hall.")]
+            StoryReference("Cal", "character", "A boy."), StoryReference("Hall", "background", "A hall.")]
     ending = "detailed_description:\n[Shot 1] <Cal> waits.\n[Shot 2] <Ann> and <Ben> talk in <Hall>."
     cut = "detailed_description:\n[Shot 1] Hard cut to <Cal> alone in <Hall>.\n[Shot 2] <Ann> enters."
     walk = "detailed_description:\n[Shot 1] <Cal> walks up to <Ann> and <Ben>."
@@ -635,63 +632,123 @@ def opening_cuts() -> None:
           len(opening_cut_warnings([ending, "Cut to <Picture 3>."], refs, [False, True])), 1)
 
 
+def retention_lines(text: str) -> list[str]:
+    return text.split("retention_analysis:\n", 1)[1].split("\n\n", 1)[0].splitlines()
+
+
+def definition_lines(text: str) -> list[str]:
+    return text.split("subject_definitions:\n", 1)[1].split("\n\n", 1)[0].splitlines()
+
+
 async def videos() -> None:
-    """A segment's or direct call's own clips: `<Video N>` per call, after its references,
-    with a motion retention line unless the text retains that clip itself."""
+    """Videos are named references: attached only where the text names them, by name first,
+    else as the global `<Video N>`, and renumbered per call after its pictures and audio."""
+    clip = lambda digit: "sha256:" + digit * 64  # noqa: E731
     refs = [{"name": "Ann", "kind": "character", "description": "A woman in red."},
-            {"name": "Ben", "kind": "character", "description": "A man in blue."}]
-    fight = "<Ann> spars with <Ben>; her moves come from <Video 1>."
-    own = "retention_analysis:\n<Video 1> (camera movement): weak_reference - the dolly only.\n\n"
+            {"name": "Ben", "kind": "character", "description": "A man in blue."},
+            {"name": "Video 1", "kind": "video", "video": clip("1")},
+            {"name": "Video 2", "kind": "video", "video": clip("2")},
+            {"name": "Spin Kick", "kind": "video", "video": clip("3")}]
     motion = f"<Video 1> (motion and choreography): attribute_transfer - {MOTION}."
-
-    def retention(text: str) -> list[str]:
-        return text.split("retention_analysis:\n", 1)[1].split("\n\n", 1)[0].splitlines()
-
     for job in (h3.LongFormInput, h3.LongFormCutsInput):
         name = job.__name__
         got = calls(job, {"references": refs, "segments": [
-            {"prompt": fight, "duration_s": 5, "videos": ["sha256:" + "1" * 64]},
-            {"prompt": own + fight + " Then <Video 2>.", "duration_s": 5, "videos": ["sha256:" + "2" * 64]},
-            {"prompt": "<Ben> copies <Video 1>.", "duration_s": 5},
+            {"prompt": "<Ann> spars with <Ben> as in <Video 2>.", "duration_s": 5},
+            {"prompt": "<Ben> copies <video_1>, then <Video 2>.", "duration_s": 5},
+            {"prompt": "<Ann> lands <Spin Kick>; <Ben> repeats <Video 2>.", "duration_s": 5},
+            {"prompt": "retention_analysis:\n<Video 2> (camera): weak_reference - the dolly only.\n\n"
+                       "<Ann> walks as in <Video 2>.", "duration_s": 5},
+            {"prompt": "<Ann> waves.", "duration_s": 5},
         ]})
-        check(f"{name}: a clip adds its motion line after the references", retention(got[0][0])[-1], motion)
-        check(f"{name}: <Video 1> names the segment's clip", got[0][2], [])
-        check(f"{name}: an authored clip line replaces the default",
-              (motion in got[1][0], retention(got[1][0])[0].startswith("<Video 1> (camera")), (False, True))
-        check(f"{name}: a clip number past the segment's clips warns", got[1][2],
-              ["Segment 2: <Video 2> match no reference; left as written."])
-        check(f"{name}: clips are per segment", got[2][2],
-              ["Segment 3: <Video 1> match no reference; left as written."])
+        check(f"{name}: a segment naming only <Video 2> sends it as its <Video 1>",
+              (got[0][1], "as in <Video 1>." in got[0][0], retention_lines(got[0][0])[-1],
+               definition_lines(got[0][0])[-1]),
+              (["Ann", "Ben", "Video 2"], True, motion, "<Video 1> is the supplied action video."))
+        check(f"{name}: two videos, numbered in the order the text names them",
+              (got[1][1], "copies <Video 1>, then <Video 2>." in got[1][0]),
+              (["Ben", "Video 1", "Video 2"], True))
+        check(f"{name}: one clip reused in two segments; a named clip keeps its name",
+              (got[2][1], "<Ann> lands <Spin Kick>; <Ben> repeats <Video 2>." in got[2][0],
+               "<Spin Kick> is the action shown in <Video 1>." in definition_lines(got[2][0])),
+              (["Ann", "Ben", "Spin Kick", "Video 2"], True, True))
+        check(f"{name}: an authored clip retention line replaces the default",
+              [line for line in retention_lines(got[3][0]) if "Video" in line],
+              ["<Video 1> (camera): weak_reference - the dolly only."])
+        check(f"{name}: a segment naming no video sends none", got[4][1], ["Ann"])
+    fallback = calls(h3.LongFormInput, {"references": [refs[3], {"name": "Hum", "kind": "audio",
+                                                                 "audio": clip("4")},
+                                                       refs[0]],
+                                        "segments": [{"prompt": "<Hum> plays.", "duration_s": 5}]})
+    check("the no-picture fallback never attaches a video", fallback[0][1], ["Hum", "Ann"])
     try:
-        request(h3.LongFormInput, {"references": refs, "segments": [
-            {"prompt": fight, "duration_s": 5, "videos": ["sha256:" + d * 64 for d in "1234"]}]})
-    except msgspec.ValidationError:
-        print("  ok   four clips in one segment refuse")
+        calls(h3.LongFormInput, {"references": [*refs, {"name": "Flip", "kind": "video", "video": clip("5")}],
+                                 "segments": [{"prompt": "<Ann>: <Video 1> <Video 2> <Spin Kick> <Flip>.",
+                                               "duration_s": 5}]})
+    except InvalidRequest:
+        print("  ok   four videos in one call refuse")
     else:
-        raise AssertionError("four clips accepted")
-    # Direct ref2va with named references: the same field, labels and prompt.
+        raise AssertionError("four videos in one call accepted")
+    # Direct ref2va: the same references, cleaning and describing off.
     attempt = fake_attempt("h3-videos")
-    named = [{**ref, "image": "sha256:" + digit * 64} for ref, digit in zip(refs, "ab", strict=True)]
+    named = [{**ref, "image": "sha256:" + digit * 64} for ref, digit in zip(refs[:2], "ab", strict=True)]
     payload = request(h3.ReferenceRenderInput, {
-        "prompt": fight, "duration_s": 5, "references": named, "videos": ["sha256:" + "c" * 64]})
+        "prompt": "<Ann> spars with <Ben> as in <Spin Kick>.", "duration_s": 5,
+        "references": [*named, refs[4]], "clean_references": False, "describe_references": False})
     sent, assets, _, warnings = await h3._direct_reference_assets(
         fake_context(), payload, Assets[Mixed](), fake_outputs(attempt), fake_telemetry(attempt))
-    check("ref2va: references, then the clip, labeled per kind",
+    check("ref2va: pictures, then the clip, labeled per kind",
           [(assets.info(i).kind, assets.info(i).label) for i in range(len(assets))],
           [("image", "Picture 1"), ("image", "Picture 2"), ("video", "Video 1")])
-    check("ref2va: the clip's motion line and no warning", (retention(sent.prompt)[-1], warnings), (motion, []))
+    check("ref2va: the clip's motion line and no warning", (retention_lines(sent.prompt)[-1], warnings),
+          (motion, []))
+
+
+def voices() -> None:
+    """Audio follows MiniMax's guide (§2.4, §4.2, §5.4): a character's `voice` is a timbre
+    `reference` reusing the text's `(Sx)`; standalone audio is `partially_copy` unless told."""
+    refs = [{"name": "Ann", "kind": "character", "description": "A woman in red.",
+             "voice": "sha256:" + "1" * 64},
+            {"name": "Line", "kind": "audio", "audio": "sha256:" + "2" * 64},
+            {"name": "Theme", "kind": "audio", "audio": "sha256:" + "3" * 64,
+             "retention_analysis": "reference - only the tempo of <Theme> guides the score."},
+            {"name": "Beach", "kind": "background", "description": "An empty beach."}]
+    got = calls(h3.LongFormInput, {"references": refs, "segments": [
+        {"prompt": "summary:\n[reference generation] <Ann> speaks.\n\ndetailed_description:\n"
+                   "[Shot 1] <Ann> (S1) says <d>[English] Hello there.</d> Then <Line> plays.",
+         "duration_s": 5},
+        {"prompt": "summary:\n[reference generation] <Ann> hums.\n\n<Ann> hums over <Theme>.",
+         "duration_s": 5},
+        {"prompt": "A gull calls over <Line>.", "duration_s": 5},
+    ]})
+    follows = ("<Audio 1>: reference - <Ann>'s voice follows <Audio 1>'s timbre and delivery "
+               "without copying the original signal.")
+    check("a voice follows its character, reusing the text's speaker ID",
+          (got[0][1], "<Audio 1> is the voice-timbre reference for <Ann> (S1)." in definition_lines(got[0][0]),
+           follows in retention_lines(got[0][0])),
+          (["Beach", "Ann", "Ann's voice", "Line"], True, True))
+    check("standalone audio is copied as is by default",
+          "<Audio 2>: partially_copy - <Audio 2> is copied into the target audio, with other sounds around it."
+          in retention_lines(got[0][0]), True)
+    check("the summary gains both audio task types",
+          "[reference generation + audio reference + audio reuse]" in got[0][0], True)
+    check("without a speaker ID in the text, none is invented",
+          "<Audio 1> is the voice-timbre reference for <Ann>." in definition_lines(got[1][0]), True)
+    check("an authored retention line is kept",
+          ("<Audio 2>: reference - only the tempo of <Theme> guides the score." in retention_lines(got[1][0]),
+           "[reference generation + audio reference]" in got[1][0]), (True, True))
+    check("a voice never attaches without its character", "Ann's voice" in got[2][1], False)
     try:
-        await h3._direct_reference_assets(
-            fake_context(), replace(payload, references=None),
-            Assets[Mixed]([ImageAsset("sha256:" + "d" * 64)]), fake_outputs(attempt), fake_telemetry(attempt))
+        validate_references(request(list[StoryReference], [
+            {"name": "Rain", "kind": "audio", "audio": "sha256:" + "4" * 64, "voice": "sha256:" + "5" * 64}]))
     except InvalidRequest:
-        print("  ok   videos with raw assets refuse")
+        print("  ok   only a character takes a voice")
     else:
-        raise AssertionError("videos with raw assets accepted")
+        raise AssertionError("a voice on audio accepted")
 
 
 if __name__ == "__main__":
     asyncio.run(videos())
+    voices()
     opening_cuts()
     one_offs()
     long_form()

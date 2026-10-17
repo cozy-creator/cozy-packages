@@ -8,11 +8,12 @@ so the workflow copies the global information into it.
 
 ## Request
 
-- `references`: characters, scenes and audio, shared by every segment.
-  A supplied character image is processed once with BiRefNet to remove its background,
-  then composited onto white before H3 receives it. The prepared image appears in the
-  reference outputs and is reused for every segment. Supplied scene images and audio
-  are used as supplied. References generated from descriptions keep their existing path.
+- `references`: characters, backgrounds, audio and videos, shared by every segment.
+- `clean_references` (default `true`): BiRefNet removes the background of each supplied
+  character image once, and H3 receives it composited onto white. The cleaned image
+  appears in the reference outputs and is reused for every segment; `false` sends it as
+  supplied. Supplied backgrounds, audio and videos are used as supplied. References generated
+  from descriptions keep their existing path.
 - `describe_references` (default `true`): a vision-language model writes one sentence
   about each supplied character image that has no `description` (identity, hair, face,
   clothing and items; never the background, pose or style). It runs once, alongside
@@ -26,7 +27,7 @@ so the workflow copies the global information into it.
   `null` inherits the shared score; blank or `N/A` requests no score. An explicit
   segment field replaces an inline music section. Without that field, inline music
   takes precedence over the shared score. This applies to both long-form composers.
-- `segments`: the ordered calls. Each may carry its own `videos` (see [Action videos](#action-videos)).
+- `segments`: the ordered calls.
 - `context_frames`: global picture window for `long_form` (0, 22, 39 or 56; default 22).
 - `mode` (`turbo` or `standard`) and `steps` (standard only).
 
@@ -64,7 +65,7 @@ Unknown fields are ignored, not refused; a missing required field, such as a mis
   "overall_soundscape": "A low hum of laboratory machinery fills the hall.",
   "references": [
     {"name": "Subject-4", "kind": "character", "description": "An adult woman in a white lab coat."},
-    {"name": "Background", "kind": "scene", "image": "./lab.png"}
+    {"name": "Background", "kind": "background", "image": "./lab.png"}
   ],
   "segments": [
     {
@@ -84,17 +85,20 @@ be missing. Text before the first heading counts as the description. Headings ma
 case, with `_`, `-` or a space between words.
 
 1. **References.** Name them as `<Name>` (any case; `_`, `-` and space alike). Each segment
-   gets every scene, the characters it names, and the audio it names. An audio reference
-   whose description names a character (a voice) follows that character. Scenes come
-   first, in the global order; then the rest in the order the text first names them.
-2. **Numbering.** `<Picture k>` and `<Audio k>` count each kind over that attached set.
-   A global `<Picture N>` or `<Audio N>` in the text also names its reference and is
-   renumbered to match. `<Video k>` is the segment's own k-th clip. A token that matches
-   nothing, such as `<Video 2>` in a segment with one clip, stays as written, with a warning.
+   gets every background, and the characters, audio and videos it names. A character's
+   `voice` goes wherever the character does. Backgrounds come
+   first, in the global order; then the rest in the order the text first names them, with
+   videos last.
+2. **Numbering.** `<Picture k>`, `<Audio k>` and `<Video k>` count each kind over that
+   attached set. A token such as `<Video 2>` names the reference called "Video 2" if there
+   is one, else the global second video; either way it is renumbered for the call, so a
+   segment naming only `<Video 2>` sends it as its `<Video 1>`. A token that matches
+   nothing stays as written, with a warning.
 3. **Sections.** The workflow adds `subject_definitions` (one line per attached
    reference), `retention_analysis` (one line per attached reference, with the
-   `[Shot N]` markers that name it, then one motion line per clip), and the global `style` (when set),
-   `overall_soundscape` and `non_diegetic_music`.
+   `[Shot N]` markers that name it), and the global `style` (when set),
+   `overall_soundscape` and `non_diegetic_music`. Audio follows MiniMax's guide (see
+   [Voices and audio](#voices-and-audio)).
    - Existing subject, retention, and soundscape sections gain the global content.
    - If the section is missing, it is added in the order above, under the canonical heading.
    - A body of `N/A` gives way to described global content in those sections.
@@ -102,42 +106,64 @@ case, with `_`, `-` or a space between words.
      `non_diegetic_music` field replaces the music section.
 4. **Everything else** reaches the model byte for byte.
 
-H3's ref2va needs an image. A segment with no scene and no named character therefore
-receives every reference, with a warning.
+H3's ref2va needs a picture. A segment with no background and no named character
+therefore receives every image and audio reference, never a video, with a warning.
 
 ## Action videos
 
-A segment's `videos` (up to three) guide its action: choreography, timing, a fight's beats.
-They go to that segment's H3 call only, after the shared references, as `<Video 1>`,
-`<Video 2>`… in list order, so each segment numbers its own. Each clip is 2–15 s with square
-pixels, 15 s in all per segment. A clip with sound also conditions the audio and takes the
-next `<Audio N>` after the segment's audio references; strip the track (`ffmpeg -an`) to
-guide motion alone. Each clip gains a default `retention_analysis` line:
-`<Video k> (motion and choreography): attribute_transfer`, which transfers its movement
-and keeps none of its people or setting. A `<Video k>` line of your own replaces it.
-Continuation and the global sections apply as to any segment. Direct `ref2va` and
-`ref2va_turbo` take the same `videos` beside named `references`.
+A `kind: video` reference guides action: choreography, timing, a fight's beats. Like a
+character, it goes only to the calls whose text names it, so one clip can guide one segment
+or several. Per call: at most three clips, 2–15 s each, 15 s in all, square pixels. A clip
+with sound also conditions the audio and takes the next `<Audio N>` after the call's audio
+references; strip the track (`ffmpeg -an`) to guide motion alone. Each clip gains
+`<Video k> (motion and choreography): attribute_transfer`, which transfers its movement and
+keeps none of its people or setting; a `<Video k>` line of your own replaces it.
+`clean_references` and `describe_references` leave videos alone. Direct `ref2va` and
+`ref2va_turbo` take video references the same way.
 
-Write the role where you name the subject, as MiniMax's guide does:
+Write the role where you name the subject, as MiniMax's guide does. Name clips anything;
+`Video 1`, `Video 2`… read naturally:
 
 ```json
 {
   "references": [
     {"name": "Subject 1", "kind": "character", "image": "./ann.png"},
     {"name": "Subject 2", "kind": "character", "image": "./ben.png"},
-    {"name": "Dojo", "kind": "scene", "description": "A wooden dojo at dusk."}
+    {"name": "Dojo", "kind": "background", "description": "A wooden dojo at dusk."},
+    {"name": "Video 1", "kind": "video", "video": "./kick.mp4"},
+    {"name": "Video 2", "kind": "video", "video": "./throw.mp4"}
   ],
   "segments": [
     {"duration_s": 6, "prompt": "subject_definitions:\n<Subject 1>'s motion comes from <Video 1>.\n\ndetailed_description:\n[Shot 1] <Subject 1> attacks <Subject 2> in <Dojo> with the spinning kick of <Video 1>."},
-    {"duration_s": 6, "prompt": "subject_definitions:\n<Subject 2>'s motion comes from <Video 1>.\n\ndetailed_description:\n[Shot 1] <Subject 2> blocks and throws <Subject 1> as in <Video 1>."}
+    {"duration_s": 6, "prompt": "subject_definitions:\n<Subject 2>'s motion comes from <Video 2>.\n\ndetailed_description:\n[Shot 1] <Subject 2> blocks and throws <Subject 1> as in <Video 2>."}
   ]
 }
 ```
 
+Segment 2 sends `throw.mp4` as its `<Video 1>`. Attach files by path in the request, or:
+
 ```sh
 cozy run fidika/minimax-h3/long_form --input fight.json \
-  --asset segments.0.videos.0=kick.mp4 --asset segments.1.videos.0=throw.mp4 --await
+  --asset references.3.video=kick.mp4 --asset references.4.video=throw.mp4 --await
 ```
+
+## Voices and audio
+
+A character's `voice` (2–15 s of clean speech) is a timbre reference: the character speaks
+new lines in that voice rather than replaying the clip. It renders as
+`<Audio k> is the voice-timbre reference for <Name> (Sx).` and
+`<Audio k>: reference - <Name>'s voice follows <Audio k>'s timbre and delivery without
+copying the original signal.` The speaker ID is the one the text gives that character
+(`<Name> (S1) says ...`); with none in the text, none is added. Write the new line as
+`<Name> (S1) says <d>[English] ...</d>`.
+
+A `kind: audio` reference is used as is: `partially_copy`, its signal copied into the
+segment with other sounds around it, such as a dialogue line or a piece of music. When the
+clip carries a character's words, write those exact words where the character says them,
+`<Name> (S1) says <d>[English] the exact words</d>`, so the lips follow them. The
+reference's own `retention_analysis` replaces the default, e.g. `fully_copy - ...` for the
+whole track, or `reference - ...` to borrow only its style. A `summary` that opens with
+`[task types]` gains `audio reference` or `audio reuse` to match.
 
 ## Unwanted speech
 
@@ -180,10 +206,10 @@ That image is a 16:9, 2 MP character design sheet on one plain white canvas, in 
 panels: a full-body front view, a full-body back view, and a neutral front-facing
 head-and-shoulders close-up that gives H3 the face in detail. Appearance, proportions
 and clothing stay consistent across the panels. The authored character description is
-included verbatim apart from surrounding whitespace. Scene references stay one 1:1,
+included verbatim apart from surrounding whitespace. Background references stay one 1:1,
 1 MP environment image.
 
-The global `style` text also reaches every Qwen character and scene reference
+The global `style` text also reaches every Qwen character and background reference
 request. For example, `style: realistic` guides both reference images and H3 video
 segments. The sheet layout does not prescribe an art style: references follow
 the explicitly requested style, default to a realistic photographic look when no
@@ -191,15 +217,17 @@ style is specified, and use anime styling only when explicitly requested.
 
 A reference has:
 
-- `name` and `kind` (`character`, `scene` or `audio`);
-- optional `description`, `image`, `audio`, `retention_analysis` and `seed`.
+- `name` and `kind` (`character`, `background`, `audio` or `video`);
+- its file: `image` (a character or background), `audio` or `video`;
+- optional `description`, `retention_analysis` and `seed`, and on a character `voice`.
 
 A supplied image skips generation. Otherwise Qwen-Image-2.1 generates the image once
 from the description. Names normalise: whitespace collapses and `<`/`>` are dropped. Two
 names that match the same token are refused. Attach files with a JSON path, or with
-`--asset references.0.image=...` / `--asset references.3.audio=...`. Audio references are
-2–15 s each, 15 s in total, at most three. Allowed: up to nine visual references and
-twelve references in all. An audio-only set is refused.
+`--asset references.0.image=...`, `--asset references.0.voice=...`,
+`--asset references.3.audio=...` or `--asset references.4.video=...`. Audio and voices are WAV, FLAC, Ogg or MP3. Audio references are 2–15 s each, 15 s in total, at most
+three. Allowed: up to nine images and twelve image and audio references in all; videos count
+per call. An audio-only set is refused.
 
 ```sh
 cozy run fidika/minimax-h3/long_form --input story.json --await
