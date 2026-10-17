@@ -146,6 +146,7 @@ from minimax_h3.official import (  # noqa: E402
     validate_reference_policy,
 )
 from minimax_h3 import turbo as turbo_module  # noqa: E402
+from minimax_h3.reference_rows import motion_size  # noqa: E402
 from minimax_h3.turbo import (  # noqa: E402
     ATTENTION_KWARG,
     LORA_FAMILIES,
@@ -2180,9 +2181,9 @@ def arm_media() -> None:
     check("square image demand", reference_image_vision_tokens(2048, 2048), 4096)
     check("4:1 image demand", reference_image_vision_tokens(4000, 1000), 16384)
     check(
-        "15-second 16:9 video demand",
+        "15-second 16:9 video demand at motion size",
         reference_video_vision_tokens(1920, 1080, Fraction(15)),
-        15120,
+        3780,
     )
     package.resolve_reference_sizing([], default=1024, video_tokens=32768)
     observe("vision capacity boundary")
@@ -2730,13 +2731,15 @@ def arm_reference_media() -> None:
         )
         normalized = state.normalized_references[0].frames
         height, width = (int(v) for v in resolve_canvas_size(2560, 1080, *official.CANVAS))
-        once = np.asarray(
-            PILImage.fromarray(reference.frames[0]).resize((width, height), PILImage.Resampling.LANCZOS)
+        canvas = PILImage.fromarray(reference.frames[0]).resize(
+            (width, height), PILImage.Resampling.LANCZOS
         )
+        motion_height, motion_width = motion_size(height, width)
+        guide = np.asarray(canvas.resize((motion_width, motion_height), PILImage.Resampling.LANCZOS))
         check(
-            "2560x1080: the official normalization puts it on its canvas with one LANCZOS resize",
-            (normalized.shape, bool(np.array_equal(normalized[0], once))),
-            ((72, height, width, 3), True),
+            "2560x1080: the official canvas LANCZOS resize, then one to its motion size",
+            (normalized.shape, bool(np.array_equal(normalized[0], guide))),
+            ((72, motion_height, motion_width, 3), True),
         )
         READ.clear()
     finally:

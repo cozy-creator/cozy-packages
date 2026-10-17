@@ -115,7 +115,9 @@ A `kind: video` reference guides action: choreography, timing, a fight's beats. 
 character, it goes only to the calls whose text names it, so one clip can guide one segment
 or several. Per call: at most three clips of at least 2 s, square pixels, any resolution or
 frame rate; H3 puts each on its own canvas at 24 fps. A clip longer than 15 s is truncated to
-its first 15 s, and the result's `warnings` says so.
+its first 15 s, and the result's `warnings` says so. A clip guides at half the canvas edge and
+every second latent frame, and only during the dense denoise steps, so a 15 s render with a
+clip costs ~1.3x the render without one (5.5x at the full sizing).
 A clip's sound is dropped unless the reference sets `use_audio: true`; then it conditions
 the audio and takes the next `<Audio N>` after the call's audio references. Each clip gains
 `<Video k> (motion and choreography): attribute_transfer`, which transfers its movement and
