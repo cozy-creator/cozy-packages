@@ -1380,16 +1380,16 @@ class OfficialH3Pipeline:
         facts = ScheduleFacts.of(plan, schedule)
         loop = blocks["denoise.denoise"]
         block_state = loop.get_block_state(state)
-        plan, rows = state.get("reference_plan"), None
-        if plan is not None:
+        thinning, rows = state.get("reference_plan"), None
+        if thinning is not None:
             rows = ReferenceRows(
                 state.normalized_references, state.condition_latents, tuple(scoped.patch_size), block_state
             )
-            plan.thin(rows, block_state)
+            thinning.thin(rows, block_state)
         for index, timestep in enumerate(block_state.timesteps):
             cancel()
             if rows is not None:
-                plan.release(rows, block_state, index)
+                thinning.release(rows, block_state, index)
             with attention_scope(
                 _attention_layout(block_state, index, sol_dense_steps=sol_dense_steps)
             ):
