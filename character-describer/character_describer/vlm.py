@@ -103,20 +103,18 @@ class Describer(Model[Pipeline], encoded_leaves="accept", min_bits=4, phase="dec
         del self.pipe
 
     @uses_components(COMPONENT)
-    def describe(self, image: Image, prompt: str, *, max_new_tokens: int) -> str:
+    def describe(self, images: list[Image], prompts: list[str], *, max_new_tokens: int) -> list[str]:
+        """One greedy reply per image and its prompt, all at once: one prefill over the rows,
+        left-padded, and one decode of them together."""
         model = self.pipe.components[COMPONENT]
         processor = self.processor
-        if type(processor).__name__ == "LlavaProcessor":
-            messages: list[dict[str, Any]] = [
-                {"role": "system", "content": "You are a helpful image captioner."},
-                {"role": "user", "content": prompt},
-            ]
-        else:
-            messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
-        text = processor.apply_chat_template(
-            messages, add_generation_prompt=True, tokenize=False, enable_thinking=False
-        )
-        inputs = processor(text=[text], images=[image], return_tensors="pt").to(model.device)
+        texts = [
+            processor.apply_chat_template(_messages(processor, prompt), add_generation_prompt=True,
+                                          tokenize=False, enable_thinking=False)
+            for prompt in prompts
+        ]
+        processor.tokenizer.padding_side = "left"
+        inputs = processor(text=texts, images=images, padding=True, return_tensors="pt").to(model.device)
         inputs["pixel_values"] = inputs["pixel_values"].to(model.dtype)
         configured = model.generation_config.eos_token_id
         stops = [*(configured if isinstance(configured, list) else [configured]), processor.tokenizer.eos_token_id]
@@ -125,5 +123,13 @@ class Describer(Model[Pipeline], encoded_leaves="accept", min_bits=4, phase="dec
             model, inputs, max_new_tokens=max_new_tokens, stop=stop,
             pad=processor.tokenizer.pad_token_id or stop[0], draft=self.pipe.draft,
         )
-        reply = processor.batch_decode(out, skip_special_tokens=True)[0]
-        return " ".join(str(reply).split())
+        return [" ".join(str(reply).split()) for reply in processor.batch_decode(out, skip_special_tokens=True)]
+
+
+def _messages(processor: Any, prompt: str) -> list[dict[str, Any]]:
+    if type(processor).__name__ == "LlavaProcessor":
+        return [
+            {"role": "system", "content": "You are a helpful image captioner."},
+            {"role": "user", "content": prompt},
+        ]
+    return [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
