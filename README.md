@@ -107,8 +107,9 @@ an interrupted run resume from its completed tensor groups.
 The H3 package exposes both official actions from one model generation. Its normal
 `model: H3Model` slot contains only the two DiTs, text encoder and VAEs.
 
-`long_form` defaults to `mode="turbo"`: each shot uses eight PDD evaluations, the
-base release and the separate PDD-8 adapter. Omit `steps` in turbo mode.
+`long_form` defaults to `mode="turbo"`: each shot uses eight evaluations, the base release
+and lightx2v's 8-step LoRA ([turbo activation](minimax-h3/docs/turbo-activation.md)). Omit
+`steps` in turbo mode.
 For standard sampling, select `mode="standard"`; omitted `steps` then means 30,
 with explicit 30/40/50 also supported. In either long-form composer, a segment's
 `turbo` defaults to `true`. Set `turbo: false` for a standard 30-step segment within
@@ -122,7 +123,7 @@ The `fl2va_turbo` and `ref2va_turbo` functions take two independent model slots:
 `base_model: H3TurboBase` holds an AdaLN-pruned five-root checkpoint, and
 `turbo_lora: H3TurboLoRA` holds only `fl2va_turbo` and `ref2va_turbo`. Both
 checkpoints must have matching DiT configurations. They default to `minimax-h3@1.0.0-rc.3` and
-`minimax-h3-turbo-lora@1.0.0-audit.1`; callers can select other compatible releases explicitly.
+`minimax-h3-lightx2v@1.0.0`; callers can select other compatible releases explicitly.
 Each sampling scope holds its base DiT and separate overlay together. LoRA hooks
 are installed during construction, before Runtime chooses fusion or Ulysses
 execution. All three model classes declare degrees 2 and 4.

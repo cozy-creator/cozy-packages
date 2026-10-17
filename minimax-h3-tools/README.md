@@ -16,7 +16,7 @@ ingested or already fetched the input, its objects are in the pod Store and noth
 | `bf16-full` | a full-precision H3 checkpoint: the converted `MiniMaxAI/MiniMax-H3` release or a `bf16-full` lane | `bf16-full` | source-only rows dropped, video VAE decode operands f16 |
 | `bf16-pruned` | same | `bf16` | AdaLN tables replace the 106 modulation rows per DiT; CUDA |
 | `fp8-pruned` | same | `fp8` | tables + both DiTs and the conditioner's 350 decoder linears `fp8-rowwise/1`; CUDA; every serving rung |
-| `turbo-lora` | the converted `alibaba-pai/MiniMax-H3-Acc-LoRAs` release (one fl2va and one ref2va component) | `pdd8` | `model.base=<full-precision H3>`; reads its modulation weights and heads only |
+| `turbo-lora` | the `as-is` upload of lightx2v's FL2VA 8-step LoRA (`model.ref2va=` its Ref2VA sibling) | `bf16` | `model.base=<full-precision H3>`; reads its modulation weights only |
 | `retable` | an AdaLN-pruned lane | `adaln-pruned`, `tables` | `model.full=<full-precision H3>`; recomputes tables only |
 | `fp8`, `int8` | an AdaLN-pruned lane | `fp8`, `int8` | `cozy model quantize`; H3's recipe: both DiTs and the text conditioner's 350 decoder linears, encoding what is still plain; CPU |
 
@@ -31,8 +31,9 @@ function, run on the ingest rental:
 ```sh
 cozy run fidika/minimax-h3-tools/fp8-pruned fidika/minimax-h3@1.0.0/bf16-full fidika/minimax-h3 \
   --rental=NAME --await
-cozy run fidika/minimax-h3-tools/turbo-lora fidika/minimax-h3-acc-loras@1.0.0/bf16 \
-  fidika/minimax-h3-turbo-lora model.base=fidika/minimax-h3@1.0.0/bf16-full --rental=NAME --await
+cozy run fidika/minimax-h3-tools/turbo-lora fidika/minimax-h3-lightx2v-source#sha256:<fl2va> \
+  fidika/minimax-h3-lightx2v model.ref2va=fidika/minimax-h3-lightx2v-source#sha256:<ref2va> \
+  model.base=fidika/minimax-h3@1.0.0-rc.3/bf16-full --on NAME
 ```
 
 The lane functions, `turbo-lora` and `retable` write weights, so they are never memoized; a
@@ -154,21 +155,19 @@ and AdaLN table production do not claim quantizer measurements. Activation fidel
 matched output distance and output quality require separate inference/evaluation evidence.
 
 
-`turbo-lora` builds the PDD-8 overlays from the released
-`MiniMax-H3-FL2VA-Acc-8Step.safetensors` and `MiniMax-H3-Ref2VA-Acc-8Step.safetensors`
-(`alibaba-pai/MiniMax-H3-Acc-LoRAs`, revision `335001fb9e5455d68a0caa18ec2e319072150328`)
-and the base model's original modulation weights. The adapter checkpoint must hold exactly two
-components whose names contain `fl2va` and `ref2va`. `build_turbo_adapter` composes the same
-producer from two single-component adapter checkpoints in a client script.
+`turbo-lora` builds the turbo overlay from lightx2v's MiniMax-H3 Turbo LoRAs
+(`lightx2v/Minimax-h3-Turbo@a29e57d195f80ead07c89f89e55ecf2911e893c5`):
+`minimax_h3_fl2v_turbo_8step_v1.0_bf16.safetensors` for FL2VA and
+`minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors` for Ref2VA, each uploaded with
+`--source-profile as-is/1` (Diffusers PEFT keys, rank 128, alpha 8). The output holds only the
+`fl2va_turbo` and `ref2va_turbo` components: the six LoRA families inherit the source objects
+under the overlay's `lora_down`/`lora_up` keys, and the only new bytes are the base model's
+AdaLN tables at each trunk's turbo plan (video shift 12 for FL2VA, 6 for Ref2VA, audio 3, eight
+evaluations), which the pruned base does not carry. lightx2v touches neither AdaLN nor the output
+heads. One native transaction checkpoints each completed table, so a resubmitted run continues
+unfinished work and a completed replay returns the same artifact.
 
-The output holds only the `fl2va_turbo` and `ref2va_turbo` components. Their six inference LoRA families inherit
-source objects. Only adapted AdaLN tables and eight collapsed output heads are
-written. The consumed AdaLN factors are absent from the output. One native transaction
-checkpoints each completed tensor, so a resubmitted run continues unfinished work and a
-completed replay returns the same artifact. Ordinary `retable` keeps its two inputs
-and two outputs; turbo preparation does not change the base schedule.
-
-The output binds to `minimax-h3`'s single `H3TurboModel` slot. Ordinary `H3Model`
+The output binds to `minimax-h3`'s `turbo_lora` slot (`H3TurboLoRA`). Ordinary `H3Model`
 continues to consume a checkpoint with only the original five components.
 
 The row-label parser is the producer's `h3_tables.table_layout`; `minimax-h3`
