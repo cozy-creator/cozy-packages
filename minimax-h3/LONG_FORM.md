@@ -225,7 +225,7 @@ A supplied image skips generation. Otherwise Qwen-Image-2.1 generates the image 
 from the description. Names normalise: whitespace collapses and `<`/`>` are dropped. Two
 names that match the same token are refused. Attach files with a JSON path, or with
 `--asset references.0.image=...`, `--asset references.0.voice=...`,
-`--asset references.3.audio=...` or `--asset references.4.video=...`. Audio references are 2–15 s each, 15 s in total, at most
+`--asset references.3.audio=...` or `--asset references.4.video=...`. Audio and voices are WAV, FLAC, Ogg or MP3. Audio references are 2–15 s each, 15 s in total, at most
 three. Allowed: up to nine images and twelve image and audio references in all; videos count
 per call. An audio-only set is refused.
 
