@@ -109,7 +109,7 @@ account names that index in its `pyproject.toml` and never spells its URL:
 
 ```toml
 [project]
-dependencies = ["qwen-image-2>=0.2.0"]
+dependencies = ["qwen-image-2>=0.9.0"]
 
 [tool.uv.sources]
 qwen-image-2 = { index = "tensorhub" }

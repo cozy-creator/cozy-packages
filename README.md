@@ -133,18 +133,6 @@ Turbo preserves four dense plus four sparse evaluations; regular 30-step samplin
 preserves ten dense plus twenty sparse evaluations when a sparse backend is selected.
 Explicit CLI attention pins take precedence.
 
-H3 1.14.3 requires Runtime 0.16.7 or newer for restoration and residency reporting
-across these model slots, retained derived-buffer aliases, and exact Python-patch
-dependency markers. Its lock selects public Runtime 0.16.8. The worker must satisfy
-that dependency before invocation. CPU parity checks do not establish real
-multi-GPU clip speed or quality.
-
-H3 1.14.3 fixes Turbo projection rounding across sequence partitions by using
-fixed row counts and contiguous input tiles. Cross-GPU identity also requires
-the worker Runtime fix from cozy-runtime PR471: Ulysses applies inside the
-sharded transformer blocks, while the replicated text refiner stays local.
-The dependency floor alone does not establish that this worker fix is present.
-
 For source qualification, install the local package from this repository:
 
 ```sh
@@ -435,7 +423,7 @@ The cheap gates require no weights or GPU:
 ```bash
 uv venv --python 3.12 .venv-check
 uv pip install --python .venv-check/bin/python \
-  "cozy-runtime>=0.1,<1" \
+  "cozy-runtime>=0.27,<1" \
   msgspec protobuf grpcio av mypy ruff
 
 .venv-check/bin/python scripts/fence.py

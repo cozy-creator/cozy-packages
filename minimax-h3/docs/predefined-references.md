@@ -38,18 +38,17 @@ Reference: https://github.com/MiniMax-AI/MiniMax-H3/blob/main/skills/h3-prompt-w
 
 ## Qualification and dependencies
 
-H3 declares `qwen-image-2>=0.3.0` from the `tensorhub` index: the publishing
+H3 declares `qwen-image-2` from the `tensorhub` index: the publishing
 account's own package on the target Hub, with no PyPI or local-checkout fallback.
 Creator writes that index for the command's Hub and account. `cozy package lock`
 pins the version, and each publication rebinds the lock to its target account's
 index without changing any version. Publish the locked qwen-image-2 release to a
 target Hub before publishing H3 there.
 
-H3 1.17.0 requires Runtime 0.18.24 or newer for the qualified managed-call,
-media-decoder and recovery cohort. Creator captures the dependency's immutable
-implementation and generated caller interface. The source implementation takes
-injected execution arguments; its installed caller exposes the flat
-`prompt`, `aspect_ratio`, `megapixels`, `steps`, `seed` and `background` parameters used here.
+Creator captures the dependency's immutable implementation and generated caller
+interface. The source implementation takes injected execution arguments; its installed
+caller exposes the flat `prompt`, `aspect_ratio`, `megapixels`, `steps`, `seed` and
+`background` parameters used here.
 
 The `long_form` API uses this same mixed reference resolver and completed AV context,
 with no shot-count cap. See [LONG_FORM.md](../LONG_FORM.md) for JSON filenames,

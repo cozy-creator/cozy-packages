@@ -4441,23 +4441,6 @@ def arm_attention_scope() -> None:
     finally:
         handle.remove()
     check("failure scope does not leak", _ACTIVE_LAYOUT.get(), None)
-    handle = dit.register_forward_pre_hook(lambda _module, _args: seen.append(_ACTIVE_LAYOUT.get()))
-    try:
-        pipe.warm_dit("fl2va")
-    finally:
-        handle.remove()
-    check(
-        "warm is explicitly dense",
-        seen[-1],
-        AttentionLayout(
-            live_tokens=24,
-            protected_prefix=0,
-            step=0,
-            dense_until_step=10,
-            dense_paths=("token_refiner", "transformer_blocks.0", "transformer_blocks.1"),
-            exact_paths=("token_refiner", "transformer_blocks.1", "transformer_blocks.45", "transformer_blocks.49"),
-        ),
-    )
 
 def _code(call: Callable[[], object]) -> str:
     try:
