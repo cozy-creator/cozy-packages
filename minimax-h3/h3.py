@@ -101,7 +101,7 @@ from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate_image as generate_reference
 from birefnet import RemoveBackgroundOutput
 from birefnet import remove_background
-from character_describer import DescribeCharacterOutput, describe_character
+from character_describer import DescribeCharacterOutput, describe_background, describe_character
 from seedvr2 import Resolution as RestorationResolution
 from seedvr2 import UpscaleOutput as RestorationOutput
 from seedvr2 import upscale as restore_video
@@ -1627,7 +1627,7 @@ async def _create_references(
         resolving = group.create_task(resolve_reference_images(
             references, create_reference, prepare_character if prepare_characters else None, show
         ))
-        describing = group.create_task(_describe_characters(references, tel)) if describe_characters else None
+        describing = group.create_task(_describe_references(references, tel)) if describe_characters else None
     images = resolving.result()
     described, warnings = describing.result() if describing is not None else (references, [])
     for reference in references:
@@ -1645,26 +1645,29 @@ async def _create_references(
     return images, described, warnings
 
 
-async def _describe_characters(
+async def _describe_references(
     references: list[StoryReference], tel: Telemetry
 ) -> tuple[list[StoryReference], list[str]]:
-    """One identity sentence for each supplied character the author did not describe: one call
-    each, so TensorD spreads them over the run's GPUs. Descriptions only help, so a failed one
-    warns and keeps that reference as written."""
-    describe = cast(Callable[..., Awaitable[DescribeCharacterOutput]], describe_character)
+    """An identity sentence for each supplied character, and a setting for each supplied
+    background, the author did not describe: one call each, so TensorD spreads them over the
+    run's GPUs. Descriptions only help, so a failed one warns and keeps that reference as
+    written."""
+    describers = {"character": describe_character, "background": describe_background}
     warnings: list[str] = []
 
     async def one(reference: StoryReference) -> StoryReference:
-        if reference.kind != "character" or reference.image is None or reference.description.strip():
+        describer = describers.get(reference.kind)
+        if describer is None or reference.image is None or reference.description.strip():
             return reference
+        describe = cast(Callable[..., Awaitable[DescribeCharacterOutput]], describer)
         try:
             with tel.scope(f"Describing {reference.name}"):
                 result = await describe(image=reference.image)
         except Exception as exc:
-            tel.log("h3 character description skipped", level="warning", subject=reference.name, error=str(exc)[:400])
+            tel.log("h3 reference description skipped", level="warning", subject=reference.name, error=str(exc)[:400])
             warnings.append(f"{reference.name}'s description was skipped: {str(exc)[:200]}")
             return reference
-        tel.log("h3 character description", subject=reference.name, description=result.description[:400])
+        tel.log("h3 reference description", subject=reference.name, description=result.description[:400])
         return replace(reference, description=result.description)
 
     return list(await asyncio.gather(*map(one, references))), warnings

@@ -16,8 +16,10 @@ so the workflow copies the global information into it.
   from descriptions keep their existing path.
 - `describe_references` (default `true`): a vision-language model writes one sentence
   about each supplied character image that has no `description` (identity, hair, face,
-  clothing and items; never the background, pose or style). It runs once, alongside
-  background removal, and joins that character's subject definition in every segment.
+  clothing and items; never the background, pose or style), and one or two about each
+  supplied background image without one (the place, layout, lighting and key objects). It
+  runs once, alongside background removal, and joins that reference's subject definition
+  in every segment.
   An authored description is kept as written. If describing fails, the run continues
   without it and reports a warning.
 - `style`: look shared by generated reference images and every segment (optional).
