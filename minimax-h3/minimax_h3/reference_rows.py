@@ -30,7 +30,7 @@ from .continuation import ContextReferenceLayout
 
 #: The canvas grid: the VAE's 16-pixel cells in 2x2 patches, and Qwen's 16-pixel patches merged 2x2.
 _GRID = 32
-_LAYOUT_FIELDS = {"position_ids", "token_tags", "video_indices", "audio_indices", "text_indices"}
+_LAYOUT_FIELDS = {"position_ids", "token_tags", "video_indices", "audio_indices", "text_indices", "prompt_embeds"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +145,7 @@ def select_rows(block_state: Any, keep: torch.Tensor) -> None:
     block_state.latents = block_state.latents[video]
     block_state.audio_latents = block_state.audio_latents[audio]
     if not bool(text.all()):
-        block_state.prompt_embeds = block_state.prompt_embeds[:, text]
+        fields["prompt_embeds"] = fields["prompt_embeds"][:, text]
     block_state.row_timestep_plan = [
         (timesteps, indices[keep]) for timesteps, indices in block_state.row_timestep_plan
     ]
