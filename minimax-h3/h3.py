@@ -73,6 +73,7 @@ from minimax_h3.model import (
     H3TurboLoRA as H3TurboLoRA,
     condition_references,
 )
+from minimax_h3.reference_rows import ReferencePlan
 from minimax_h3.official import (
     FPS,
     MAX_AUDIO_REFERENCES,
@@ -252,6 +253,7 @@ class ReferenceClipInput(ClipInput, kw_only=True):
     """A reference render call: whether each of its videos, in packed order, keeps its sound."""
 
     video_audio: tuple[bool, ...]
+    reference_plan: str = ""
 
 
 class ReferenceStandardClipInput(ReferenceClipInput, kw_only=True):
@@ -305,6 +307,7 @@ class ReferenceRenderInput(RenderInput, kw_only=True):
     style: str = ""
     clean_references: bool = True
     describe_references: bool = True
+    reference_plan: str = ""
 
 
 class ReferenceStandardRenderInput(ReferenceRenderInput, kw_only=True):
@@ -1010,12 +1013,13 @@ async def _render_workflow(
     video_audio: tuple[bool, ...] = (),
 ) -> RenderOutput:
     seed = shot_seed(payload, ctx.request_id, 0)
+    plan = getattr(payload, "reference_plan", "")
     fields: dict[str, Any] = {"prompt": payload.prompt, "seed": seed, "duration_s": payload.duration_s}
     if steps is not None:
         fields["steps"] = steps
     request = (
         (ReferenceClipInput if steps is None else ReferenceStandardClipInput)(
-            **fields, video_audio=video_audio
+            **fields, video_audio=video_audio, reference_plan=plan
         )
         if task.startswith("ref2va")
         else (ClipInput if steps is None else StandardClipInput)(**fields)
@@ -1247,7 +1251,9 @@ def _references_to_video(
             expected_context_provenance=expected_context_provenance,
             reference_image_short_edges=sizing.edges,
             task=task,
+            reference_plan=ReferencePlan.parse(getattr(payload, "reference_plan", "")),
         )
+        tel.log("h3 reference plan", plan=repr(state.get("reference_plan")))
         for index, reference in enumerate(state.normalized_references):
             if reference.kind == "image":
                 info = assets.info(index)
