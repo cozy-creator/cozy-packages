@@ -177,8 +177,8 @@ The ordinary action syntax is:
   and standalone-audio references. Repeated CLI `--asset` arguments preserve this order;
   callers do not construct tagged reference JSON.
 
-For a reference call, the package adapts the supplied assets through Runtime's existing
-media decoder. File delivery works the same locally and on a rental:
+For a reference call, the package reads the supplied assets through Runtime's media handles.
+File delivery works the same locally and on a rental:
 
 ```sh
 cozy run paul/minimax-h3/ref2va \
@@ -291,9 +291,10 @@ FULL reference lane `bf16-full`. `adaln-curve` is reserved for approximate commu
 artifacts and is not a lane.
 
 Ref2VA preserves request order and enforces the official product bounds: at most 9 images, 3 videos,
-3 standalone audio clips, and 12 entries total. Video and audio clips are 2–15 seconds, with at most
-15 seconds per modality in aggregate. A video's embedded soundtrack belongs to that video and does
-not consume the standalone-audio count. Standalone audio cannot be the only reference modality.
+3 standalone audio clips, and 12 entries total. Video and audio clips are at least 2 seconds. A video
+longer than 15 seconds is truncated to its first 15 (Runtime records the adjustment and `warnings`
+says so); audio over 15 seconds refuses, and standalone audio totals at most 15 seconds. A video's
+embedded soundtrack belongs to that video and does not consume the standalone-audio count. Standalone audio cannot be the only reference modality.
 The package selects qwen-image-2 sizes automatically. Images with `auto` fidelity
 start at a 1024-pixel short edge; `low`, `medium`, and `high` fidelity select 256, 1024,
 and 2048 pixels respectively. Diffusers rounds both axes to its 32-pixel grid. Explicit

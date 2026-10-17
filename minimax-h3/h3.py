@@ -1,6 +1,6 @@
 """MiniMax-H3's two official serving actions over one dual-DiT construction.
 
-Runtime decodes typed assets and encodes outputs. Official Diffusers owns H3 presentation,
+Runtime reads typed asset handles and encodes outputs. Official Diffusers owns H3 presentation,
 conditioning, AdaLN, solver, and decode math. This module validates the product contract,
 stages weighted roots, and joins those two boundaries.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import queue
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
 from concurrent.futures import Future
 from contextlib import suppress
 from enum import Enum
@@ -26,9 +26,9 @@ from cozy_runtime.author import (
     AssetLimits,
     Assets,
     AudioAsset,
+    AudioProbe,
     ChildCallError,
     Context,
-    DecodedAudio,
     DecodedAudioChunk,
     DecodedAudioFormat,
     DecodedMediaHeader,
@@ -39,8 +39,6 @@ from cozy_runtime.author import (
     ImageAsset,
     ImagePreparation,
     InvalidRequest,
-    MediaDecoder,
-    Mixed,
     OutputError,
     Outputs,
     SavedVideo,
@@ -49,6 +47,7 @@ from cozy_runtime.author import (
     ThreadPoolExecutor,
     UnsupportedInput,
     VideoAsset,
+    VideoProbe,
     data_values,
     invocable,
     prefetch,
@@ -83,14 +82,12 @@ from minimax_h3.official import (
     MAX_VIDEO_REFERENCES,
     REFERENCE_IMAGE_SHORT_EDGE,
     OfficialH3Pipeline,
-    ReferenceClip,
     ReferencePolicyFacts,
     ScheduleFacts,
     Task,
     assert_duration_envelope,
     denoise_rows,
     frames_for,
-    read_reference_video,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
     turbo_steps,
@@ -107,8 +104,13 @@ from seedvr2 import Resolution as RestorationResolution
 from seedvr2 import UpscaleOutput as RestorationOutput
 from seedvr2 import upscale as restore_video
 from story import (
+    AUDIO_READ_BYTES,
     FILE,
-    UNBOUNDED,
+    IMAGE_READ_BYTES,
+    REFERENCE_AUDIO,
+    REFERENCE_VIDEO,
+    VIDEO_MAX_BYTES,
+    VIDEO_READ_BYTES,
     SegmentCall,
     StoryReference,
     compile_segments,
@@ -124,30 +126,22 @@ from text_states import encode_text
 app = App()
 
 _MIB = 1 << 20
-_MIN_REFERENCE_DURATION = Fraction(2, 1)
-_MAX_REFERENCE_DURATION = Fraction(15, 1)
+#: Standalone audio references share one 15-second budget; each is 2-15 s (`REFERENCE_AUDIO`).
+_MAX_AUDIO_SECONDS = Fraction(15, 1)
 
-
-#: A render call's references as handles: it decodes each itself, a video straight onto the
-#: call's canvas and clock (`read_reference_video`), never retaining a full-size frame.
+Reference = ImageAsset | VideoAsset | AudioAsset
+#: One reference of each kind, with its retained-read bound. Every input carrying references
+#: (the render children's and direct ref2va's `assets`, and `StoryReference`) declares the same
+#: preparations, so Runtime records the truncation on the call the client made.
+_REFERENCE = (
+    Annotated[ImageAsset, AssetBound(max_decoded_bytes=IMAGE_READ_BYTES)]
+    | Annotated[
+        VideoAsset, AssetBound(max_bytes=VIDEO_MAX_BYTES, max_decoded_bytes=VIDEO_READ_BYTES)
+    ]
+    | Annotated[AudioAsset, AssetBound(max_decoded_bytes=AUDIO_READ_BYTES)]
+)
 ReferenceAssets = Annotated[
-    Assets[
-        Annotated[ImageAsset, AssetBound(max_decoded_bytes=UNBOUNDED)]
-        | Annotated[VideoAsset, AssetBound(max_decoded_bytes=UNBOUNDED)]
-        | Annotated[AudioAsset, AssetBound(max_decoded_bytes=UNBOUNDED)]
-    ],
-    AssetLimits(
-        images=MAX_IMAGE_REFERENCES,
-        videos=MAX_VIDEO_REFERENCES,
-        audio=MAX_AUDIO_REFERENCES,
-        total=MAX_REFERENCES,
-    ),
-    msgspec.Meta(min_length=1),
-]
-# Direct ref2va takes either attached assets or named `references`; the wire field is required,
-# so a references-only request sends `"assets": []`.
-DirectReferenceAssets = Annotated[
-    Assets[Mixed],
+    Assets[_REFERENCE],
     AssetLimits(
         images=MAX_IMAGE_REFERENCES,
         videos=MAX_VIDEO_REFERENCES,
@@ -155,6 +149,23 @@ DirectReferenceAssets = Annotated[
         total=MAX_REFERENCES,
     ),
     ImagePreparation(max_edge=8192, max_pixels=16_777_216),
+    REFERENCE_VIDEO,
+    REFERENCE_AUDIO,
+    msgspec.Meta(min_length=1),
+]
+# Direct ref2va takes either attached assets or named `references`; the wire field is required,
+# so a references-only request sends `"assets": []`.
+DirectReferenceAssets = Annotated[
+    Assets[_REFERENCE],
+    AssetLimits(
+        images=MAX_IMAGE_REFERENCES,
+        videos=MAX_VIDEO_REFERENCES,
+        audio=MAX_AUDIO_REFERENCES,
+        total=MAX_REFERENCES,
+    ),
+    ImagePreparation(max_edge=8192, max_pixels=16_777_216),
+    REFERENCE_VIDEO,
+    REFERENCE_AUDIO,
 ]
 
 
@@ -164,20 +175,48 @@ def video_audio(references: Sequence[StoryReference]) -> tuple[bool, ...]:
 
 
 def _call_assets(
-    files: dict[str, ImageAsset | AudioAsset | VideoAsset], references: Sequence[StoryReference]
-) -> Assets[Mixed]:
+    files: dict[str, Reference], references: Sequence[StoryReference]
+) -> Assets[Reference]:
     """One H3 call's references in packed order, labeled `Picture|Audio|Video N` per kind."""
     counts = {"image": 0, "audio": 0, "video": 0}
-    labeled: list[ImageAsset | AudioAsset | VideoAsset] = []
+    labeled: list[Reference] = []
     for reference in references:
         file = files[reference.name]
         counts[file.kind] += 1
         label = {"image": "Picture", "audio": "Audio", "video": "Video"}[file.kind]
         labeled.append(file.with_label(f"{label} {counts[file.kind]}"))
-    return Assets[Mixed](labeled)
+    return Assets(labeled)
 
 
-KeyframeAssets = Annotated[Assets[Image], AssetLimits(images=2)]
+def truncation_warnings(videos: Iterable[tuple[str, VideoAsset]]) -> list[str]:
+    """A line for each reference video Runtime cut to the first 15 s `REFERENCE_VIDEO` keeps."""
+    lines = []
+    for name, video in videos:
+        probe = video.probe()
+        if probe.source_duration > probe.duration:
+            lines.append(
+                f"Reference video {name} is {float(probe.source_duration):.1f} s long; "
+                f"H3 used its first {float(probe.duration):g} s."
+            )
+    return lines
+
+
+def named_videos(
+    references: Iterable[StoryReference], calls: Iterable[SegmentCall]
+) -> list[tuple[str, VideoAsset]]:
+    """The video references some call attaches, by name."""
+    used = {ref.name for call in calls for ref in call.references}
+    return [
+        (f"<{ref.name}>", ref.video)
+        for ref in references
+        if ref.video is not None and ref.name in used
+    ]
+
+
+KeyframeAssets = Annotated[
+    Assets[Annotated[ImageAsset, AssetBound(max_decoded_bytes=256 << 20)]],
+    AssetLimits(images=2),
+]
 DEFAULT_REFERENCE_IMAGE_SHORT_EDGE = 1024
 _SHORT_EDGE_LADDER = (2048, 1536, 1024, 768, 512, 256)
 _REFERENCE_FIDELITY_EDGES = {"low": 256, "medium": 1024, "high": REFERENCE_IMAGE_SHORT_EDGE}
@@ -379,7 +418,7 @@ def _keyframe_image(
 ) -> Image | None:
     if index is None:
         return None
-    image = assets[index]
+    image = assets[index].read()
     _validate_ratio(image.width, image.height, field)
     return image
 
@@ -449,68 +488,61 @@ def resolve_reference_sizing(
     )
 
 
-def _read_reference(
-    references: ReferenceAssets, decoder: MediaDecoder, frames: int, sound: Sequence[bool],
-    index: int,
-) -> Image | ReferenceClip | DecodedAudio:
-    """Decode one reference: a video as a stream onto the call's canvas and first `frames`,
-    keeping its soundtrack only where `sound` says so for that video."""
-    handle = references[index]
-    if isinstance(handle, VideoAsset):
-        ordinal = sum(references.info(i).kind == "video" for i in range(index))
-        with decoder.stream_video(handle) as stream:
-            return read_reference_video(stream, frames=frames,
-                                        audio=ordinal < len(sound) and sound[ordinal])
-    if isinstance(handle, AudioAsset):
-        return decoder.decode_audio(handle)
-    return cast(Image, decoder.value(handle))
-
-
 def assets_to_h3_refs(
-    references: ReferenceAssets,
+    references: Assets[Reference],
     *,
     pipe: OfficialH3Pipeline,
-    read: Callable[[int], Image | ReferenceClip | DecodedAudio],
+    frames: int,
+    video_audio: Sequence[bool] = (),
 ) -> tuple[list[Any], ReferenceSizing]:
-    prepared: list[Any] = []
-    video_duration = Fraction(0)
+    """Check every reference from its header and size the vision budget, then read each.
+
+    Durations are Runtime's (`REFERENCE_VIDEO`/`REFERENCE_AUDIO`): `probe().duration` is the
+    length a read returns, so a truncated clip is budgeted at 15 s. A video reads at source
+    resolution on the 24-fps clock, and only the call's `frames`, which is all the official
+    pipeline keeps of it; the pipeline resolves its canvas. `video_audio` says, per video in
+    packed order, whether it keeps its soundtrack.
+    """
     audio_duration = Fraction(0)
     video_tokens = 0
     images: list[ImageSizing] = []
-
-    for index in range(len(references)):
+    sound = iter(video_audio)
+    keeps = [
+        isinstance(reference, VideoAsset) and next(sound, False) for reference in references
+    ]
+    for index, reference in enumerate(references):
         info = references.info(index)
         field = info.id
-        reference = read(index)
-        if isinstance(reference, Image):
-            image = reference
+        if isinstance(reference, ImageAsset):
+            image = reference.probe()
             _validate_ratio(image.width, image.height, field)
             requested = (
                 None if info.fidelity == "auto" else _REFERENCE_FIDELITY_EDGES[info.fidelity]
             )
             images.append(ImageSizing(field, image.width, image.height, requested))
-            prepared.append(pipe.image_reference(image))
-        elif isinstance(reference, ReferenceClip):
-            video = reference
-            _validate_video(video, field)
-            video_duration += video.duration
-            if video_duration > _MAX_REFERENCE_DURATION:
-                raise InvalidRequest(
-                    "reference videos total more than 15 seconds",
-                    code="reference_policy",
-                    fields=["assets"],
-                )
+        elif isinstance(reference, VideoAsset):
+            video = reference.probe()
+            _validate_video(video, field, sound=keeps[index])
             video_tokens += reference_video_vision_tokens(video.width, video.height, video.duration)
-            prepared.append(pipe.video_reference(video))
         else:
-            audio = reference
+            audio = reference.probe()
             _validate_audio(audio, field)
             audio_duration += audio.duration
             _validate_audio_aggregate(audio_duration)
-            prepared.append(pipe.audio_reference(audio))
-    return prepared, resolve_reference_sizing(
+    sizing = resolve_reference_sizing(
         images, default=DEFAULT_REFERENCE_IMAGE_SHORT_EDGE, video_tokens=video_tokens
     )
+    window = Fraction(frames, FPS)
+    prepared = []
+    for index, reference in enumerate(references):
+        if isinstance(reference, ImageAsset):
+            prepared.append(pipe.image_reference(reference.read()))
+        elif isinstance(reference, VideoAsset):
+            clip = reference.read(end=window, fps=FPS, audio=keeps[index])
+            prepared.append(pipe.video_reference(clip))
+        else:
+            prepared.append(pipe.audio_reference(reference.read()))
+    return prepared, sizing
 
 
 def _validate_ratio(width: int, height: int, field: str) -> None:
@@ -522,32 +554,27 @@ def _validate_ratio(width: int, height: int, field: str) -> None:
         )
 
 
-def _validate_audio(audio: DecodedAudio, field: str) -> None:
-    _validate_audio_channels(audio, field)
-    _validate_duration(audio.duration, field)
+def _validate_audio(audio: AudioProbe, field: str) -> None:
+    _validate_audio_channels(audio.channels, field)
 
 
-def _validate_video(video: ReferenceClip, field: str) -> None:
+def _validate_video(video: VideoProbe, field: str, *, sound: bool) -> None:
     _validate_ratio(video.width, video.height, field)
-    _validate_duration(video.duration, field)
     if video.pixel_aspect_ratio != 1:
         raise UnsupportedInput(
             f"{field} must use square pixels, got {video.pixel_aspect_ratio}",
             code="reference_policy",
             fields=[field],
         )
-    if video.soundtrack is not None and int(video.soundtrack.shape[0]) not in (1, 2):
-        raise UnsupportedInput(
-            f"{field} audio must be mono or stereo, got {int(video.soundtrack.shape[0])} channels",
-            code="reference_policy",
-            fields=[field],
-        )
+    # Frame and soundtrack clock alignment belong to the model's video_reference.
+    if sound and video.soundtrack is not None:
+        _validate_audio_channels(video.soundtrack.channels, field)
 
 
 def _validate_audio_aggregate(duration: Fraction) -> None:
     """The standalone-audio modality cap. A video's soundtrack belongs to that video and
-    rides the video aggregate; it never consumes this budget."""
-    if duration > _MAX_REFERENCE_DURATION:
+    never consumes this budget; videos have no aggregate cap."""
+    if duration > _MAX_AUDIO_SECONDS:
         raise InvalidRequest(
             "standalone audio references total more than 15 seconds",
             code="reference_policy",
@@ -555,19 +582,10 @@ def _validate_audio_aggregate(duration: Fraction) -> None:
         )
 
 
-def _validate_audio_channels(audio: DecodedAudio, field: str) -> None:
-    if audio.channels not in (1, 2):
+def _validate_audio_channels(channels: int, field: str) -> None:
+    if channels not in (1, 2):
         raise UnsupportedInput(
-            f"{field} audio must be mono or stereo, got {audio.channels} channels",
-            code="reference_policy",
-            fields=[field],
-        )
-
-
-def _validate_duration(duration: Fraction, field: str) -> None:
-    if not _MIN_REFERENCE_DURATION <= duration <= _MAX_REFERENCE_DURATION:
-        raise InvalidRequest(
-            f"{field} must be between 2 and 15 seconds, got {float(duration):.3f}",
+            f"{field} audio must be mono or stereo, got {channels} channels",
             code="reference_policy",
             fields=[field],
         )
@@ -955,13 +973,12 @@ async def generate_ref2va(
     payload: ReferenceStandardClipInput,
     assets: ReferenceAssets,
     model: H3Model,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
     _reference_policy(assets)
     return _references_to_video(
-        ctx, "ref2va", payload, assets, decoder, model, out, tel, steps=payload.steps
+        ctx, "ref2va", payload, assets, model, out, tel, steps=payload.steps
     )
 
 
@@ -977,7 +994,6 @@ async def generate_ref2va_turbo(
     assets: ReferenceAssets,
     base_model: H3TurboBase,
     turbo_lora: H3TurboLoRA,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> H3VideoOutput:
@@ -988,7 +1004,6 @@ async def generate_ref2va_turbo(
         "ref2va_turbo",
         payload,
         assets,
-        decoder,
         base_model,
         out,
         tel,
@@ -1091,20 +1106,42 @@ async def _direct_reference_assets(
             warnings + call.warnings)
 
 
+def _direct_truncations(payload: ReferenceRenderInput, resolved: Assets[Reference]) -> list[str]:
+    """Truncation lines for the videos a direct call attaches: by label (or input id), or by
+    reference name."""
+    attached = [(index, item) for index, item in enumerate(resolved) if isinstance(item, VideoAsset)]
+    if payload.references is None:
+        return truncation_warnings(
+            (resolved.info(index).label or resolved.info(index).id, item) for index, item in attached
+        )
+    sent = {item.ref for _, item in attached}
+    return truncation_warnings(
+        (f"<{ref.name}>", ref.video)
+        for ref in payload.references
+        if ref.video is not None and ref.video.ref in sent
+    )
+
+
 async def ref2va(ctx: Context, payload: ReferenceStandardRenderInput, out: Outputs, tel: Telemetry,
                  assets: DirectReferenceAssets) -> ReferenceRenderOutput:
     request, resolved, sound, shown, warnings = await _direct_reference_assets(ctx, payload, assets, out, tel)
+    truncated = _direct_truncations(payload, resolved)
     result = await _render_workflow(ctx, request, resolved, out, tel, task="ref2va", steps=payload.steps,
                                     video_audio=sound)
-    return ReferenceRenderOutput(result.video, result.originals, warnings + result.warnings, shown)
+    return ReferenceRenderOutput(
+        result.video, result.originals, truncated + warnings + result.warnings, shown
+    )
 
 
 async def ref2va_turbo(ctx: Context, payload: ReferenceRenderInput, out: Outputs, tel: Telemetry,
                        assets: DirectReferenceAssets) -> ReferenceRenderOutput:
     request, resolved, sound, shown, warnings = await _direct_reference_assets(ctx, payload, assets, out, tel)
+    truncated = _direct_truncations(payload, resolved)
     result = await _render_workflow(ctx, request, resolved, out, tel, task="ref2va_turbo", steps=None,
                                     video_audio=sound)
-    return ReferenceRenderOutput(result.video, result.originals, warnings + result.warnings, shown)
+    return ReferenceRenderOutput(
+        result.video, result.originals, truncated + warnings + result.warnings, shown
+    )
 
 
 app.entrypoint(fl2va, emits_media=True, accelerator=False)
@@ -1206,7 +1243,6 @@ def _references_to_video(
     task: Task,
     payload: ClipInput,
     assets: ReferenceAssets,
-    decoder: MediaDecoder,
     model: H3Model,
     out: Outputs,
     tel: Telemetry,
@@ -1220,11 +1256,11 @@ def _references_to_video(
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
+    frames = frames_for(payload.duration_s) if delivery is None else delivery.sample_frames
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
-        frames = frames_for(payload.duration_s) if delivery is None else delivery.sample_frames
         sound = payload.video_audio if isinstance(payload, ReferenceClipInput) else ()
         references, sizing = assets_to_h3_refs(
-            assets, pipe=model.pipe, read=partial(_read_reference, assets, decoder, frames, sound)
+            assets, pipe=model.pipe, frames=frames, video_audio=sound
         )
         tel.log(
             "h3 reference sizing",
@@ -1241,7 +1277,7 @@ def _references_to_video(
             references=references,
             generator=model.pipe.generator(view.generator),
             steps=steps,
-            frames=frames_for(payload.duration_s) if delivery is None else delivery.sample_frames,
+            frames=frames,
             context=context,
             delivery=delivery,
             expected_context_provenance=expected_context_provenance,
@@ -1410,7 +1446,6 @@ def _render_cut(
     ctx: Context,
     payload: CutInput,
     assets: ReferenceAssets,
-    decoder: MediaDecoder,
     model: H3Model,
     out: Outputs,
     tel: Telemetry,
@@ -1430,7 +1465,6 @@ def _render_cut(
         task,
         payload,
         assets,
-        decoder,
         model,
         out,
         tel,
@@ -1453,13 +1487,11 @@ async def cut_segment(
     assets: ReferenceAssets,
     base_model: H3TurboBase,
     turbo_lora: H3TurboLoRA,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> SegmentOutput:
     lora = _sampling(payload, turbo_lora)
-    return _render_cut(ctx, payload, assets, decoder, base_model, out, tel, steps=payload.steps,
-                       turbo_lora=lora)
+    return _render_cut(ctx, payload, assets, base_model, out, tel, steps=payload.steps, turbo_lora=lora)
 
 
 app.entrypoint(internal=True)(cut_segment)
@@ -1510,7 +1542,6 @@ def _render_motion(
     ctx: Context,
     payload: MotionInput,
     assets: ReferenceAssets,
-    decoder: MediaDecoder,
     model: H3Model,
     out: Outputs,
     tel: Telemetry,
@@ -1558,7 +1589,6 @@ def _render_motion(
         ReferenceClipInput(prompt=payload.prompt, seed=payload.seed, duration_s=payload.duration_s,
                            video_audio=payload.video_audio),
         assets,
-        decoder,
         model,
         out,
         tel,
@@ -1591,12 +1621,11 @@ async def motion_segment(
     assets: ReferenceAssets,
     base_model: H3TurboBase,
     turbo_lora: H3TurboLoRA,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> MotionOutput:
     lora = _sampling(payload, turbo_lora)
-    return _render_motion(ctx, payload, assets, decoder, base_model, out, tel, turbo_lora=lora)
+    return _render_motion(ctx, payload, assets, base_model, out, tel, turbo_lora=lora)
 
 
 app.entrypoint(internal=True)(motion_segment)
@@ -1654,7 +1683,7 @@ async def _create_references(
     style: str,
     prepare_characters: bool = True,
     describe_characters: bool = True,
-) -> tuple[dict[str, ImageAsset | AudioAsset | VideoAsset], list[StoryReference], list[str]]:
+) -> tuple[dict[str, Reference], list[StoryReference], list[str]]:
     """Prepare, generate and describe references concurrently; return the described list."""
     reference_steps = 40
     # Managed dependencies install an asynchronous flat caller for the source
@@ -1750,7 +1779,6 @@ async def _describe_characters(
 async def long_form_cuts(
     ctx: Context,
     payload: LongFormCutsInput,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> LongFormOutput:
@@ -1780,11 +1808,12 @@ async def long_form_cuts(
     calls = segment_calls(replace(payload, references=described))
     completed_work = reference_work
     expected = None
+    warnings = truncation_warnings(named_videos(payload.references, calls)) + warnings
     warnings += [warning for call in calls for warning in call.warnings]
     count = len(payload.segments)
-    cut = CutJoin(decoder, out, ctx.raise_if_cancelled)
+    cut = CutJoin(out, ctx.raise_if_cancelled)
     joining: asyncio.Future[None] | None = None
-    with ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
+    with ScanAhead(ctx.raise_if_cancelled, pictures=False) as scanning:
 
         def show(index: int, last: bool) -> None:
             """Join shot `index` and publish the film so far, off the GPU path."""
@@ -1861,7 +1890,6 @@ async def long_form_cuts(
 async def long_form(
     ctx: Context,
     payload: LongFormInput,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> LongFormOutput:
@@ -1918,14 +1946,16 @@ async def long_form(
         describe_characters=payload.describe_references,
     )
     calls = segment_calls(replace(payload, references=described))
-    warnings = described_warnings + warnings
+    warnings = (
+        truncation_warnings(named_videos(payload.references, calls)) + described_warnings + warnings
+    )
     completed_work = reference_work
     context = None
     expected: RenderProvenance | None = None
     count = len(payload.segments)
-    cut = CutJoin(decoder, out, ctx.raise_if_cancelled, continuous=True)
+    cut = CutJoin(out, ctx.raise_if_cancelled, continuous=True)
     joining: asyncio.Future[None] | None = None
-    with ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
+    with ScanAhead(ctx.raise_if_cancelled, pictures=False) as scanning:
 
         def show(index: int, last: bool) -> None:
             """Join segment `index` and publish the video so far, off the GPU path."""

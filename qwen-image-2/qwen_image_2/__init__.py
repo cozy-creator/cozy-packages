@@ -13,7 +13,6 @@ from cozy_runtime.author import (
     AssetBound,
     Context,
     ImageAsset,
-    MediaDecoder,
     Memoize,
     Outputs,
     Shape,
@@ -161,7 +160,6 @@ def generate_image(
     ctx: Context,
     payload: GenerateInput,
     model: QwenImage21Model,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> ImageOutput:
@@ -171,7 +169,7 @@ def generate_image(
     reference_images, reference_latents, image_pad_mask = None, None, None
     if payload.reference_images:
         with tel.stage("encoding reference images", overall_range=(0.0, 0.08)):
-            reference_images = [decoder.value(asset) for asset in payload.reference_images]
+            reference_images = [asset.read() for asset in payload.reference_images]
             conditioning_images, reference_latents = model.encode_reference_images(reference_images)
         ctx.raise_if_cancelled()
     with tel.stage("encoding prompt", overall_range=(0.08 if reference_images else 0.0, 0.1)):

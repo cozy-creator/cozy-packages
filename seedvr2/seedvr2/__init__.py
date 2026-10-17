@@ -19,7 +19,6 @@ from cozy_runtime.author import (
     DecodedAudioChunk,
     DecodedMediaHeader,
     DecodedVideoFrame,
-    MediaDecoder,
     Outputs,
     Shape,
     Telemetry,
@@ -107,7 +106,6 @@ def upscale(
     ctx: Context,
     payload: UpscaleInput,
     model: RestorationModel,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> UpscaleOutput:
@@ -185,7 +183,7 @@ def upscale(
             tail = [] if final else restored[emit:]
             pending = [] if final else pending[emit:]
 
-        with decoder.stream_video(payload.video) as stream:
+        with payload.video.stream() as stream:
             for event in stream:
                 ctx.raise_if_cancelled()
                 if isinstance(event, DecodedMediaHeader):

@@ -20,14 +20,12 @@ from cozy_runtime.author import (
     Context,
     InvalidRequest,
     Invocation,
-    MediaDecoder,
     Outputs,
     Telemetry,
     attempt,
     fakes,
     invocable,
 )
-from cozy_runtime.author._assets import GrantedInput, file_state
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
 import assembly
@@ -40,12 +38,11 @@ async def scanned_assembly(
     ctx: Context,
     *,
     payload: assembly.AssembleVideoRequest,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> assembly.AssembleVideoResponse:
     pictures = payload.transition == "continuous"  # a cut's pictures are copied, not scanned
-    with assembly.ScanAhead(decoder, ctx.raise_if_cancelled, pictures=pictures) as scanning:
+    with assembly.ScanAhead(ctx.raise_if_cancelled, pictures=pictures) as scanning:
         for video in payload.videos:
             scanning.add(video)
         scans = scanning.finish(payload.videos)
@@ -64,16 +61,13 @@ async def scanned_assembly(
             )
         if len(payload.videos) == 8:
             # Neither composition mode imposes an eight-shot count limit.
-            with assembly.ScanAhead(
-                decoder, ctx.raise_if_cancelled, pictures=pictures
-            ) as unbounded:
+            with assembly.ScanAhead(ctx.raise_if_cancelled, pictures=pictures) as unbounded:
                 for video in payload.videos:
                     unbounded.add(video)
                 unbounded.add(payload.videos[0])
                 assert len(unbounded.finish([*payload.videos, payload.videos[0]])) == 9
         return assembly.assemble(
             payload,
-            decoder=decoder,
             out=out,
             tel=tel,
             check=ctx.raise_if_cancelled,
@@ -164,7 +158,7 @@ def execute(
     label = f"{count}-{'changed' if changed else master or 'segments'}-{transition}"
     work = root / (label + ("-scanned" if scanned else ""))
     work.mkdir()
-    assets: dict[str, GrantedInput] = {}
+    assets: dict[str, Any] = {}
     videos = []
     for index in range(count):
         path = files[f"{index % 2}.mp4"]
@@ -172,30 +166,15 @@ def execute(
             changed_path = work / "changed-input.mp4"
             changed_path.write_bytes(path.read_bytes())
             path = changed_path
-        digest = sha(path.read_bytes())
-        videos.append(digest)
         key = f"payload.videos.{index}"
-        assets[key] = GrantedInput(
-            input_id=key,
-            local=path,
-            media_type="video/mp4",
-            digest=digest,
-            length=path.stat().st_size,
-            file_state=file_state(path),
-            order=index,
-        )
+        assets[key] = fakes.granted_input(path, input_id=key, order=index, media_type="video/mp4")
+        videos.append(assets[key].digest)
     master_digest = None
     if master:
-        path = files[master]
-        master_digest = sha(path.read_bytes())
-        assets["payload.master_audio"] = GrantedInput(
-            input_id="payload.master_audio",
-            local=path,
-            media_type="audio/flac",
-            digest=master_digest,
-            length=path.stat().st_size,
-            file_state=file_state(path),
+        assets["payload.master_audio"] = fakes.granted_input(
+            files[master], input_id="payload.master_audio", media_type="audio/flac"
         )
+        master_digest = assets["payload.master_audio"].digest
     if changed:
         path = assets["payload.videos.0"].local
         with path.open("r+b") as stream:

@@ -43,7 +43,6 @@ from cozy_runtime.author import (
     DecodedVideoFormat,
     DecodedVideoFrame,
     InvalidRequest,
-    MediaDecoder,
     OutputError,
     Outputs,
     SavedVideo,
@@ -190,9 +189,7 @@ def _rms(channels: tuple[bytes, ...], *, start: int = 0, samples: int | None = N
     return math.sqrt(total / count) if count else 0.0
 
 
-def _scan_video(
-    decoder: MediaDecoder, asset: VideoAsset, check: Callable[[], None], *, pictures: bool = True
-) -> _Scan:
+def _scan_video(asset: VideoAsset, check: Callable[[], None], *, pictures: bool = True) -> _Scan:
     """Clocks and bounded audio windows; without `pictures` only the soundtrack is decoded
     (a packet copy's Runtime join checks the frame clock itself)."""
     header: DecodedMediaHeader | None = None
@@ -205,7 +202,7 @@ def _scan_video(
     head_peak_samples = 0
     first_frame_digest = ""
     head_limit = 0
-    with decoder.stream_video(asset) if pictures else decoder.stream_audio(asset) as stream:
+    with asset.stream(pictures=pictures) as stream:
         for event in stream:
             check()
             if isinstance(event, DecodedMediaHeader):
@@ -291,10 +288,7 @@ class ScanAhead:
     byte-grant checks. Leaving the scope always joins the worker before attempt cleanup.
     """
 
-    def __init__(
-        self, decoder: MediaDecoder, check: Callable[[], None], *, pictures: bool = True
-    ) -> None:
-        self._decoder = decoder
+    def __init__(self, check: Callable[[], None], *, pictures: bool = True) -> None:
         self._check = check
         self.pictures = pictures
         self._stopped = Event()
@@ -325,9 +319,7 @@ class ScanAhead:
             if pending.done():
                 pending.result()
         self._pending.append(
-            self._pool.submit(
-                _scan_video, self._decoder, asset, self._check_active, pictures=self.pictures
-            )
+            self._pool.submit(_scan_video, asset, self._check_active, pictures=self.pictures)
         )
 
     def result(self, index: int) -> _Scan:
@@ -357,14 +349,9 @@ class CutJoin:
     must stay within a frame of the picture."""
 
     def __init__(
-        self,
-        decoder: MediaDecoder,
-        out: Outputs,
-        check: Callable[[], None],
-        *,
-        continuous: bool = False,
+        self, out: Outputs, check: Callable[[], None], *, continuous: bool = False
     ) -> None:
-        self.decoder, self.out, self.check = decoder, out, check
+        self.out, self.check = out, check
         self.continuous = continuous
         self.join: VideoJoin | None = None
         self.audio: DecodedAudioFormat | None = None
@@ -398,7 +385,7 @@ class CutJoin:
                 )[-1]
             gain = _global_gain(self.scans[-1:], [selection], [_Gains()], audio)
             segment = _SegmentAudio(audio, selection, _Gains(), gain, self.output_audio)
-            with self.decoder.stream_audio(scan.asset) as stream:
+            with scan.asset.stream(pictures=False) as stream:
                 for event in stream:
                     self.check()
                     if isinstance(event, DecodedAudioChunk) and (chunk := segment.take(event)):
@@ -428,10 +415,10 @@ class CutJoin:
         return self.join.finish()
 
 
-def _scan_audio(decoder: MediaDecoder, asset: AudioAsset, check: Callable[[], None]) -> _AudioScan:
+def _scan_audio(asset: AudioAsset, check: Callable[[], None]) -> _AudioScan:
     header: DecodedAudioFormat | None = None
     samples = 0
-    with decoder.stream_audio(asset) as stream:
+    with asset.stream() as stream:
         for event in stream:
             check()
             if isinstance(event, DecodedMediaHeader):
@@ -728,7 +715,6 @@ class _SegmentAudio:
 
 
 def _segment_events(
-    decoder: MediaDecoder,
     scans: list[_Scan],
     selections: list[_AudioSelection],
     gains: list[_Gains],
@@ -748,7 +734,7 @@ def _segment_events(
     for index, (scan, selection) in enumerate(zip(scans, selections, strict=True)):
         segment = _SegmentAudio(audio, selection, gains[index], global_gain, output_audio)
         seen_frames = 0
-        with decoder.stream_video(scan.asset) as stream:
+        with scan.asset.stream() as stream:
             for event in stream:
                 check()
                 if isinstance(event, DecodedMediaHeader):
@@ -784,7 +770,6 @@ def _segment_events(
 
 
 def _soundtrack(
-    decoder: MediaDecoder,
     scans: list[_Scan],
     selections: list[_AudioSelection],
     gains: list[_Gains],
@@ -799,7 +784,7 @@ def _soundtrack(
     output_audio = 0
     for scan, selection, gain in zip(scans, selections, gains, strict=True):
         segment = _SegmentAudio(audio, selection, gain, global_gain, output_audio)
-        with decoder.stream_audio(scan.asset) as stream:
+        with scan.asset.stream(pictures=False) as stream:
             for event in stream:
                 check()
                 if isinstance(event, DecodedAudioChunk) and (chunk := segment.take(event)):
@@ -810,7 +795,6 @@ def _soundtrack(
 
 
 def _master_events(
-    decoder: MediaDecoder,
     scans: list[_Scan],
     master: AudioAsset,
     master_scan: _AudioScan,
@@ -827,14 +811,14 @@ def _master_events(
     output_frame = 0
     output_audio = 0
     source_audio = 0
-    with decoder.stream_audio(master) as audio_stream:
+    with master.stream() as audio_stream:
         audio_header = next(audio_stream)
         assert isinstance(audio_header, DecodedMediaHeader)
         audio_iter = iter(audio_stream)
         next_audio = next(audio_iter, None)
         for index, scan in enumerate(scans):
             seen_frames = 0
-            with decoder.stream_video(scan.asset) as video_stream:
+            with scan.asset.stream() as video_stream:
                 for event in video_stream:
                     check()
                     if not isinstance(event, DecodedVideoFrame):
@@ -922,7 +906,6 @@ async def assemble_video(
     ctx: Context,
     *,
     payload: AssembleVideoRequest,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> AssembleVideoResponse:
@@ -932,13 +915,12 @@ async def assemble_video(
     CPU work with no model slot. The videos ride as asset
     references, so a caller names `long_form`'s reported digests and nothing re-uploads.
     """
-    return assemble(payload, decoder=decoder, out=out, tel=tel, check=ctx.raise_if_cancelled)
+    return assemble(payload, out=out, tel=tel, check=ctx.raise_if_cancelled)
 
 
 def assemble(
     payload: AssembleVideoRequest,
     *,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
     check: Callable[[], None],
@@ -961,7 +943,7 @@ def assemble(
     scans = scanned.finish(payload.videos) if scanned is not None else []
     if scanned is None:
         for index, item in enumerate(payload.videos):
-            scans.append(_scan_video(decoder, item, check, pictures=pictures))
+            scans.append(_scan_video(item, check, pictures=pictures))
             scan_step(index)
     else:
         scan_step(len(scans) - 1)
@@ -996,9 +978,7 @@ def assemble(
                 scans, FRAME_RATE, joined, tolerance, trim_replay=False
             )
             global_gain = _global_gain(scans, selections, gains, joined)
-            return _soundtrack(
-                decoder, scans, selections, gains, global_gain=global_gain, check=check
-            )
+            return _soundtrack(scans, selections, gains, global_gain=global_gain, check=check)
 
         try:
             with tel.stage("join", overall_range=(0.10, 1.00)):
@@ -1008,7 +988,7 @@ def assemble(
                 raise
             tel.log("assembly re-encodes unjoinable tracks", reason=str(refused)[:256])
             if not pictures:
-                scans = [_scan_video(decoder, item, check) for item in payload.videos]
+                scans = [_scan_video(item, check) for item in payload.videos]
     video_format = scans[0].header.video
     if saved is None:
         assert video_format is not None and video_format.nominal_frame_rate is not None
@@ -1036,7 +1016,6 @@ def assemble(
         global_gain = _global_gain(scans, selections, gains, audio_format)
         saved = out.save_video_stream(
             _segment_events(
-                decoder,
                 scans,
                 selections,
                 gains,
@@ -1048,7 +1027,7 @@ def assemble(
         )
     elif saved is None:
         assert payload.master_audio is not None
-        master_scan = _scan_audio(decoder, payload.master_audio, check)
+        master_scan = _scan_audio(payload.master_audio, check)
         target_audio = _nearest(
             Fraction(output_frames * master_scan.header.sample_rate, 1) / FRAME_RATE
         )
@@ -1060,7 +1039,6 @@ def assemble(
             )
         saved = out.save_video_stream(
             _master_events(
-                decoder,
                 scans,
                 payload.master_audio,
                 master_scan,

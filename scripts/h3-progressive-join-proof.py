@@ -16,7 +16,6 @@ The proof shows that
 
 from __future__ import annotations
 
-import hashlib
 import itertools
 import json
 import subprocess
@@ -34,7 +33,6 @@ from cozy_runtime.author import (
     App,
     Context,
     Invocation,
-    MediaDecoder,
     Outputs,
     Telemetry,
     VideoAsset,
@@ -42,7 +40,6 @@ from cozy_runtime.author import (
     fakes,
     invocable,
 )
-from cozy_runtime.author._assets import GrantedInput, file_state
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
 import assembly
@@ -65,13 +62,12 @@ async def progressive(
     ctx: Context,
     *,
     payload: assembly.AssembleVideoRequest,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> Joined:
     """long_form's join: one revision published per segment, the joined video returned."""
-    cut = assembly.CutJoin(decoder, out, ctx.raise_if_cancelled)
-    with assembly.ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
+    cut = assembly.CutJoin(out, ctx.raise_if_cancelled)
+    with assembly.ScanAhead(ctx.raise_if_cancelled, pictures=False) as scanning:
         for index, video in enumerate(payload.videos):
             scanning.add(video)
             last = index + 1 == len(payload.videos)
@@ -86,13 +82,12 @@ async def continuous(
     ctx: Context,
     *,
     payload: assembly.AssembleVideoRequest,
-    decoder: MediaDecoder,
     out: Outputs,
     tel: Telemetry,
 ) -> Joined:
     """long_form's join of continuation segments."""
-    cut = assembly.CutJoin(decoder, out, ctx.raise_if_cancelled, continuous=True)
-    with assembly.ScanAhead(decoder, ctx.raise_if_cancelled, pictures=False) as scanning:
+    cut = assembly.CutJoin(out, ctx.raise_if_cancelled, continuous=True)
+    with assembly.ScanAhead(ctx.raise_if_cancelled, pictures=False) as scanning:
         for index, video in enumerate(payload.videos):
             scanning.add(video)
             cut.append(scanning.result(index), FRAMES[index], last=index + 1 == len(FRAMES))
@@ -153,18 +148,9 @@ def run(
     work.mkdir()
     assets, videos = {}, []
     for index, path in enumerate(paths):
-        digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
         key = f"payload.videos.{index}"
-        assets[key] = GrantedInput(
-            input_id=key,
-            local=path,
-            media_type="video/mp4",
-            digest=digest,
-            length=path.stat().st_size,
-            file_state=file_state(path),
-            order=index,
-        )
-        videos.append(digest)
+        assets[key] = fakes.granted_input(path, input_id=key, order=index, media_type="video/mp4")
+        videos.append(assets[key].digest)
     app = App()
     app.entrypoint(handler, emits_media=True, accelerator=False)
     result, outcome, record = attempt(

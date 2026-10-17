@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Annotated, cast
+from typing import Annotated
 
 import msgspec
 from PIL.Image import Image
@@ -12,7 +12,6 @@ from cozy_runtime.author import (
     AssetBound,
     Context,
     ImageAsset,
-    MediaDecoder,
     ModelArtifact,
     Telemetry,
     UnsupportedInput,
@@ -111,13 +110,12 @@ def describe_character(
     ctx: Context,
     payload: DescribeCharacterInput,
     model: Describer,
-    decoder: MediaDecoder,
     tel: Telemetry,
 ) -> DescribeCharacterOutput:
     """Describe one supplied character's appearance in one sentence."""
     ctx.raise_if_cancelled()
     with tel.stage("describing character"):
-        (text,) = _describe(model, [cast(Image, decoder.value(payload.image))], tel)
+        (text,) = _describe(model, [payload.image.read()], tel)
     if not text:
         raise UnsupportedInput("the character description names no appearance", code="output_integrity")
     return DescribeCharacterOutput(text)
@@ -132,13 +130,12 @@ def describe_characters(
     ctx: Context,
     payload: DescribeCharactersInput,
     model: Describer,
-    decoder: MediaDecoder,
     tel: Telemetry,
 ) -> DescribeCharactersOutput:
     """Describe each supplied character's appearance in one sentence, all images in one pass."""
     ctx.raise_if_cancelled()
     with tel.stage("describing characters"):
-        texts = _describe(model, [cast(Image, decoder.value(image)) for image in payload.images], tel)
+        texts = _describe(model, [image.read() for image in payload.images], tel)
     return DescribeCharactersOutput(texts)
 
 

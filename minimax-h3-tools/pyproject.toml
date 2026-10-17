@@ -1,9 +1,9 @@
 [project]
 name = "minimax-h3-tools"
-version = "2.22.1"
+version = "2.22.2"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime>=0.25.1",
+    "cozy-runtime>=0.27.0",
     "tensorfs>=0.10",
     "msgspec>=0.19",
     "numpy>=1.26",

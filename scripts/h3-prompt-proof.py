@@ -16,7 +16,7 @@ from typing import Any, get_type_hints
 
 import msgspec
 from msgspec.structs import replace
-from cozy_runtime.author import Assets, AudioAsset, ImageAsset, InvalidRequest, Mixed, VideoAsset
+from cozy_runtime.author import Assets, AudioAsset, ImageAsset, InvalidRequest, VideoAsset
 from cozy_runtime.author.fakes import fake_attempt, fake_context, fake_outputs, fake_telemetry
 from diffusers.modular_pipelines.minimax_h3.encoders import MiniMaxH3Ref2VATextEncoderStep
 
@@ -695,7 +695,7 @@ async def videos() -> None:
         "prompt": "<Ann> spars with <Ben> as in <Spin Kick>.", "duration_s": 5,
         "references": [*named, refs[4]], "clean_references": False, "describe_references": False})
     sent, assets, sound, _, warnings = await h3._direct_reference_assets(
-        fake_context(), payload, Assets[Mixed](), fake_outputs(attempt), fake_telemetry(attempt))
+        fake_context(), payload, Assets(), fake_outputs(attempt), fake_telemetry(attempt))
     check("ref2va: pictures, then the clip, labeled per kind",
           [(assets.info(i).kind, assets.info(i).label) for i in range(len(assets))],
           [("image", "Picture 1"), ("image", "Picture 2"), ("video", "Video 1")])
