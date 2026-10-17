@@ -45,7 +45,7 @@ DISTILLATION = "lightx2v"
 #: fl2va: video shift 12 (fl2v 8-step v1.0); ref2va: video shift 6 (ref2v 8-step v1.0 768p).
 PLAN_DIGESTS: dict[Task, str] = {
     "fl2va": "sha256:d2eb1605c1c1e01a4c5fdaaf1912ab43f33d9ce4772febf1c75b9bbfc8f7ba9d",
-    "ref2va": "sha256:de82396318950cecce36718db968d96be07a662c69f33565f5989ae97bc524bc",
+    "ref2va": "sha256:896a10881805e3047f6df514dd4e70fcea078837469eeb22ce67f0bd3f679cb7",
 }
 TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
 _PEFT = {"lora_down": "lora_A.default.weight", "lora_up": "lora_B.default.weight"}

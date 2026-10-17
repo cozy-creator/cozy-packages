@@ -35,7 +35,7 @@ VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
 TASKS: tuple[Trunk, ...] = ("fl2va", "ref2va")
 #: lightx2v's training video shifts: fl2v 8-step v1.0 at 12, ref2v 8-step v1.0 768p at 6.
-TURBO_VIDEO_SHIFT: dict[Trunk, float] = {"fl2va": 12.0, "ref2va": 6.0}
+TURBO_VIDEO_SHIFT: dict[Trunk, float] = {"fl2va": 12.0, "ref2va": 12.0}
 
 
 def official_schedule(steps: int, video_shift: float = VIDEO_SHIFT) -> Schedule:
