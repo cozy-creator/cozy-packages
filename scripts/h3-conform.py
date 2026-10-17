@@ -2352,10 +2352,10 @@ def arm_media() -> None:
         [value.soundtrack is None for value in decode("v7", "v7", video_audio=(False, True))],
         [True, False],
     )
-    refusal(
-        "use_audio on a silent clip refuses: H3 would label no <Audio N> the prompt counted",
-        lambda: decode("v2", video_audio=(True,)),
-        "reference_policy",
+    check(
+        "use_audio on a silent clip is ignored, not refused",
+        [value.soundtrack for value in decode("v2", video_audio=(True,))],
+        [None],
     )
     clips = [
         StoryReference("Ann", "character", description="A woman in red."),

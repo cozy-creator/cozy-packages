@@ -24,12 +24,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
 import h3
 from minimax_h3.official import Task
 from story import (
+    SHORT_DESCRIPTION,
     StoryReference,
+    apply_written,
+    compile_segments,
     encoder_prompt,
     image_prompt,
     opening_cut_warnings,
     resolve_reference_images,
     validate_references,
+    writer_request,
 )
 
 # The owner's own ref2va prompt, verbatim from MiniMax's full-reference guide.
@@ -307,25 +311,16 @@ def coffee(lab: dict[str, Any]) -> None:
             ],
         },
     )
-    shots = "(appears in [Shot 1], [Shot 2])"
-    voice = "<Audio 1> is the voice-timbre reference for <Subject 3> (S1)."
     follows = ("<Audio 1>: reference - <Subject 3>'s voice follows <Audio 1>'s timbre and delivery without "
                "copying the original signal.\n")
-    definitions = (
-        "<Subject 1> is the background shown in <Picture 1>. A coffee shop with a brick wall.\n"
-        "<Subject 2> is the character shown in <Picture 2>. A fluffy white Samoyed.\n"
-        f"<Subject 3> is the character shown in <Picture 3>. A young blonde woman.\n{voice}\n"
-        "<Subject 4> is the character shown in <Picture 4>. A young man in a hoodie.\n"
-    )
-    retention = (
-        f"<Subject 1> (appears in [Shot 1]): fully_preserved - {SCENE}.\n"
-        f"<Subject 2> {shots}: fully_preserved - {PERSON}.\n"
-        f"<Subject 3> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - {PERSON}.\n"
-        f"{follows}"
-        f"<Subject 4> {shots}: fully_preserved - {PERSON}.\n"
-    )
-    first = COFFEE.replace("vocal layer.\n", "vocal layer.\n" + definitions, 1).replace(
-        "original signal.\n", "original signal.\n" + retention, 1
+    # The text defines <Subject 1>, <Subject 2> (each citing its picture) and the voice <Audio 1>, and
+    # writes a retention line for each subject: the template adds only <Subject 3> and <Subject 4>'s
+    # pictures, and joins each reference's description to the text's own definition.
+    first = (
+        COFFEE.replace("wooden coffee table.\n<Subject 2>", "wooden coffee table. A coffee shop with a brick wall.\n<Subject 2>", 1)
+        .replace("a curved tail.\n<Subject 3>", "a curved tail. A fluffy white Samoyed.\n<Subject 3>", 1)
+        .replace("vocal layer.\n", "vocal layer.\n<Subject 3> is the character shown in <Picture 3>. A young blonde woman.\n"
+                 "<Subject 4> is the character shown in <Picture 4>. A young man in a hoodie.\n", 1)
     )
     check("coffee-shop segment: the text is kept and its sections gain the references", got[0][0], first)
     check(
@@ -605,7 +600,7 @@ async def reference_order() -> None:
             await asyncio.sleep(0)
         check("a reference made early waits for every earlier one", [p.label for p in attempt.published], [])
         gates["Ann"].set()
-        images, _, _ = await running
+        images, _, _, _ = await running
     finally:
         for name, callee in real.items():
             setattr(h3, name, callee)
@@ -801,7 +796,62 @@ def voices() -> None:
         raise AssertionError("a voice on audio accepted")
 
 
+def writer() -> None:
+    """describe_references writes what a call with a described clip lacks of the guide format,
+    and nothing else."""
+    refs = request(list[StoryReference], [
+        {"name": "Ann", "kind": "character", "description": "A woman in a red coat."},
+        {"name": "Ben", "kind": "character", "description": "A man in a blue suit."},
+        {"name": "Hall", "kind": "background", "description": "A marble hall."},
+        {"name": "Kick", "kind": "video", "video": "sha256:" + "5" * 64},
+    ])
+    clips = {"Kick": "PEOPLE:\nP1: left - tall\nP2: right - short\nBEATS:\n0-2 s: P1 kicks P2; P2 falls back."}
+    short = "summary:\n<Ann> kicks <Ben>.\n\ndetailed_description:\n[Shot 1] In <Hall>, <Ann> kicks <Ben> as in <Kick>."
+    (call,) = compile_segments([short], refs)
+    asked = writer_request(short, call.references, clips, "Film noir.", "")
+    check("a short call with a described clip asks the writer, with the looks, the clip and the request",
+          (asked is not None and "<Ann>: a character. Look: A woman in a red coat." in asked
+           and "P1 kicks P2" in asked and short in asked and "Style: Film noir." in asked), True)
+    check("no clip description, no writing", writer_request(short, call.references, {}, "", ""), None)
+    long = " ".join(["word"] * SHORT_DESCRIPTION)
+    full = ("subject_definitions:\n<Ann>'s movements come from the kicker in <Kick>.\n<Ben>'s movements come "
+            f"from the one kicked in <Kick>.\n\ndetailed_description:\n[Shot 1] <Ann> <Ben> <Hall> {long}\n\n"
+            "overall_soundscape:\nRain.")
+    check("a call already in full is left alone", writer_request(full, call.references, clips, "", ""), None)
+    description = "[Shot 1] In <Hall>, <Ann> faces <Ben> and kicks him; <Ben> falls back. " + long
+    reply = (f"ROLES:\n<Ann>: P1, the kicker\n<Ben>: P2, the one kicked\n\nDESCRIPTION:\n{description}\n\n"
+             "SOUNDSCAPE:\nShoes squeak on marble.")
+    text, warnings = apply_written(short, reply, refs, call.references, clips, "")
+    check("the reply fills the roles, the description and the soundscape",
+          (text, warnings),
+          ("subject_definitions:\n<Ann> is the character whose appearance comes from <Picture 1> and whose "
+           "movements come from the kicker in <Kick>.\n<Ben> is the character whose appearance comes from "
+           f"<Picture 2> and whose movements come from the one kicked in <Kick>.\n\nsummary:\n<Ann> kicks <Ben>.\n\ndetailed_description:\n{description}"
+           "\n\noverall_soundscape:\nShoes squeak on marble.\n", []))
+    (bound,) = compile_segments([text], refs)
+    check("a character the text defines gets no template line; its description joins the text's",
+          definition_lines(bound.prompt),
+          ["<Ann> is the character whose appearance comes from <Picture 1> and whose movements come from "
+           "the kicker in <Kick>. A woman in a red coat.",
+           "<Ben> is the character whose appearance comes from <Picture 2> and whose movements come from "
+           "the one kicked in <Kick>. A man in a blue suit.",
+           "<Hall> is the background shown in <Picture 3>. A marble hall.",
+           "<Kick> is the motion and camera reference in <Video 1> for <Ann> and <Ben>."])
+    kept, warned = apply_written(short, reply.replace("<Ben>", "him"), refs, call.references, clips, "")
+    check("a description that drops a named character is not used",
+          "[Shot 1] In <Hall>, <Ann> kicks <Ben> as in <Kick>." in kept, True)
+    unplaced, _ = apply_written(short, reply.replace("In <Hall>, ", ""), refs, call.references, clips, "")
+    check("a place told only in words is still named: the description opens in it",
+          "detailed_description:\nThe video takes place in <Hall>.\n[Shot 1] <Ann> faces" in unplaced, True)
+    check("the warning names the dropped character",
+          warned, ["The written description was not used: it never names <Ben>; the text's own is sent."])
+    own = short + "\n\noverall_soundscape:\nWind."
+    check("the text's own soundscape stays",
+          apply_written(own, reply, refs, call.references, clips, "")[0].endswith("overall_soundscape:\nWind."), True)
+
+
 if __name__ == "__main__":
+    writer()
     asyncio.run(videos())
     voices()
     opening_cuts()

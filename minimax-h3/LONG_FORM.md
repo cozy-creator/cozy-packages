@@ -14,12 +14,17 @@ so the workflow copies the global information into it.
   appears in the reference outputs and is reused for every segment; `false` sends it as
   supplied. Supplied backgrounds, audio and videos are used as supplied. References generated
   from descriptions keep their existing path.
-- `describe_references` (default `true`): a vision-language model writes one sentence
-  about each supplied character image that has no `description` (identity, hair, face,
-  clothing and items; never the background, pose or style). It runs once, alongside
-  background removal, and joins that character's subject definition in every segment.
-  An authored description is kept as written. If describing fails, the run continues
-  without it and reports a warning.
+- `describe_references` (default `true`): a vision-language model (character-describer)
+  writes one sentence about each supplied character or background image that has no
+  `description` (a character's identity, hair, face, clothing and items; a place's look,
+  people left out), and watches each clip as video for its people, beats, camera and cuts.
+  It runs once, alongside background removal; the sentences join the subject definitions.
+  Each segment with a clip then gains, from one writing pass over all of them, what its
+  text lacks of MiniMax's guide format: each character's role in the clip, a 350-500-word
+  description establishing the characters, the background and the clip's beats in order,
+  and a soundscape. What the text already has in full is kept as written. Every result is
+  memoized on the machine, so a repeat of the same files skips the model. If describing or
+  writing fails, the run continues with the text as written and reports a warning.
 - `style`: look shared by generated reference images and every segment (optional).
 - `overall_soundscape`: sound shared by every segment (optional).
 - `non_diegetic_music`: score shared by every segment (default `N/A`).
@@ -123,7 +128,7 @@ every second latent frame, and only during the dense denoise steps, so a 15 s re
 clip costs ~1.3x the render without one (5.5x at the full sizing).
 A clip's sound is dropped unless the reference sets `use_audio: true`; then it conditions
 the audio as `<Audio k>`, "the synchronized audio track of `<Video k>`", copied by default
-(a silent clip with `use_audio` is refused). Each clip is bound to the characters its shots
+(on a silent clip, `use_audio` is ignored with a warning). Each clip is bound to the characters its shots
 name (all of the call's characters if no shot names it): their lines say their movements
 come from it, and it gains `<Video k> (motion, choreography and camera movement):
 attribute_transfer - its movements, timing and camera work are performed by <...> in
@@ -133,10 +138,11 @@ attribute_transfer - its movements, timing and camera work are performed by <...
 
 Binding alone does not stop H3 from copying a clip's own people and setting: the
 description must establish each character's look, the background and the beats in order
-(MiniMax's guide asks 350-500 words). A segment whose clip guides a shorter description
-gets a warning, as does a declared clip no prompt names.
+(MiniMax's guide asks 350-500 words). `describe_references` writes it from the clip and the
+segment's text; a segment whose clip still guides a shorter description gets a warning, as
+does a declared clip no prompt names.
 
-`clean_references` and `describe_references` leave videos alone. Direct `ref2va` and
+`clean_references` leaves videos alone; `describe_references` describes them (above). Direct `ref2va` and
 `ref2va_turbo` take video references the same way.
 
 Write the role where you name the subject, as MiniMax's guide does. Name clips anything;

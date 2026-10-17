@@ -392,9 +392,19 @@ def _segment_call(
         (m.group(1), {ref.name for ref in mentioned(text[a:b])})
         for m, (a, b) in zip(markers, spans, strict=True)
     ]
+    _, start, end = sections.get("subject_definitions", (0, 0, 0))
+    bound = {
+        (person.name, clip.name)
+        for named_here in map(mentioned, text[start:end].splitlines())
+        for person in named_here if person.kind == "character"
+        for clip in named_here if clip.kind == "video"
+    }
     _, start, end = sections.get("retention_analysis", (0, 0, 0))
+    # The text's own retention line for a reference opens with it; the template's then gives way.
     retained = {
-        part(token, ref) for token in _TOKEN.finditer(text, start, end) if (ref := lookup(token))
+        part(first, ref)
+        for line in text[start:end].splitlines()
+        if (first := _TOKEN.match(line.lstrip(" \t-*"))) and (ref := lookup(first))
     }
     given = _tasks(text)
     editing = bool({"video editing", "video continuation"} & {task.casefold() for task in given})
@@ -433,12 +443,32 @@ def _segment_call(
 
     motion = {} if editing else {clip.name: performers(clip) for clip in clips}
     voiced = {ref.name: speaker(owners[ref.name], text) for ref in used if ref.name in owners}
+    # A subject_definitions line of the text's own that opens with a reference, and cites its
+    # picture for an image, defines it: the template adds no second line, and the reference's
+    # description joins the text's line.
+    _, start, end = sections.get("subject_definitions", (0, 0, 0))
+    own: dict[tuple[str, str], int] = {}
+    for line in re.finditer(r"[^\n]+", text[start:end]):
+        first = _TOKEN.match(line.group(0).lstrip(" \t-*"))
+        if not first or (ref := lookup(first)) is None or ref not in used:
+            continue
+        cited = FILE[ref.kind] != "image" or any(
+            lookup(token) is ref and _MEDIA.fullmatch(name_key(token.group(1)))
+            for token in _TOKEN.finditer(line.group(0))
+        )
+        if cited:
+            own.setdefault(part(first, ref), start + line.end())
+    for (name, kind), at in sorted(own.items(), key=lambda item: -item[1]):
+        ref = by_key[name_key(name)]
+        if kind == _SLOT[ref.kind] and ref.description and ref.description.strip() not in text[start:at]:
+            text = text[:at] + f" {ref.description.strip()}" + text[at:]
     text = _TOKEN.sub(renumber, text)
     definitions, retention = [], []
     tasks = set()
     for ref in used:
         slot = label(ref)
         line_label = slot
+        defined = len(definitions)
         if ref.name in owners:
             owner = f"<{owners[ref.name].name}>"
             definitions.append(f"{slot} is the voice-timbre reference for {owner}{voiced[ref.name]}.")
@@ -454,7 +484,8 @@ def _segment_call(
                                else f"<{ref.name}> is the {role} in {slot}{who}.")
             if ref.use_audio:
                 sound = label(ref, "audio")
-                definitions.append(f"{sound} is the synchronized audio track of {slot}.")
+                if (ref.name, "audio") not in own:
+                    definitions.append(f"{sound} is the synchronized audio track of {slot}.")
                 if (ref.name, "audio") not in retained:
                     retention.append(f"{sound}: partially_copy - the synchronized audio track of {slot} "
                                      "is copied into the target audio, with other sounds around it.")
@@ -471,7 +502,8 @@ def _segment_call(
                            f"by {cast}{where}.")
         else:
             moves = [f"<{clip.name}>" if not _MEDIA.fullmatch(clip.name) else label(clip)
-                     for clip in clips if ref in motion.get(clip.name, ())]
+                     for clip in clips
+                     if ref in motion.get(clip.name, ()) and (ref.name, clip.name) not in bound]
             binding = f", whose movements come from {' and '.join(moves)}" if moves else ""
             definitions.append(f"<{ref.name}> is the {ref.kind} shown in {slot}{binding}.")
             preserved = (
@@ -482,13 +514,15 @@ def _segment_call(
             default = f"fully_preserved - {preserved}."
             appears = [f"[Shot {n}]" for n, found in shots if ref.name in found]
             line_label = f"<{ref.name}>" + (f" (appears in {', '.join(appears)})" if appears else "")
-        if ref.description:
-            definitions[-1 - (ref.kind == "video" and ref.use_audio)] += f" {ref.description}"
+        if (ref.name, _SLOT[ref.kind]) in own:
+            del definitions[defined]
+        elif ref.description:
+            definitions[defined] += f" {ref.description}"
         line = ref.retention_analysis or default
         if ref.kind == "audio":
             tasks.add("audio reuse" if line.split(" ", 1)[0] in ("fully_copy", "partially_copy")
                       else "audio reference")
-        if ref.kind != "video" or ref.retention_analysis or (ref.name, "video") not in retained:
+        if ref.retention_analysis or (ref.name, _SLOT[ref.kind]) not in retained:
             retention.append(f"{line_label}: {line}")
     if clips and not editing and words < SHORT_DESCRIPTION:
         warnings.append(
@@ -512,6 +546,150 @@ def _segment_call(
         "overall_soundscape": soundscape,
     }
     return SegmentCall(_fill(text, additions), used, warnings)
+
+
+WRITER_TOKENS = 1400
+WRITER_PARTS = ("ROLES", "DESCRIPTION", "SOUNDSCAPE")
+_PART = re.compile(r"^[ \t*#]*(" + "|".join(WRITER_PARTS) + r")[ \t*]*:[ \t*]*", re.MULTILINE)
+_ROLE = re.compile(r"^\W*<([^<>\n]+)>[^:=\n]*[:=][ \t]*(.+)$", re.MULTILINE)
+_PERSON = re.compile(r"\bP\d+\b")
+_CLIP_WORDS = re.compile(r"\s*\b(?:from|in|of) (?:the|this) (?:reference )?(?:clip|video)\b", re.IGNORECASE)
+WRITER_TASK = """You write one shot list for MiniMax-H3, a video model. The video performs the motion of a \
+reference clip again, with the request's characters in the request's place.
+
+{references}
+
+The request; keep every event, name and detail it asks for:
+{request}
+
+Write exactly these three parts, each starting with its label on its own line, and nothing else:
+ROLES: one line per character who performs the clip's motion, "<Name>: <who they are in the clip, \
+by what they do there>", matching the clip's people to the request's characters by what the request \
+says each one does.
+DESCRIPTION: 350 to 500 words of English in playback order, as shots: "[Shot 1] ..." and each later \
+shot "[Shot N] At MM:SS.mmm, ...". At each character's first appearance give their position in the \
+frame and their look, and establish the place from its look. Then follow the clip's beats in order: \
+who does what to whom, which way each turns, falls or moves, each person's facing relative to the \
+camera, and the camera's framing and moves. Keep everything the request asks for. The clip gives only \
+motion, timing and camera: never describe its people's looks or its setting, never call anyone P1 \
+or P2, and never mention the clip itself. Write times as MM:SS.mmm, such as 00:02.400. Name each \
+of {tokens} by that token, exactly as written, at its first appearance and wherever it acts. Write \
+at least 350 words. Do not restate the style.
+SOUNDSCAPE: one or two sentences of ambience and physical sounds, without music or speech."""
+
+
+def writer_request(
+    text: str, attached: Sequence[StoryReference], clips: dict[str, str], style: str, soundscape: str
+) -> str | None:
+    """What the writer is asked for a call that attaches a described clip and lacks what MiniMax's
+    guide asks for: a 350-500-word description, each character bound to the clip, a soundscape.
+    None when nothing is missing."""
+    if not _missing(text, attached, clips, soundscape):
+        return None
+    lines = ["References, each named by its token:"]
+    for ref in attached:
+        if ref.kind in ("character", "background"):
+            role = "a character" if ref.kind == "character" else "the place"
+            lines.append(f"<{ref.name}>: {role}. " + (f"Look: {ref.description}" if ref.description else ""))
+        elif clips.get(ref.name):
+            lines.append(f"<{ref.name}>: the motion clip, P1, P2 and so on being its people:\n{clips[ref.name]}")
+    if style:
+        lines.append(f"\nStyle: {style}")
+    tokens = [f"<{ref.name}>" for ref in attached if ref.kind in ("character", "background")]
+    listed = ", ".join(tokens[:-1]) + " and " + tokens[-1] if len(tokens) > 1 else "".join(tokens)
+    return WRITER_TASK.format(references="\n".join(lines), request=text.strip(), tokens=listed)
+
+
+def apply_written(
+    text: str,
+    reply: str,
+    references: Sequence[StoryReference],
+    attached: Sequence[StoryReference],
+    clips: dict[str, str],
+    soundscape: str,
+) -> tuple[str, list[str]]:
+    """The writer's reply where the text lacks it: the guide's binding line per unbound character
+    ("<Ann> is the character whose appearance comes from <Picture 1> and whose movements come
+    from ... in <Video 1>"), the description when the text's is short, the soundscape when it has
+    none. The text's own full sections stay as written; a description that drops a named
+    reference or names the clip's people is not used."""
+    missing = _missing(text, attached, clips, soundscape)
+    found = list(_PART.finditer(reply))
+    parts = {
+        m.group(1): reply[m.end(): nxt.start() if nxt else len(reply)].strip()
+        for m, nxt in zip(found, [*found[1:], None], strict=True)
+    }
+    warnings = []
+    clip = next(ref for ref in attached if ref.kind == "video" and clips.get(ref.name))
+    by_key = {name_key(ref.name): ref for ref in attached if ref.kind == "character"}
+    picture = {ref.name: n for (kind, n), ref in _numbering(voices(references)[0]).items() if kind == "picture"}
+    roles = [
+        f"<{ref.name}> is the character whose appearance comes from <Picture {picture[ref.name]}> and "
+        f"whose movements come from {role} in <{clip.name}>."
+        for name, said in _ROLE.findall(parts.get("ROLES", ""))
+        if (ref := by_key.get(name_key(name))) and ref.name in missing.get("roles", ())
+        and (role := _role(said))
+    ]
+    if roles:
+        text = _fill(text, {"subject_definitions": "\n".join(roles)})
+    if "description" in missing:
+        written = parts.get("DESCRIPTION", "")
+        named = {name_key(token.group(1)) for token in _TOKEN.finditer(written)}
+        asked = {name_key(token.group(1)) for token in _TOKEN.finditer(text)}
+        dropped = [ref for ref in attached if ref.kind == "character" and name_key(ref.name) in asked - named]
+        places = [f"<{ref.name}>" for ref in attached if ref.kind == "background" and name_key(ref.name) not in named]
+        if places:
+            # A place told in words only: the reference is still where it all happens.
+            written = f"The video takes place in {' and '.join(places)}.\n{written}"
+        why = (f"it is {len(written.split())} words" if len(written.split()) < SHORT_DESCRIPTION
+               else f"it never names <{dropped[0].name}>" if dropped
+               else "it names the clip's people" if _PERSON.search(written) else "")
+        if why:
+            warnings.append(f"The written description was not used: {why}; the text's own is sent.")
+        else:
+            text = _replace(text, "detailed_description", written)
+    if "soundscape" in missing and parts.get("SOUNDSCAPE"):
+        text = _replace(text, "overall_soundscape", parts["SOUNDSCAPE"])
+    return text, warnings
+
+
+def _role(said: str) -> str:
+    """A writer's role phrase as a binding reads it: no P1/P2, no "from the clip", lowercase."""
+    role = _CLIP_WORDS.sub("", _PERSON.sub("", said)).strip(" ,.;:-")
+    return role[:1].lower() + role[1:] if role[:1].isupper() and not role[1:2].isupper() else role
+
+
+def _missing(
+    text: str, attached: Sequence[StoryReference], clips: dict[str, str], soundscape: str
+) -> dict[str, tuple[str, ...]]:
+    """What a call with a described clip lacks: characters bound to no clip in
+    `subject_definitions`, a description shorter than `SHORT_DESCRIPTION` words, a soundscape."""
+    if not any(ref.kind == "video" and clips.get(ref.name) for ref in attached):
+        return {}
+    keys = {name_key(ref.name): ref for ref in attached}
+    bound = set()
+    for line in _body(text, "subject_definitions").splitlines():
+        found = [keys.get(name_key(t.group(1))) for t in _TOKEN.finditer(line)]
+        if any(ref is not None and ref.kind == "video" for ref in found) or re.search(r"<\s*video\s+\d+\s*>", line, re.I):
+            bound |= {ref.name for ref in found if ref is not None and ref.kind == "character"}
+    missing: dict[str, tuple[str, ...]] = {}
+    if unbound := tuple(ref.name for ref in attached if ref.kind == "character" and ref.name not in bound):
+        missing["roles"] = unbound
+    if len(_body(text, "detailed_description").split()) < SHORT_DESCRIPTION:
+        missing["description"] = ()
+    if not soundscape and _body(text, "overall_soundscape").strip().upper() in ("", "N/A"):
+        missing["soundscape"] = ()
+    return missing
+
+
+def _replace(text: str, name: str, body: str) -> str:
+    """`name`'s body replaced, its heading kept; a headerless description gains its heading."""
+    found = _sections(text)
+    if name not in found:
+        return _fill(text, {name: body})
+    head, start, end = found[name]
+    rest = text[end:].lstrip()
+    return text[:head] + f"{name}:\n{body}" + (f"\n\n{rest}" if rest else "\n")
 
 
 def _tasks(text: str) -> list[str]:

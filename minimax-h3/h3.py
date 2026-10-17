@@ -100,7 +100,15 @@ from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate_image as generate_reference
 from birefnet import RemoveBackgroundOutput
 from birefnet import remove_background
-from character_describer import DescribeCharactersOutput, describe_characters
+from character_describer import (
+    DescribeCharactersOutput,
+    DescribeClipOutput,
+    WriteTextsOutput,
+    describe_characters,
+    describe_clip,
+    describe_places,
+    write_texts,
+)
 from seedvr2 import Resolution as RestorationResolution
 from seedvr2 import UpscaleOutput as RestorationOutput
 from seedvr2 import upscale as restore_video
@@ -112,8 +120,10 @@ from story import (
     REFERENCE_VIDEO,
     VIDEO_MAX_BYTES,
     VIDEO_READ_BYTES,
+    WRITER_TOKENS,
     SegmentCall,
     StoryReference,
+    apply_written,
     compile_segments,
     encoder_prompt,
     image_prompt,
@@ -121,6 +131,7 @@ from story import (
     reference_seed,
     resolve_reference_images,
     validate_references,
+    writer_request,
 )
 from text_states import encode_text
 
@@ -523,6 +534,7 @@ def assets_to_h3_refs(
             images.append(ImageSizing(field, image.width, image.height, requested))
         elif isinstance(reference, VideoAsset):
             video = reference.probe()
+            keeps[index] = keeps[index] and video.soundtrack is not None
             _validate_video(video, field, sound=keeps[index])
             video_tokens += reference_video_vision_tokens(video.width, video.height, video.duration)
         else:
@@ -569,14 +581,7 @@ def _validate_video(video: VideoProbe, field: str, *, sound: bool) -> None:
             fields=[field],
         )
     # Frame and soundtrack clock alignment belong to the model's video_reference.
-    if sound and video.soundtrack is None:
-        # H3 labels a soundtrack `<Audio N>` only if there is one; the prompt counted it.
-        raise InvalidRequest(
-            f"{field} has no soundtrack; set use_audio to false for a silent clip",
-            code="reference_policy",
-            fields=[field],
-        )
-    if sound:
+    if sound and video.soundtrack is not None:
         _validate_audio_channels(video.soundtrack.channels, field)
 
 
@@ -1097,7 +1102,7 @@ async def _direct_reference_assets(
         raise InvalidRequest("references must contain at least one item", fields=["references"])
     validate_references(payload.references)
     shown: list[ImageAsset] = []
-    images, references, warnings = await _create_references(
+    images, references, warnings, clips = await _create_references(
         ctx,
         payload.references,
         tel,
@@ -1107,7 +1112,9 @@ async def _direct_reference_assets(
         prepare_characters=payload.clean_references,
         describe_characters=payload.describe_references,
     )
-    call = compile_segments([payload.prompt], references, style=payload.style)[0]
+    prompts, written = await _write_prompts([payload.prompt], references, clips, payload.style, "", tel)
+    warnings += written
+    call = compile_segments(prompts, references, style=payload.style)[0]
     for warning in call.warnings:
         tel.log("h3 reference prompt", level="warning", warning=warning)
     labeled = _call_assets(images, call.references)
@@ -1692,8 +1699,10 @@ async def _create_references(
     style: str,
     prepare_characters: bool = True,
     describe_characters: bool = True,
-) -> tuple[dict[str, Reference], list[StoryReference], list[str]]:
-    """Prepare, generate and describe references concurrently; return the described list."""
+) -> tuple[dict[str, Reference], list[StoryReference], list[str], dict[str, str]]:
+    """Prepare, generate and describe references concurrently: the images, the described list,
+    warnings, and each motion clip's description by name. Describing fills a supplied
+    character's or place's missing description and describes every clip (`describe_clip`)."""
     reference_steps = 40
     # Managed dependencies install an asynchronous flat caller for the source
     # entrypoint, whose own annotations describe its injected implementation.
@@ -1730,13 +1739,22 @@ async def _create_references(
         out.publish("references", image, label=f"Reference: {reference.name}")
         shown.append(image)
 
+    references, warnings = _audible(references)
     async with asyncio.TaskGroup() as group:
         resolving = group.create_task(resolve_reference_images(
             references, create_reference, prepare_character if prepare_characters else None, show
         ))
-        describing = group.create_task(_describe_characters(references, tel)) if describe_characters else None
+        if describe_characters:
+            people = group.create_task(_describe_images(references, "character", tel))
+            places = group.create_task(_describe_images(references, "background", tel))
+            watching = group.create_task(_describe_clips(references, tel))
     images = resolving.result()
-    described, warnings = describing.result() if describing is not None else (references, [])
+    described, clips = references, {}
+    if describe_characters:
+        found = {**people.result()[0], **places.result()[0]}
+        described = [replace(ref, description=found[ref.name]) if found.get(ref.name) else ref for ref in references]
+        clips = watching.result()[0]
+        warnings += people.result()[1] + places.result()[1] + watching.result()[1]
     for reference in references:
         ctx.raise_if_cancelled()
         tel.log(
@@ -1749,40 +1767,122 @@ async def _create_references(
                     else "attached"),
             digest=images[reference.name].digest,
         )
-    return images, described, warnings
-async def _describe_characters(
-    references: list[StoryReference], tel: Telemetry
-) -> tuple[list[StoryReference], list[str]]:
-    """One identity sentence for each supplied character the author did not describe, all in one
-    call: one prefill over their images and one decode of them together. Descriptions only help,
-    so a failed call, or an image showing no character, warns and keeps the reference as written."""
-    wanted = [
-        reference for reference in references
-        if reference.kind == "character" and reference.image is not None and not reference.description.strip()
-    ]
+    return images, described, warnings, clips
+def _audible(references: list[StoryReference]) -> tuple[list[StoryReference], list[str]]:
+    """`use_audio` holds only for a clip with a soundtrack: on a silent one it is ignored, with a
+    warning, so H3's `<Audio N>` labels match the prompt's."""
+    silent = {
+        ref.name for ref in references
+        if ref.kind == "video" and ref.use_audio and ref.video is not None and ref.video.probe().soundtrack is None
+    }
+    return (
+        [replace(ref, use_audio=False) if ref.name in silent else ref for ref in references],
+        [f"{name} has no audio track; use_audio ignored" for name in silent],
+    )
+
+
+async def _describe_images(
+    references: list[StoryReference], kind: str, tel: Telemetry
+) -> tuple[dict[str, str], list[str]]:
+    """One sentence for each supplied character (identity) or place (look, people left out) the
+    author did not describe, all in one call. Descriptions only help, so a failed call, or an
+    image that shows no character, warns and keeps the reference as written."""
+    wanted = [ref for ref in references if ref.kind == kind and ref.image is not None and not ref.description.strip()]
     if not wanted:
-        return references, []
-    describe = cast(Callable[..., Awaitable[DescribeCharactersOutput]], describe_characters)
-    names = ", ".join(reference.name for reference in wanted)
+        return {}, []
+    describe = cast(
+        Callable[..., Awaitable[DescribeCharactersOutput]],
+        describe_characters if kind == "character" else describe_places,
+    )
+    names = ", ".join(ref.name for ref in wanted)
     try:
         with tel.scope(f"Describing {names}"):
-            result = await describe(images=[reference.image for reference in wanted])
+            result = await describe(images=[ref.image for ref in wanted])
     except Exception as exc:
-        tel.log("h3 character descriptions skipped", level="warning", subjects=names, error=str(exc)[:400])
-        return references, [f"the descriptions of {names} were skipped: {str(exc)[:200]}"]
-    described = dict(zip((reference.name for reference in wanted), result.descriptions, strict=True))
-    warnings = []
+        tel.log("h3 reference descriptions skipped", level="warning", subjects=names, error=str(exc)[:400])
+        return {}, [f"the descriptions of {names} were skipped: {str(exc)[:200]}"]
+    described = dict(zip((ref.name for ref in wanted), result.descriptions, strict=True))
     for name, description in described.items():
         if description:
-            tel.log("h3 character description", subject=name, description=description[:400])
+            tel.log(f"h3 {kind} description", subject=name, description=description[:400])
+    return described, [
+        f"{name}'s description was skipped: the image shows no character's appearance"
+        for name, description in described.items() if not description
+    ]
+
+
+async def _describe_clips(
+    references: list[StoryReference], tel: Telemetry
+) -> tuple[dict[str, str], list[str]]:
+    """Each clip's people, beats, camera and cuts, watched as video (`describe_clip`); a clip
+    that fails is left undescribed, with a warning."""
+    clips = [ref for ref in references if ref.kind == "video" and ref.video is not None]
+    describe = cast(Callable[..., Awaitable[DescribeClipOutput]], describe_clip)
+
+    async def one(ref: StoryReference) -> str:
+        with tel.scope(f"Describing {ref.name}"):
+            return (await describe(video=ref.video)).description
+
+    results = await asyncio.gather(*(one(ref) for ref in clips), return_exceptions=True)
+    described, warnings = {}, []
+    for ref, result in zip(clips, results, strict=True):
+        if isinstance(result, BaseException):
+            tel.log("h3 clip description skipped", level="warning", subject=ref.name, error=str(result)[:400])
+            warnings.append(f"the description of {ref.name} was skipped: {str(result)[:200]}")
         else:
-            warnings.append(f"{name}'s description was skipped: the image shows no character's appearance")
-    return [
-        replace(reference, description=described[reference.name]) if described.get(reference.name) else reference
-        for reference in references
-    ], warnings
+            tel.log("h3 clip description", subject=ref.name, description=result[:2000])
+            described[ref.name] = result
+    return described, warnings
 
 
+async def _write_prompts(
+    prompts: list[str],
+    references: list[StoryReference],
+    clips: dict[str, str],
+    style: str,
+    soundscape: str,
+    tel: Telemetry,
+) -> tuple[list[str], list[str]]:
+    """Each call with a described clip gains, from one writer pass over all of them, what its text
+    lacks of MiniMax's guide format: the characters' roles in the clip, a 350-500-word
+    description, a soundscape (`apply_written`). Writing only helps: a failed pass warns and
+    sends the text as written."""
+    if not clips:
+        return prompts, []
+    calls = compile_segments(prompts, references, style=style)
+    asks = [
+        (index, request) for index, (text, call) in enumerate(zip(prompts, calls, strict=True))
+        if (request := writer_request(text, call.references, clips, style, soundscape))
+    ]
+    if not asks:
+        return prompts, []
+    write = cast(Callable[..., Awaitable[WriteTextsOutput]], write_texts)
+    try:
+        with tel.scope("Writing the prompts"):
+            result = await write(prompts=[request for _, request in asks], max_new_tokens=WRITER_TOKENS)
+    except Exception as exc:
+        tel.log("h3 prompt writing skipped", level="warning", error=str(exc)[:400])
+        return prompts, [f"the prompts were sent as written: writing them failed: {str(exc)[:200]}"]
+    written, warnings = list(prompts), []
+    for (index, _), reply in zip(asks, result.texts, strict=True):
+        tel.log("h3 written prompt", segment=index + 1, reply=reply[:6000])
+        written[index], more = apply_written(
+            prompts[index], reply, references, calls[index].references, clips, soundscape
+        )
+        warnings += [f"Segment {index + 1}: {warning}" for warning in more]
+    return written, warnings
+
+
+async def _written[T: (LongFormInput, LongFormCutsInput)](
+    payload: T, references: list[StoryReference], clips: dict[str, str], tel: Telemetry
+) -> tuple[T, list[str]]:
+    """`payload` with the described references and its segments' prompts written (`_write_prompts`)."""
+    prompts, warnings = await _write_prompts(
+        [segment.prompt for segment in payload.segments], references, clips, payload.style,
+        payload.overall_soundscape.strip(), tel,
+    )
+    segments = [replace(segment, prompt=prompt) for segment, prompt in zip(payload.segments, prompts, strict=True)]
+    return replace(payload, references=references, segments=segments), warnings
 
 
 async def long_form_cuts(
@@ -1809,12 +1909,14 @@ async def long_form_cuts(
     total_work = sum(render_work) + reference_work
     prefetch(cut_segment)
     references: list[ImageAsset] = []
-    images, described, warnings = await _create_references(
+    images, described, warnings, clips = await _create_references(
         ctx, payload.references, tel, out, references, style=payload.style,
         prepare_characters=payload.clean_references,
         describe_characters=payload.describe_references,
     )
-    calls = segment_calls(replace(payload, references=described))
+    payload, written = await _written(payload, described, clips, tel)
+    warnings += written
+    calls = segment_calls(payload)
     completed_work = reference_work
     expected = None
     warnings = truncation_warnings(named_videos(payload.references, calls)) + warnings
@@ -1949,12 +2051,14 @@ async def long_form(
     total_work = sum(render_work) + reference_work
     prefetch(motion_segment)
     references: list[ImageAsset] = []
-    images, described, described_warnings = await _create_references(
+    images, described, described_warnings, clips = await _create_references(
         ctx, payload.references, tel, out, references, style=payload.style,
         prepare_characters=payload.clean_references,
         describe_characters=payload.describe_references,
     )
-    calls = segment_calls(replace(payload, references=described))
+    payload, written = await _written(payload, described, clips, tel)
+    described_warnings += written
+    calls = segment_calls(payload)
     warnings = (
         truncation_warnings(named_videos(payload.references, calls)) + described_warnings + warnings
     )
