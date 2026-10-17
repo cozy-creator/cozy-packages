@@ -152,7 +152,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.26.0"
+version = "0.26.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -162,10 +162,10 @@ dependencies = [
     { name = "pillow" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3c/3e/41632478b0b2e017d8a3972ddd0953e121255fbad865e730a2a9bc191716/cozy_runtime-0.26.0.tar.gz", hash = "sha256:955a3a0b0828b522ed941e3b60fcd4f602a66dcbf469efd79e40378c7a3065e8", size = 1910482, upload-time = "2026-10-16T22:59:50.799Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/b3/c7a839798cb6a7cf978bdc8606fe9b7421ec2a340f1a9009cd37b83220af/cozy_runtime-0.26.4.tar.gz", hash = "sha256:ad3bf5afe33fa8778a79430c0b4284fced19f5f834578e4f92dee1d2dc67b3a4", size = 1935001, upload-time = "2026-10-17T02:30:35.85Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/04/24/d271c869374622f9cead7bce11a441ee397e187d70e7de771a3f77deff14/cozy_runtime-0.26.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:41f326fedf1dea003d393e913997f1c189af7ce00f7bd13449a5fdddebe53748", size = 26143496, upload-time = "2026-10-16T22:59:46.151Z" },
-    { url = "https://files.pythonhosted.org/packages/ef/1f/f0f710d9be995808a0fe58a83b73fef147f2807074670b7fa25ae5769f36/cozy_runtime-0.26.0-py3-none-any.whl", hash = "sha256:bca84daf4b91dd0e4e1403f2684c5f6791b36e5841cfa44ffbeab8aa74fb987f", size = 1011405, upload-time = "2026-10-16T22:59:49.058Z" },
+    { url = "https://files.pythonhosted.org/packages/24/0c/5a451d1dd376fe4df3de99e60cb3a765f9e17bb7a0c5330a39667354a76e/cozy_runtime-0.26.4-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:ae21bcd33acf33237f53bc6bc5a2b6c65c22982771c285b79389e69e787366aa", size = 26153917, upload-time = "2026-10-17T02:30:31.625Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/19/22528594cdf3b54db137d8001723a5aa28456a6517c005678092a0b22af3/cozy_runtime-0.26.4-py3-none-any.whl", hash = "sha256:7eb328f52dc6cfab18ba62bd3d84c1f9b8ea4e7f069498c6e95c02c851c7d9c7", size = 1022453, upload-time = "2026-10-17T02:30:34.385Z" },
 ]
 
 [package.optional-dependencies]
@@ -321,7 +321,7 @@ wheels = [
 
 [[package]]
 name = "flux-3-klein"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -338,7 +338,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.26.0" },
+    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.26.4" },
     { name = "diffusers", git = "https://github.com/huggingface/diffusers?rev=7ecb1e1b4fe500be7fb7381a7bb79a24d7fa3941" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
