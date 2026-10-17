@@ -114,16 +114,6 @@ class H3Model(
             producer.retain_rotary(component)
         return glue.install(self, self.pipe, plan)
 
-    # Published interfaces (paul/minimax-h3) name these two scopes in `component_use`; they
-    # stay until that package is republished. The runtime no longer calls `Model.warm`.
-    @uses_components("fl2va_dit")
-    def warm_fl2va(self) -> None:
-        self.pipe.warm_dit("fl2va")
-
-    @uses_components("ref2va_dit")
-    def warm_ref2va(self) -> None:
-        self.pipe.warm_dit("ref2va")
-
     @uses_components("text_encoder")
     def condition_text(self, task: Task, state: Any) -> None:
         self.pipe.condition_text(task, state)

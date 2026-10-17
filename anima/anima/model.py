@@ -36,8 +36,7 @@ from transformers import initialization as transformer_init
 
 from . import optimization
 
-_MODULE_ROOT = Path(__file__).resolve().parent
-_ROOT = _MODULE_ROOT / "anima_assets" if (_MODULE_ROOT / "anima_assets").is_dir() else _MODULE_ROOT
+_ROOT = Path(__file__).resolve().parent
 
 
 class _Phase(NamedTuple):

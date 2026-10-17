@@ -174,8 +174,3 @@ continues to consume a checkpoint with only the original five components.
 The row-label parser is the producer's `h3_tables.table_layout`; `minimax-h3`
 depends on this package and imports it rather than keeping a copy.
 
-
-The tensor-only serving hooks require Runtime's preservation of hooks during encoded
-leaf installation and its refusal to prequantize a hooked consumer's operand. Publish
-the serving package only with that Runtime fix; the producer itself uses released
-Runtime 0.12 APIs.

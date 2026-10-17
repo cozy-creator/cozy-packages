@@ -72,12 +72,9 @@ def _processor(assets: ModelAssets) -> Any:
 
 class DrafterGraph:
     def __init__(self, config: Config) -> None:
-        # The head's checkpoint is its tensors alone: the upsampler's config describes it.
-        mapping = config.mapping() or json.loads(
-            files(__package__).joinpath("draft_config.json").read_bytes()
-        )
+        # The head-only lane keeps Qwen3.5-9B's config (`drafter_head`).
         with no_init_weights():
-            head = lm.Draft(AutoConfig.for_model(**mapping), modeling_qwen3_5)
+            head = lm.Draft(AutoConfig.for_model(**config.mapping()), modeling_qwen3_5)
         self.components: dict[str, torch.nn.Module] = {DRAFT: head.to(torch.bfloat16).eval()}
 
 

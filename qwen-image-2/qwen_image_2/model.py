@@ -11,9 +11,15 @@ import json
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any
 
-import diffusers
 import torch
-from diffusers import FlowMatchEulerDiscreteScheduler
+from diffusers import (
+    AutoencoderKLQwenImage21,
+    FlowMatchEulerDiscreteScheduler,
+    QwenImage21Pipeline,
+    QwenImage21Transformer2DModel,
+)
+from diffusers.models.transformers.transformer_qwenimage21 import QwenImage21TransformerBlock
+from diffusers.pipelines.qwenimage21.pipeline_qwenimage21 import calculate_dimensions
 from tokenizers import Tokenizer
 from transformers import (
     AutoModelForImageTextToText,
@@ -28,28 +34,12 @@ from transformers import initialization as transformer_init
 from cozy_runtime import fusion
 from cozy_runtime.author import (
     Config,
-    ConformanceError,
     Loader,
     Model,
     ModelAssets,
     uses_components,
 )
 from cozy_runtime.author.kernels import Plan
-
-try:
-    from diffusers import (
-        AutoencoderKLQwenImage21,
-        QwenImage21Pipeline,
-        QwenImage21Transformer2DModel,
-    )
-    from diffusers.models.transformers.transformer_qwenimage21 import QwenImage21TransformerBlock
-    from diffusers.pipelines.qwenimage21.pipeline_qwenimage21 import calculate_dimensions
-except ImportError:
-    # A caller that only imports this package for its call proxies (H3) may hold an older
-    # Diffusers. The module still imports there; building the model refuses.
-    QwenImage21Pipeline = None
-
-_Pipeline: Any = QwenImage21Pipeline or object
 
 
 def _modulation(block: Any, arguments: Mapping[str, Any]) -> fusion.Modulation:
@@ -66,30 +56,26 @@ def _modulation(block: Any, arguments: Mapping[str, Any]) -> fusion.Modulation:
 
 
 #: The 2.1 block as Runtime fuses it (scale, gate | scale, gate; tanh gates; no shift).
-BLOCK = (
-    fusion.DiTBlock(
-        QwenImage21TransformerBlock,
-        width=4096,
-        head_dim=128,
-        modulation=_modulation,
-        norms=("img_norm1", "img_norm2"),
-        norm="layer",
-        attention="attn",
-        arguments=(
-            "attention_mask",
-            "rotary_emb",
-            "layer_cache",
-            "kv_cache_mode",
-            "cache_write_slice",
-            "segments",
-            "key_valid",
-        ),
-        mlp=fusion.GatedMLP("img_mlp", gate="gate_layer", up="proj", down="out"),
-        rope=fusion.Rope("rotary_emb", interleaved=True),
-        gate="tanh",
-    )
-    if QwenImage21Pipeline is not None
-    else None
+BLOCK = fusion.DiTBlock(
+    QwenImage21TransformerBlock,
+    width=4096,
+    head_dim=128,
+    modulation=_modulation,
+    norms=("img_norm1", "img_norm2"),
+    norm="layer",
+    attention="attn",
+    arguments=(
+        "attention_mask",
+        "rotary_emb",
+        "layer_cache",
+        "kv_cache_mode",
+        "cache_write_slice",
+        "segments",
+        "key_valid",
+    ),
+    mlp=fusion.GatedMLP("img_mlp", gate="gate_layer", up="proj", down="out"),
+    rope=fusion.Rope("rotary_emb", interleaved=True),
+    gate="tanh",
 )
 
 
@@ -125,12 +111,6 @@ class QwenImage21Graph:
     """One native construction census, with source checkpoint precision preserved."""
 
     def __init__(self, config: Config) -> None:
-        if QwenImage21Pipeline is None:
-            raise ConformanceError(
-                "Qwen Image 2.1 needs the Diffusers this package pins (QwenImage21Pipeline); "
-                f"this environment has diffusers {diffusers.__version__}",
-                code="qwen_image21_diffusers",
-            )
         mapping = config.mapping()
         with transformer_init.no_init_weights():
             self.components: dict[str, Any] = {
@@ -183,7 +163,7 @@ def build_processor(assets: ModelAssets) -> Any:
     )
 
 
-class _StagedPipeline(_Pipeline):
+class _StagedPipeline(QwenImage21Pipeline):
     reference_latents: torch.Tensor | None = None
     reference_pad_mask: torch.Tensor | None = None
 
@@ -230,7 +210,6 @@ class QwenImage21Model(Model[QwenImage21Graph], encoded_leaves="accept"):
         self.processor = build_processor(loader.assets)
 
     def execution_plan(self, plan: Plan) -> str:
-        assert BLOCK is not None
         return fusion.install(plan, BLOCK, self.graph.components["transformer"])
 
     def _pipeline(self) -> _StagedPipeline:
