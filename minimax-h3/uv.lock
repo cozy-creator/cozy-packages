@@ -138,7 +138,7 @@ wheels = [
 
 [[package]]
 name = "character-describer"
-version = "0.6.0"
+version = "0.6.1"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -152,7 +152,7 @@ dependencies = [
     { name = "transformers" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/character-describer/0.6.0/character_describer-0.6.0-py3-none-any.whl", hash = "sha256:b4f29752c688a3faedeb43bef9c5abd229740222a1751318ac1f64f26f32281d" },
+    { url = "https://tensorhub.com/v1/index/fidika/character-describer/0.6.1/character_describer-0.6.1-py3-none-any.whl", hash = "sha256:897fe782e7b64eb2784c2b3ae9d62e2e62c64951237efdccfa29e9a7ca6d4699" },
 ]
 
 [[package]]
@@ -209,7 +209,7 @@ wheels = [
 
 [[package]]
 name = "cozy-runtime"
-version = "0.26.2"
+version = "0.26.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
@@ -219,10 +219,10 @@ dependencies = [
     { name = "pillow" },
     { name = "tensorfs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/68/32/d341ba52bf1d94e0e9349a59e8faf9a2e8e37f652e36c906738b1a904978/cozy_runtime-0.26.2.tar.gz", hash = "sha256:18309b5e3c672df74136fa5996e1659de634948fd1ab01e5aa297a5962e96e11", size = 1911645, upload-time = "2026-10-17T00:27:29.63Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/b3/c7a839798cb6a7cf978bdc8606fe9b7421ec2a340f1a9009cd37b83220af/cozy_runtime-0.26.4.tar.gz", hash = "sha256:ad3bf5afe33fa8778a79430c0b4284fced19f5f834578e4f92dee1d2dc67b3a4", size = 1935001, upload-time = "2026-10-17T02:30:35.85Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b6/ae/122024ea8436291cce9985886a8c667f4d702309e1ed8dd5f7900ae3441e/cozy_runtime-0.26.2-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:8dd2f8da9906520c81660a6f74b72a5a924fe191b2b15de4869d42d7c84cecc9", size = 26133309, upload-time = "2026-10-17T00:27:25.222Z" },
-    { url = "https://files.pythonhosted.org/packages/3b/7e/d167154d5978dcbfb41fcfff43df5aa5fdf58589f1a7e96182ebbaa0316f/cozy_runtime-0.26.2-py3-none-any.whl", hash = "sha256:5011ac24f21f2de204111c63e18db97629ff7d7a615b040c5840a073112642af", size = 1011859, upload-time = "2026-10-17T00:27:28.008Z" },
+    { url = "https://files.pythonhosted.org/packages/24/0c/5a451d1dd376fe4df3de99e60cb3a765f9e17bb7a0c5330a39667354a76e/cozy_runtime-0.26.4-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:ae21bcd33acf33237f53bc6bc5a2b6c65c22982771c285b79389e69e787366aa", size = 26153917, upload-time = "2026-10-17T02:30:31.625Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/19/22528594cdf3b54db137d8001723a5aa28456a6517c005678092a0b22af3/cozy_runtime-0.26.4-py3-none-any.whl", hash = "sha256:7eb328f52dc6cfab18ba62bd3d84c1f9b8ea4e7f069498c6e95c02c851c7d9c7", size = 1022453, upload-time = "2026-10-17T02:30:34.385Z" },
 ]
 
 [package.optional-dependencies]
@@ -580,7 +580,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.38.1"
+version = "1.38.2"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },
