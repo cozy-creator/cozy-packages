@@ -15,7 +15,7 @@
     },
     {
       "name": "Garden",
-      "kind": "scene",
+      "kind": "background",
       "description": "A quiet walled garden with a wooden gate, stone path and flowering shrubs."
     }
   ],

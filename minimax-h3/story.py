@@ -10,9 +10,9 @@ from itertools import pairwise
 from typing import Annotated, Literal, NamedTuple
 
 import msgspec
-from cozy_runtime.author import AssetBound, AudioAsset, ImageAsset, InvalidRequest
+from cozy_runtime.author import AssetBound, AudioAsset, ImageAsset, InvalidRequest, VideoAsset
 
-from minimax_h3.official import Task, validate_reference_policy
+from minimax_h3.official import MAX_VIDEO_REFERENCES, Task, validate_reference_policy
 
 #: MiniMax's full-reference sections, plus `style`, in their canonical order.
 SECTIONS = (
@@ -33,6 +33,12 @@ _TOKEN = re.compile(r"<([^<>\n]+)>")
 _MEDIA = re.compile(r"\s*(picture|audio|video)\s+(\d+)\s*", re.IGNORECASE)
 _SHOT = re.compile(r"\[Shot\s*(\d+)\]", re.IGNORECASE)
 _CUT = re.compile(r"\bcut(?:s|ting)?\b", re.IGNORECASE)
+#: Each kind's file field, its H3 reference kind and its `<Picture|Audio|Video N>` label.
+FILE = {"character": "image", "background": "image", "audio": "audio", "video": "video"}
+_SLOT = {"character": "picture", "background": "picture", "audio": "audio", "video": "video"}
+_POLICY = {"character": "image", "background": "image", "audio": "audio", "video": "video"}
+_SPEAKER = re.compile(r"\s*\((S\d+)\)")
+_PREFIX = re.compile(r"\s*\[([^\]\n]*)\]")
 #: A clip's default retention: action guidance, never a subject.
 MOTION = (
     "its movement, timing and choreography transfer to the subjects who perform them; "
@@ -41,10 +47,11 @@ MOTION = (
 
 
 class StoryReference(msgspec.Struct):
-    """A supplied image or an image generated from its shared visual description."""
+    """A supplied file (`FILE[kind]`), or a character or background image generated from its
+    description."""
 
     name: str
-    kind: Literal["character", "scene", "audio"]
+    kind: Literal["character", "background", "audio", "video"]
     description: str = ""
     retention_analysis: Annotated[str, msgspec.Meta(max_length=1024)] | None = None
     image: Annotated[
@@ -57,6 +64,10 @@ class StoryReference(msgspec.Struct):
     ] = None
     audio: Annotated[
         AudioAsset | None,
+        AssetBound(max_bytes=256 << 20, max_decoded_bytes=2 << 30),
+    ] = None
+    video: Annotated[
+        VideoAsset | None,
         AssetBound(max_bytes=256 << 20, max_decoded_bytes=2 << 30),
     ] = None
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
@@ -81,18 +92,18 @@ async def resolve_reference_images(
     generate: Callable[[StoryReference], Awaitable[ImageAsset]],
     prepare_character: Callable[[StoryReference], Awaitable[ImageAsset]] | None = None,
     show: Callable[[StoryReference, ImageAsset], None] | None = None,
-) -> dict[str, ImageAsset | AudioAsset]:
-    """Prepare supplied characters, reuse scenes/audio, and generate missing images once,
-    concurrently. `show` gets each made image in request order, as soon as it and every
+) -> dict[str, ImageAsset | AudioAsset | VideoAsset]:
+    """Prepare supplied characters, reuse other supplied files, and generate missing images
+    once, concurrently. `show` gets each made image in request order, as soon as it and every
     earlier one exist."""
-    images: dict[str, ImageAsset | AudioAsset] = {}
+    images: dict[str, ImageAsset | AudioAsset | VideoAsset] = {}
     for ref in references:
-        supplied = ref.audio if ref.kind == "audio" else ref.image
+        supplied = getattr(ref, FILE[ref.kind])
         if supplied is not None:
             images[ref.name] = supplied
     pending = [
         ref for ref in references
-        if ref.kind != "audio" and (
+        if FILE[ref.kind] == "image" and (
             ref.image is None or ref.kind == "character" and prepare_character is not None
         )
     ]
@@ -155,12 +166,12 @@ def image_prompt(reference: StoryReference, style: str = "") -> str:
 
 def validate_references(references: Sequence[StoryReference]) -> dict[str, StoryReference]:
     # The render children enforce this same policy after model preparation; refuse here first.
-    try:
-        validate_reference_policy(
-            ["audio" if ref.kind == "audio" else "image" for ref in references]
-        )
-    except ValueError as exc:
-        raise InvalidRequest(str(exc), code="reference_policy", fields=["references"]) from exc
+    # Videos attach only where named, so the H3 limit on them is per call (`_segment_call`).
+    videos = sum(ref.kind == "video" for ref in references)
+    _policy(
+        [_POLICY[ref.kind] for ref in references if ref.kind != "video"]
+        + ["video"] * min(videos, MAX_VIDEO_REFERENCES)
+    )
     by_name: dict[str, StoryReference] = {}
     for reference in references:
         key = name_key(reference.name)
@@ -168,19 +179,16 @@ def validate_references(references: Sequence[StoryReference]) -> dict[str, Story
             raise InvalidRequest(
                 f"duplicate reference name: {reference.name}", fields=["references"]
             )
-        if reference.kind == "audio" and (reference.audio is None or reference.image is not None):
+        field = FILE[reference.kind]
+        for other in {"image", "audio", "video"} - {field}:
+            if getattr(reference, other) is not None:
+                raise InvalidRequest(
+                    f"{reference.kind} reference {reference.name} takes {field}, not {other}",
+                    fields=["references"],
+                )
+        if getattr(reference, field) is None and (field != "image" or not reference.description.strip()):
             raise InvalidRequest(
-                f"audio reference {reference.name} requires audio and forbids image",
-                fields=["references"],
-            )
-        if reference.kind != "audio" and reference.audio is not None:
-            raise InvalidRequest(
-                f"{reference.kind} reference {reference.name} cannot carry audio",
-                fields=["references"],
-            )
-        if reference.kind != "audio" and reference.image is None and not reference.description.strip():
-            raise InvalidRequest(
-                f"reference {reference.name} needs an image or a nonempty description",
+                f"reference {reference.name} needs {'an image or a nonempty description' if field == 'image' else f'its {field}'}",
                 fields=["references"],
             )
         if reference.retention_analysis is not None and not reference.retention_analysis.strip():
@@ -190,6 +198,13 @@ def validate_references(references: Sequence[StoryReference]) -> dict[str, Story
             )
         by_name[key] = reference
     return by_name
+
+
+def _policy(kinds: list[str], prefix: str = "") -> None:
+    try:
+        validate_reference_policy(kinds)
+    except ValueError as exc:
+        raise InvalidRequest(f"{prefix}{exc}", code="reference_policy", fields=["references"]) from exc
 
 
 def encoder_prompt(task: Task, prompt: str) -> str:
@@ -223,41 +238,33 @@ def compile_segments(
     overall_soundscape: str = "",
     non_diegetic_music: str = "N/A",
     segment_music: Sequence[str | None] | None = None,
-    videos: Sequence[int] | None = None,
 ) -> list[SegmentCall]:
-    """Each child prompt uses its music override, inline score, or overall score.
-
-    `videos` counts each segment's own clips, `<Video 1>`… in that call, sent after its
-    references."""
+    """Each child prompt uses its music override, inline score, or overall score."""
     validate_references(references)
     shared = {
         "style": style.strip(),
         "overall_soundscape": overall_soundscape.strip(),
     }
     overrides = [None] * len(prompts) if segment_music is None else segment_music
-    clips = [0] * len(prompts) if videos is None else videos
     calls = []
-    for index, (text, override, count) in enumerate(zip(prompts, overrides, clips, strict=True)):
+    for index, (text, override) in enumerate(zip(prompts, overrides, strict=True)):
         music = non_diegetic_music if override is None else override
         text = _fill(
             text, {"non_diegetic_music": music.strip() or "N/A"},
             replace_music=override is not None,
         )
-        calls.append(_segment_call(text, references, shared, index, count))
+        calls.append(_segment_call(text, references, shared, index))
     return calls
 
 
-def _slot(ref: StoryReference) -> str:
-    return "audio" if ref.kind == "audio" else "picture"
-
-
 def _numbering(references: Sequence[StoryReference]) -> dict[tuple[str, int], StoryReference]:
-    """`<Picture N>` and `<Audio N>`: each kind counted in the given order."""
-    counts = {"picture": 0, "audio": 0}
+    """`<Picture N>`, `<Audio N>` and `<Video N>`: each kind counted in the given order."""
+    counts = dict.fromkeys(("picture", "audio", "video"), 0)
     slots: dict[tuple[str, int], StoryReference] = {}
     for ref in references:
-        counts[_slot(ref)] += 1
-        slots[_slot(ref), counts[_slot(ref)]] = ref
+        slot = _SLOT[ref.kind]
+        counts[slot] += 1
+        slots[slot, counts[slot]] = ref
     return slots
 
 
@@ -266,59 +273,60 @@ def _segment_call(
     references: Sequence[StoryReference],
     shared: dict[str, str],
     index: int,
-    videos: int = 0,
 ) -> SegmentCall:
-    """Scenes always; characters, and audio, only where the text names them.
+    """Backgrounds always; characters, audio and videos only where the text names them.
 
-    A voice (audio whose description names a character) follows its character. Global
-    `<Picture N>`/`<Audio N>` tokens count as mentions and are renumbered for the child.
-    `<Video N>` names the call's own N-th clip and stays as written.
+    A token names a reference by its name first (any case, `_`, `-` and space alike), else as
+    the global `<Picture N>`/`<Audio N>`/`<Video N>`; these are renumbered for the call. A voice
+    (audio whose description names a character) follows its character. Videos go last, so
+    the audio references keep their numbers ahead of a clip's soundtrack.
     """
     by_key = {name_key(ref.name): ref for ref in references}
     by_slot = _numbering(references)
 
     def lookup(token: re.Match[str]) -> StoryReference | None:
-        media = _MEDIA.fullmatch(token.group(1))
-        if media is None:
-            return by_key.get(name_key(token.group(1)))
+        named = by_key.get(name_key(token.group(1)))
+        media = _MEDIA.fullmatch(name_key(token.group(1)))
+        if named is not None or media is None:
+            return named
         return by_slot.get((media.group(1).lower(), int(media.group(2))))
 
     def mentioned(span: str) -> list[StoryReference]:
         found = {ref.name: ref for token in _TOKEN.finditer(span) if (ref := lookup(token))}
         return list(found.values())
 
-    def clip(token: re.Match[str]) -> int:
-        media = _MEDIA.fullmatch(token.group(1))
-        number = int(media.group(2)) if media and media.group(1).lower() == "video" else 0
-        return number if 1 <= number <= videos else 0
-
     unmatched = dict.fromkeys(
         token.group(0)
         for token in _TOKEN.finditer(text)
-        if _MEDIA.fullmatch(token.group(1)) and lookup(token) is None and not clip(token)
+        if _MEDIA.fullmatch(name_key(token.group(1))) and lookup(token) is None
     )
     warnings = (
         [f"Segment {index + 1}: {', '.join(unmatched)} match no reference; left as written."]
         if unmatched else []
     )
     voices: dict[str, list[StoryReference]] = {}
+    owners: dict[str, StoryReference] = {}
     for ref in references:
-        owner = [o for o in mentioned(ref.description) if o.kind != "audio"]
+        owner = [o for o in mentioned(ref.description) if o.kind not in ("audio", "video")]
         if ref.kind == "audio" and owner:
             voices.setdefault(owner[0].name, []).append(ref)
-    attached = {ref.name: ref for ref in references if ref.kind == "scene"}
+            owners[ref.name] = owner[0]
+    attached = {ref.name: ref for ref in references if ref.kind == "background"}
     for ref in mentioned(text):
         attached.setdefault(ref.name, ref)
         for voice in voices.get(ref.name, []):
             attached.setdefault(voice.name, voice)
     used = list(attached.values())
-    if not videos and all(ref.kind == "audio" for ref in used):
-        # H3's ref2va needs an image: with no scene and no character named, send them all.
-        used = list(references)
+    if all(ref.kind == "audio" for ref in used):
+        # H3's ref2va needs a picture: with no background and no character named, send every
+        # reference but the videos.
+        used = [ref for ref in references if ref.kind != "video"]
         warnings.append(
-            f"Segment {index + 1} names no character and there is no scene, so it receives "
-            f"all {len(used)} references."
+            f"Segment {index + 1} names no character and there is no background, so it receives "
+            f"all {len(used)} of its image and audio references."
         )
+    used = [ref for ref in used if ref.kind != "video"] + [ref for ref in used if ref.kind == "video"]
+    _policy([_POLICY[ref.kind] for ref in used], f"segment {index + 1}: ")
     _, start, end = _sections(text).get("detailed_description", (0, 0, 0))
     markers = list(_SHOT.finditer(text, start, end))
     spans = pairwise([marker.start() for marker in markers] + [end])
@@ -326,24 +334,47 @@ def _segment_call(
         (m.group(1), {ref.name for ref in mentioned(text[a:b])})
         for m, (a, b) in zip(markers, spans, strict=True)
     ]
+    _, start, end = _sections(text).get("retention_analysis", (0, 0, 0))
+    retained = {ref.name for ref in mentioned(text[start:end])}
+
+    def speaker(owner: StoryReference, span: str) -> str:
+        """The `(Sx)` the text gives the voice's character, never a new one (guide §5.4)."""
+        for token in _TOKEN.finditer(span):
+            if lookup(token) is owner and (sx := _SPEAKER.match(span, token.end())):
+                return f" ({sx.group(1)})"
+        return ""
+
     child = {ref.name: slot for slot, ref in _numbering(used).items()}
 
     def renumber(token: re.Match[str]) -> str:
-        ref = lookup(token) if _MEDIA.fullmatch(token.group(1)) else None
+        ref = lookup(token) if _MEDIA.fullmatch(name_key(token.group(1))) else None
         if ref is None or ref.name not in child:
             return token.group(0)
         kind, number = child[ref.name]
         return f"<{kind.capitalize()} {number}>"
 
+    voiced = {ref.name: speaker(owners[ref.name], text) or speaker(owners[ref.name], ref.description)
+              for ref in used if ref.name in owners}
     text = _TOKEN.sub(renumber, text)
     definitions, retention = [], []
+    tasks = set()
     for ref in used:
         kind, number = child[ref.name]
         slot = f"<{kind.capitalize()} {number}>"
-        if ref.kind == "audio":
+        label = slot
+        if ref.name in owners:
+            owner = f"<{owners[ref.name].name}>"
+            definitions.append(f"{slot} is the voice-timbre reference for {owner}{voiced[ref.name]}.")
+            default = (f"reference - {owner}'s voice follows {slot}'s timbre and delivery without "
+                       "copying the original signal.")
+        elif ref.kind == "audio":
             definitions.append(f"{slot} is the supplied audio reference for <{ref.name}>.")
-            preserved = "the referenced audio signal and its supplied timing"
-            label = slot
+            default = f"reference - its sound guides the target audio without copying the original signal."
+        elif ref.kind == "video":
+            definitions.append(f"{slot} is the supplied action video." if _MEDIA.fullmatch(ref.name)
+                               else f"<{ref.name}> is the action shown in {slot}.")
+            label = f"{slot} (motion and choreography)"
+            default = f"attribute_transfer - {MOTION}."
         else:
             definitions.append(f"<{ref.name}> is the {ref.kind} shown in {slot}.")
             preserved = (
@@ -351,22 +382,23 @@ def _segment_call(
                 if ref.kind == "character"
                 else "the architecture, materials and defining features of the referenced environment"
             )
+            default = f"fully_preserved - {preserved}."
             appears = [f"[Shot {n}]" for n, names in shots if ref.name in names]
             label = f"<{ref.name}>" + (f" (appears in {', '.join(appears)})" if appears else "")
         if ref.description:
             definitions[-1] += f" {ref.description}"
-        retention.append(f"{label}: {ref.retention_analysis or f'fully_preserved - {preserved}.'}")
-    _, start, end = _sections(text).get("retention_analysis", (0, 0, 0))
-    authored = {clip(token) for token in _TOKEN.finditer(text, start, end)}
-    retention += [
-        f"<Video {n}> (motion and choreography): attribute_transfer - {MOTION}."
-        for n in range(1, videos + 1) if n not in authored
-    ]
-    try:
-        validate_reference_policy([*("audio" if ref.kind == "audio" else "image" for ref in used),
-                                   *["video"] * videos])
-    except ValueError as exc:
-        raise InvalidRequest(f"segment {index + 1}: {exc}", code="reference_policy") from exc
+        line = ref.retention_analysis or default
+        if ref.kind == "audio":
+            tasks.add("audio reuse" if line.split(" ", 1)[0] in ("fully_copy", "partially_copy")
+                      else "audio reference")
+        if ref.kind != "video" or ref.retention_analysis or ref.name not in retained:
+            retention.append(f"{label}: {line}")
+    _, start, end = _sections(text).get("summary", (0, 0, 0))
+    if prefix := _PREFIX.match(text, start, end):
+        named = [part.strip() for part in prefix.group(1).split("+")]
+        missing = sorted(tasks - set(named))
+        if missing:
+            text = text[: prefix.start(1)] + " + ".join([*named, *missing]) + text[prefix.end(1):]
     additions = {
         "subject_definitions": "\n".join(definitions),
         "retention_analysis": "\n".join(retention),
