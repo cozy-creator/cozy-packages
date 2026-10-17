@@ -694,13 +694,15 @@ async def videos() -> None:
     payload = request(h3.ReferenceRenderInput, {
         "prompt": "<Ann> spars with <Ben> as in <Spin Kick>.", "duration_s": 5,
         "references": [*named, refs[4]], "clean_references": False, "describe_references": False})
-    sent, assets, _, warnings = await h3._direct_reference_assets(
+    sent, assets, sound, _, warnings = await h3._direct_reference_assets(
         fake_context(), payload, Assets[Mixed](), fake_outputs(attempt), fake_telemetry(attempt))
     check("ref2va: pictures, then the clip, labeled per kind",
           [(assets.info(i).kind, assets.info(i).label) for i in range(len(assets))],
           [("image", "Picture 1"), ("image", "Picture 2"), ("video", "Video 1")])
     check("ref2va: the clip's motion line and no warning", (retention_lines(sent.prompt)[-1], warnings),
           (motion, []))
+    check("a clip keeps its sound only with use_audio", (sound, h3.video_audio(
+        request(list[StoryReference], [{**refs[4], "use_audio": True}, refs[3]]))), ((False,), (True, False)))
 
 
 def voices() -> None:

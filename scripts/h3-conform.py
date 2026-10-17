@@ -2099,6 +2099,8 @@ def arm_media() -> None:
     assert clip.soundtrack is not None
     check("soundtrack aligns to the full video origin", tuple(clip.soundtrack.shape), (1, 8))
     check("half-second audio offset becomes two silent samples", clip.soundtrack[0, :3].tolist(), [0.0, 0.0, 1.0])
+    silent = official.read_reference_video(_events(2, audio_start=Fraction(1, 2)), frames=48, audio=False)
+    check("a clip without use_audio keeps no soundtrack", silent.soundtrack, None)
     short = official.read_reference_video(_events(15), frames=124)
     check("only the call's frames are kept, the length is the whole clip",
           (int(short.frames.shape[0]), short.duration), (124, 15))
@@ -3019,6 +3021,7 @@ def arm_interface() -> None:
                         steps=package.TURBO_STEPS,
                         turbo=True,
                         frames=package.held_frames(plan),
+                        video_audio=(),
                     )
                 ).values
             )
@@ -3033,7 +3036,7 @@ def arm_interface() -> None:
 
     def sampled(turbo: bool, steps: int) -> object:
         segment = package.MotionInput(
-            prompt="x", seed=1, duration_s=6, steps=steps, turbo=turbo, frames=158
+            prompt="x", seed=1, duration_s=6, steps=steps, turbo=turbo, frames=158, video_audio=()
         )
         return package._sampling(segment, adapter)  # type: ignore[arg-type]
 

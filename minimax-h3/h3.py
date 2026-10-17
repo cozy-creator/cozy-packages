@@ -158,6 +158,11 @@ DirectReferenceAssets = Annotated[
 ]
 
 
+def video_audio(references: Sequence[StoryReference]) -> tuple[bool, ...]:
+    """Whether each of a call's videos, in packed order, keeps its sound (`use_audio`)."""
+    return tuple(ref.use_audio for ref in references if ref.kind == "video")
+
+
 def _call_assets(
     files: dict[str, ImageAsset | AudioAsset | VideoAsset], references: Sequence[StoryReference]
 ) -> Assets[Mixed]:
@@ -240,6 +245,16 @@ class ClipInput(msgspec.Struct, kw_only=True):
 class StandardClipInput(ClipInput, kw_only=True):
     """`ClipInput` with the standard calls' denoise steps."""
 
+    steps: Steps = DEFAULT_STEPS
+
+
+class ReferenceClipInput(ClipInput, kw_only=True):
+    """A reference render call: whether each of its videos, in packed order, keeps its sound."""
+
+    video_audio: tuple[bool, ...]
+
+
+class ReferenceStandardClipInput(ReferenceClipInput, kw_only=True):
     steps: Steps = DEFAULT_STEPS
 
 
@@ -435,13 +450,17 @@ def resolve_reference_sizing(
 
 
 def _read_reference(
-    references: ReferenceAssets, decoder: MediaDecoder, frames: int, index: int
+    references: ReferenceAssets, decoder: MediaDecoder, frames: int, sound: Sequence[bool],
+    index: int,
 ) -> Image | ReferenceClip | DecodedAudio:
-    """Decode one reference: a video as a stream onto the call's canvas and first `frames`."""
+    """Decode one reference: a video as a stream onto the call's canvas and first `frames`,
+    keeping its soundtrack only where `sound` says so for that video."""
     handle = references[index]
     if isinstance(handle, VideoAsset):
+        ordinal = sum(references.info(i).kind == "video" for i in range(index))
         with decoder.stream_video(handle) as stream:
-            return read_reference_video(stream, frames=frames)
+            return read_reference_video(stream, frames=frames,
+                                        audio=ordinal < len(sound) and sound[ordinal])
     if isinstance(handle, AudioAsset):
         return decoder.decode_audio(handle)
     return cast(Image, decoder.value(handle))
@@ -933,7 +952,7 @@ async def generate_fl2va_turbo(
 async def generate_ref2va(
     ctx: Context,
     *,
-    payload: StandardClipInput,
+    payload: ReferenceStandardClipInput,
     assets: ReferenceAssets,
     model: H3Model,
     decoder: MediaDecoder,
@@ -954,7 +973,7 @@ async def generate_ref2va(
 async def generate_ref2va_turbo(
     ctx: Context,
     *,
-    payload: ClipInput,
+    payload: ReferenceClipInput,
     assets: ReferenceAssets,
     base_model: H3TurboBase,
     turbo_lora: H3TurboLoRA,
@@ -988,14 +1007,18 @@ app.entrypoint(internal=True)(generate_ref2va_turbo)
 async def _render_workflow(
     ctx: Context, payload: RenderInput, assets: KeyframeAssets | ReferenceAssets,
     out: Outputs, tel: Telemetry, *, task: Task, steps: int | None,
+    video_audio: tuple[bool, ...] = (),
 ) -> RenderOutput:
     seed = shot_seed(payload, ctx.request_id, 0)
+    fields: dict[str, Any] = {"prompt": payload.prompt, "seed": seed, "duration_s": payload.duration_s}
+    if steps is not None:
+        fields["steps"] = steps
     request = (
-        ClipInput(prompt=payload.prompt, seed=seed, duration_s=payload.duration_s)
-        if steps is None
-        else StandardClipInput(
-            prompt=payload.prompt, seed=seed, duration_s=payload.duration_s, steps=steps
+        (ReferenceClipInput if steps is None else ReferenceStandardClipInput)(
+            **fields, video_audio=video_audio
         )
+        if task.startswith("ref2va")
+        else (ClipInput if steps is None else StandardClipInput)(**fields)
     )
     functions = {"fl2va": generate_fl2va, "fl2va_turbo": generate_fl2va_turbo,
                  "ref2va": generate_ref2va, "ref2va_turbo": generate_ref2va_turbo}
@@ -1034,8 +1057,8 @@ async def _direct_reference_assets(
     assets: DirectReferenceAssets,
     out: Outputs,
     tel: Telemetry,
-) -> tuple[ReferenceRenderInput, ReferenceAssets, list[ImageAsset], list[str]]:
-    """Resolve named references once for a direct call.
+) -> tuple[ReferenceRenderInput, ReferenceAssets, tuple[bool, ...], list[ImageAsset], list[str]]:
+    """Resolve named references once for a direct call, and whether each video keeps its sound.
 
     ``assets`` is the prepared handoff used by long-form children.  Named references are
     prepared here, then compiled exactly like one long-form segment.
@@ -1043,7 +1066,7 @@ async def _direct_reference_assets(
     if payload.references is None:
         if not assets:
             raise InvalidRequest("ref2va requires references or assets", fields=["references"])
-        return payload, assets, [], []
+        return payload, assets, (), [], []
     if assets:
         raise InvalidRequest("send references or assets, not both", fields=["references", "assets"])
     if not payload.references:
@@ -1064,20 +1087,23 @@ async def _direct_reference_assets(
     for warning in call.warnings:
         tel.log("h3 reference prompt", level="warning", warning=warning)
     labeled = _call_assets(images, call.references)
-    return replace(payload, prompt=call.prompt), labeled, shown, warnings + call.warnings
+    return (replace(payload, prompt=call.prompt), labeled, video_audio(call.references), shown,
+            warnings + call.warnings)
 
 
 async def ref2va(ctx: Context, payload: ReferenceStandardRenderInput, out: Outputs, tel: Telemetry,
                  assets: DirectReferenceAssets) -> ReferenceRenderOutput:
-    request, resolved, shown, warnings = await _direct_reference_assets(ctx, payload, assets, out, tel)
-    result = await _render_workflow(ctx, request, resolved, out, tel, task="ref2va", steps=payload.steps)
+    request, resolved, sound, shown, warnings = await _direct_reference_assets(ctx, payload, assets, out, tel)
+    result = await _render_workflow(ctx, request, resolved, out, tel, task="ref2va", steps=payload.steps,
+                                    video_audio=sound)
     return ReferenceRenderOutput(result.video, result.originals, warnings + result.warnings, shown)
 
 
 async def ref2va_turbo(ctx: Context, payload: ReferenceRenderInput, out: Outputs, tel: Telemetry,
                        assets: DirectReferenceAssets) -> ReferenceRenderOutput:
-    request, resolved, shown, warnings = await _direct_reference_assets(ctx, payload, assets, out, tel)
-    result = await _render_workflow(ctx, request, resolved, out, tel, task="ref2va_turbo", steps=None)
+    request, resolved, sound, shown, warnings = await _direct_reference_assets(ctx, payload, assets, out, tel)
+    result = await _render_workflow(ctx, request, resolved, out, tel, task="ref2va_turbo", steps=None,
+                                    video_audio=sound)
     return ReferenceRenderOutput(result.video, result.originals, warnings + result.warnings, shown)
 
 
@@ -1196,8 +1222,9 @@ def _references_to_video(
     view = model.for_request(ctx, seed=payload.seed)
     with tel.stage("prepare", overall_range=(0.00, 0.03)):
         frames = frames_for(payload.duration_s) if delivery is None else delivery.sample_frames
+        sound = payload.video_audio if isinstance(payload, ReferenceClipInput) else ()
         references, sizing = assets_to_h3_refs(
-            assets, pipe=model.pipe, read=partial(_read_reference, assets, decoder, frames)
+            assets, pipe=model.pipe, read=partial(_read_reference, assets, decoder, frames, sound)
         )
         tel.log(
             "h3 reference sizing",
@@ -1361,7 +1388,7 @@ def segment_clock(durations: Sequence[int]) -> tuple[list[int], int]:
     return starts, total
 
 
-class CutInput(ClipInput, kw_only=True):
+class CutInput(ReferenceClipInput, kw_only=True):
     steps: int
     turbo: bool
     expected_provenance: RenderProvenance | None = None
@@ -1461,6 +1488,8 @@ class MotionInput(msgspec.Struct):
     #: holds more than its seconds say, so a 12 s segment after a 6 s one ran on the 6 s
     #: peak and ran out on GPU 1 (run 1560). Any other value is refused.
     frames: int
+    #: Whether each of the segment's videos, in packed order, keeps its sound.
+    video_audio: tuple[bool, ...]
     #: What this segment carries from its predecessor, and what its successor carries.
     context_frames: ContextFrames = 0
     context_audio: bool = False
@@ -1526,7 +1555,8 @@ def _render_motion(
     shot = _references_to_video(
         ctx,
         task,
-        ClipInput(prompt=payload.prompt, seed=payload.seed, duration_s=payload.duration_s),
+        ReferenceClipInput(prompt=payload.prompt, seed=payload.seed, duration_s=payload.duration_s,
+                           video_audio=payload.video_audio),
         assets,
         decoder,
         model,
@@ -1778,6 +1808,7 @@ async def long_form_cuts(
                                 steps=steps,
                                 turbo=turbo,
                                 duration_s=shot.duration_s,
+                                video_audio=video_audio(selected),
                                 expected_provenance=expected,
                                 previous_provenance=expected,
                             ),
@@ -1915,6 +1946,7 @@ async def long_form(
                             seed=seed,
                             duration_s=durations[index],
                             steps=steps,
+                            video_audio=video_audio(calls[index].references),
                             turbo=turbo,
                             frames=held_frames(plans[index]),
                             expected_provenance=expected,
