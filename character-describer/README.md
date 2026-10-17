@@ -8,6 +8,9 @@ WebP image of up to 64 MiB. Describe several characters with one call each: Tens
 on all of the run's GPUs at once. MiniMax-H3 uses it to fill a supplied character's missing
 description.
 
+`describe_background` describes one supplied background image's setting (place, layout,
+lighting, key objects, materials and colors) in one or two sentences, never people or style.
+
 ```sh
 cozy run fidika/character-describer/describe_character --asset image=./character.png --await
 ```

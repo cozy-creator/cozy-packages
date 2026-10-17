@@ -43,6 +43,12 @@ SCENE_OR_POSE = re.compile(
     r"kneel(?:s|ing)?|crouch(?:es|ing)?|walk(?:s|ing)?|looking|facing|gaz(?:es|ing)|confident(?:ly)?)\b",
     re.IGNORECASE,
 )
+BACKGROUND_PROMPT = (
+    "Describe only the place shown in this image, in one or two concise sentences: the kind of "
+    "setting, its layout, lighting, and its key objects, materials and colors. Say nothing about "
+    "people, characters or animals, the camera, image quality or art style. Do not invent hidden "
+    "details or a name. Return only the sentences, without a label or introduction."
+)
 MAX_NEW_TOKENS = 160
 
 
@@ -103,6 +109,28 @@ def describe_character(
         text = _describe(model, cast(Image, decoder.value(payload.image)), tel)
     if not text:
         raise UnsupportedInput("the character description names no appearance", code="output_integrity")
+    return DescribeCharacterOutput(text)
+
+
+@app.entrypoint(
+    defaults={"model": "qwen3.5-9b@0.2.0"},
+    memoize=True,
+    memo_version="background-v1",
+)
+def describe_background(
+    ctx: Context,
+    payload: DescribeCharacterInput,
+    model: Describer,
+    decoder: MediaDecoder,
+    tel: Telemetry,
+) -> DescribeCharacterOutput:
+    """Describe one supplied background's setting in one or two sentences."""
+    ctx.raise_if_cancelled()
+    with tel.stage("describing background"):
+        text = model.describe(cast(Image, decoder.value(payload.image)), BACKGROUND_PROMPT,
+                              max_new_tokens=MAX_NEW_TOKENS).strip()
+    if not text:
+        raise UnsupportedInput("the background description is empty", code="output_integrity")
     return DescribeCharacterOutput(text)
 
 
