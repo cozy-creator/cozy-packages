@@ -1102,4 +1102,4 @@ app.entrypoint(
 
 from .turbo import turbo_lora  # noqa: E402
 
-app.entrypoint(turbo_lora, name="turbo-lora", weights=(WeightsOutput("bf16", 1 << 29),))
+app.entrypoint(turbo_lora, name="turbo-lora", weights=(WeightsOutput("pdd8", 1 << 29),))
