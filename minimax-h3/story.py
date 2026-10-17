@@ -33,6 +33,10 @@ _TOKEN = re.compile(r"<([^<>\n]+)>")
 _MEDIA = re.compile(r"\s*(picture|audio|video)\s+(\d+)\s*", re.IGNORECASE)
 _SHOT = re.compile(r"\[Shot\s*(\d+)\]", re.IGNORECASE)
 _CUT = re.compile(r"\bcut(?:s|ting)?\b", re.IGNORECASE)
+#: Runtime asks every decodable input for a decoded-size bound and refuses one above its own
+#: hard ceiling, so reference media declare that ceiling: each call decodes them straight to
+#: the size it uses (a video as a stream), so no real input comes near it.
+UNBOUNDED = 2 << 30
 #: Each kind's file field, its H3 reference kind and its `<Picture|Audio|Video N>` label.
 FILE = {"character": "image", "background": "image", "audio": "audio", "video": "video"}
 _SLOT = {"character": "picture", "background": "picture", "audio": "audio", "video": "video"}
@@ -58,22 +62,22 @@ class StoryReference(msgspec.Struct):
         ImageAsset | None,
         AssetBound(
             max_bytes=64 << 20,
-            max_decoded_bytes=256 << 20,
+            max_decoded_bytes=UNBOUNDED,
             media_types=("image/png", "image/jpeg", "image/webp"),
         ),
     ] = None
     audio: Annotated[
         AudioAsset | None,
-        AssetBound(max_bytes=256 << 20, max_decoded_bytes=2 << 30),
+        AssetBound(max_bytes=256 << 20, max_decoded_bytes=UNBOUNDED),
     ] = None
     video: Annotated[
         VideoAsset | None,
-        AssetBound(max_bytes=256 << 20, max_decoded_bytes=2 << 30),
+        AssetBound(max_bytes=256 << 20, max_decoded_bytes=UNBOUNDED),
     ] = None
     #: A character's voice: a timbre reference wherever the character is named.
     voice: Annotated[
         AudioAsset | None,
-        AssetBound(max_bytes=256 << 20, max_decoded_bytes=2 << 30),
+        AssetBound(max_bytes=256 << 20, max_decoded_bytes=UNBOUNDED),
     ] = None
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
 
