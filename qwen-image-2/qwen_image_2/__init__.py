@@ -135,14 +135,6 @@ def reference_prompt(prompt: str, background: Background) -> str:
     return prompt
 
 
-def reference_pixels(asset: ImageAsset) -> Image.Image:
-    """A reference's RGB pixels. Runtime's read keeps Pillow's `info`, whose `transparency`
-    would key a colour out when the VAE input converts to RGBA."""
-    image = asset.read()
-    image.info.pop("transparency", None)
-    return image
-
-
 def rgb_image(decoded: Any) -> Image.Image:
     """Preserve native RGBA semantics and flatten alpha over white for H3 references."""
     # The model returns B,C,H,W in [-1,1], just as upstream VaeImageProcessor consumes.
@@ -177,7 +169,7 @@ def generate_image(
     reference_images, reference_latents, image_pad_mask = None, None, None
     if payload.reference_images:
         with tel.stage("encoding reference images", overall_range=(0.0, 0.08)):
-            reference_images = [reference_pixels(asset) for asset in payload.reference_images]
+            reference_images = [asset.read() for asset in payload.reference_images]
             conditioning_images, reference_latents = model.encode_reference_images(reference_images)
         ctx.raise_if_cancelled()
     with tel.stage("encoding prompt", overall_range=(0.08 if reference_images else 0.0, 0.1)):

@@ -48,8 +48,9 @@ REFERENCE_AUDIO = AudioPreparation(min_seconds=2, max_seconds=15, excess="refuse
 #: A reference video's upload: a source of any length is admitted and truncated, not refused.
 VIDEO_MAX_BYTES = 1 << 30
 #: Retained-read bounds. A video reads at source resolution on the 24-fps clock: 15 s of 1080p
-#: is 2.2 GB. A prepared image is at most 16,777,216 RGB8 pixels; audio is 15 s, mono or stereo.
-VIDEO_READ_BYTES = 8 << 30
+#: is 2.2 GB, of 4K 9 GB; memory is Runtime's to budget. A prepared image is at most 16,777,216
+#: RGB8 pixels; audio is 15 s, mono or stereo.
+VIDEO_READ_BYTES = 16 << 30
 IMAGE_READ_BYTES = 64 << 20
 AUDIO_READ_BYTES = 64 << 20
 #: Each kind's file field, its H3 reference kind and its `<Picture|Audio|Video N>` label.
