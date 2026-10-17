@@ -1058,6 +1058,7 @@ class OfficialH3Pipeline:
             references = list(scratch.get("normalized_references"))
             if any(reference.has_audio for reference in references):
                 return None
+            plan = scratch.get("reference_plan") or ReferencePlan()
             video, audio = [], []
             for reference in references:
                 if reference.kind == "image":
@@ -1070,6 +1071,7 @@ class OfficialH3Pipeline:
                         + LATENTS_PER_CHUNK
                     )
                     frames = video_latent_num_frames(snapped, FRAMES_PER_CHUNK, LATENTS_PER_CHUNK)
+                    frames = len(range(0, frames, plan.frame_stride))
                 video.append(
                     torch.empty(
                         (1, 1, frames, height // VAE_SPATIAL_RATIO, width // VAE_SPATIAL_RATIO),
