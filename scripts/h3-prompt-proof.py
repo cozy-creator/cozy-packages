@@ -24,7 +24,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "minimax-h3"))
 import h3
 from minimax_h3.official import Task
 from story import (
-    MOTION,
     StoryReference,
     encoder_prompt,
     image_prompt,
@@ -139,7 +138,8 @@ def music() -> None:
     scene = {"name": "Beach", "kind": "background", "description": "An empty beach."}
     prefix = (
         "subject_definitions:\n<Beach> is the background shown in <Picture 1>. An empty beach.\n\n"
-        f"retention_analysis:\n<Beach>: fully_preserved - {SCENE}.\n\n{ONE_LINE}\n\n"
+        f"retention_analysis:\n<Beach>: fully_preserved - {SCENE}.\n\n"
+        f"detailed_description:\n{ONE_LINE}\n\n"
     )
 
     class TokenizerInput:
@@ -223,58 +223,60 @@ def long_form() -> None:
         "overall_soundscape": HUM,
         "segments": [{"prompt": text, "duration_s": 6} for text in segments],
     }
-    lab = f"<Background> is the background shown in <Picture 1>. {LAB[4]['description']}"
+    def lab(n: int) -> str:
+        return f"<Background> is the background shown in <Picture {n}>. {LAB[4]['description']}"
+
     expected = [
         (
-            f"subject_definitions:\n{lab}\n<Subject-4> is the character shown in <Picture 2>. "
-            f"{LAB[3]['description']}\n\n"
+            f"subject_definitions:\n<Subject-4> is the character shown in <Picture 1>. "
+            f"{LAB[3]['description']}\n{lab(2)}\n\n"
             "summary:\n[reference generation] <Subject-4> explores.\n\n"
-            f"retention_analysis:\n<Background> (appears in [Shot 1]): fully_preserved - {SCENE}.\n"
-            f"<Subject-4> (appears in [Shot 1]): fully_preserved - {PERSON}.\n\n"
+            f"retention_analysis:\n<Subject-4> (appears in [Shot 1]): fully_preserved - {PERSON}.\n"
+            f"<Background> (appears in [Shot 1]): fully_preserved - {SCENE}.\n\n"
             "detailed_description:\n[Shot 1] <Subject-4> is walking through the labratory "
             "<Background>, exploring and looking around.\n\n"
             f"overall_soundscape:\n{HUM}\n\nnon_diegetic_music:\nN/A",
-            ["Background", "Subject-4"],
+            ["Subject-4", "Background"],
         ),
         (
-            f"Subject Definitions:\n<Subject-1> carries a courier bag.\n{lab}\n"
-            f"<Subject-1> is the character shown in <Picture 2>. {LAB[0]['description']}\n\n"
-            f"retention_analysis:\n<Background>: fully_preserved - {SCENE}.\n"
-            f"<Subject-1> (appears in [Shot 1], [Shot 2]): fully_preserved - {PERSON}.\n\n"
+            f"Subject Definitions:\n<Subject-1> carries a courier bag.\n"
+            f"<Subject-1> is the character shown in <Picture 1>. {LAB[0]['description']}\n{lab(2)}\n\n"
+            f"retention_analysis:\n<Subject-1> (appears in [Shot 1], [Shot 2]): fully_preserved - {PERSON}.\n"
+            f"<Background>: fully_preserved - {SCENE}.\n\n"
             "detailed description:\n[Shot 1] <Subject-1> runs in. [Shot 2] <Subject 1> stops.\n\n"
             f"Overall Soundscape:\nFast footsteps on concrete.\n{HUM}\n\n"
             "non_diegetic_music:\nN/A",
-            ["Background", "Subject-1"],
+            ["Subject-1", "Background"],
         ),
         (
-            f"subject_definitions:\n{lab}\n<Subject-2> is the character shown in <Picture 2>. "
-            f"{LAB[1]['description']}\n<Subject-3> is the character shown in <Picture 3>. "
-            f"{LAB[2]['description']}\n\n"
+            f"subject_definitions:\n<Subject-2> is the character shown in <Picture 1>. "
+            f"{LAB[1]['description']}\n<Subject-3> is the character shown in <Picture 2>. "
+            f"{LAB[2]['description']}\n{lab(3)}\n\n"
             "summary:\n[reference generation] <subject 2> confronts <Subject_3>.\n\n"
-            f"retention_analysis:\n<Background>: fully_preserved - {SCENE}.\n"
-            f"<Subject-2> (appears in [Shot 1]): fully_preserved - {PERSON}.\n"
-            f"<Subject-3> (appears in [Shot 1], [Shot 2]): fully_preserved - {PERSON}.\n\n"
+            f"retention_analysis:\n<Subject-2> (appears in [Shot 1]): fully_preserved - {PERSON}.\n"
+            f"<Subject-3> (appears in [Shot 1], [Shot 2]): fully_preserved - {PERSON}.\n"
+            f"<Background>: fully_preserved - {SCENE}.\n\n"
             "detailed_description:\n[Shot 1] <Subject-2> points at <Subject-3>. [Shot 2] "
             "<Subject-3> raises his hands.\n\n"
             f"overall-soundscape: Alarms blare.\n{HUM}\n\n"
             "NON_DIEGETIC_MUSIC:\nA low synth drone.",
-            ["Background", "Subject-2", "Subject-3"],
+            ["Subject-2", "Subject-3", "Background"],
         ),
         (
-            f"subject_definitions:\n{lab}\n\n"
+            f"subject_definitions:\n{lab(1)}\n\n"
             f"retention_analysis:\n<Background>: fully_preserved - {SCENE}.\n\n"
-            "The camera pans slowly across the empty laboratory.\n\n"
+            "detailed_description:\nThe camera pans slowly across the empty laboratory.\n\n"
             f"overall_soundscape:\n{HUM}\n\nnon_diegetic_music:\nN/A",
             ["Background"],
         ),
         (
-            f"subject_definitions:\n{lab}\n<Subject-4> is the character shown in <Picture 2>. "
-            f"{LAB[3]['description']}\n\n"
-            f"retention_analysis:\n<Background>: fully_preserved - {SCENE}.\n"
-            f"<Subject-4>: fully_preserved - {PERSON}.\n\n"
-            f"<Subject-4> waits.\n\nOVERALL_SOUNDSCAPE:\nRain on the skylight.\n{HUM}\n\n"
+            f"subject_definitions:\n<Subject-4> is the character shown in <Picture 1>. "
+            f"{LAB[3]['description']}\n{lab(2)}\n\n"
+            f"retention_analysis:\n<Subject-4>: fully_preserved - {PERSON}.\n"
+            f"<Background>: fully_preserved - {SCENE}.\n\n"
+            f"detailed_description:\n<Subject-4> waits.\n\nOVERALL_SOUNDSCAPE:\nRain on the skylight.\n{HUM}\n\n"
             "non_diegetic_music:\nN/A",
-            ["Background", "Subject-4"],
+            ["Subject-4", "Background"],
         ),
     ]
     for job in (h3.LongFormInput, h3.LongFormCutsInput):
@@ -335,20 +337,20 @@ def coffee(lab: dict[str, Any]) -> None:
         ),
     )
     check(
-        "one-line segment: the scene, its two characters and the voice",
+        "one-line segment: the scene, its two characters and the voice, in request order",
         got[1],
         (
             "subject_definitions:\n"
             "<Subject 1> is the background shown in <Picture 1>. A coffee shop with a brick wall.\n"
-            "<Subject 3> is the character shown in <Picture 2>. A young blonde woman.\n"
-            "<Audio 1> is the voice-timbre reference for <Subject 3>.\n"
-            "<Subject 2> is the character shown in <Picture 3>. A fluffy white Samoyed.\n\n"
+            "<Subject 2> is the character shown in <Picture 2>. A fluffy white Samoyed.\n"
+            "<Subject 3> is the character shown in <Picture 3>. A young blonde woman.\n"
+            "<Audio 1> is the voice-timbre reference for <Subject 3>.\n\n"
             f"retention_analysis:\n<Subject 1>: fully_preserved - {SCENE}.\n"
+            f"<Subject 2>: fully_preserved - {PERSON}.\n"
             f"<Subject 3>: fully_preserved - {PERSON}.\n"
-            f"{follows}"
-            f"<Subject 2>: fully_preserved - {PERSON}.\n\n"
-            "<Subject 3> waves goodbye to <Subject 2>.\n\nnon_diegetic_music:\nN/A",
-            ["Subject 1", "Subject 3", "Subject 3's voice", "Subject 2"],
+            f"{follows}\n"
+            "detailed_description:\n<Subject 3> waves goodbye to <Subject 2>.\n\nnon_diegetic_music:\nN/A",
+            ["Subject 1", "Subject 2", "Subject 3", "Subject 3's voice"],
             [],
         ),
     )
@@ -358,11 +360,11 @@ def coffee(lab: dict[str, Any]) -> None:
         {**lab, "segments": [{"prompt": "[Shot 1] <Picture 3> nods. <Picture 9> waves.", "duration_s": 5}]},
     )
     check(
-        "global <Picture 3> is Subject-3, the child's <Picture 2>; an unknown token stays",
+        "global <Picture 3> is Subject-3, the child's <Picture 1>; an unknown token stays",
         (renumbered[0].split("\n\n")[2], renumbered[1], renumbered[2]),
         (
-            "[Shot 1] <Picture 2> nods. <Picture 9> waves.",
-            ["Background", "Subject-3"],
+            "detailed_description:\n[Shot 1] <Picture 1> nods. <Picture 9> waves.",
+            ["Subject-3", "Background"],
             ["Segment 1: <Picture 9> match no reference; left as written."],
         ),
     )
@@ -393,11 +395,11 @@ def retention_defaults() -> None:
             "duration_s": 5,
         }],
     }
-    labels = ["<Depot> (appears in [Shot 1])", "<Hero> (appears in [Shot 1])", "<Audio 1>"]
+    labels = ["<Hero> (appears in [Shot 1])", "<Depot> (appears in [Shot 1])", "<Audio 1>"]
     defaults = [
-        f"fully_preserved - {SCENE}.",
         "fully_preserved - keep the face, hair, and outfit of the referenced character. "
         "Ignore the white background.",
+        f"fully_preserved - {SCENE}.",
         "partially_copy - <Audio 1> is copied into the target audio, with other sounds around it.",
     ]
     authored = "reference - retain only the authored details, including the blue backdrop."
@@ -437,16 +439,16 @@ def style() -> None:
         "segments": [{"prompt": text, "duration_s": 5} for text in texts],
     }
     definitions = (
-        "subject_definitions:\n<Beach> is the background shown in <Picture 1>. An empty sandy beach.\n"
-        "<Kite> is the character shown in <Picture 2>. A red paper kite.\n\n"
+        "subject_definitions:\n<Kite> is the character shown in <Picture 1>. A red paper kite.\n"
+        "<Beach> is the background shown in <Picture 2>. An empty sandy beach.\n\n"
     )
-    retention = f"<Beach>: fully_preserved - {SCENE}.\n<Kite>{{}}: fully_preserved - {PERSON}.\n\n"
+    retention = f"<Kite>{{}}: fully_preserved - {PERSON}.\n<Beach>: fully_preserved - {SCENE}.\n\n"
     styled = [
-        f"{definitions}summary:\n<Kite> climbs.\n\nstyle:\n{look}\n\nretention_analysis:\n"
+        f"{definitions}summary:\n[reference generation] <Kite> climbs.\n\nretention_analysis:\n"
         + retention.format(" (appears in [Shot 1])")
-        + "detailed_description:\n[Shot 1] <Kite> climbs.\n\nnon_diegetic_music:\nN/A",
-        f"{definitions}style:\n{look}\n\nretention_analysis:\n{retention.format('')}"
-        "<Kite> dips toward the sand.\n\nnon_diegetic_music:\nN/A",
+        + f"detailed_description:\n{look}\n[Shot 1] <Kite> climbs.\n\nnon_diegetic_music:\nN/A",
+        f"{definitions}retention_analysis:\n{retention.format('')}"
+        f"detailed_description:\n{look}\n<Kite> dips toward the sand.\n\nnon_diegetic_music:\nN/A",
     ]
     own = "<Kite> spins.\n\nStyle: Grainy black-and-white film."
 
@@ -455,17 +457,17 @@ def style() -> None:
 
     for job in (h3.LongFormInput, h3.LongFormCutsInput):
         name = job.__name__
-        check(f"{name}: style is a section in both segments", prompts(job, wire), styled)
+        check(f"{name}: style opens the description in both segments", prompts(job, wire), styled)
         check(
-            f"{name}: no style, no section",
+            f"{name}: no style, no opening line",
             prompts(job, {key: value for key, value in wire.items() if key != "style"}),
-            [text.replace(f"style:\n{look}\n\n", "") for text in styled],
+            [text.replace(f"{look}\n", "") for text in styled],
         )
         check(
-            f"{name}: a segment's own style is kept",
+            f"{name}: a segment's own style section opens its description instead",
             prompts(job, {**wire, "segments": [{"prompt": own, "duration_s": 5}]}),
-            [f"{definitions}retention_analysis:\n{retention.format('')}{own}\n\n"
-             "non_diegetic_music:\nN/A"],
+            [f"{definitions}retention_analysis:\n{retention.format('')}detailed_description:\n"
+             "Grainy black-and-white film.\n<Kite> spins.\n\nnon_diegetic_music:\nN/A"],
         )
         extra = {
             **wire,
@@ -642,14 +644,15 @@ def definition_lines(text: str) -> list[str]:
 
 async def videos() -> None:
     """Videos are named references: attached only where the text names them, by name first,
-    else as the global `<Video N>`, and renumbered per call after its pictures and audio."""
+    else as the global `<Video N>`, and renumbered per call in request order."""
     clip = lambda digit: "sha256:" + digit * 64  # noqa: E731
     refs = [{"name": "Ann", "kind": "character", "description": "A woman in red."},
             {"name": "Ben", "kind": "character", "description": "A man in blue."},
             {"name": "Video 1", "kind": "video", "video": clip("1")},
             {"name": "Video 2", "kind": "video", "video": clip("2")},
             {"name": "Spin Kick", "kind": "video", "video": clip("3")}]
-    motion = f"<Video 1> (motion and choreography): attribute_transfer - {MOTION}."
+    motion = ("<Video 1> (motion, choreography and camera movement): attribute_transfer - its "
+              "movements, timing and camera work are performed by <Ann> and <Ben>.")
     for job in (h3.LongFormInput, h3.LongFormCutsInput):
         name = job.__name__
         got = calls(job, {"references": refs, "segments": [
@@ -662,15 +665,19 @@ async def videos() -> None:
         ]})
         check(f"{name}: a segment naming only <Video 2> sends it as its <Video 1>",
               (got[0][1], "as in <Video 1>." in got[0][0], retention_lines(got[0][0])[-1],
-               definition_lines(got[0][0])[-1]),
-              (["Ann", "Ben", "Video 2"], True, motion, "<Video 1> is the supplied action video."))
+               definition_lines(got[0][0])),
+              (["Ann", "Ben", "Video 2"], True, motion,
+               ["<Ann> is the character shown in <Picture 1>, whose movements come from <Video 1>. A woman in red.",
+                "<Ben> is the character shown in <Picture 2>, whose movements come from <Video 1>. A man in blue.",
+                "<Video 1> is the motion and camera reference for <Ann> and <Ben>."]))
         check(f"{name}: two videos, numbered in the order the text names them",
               (got[1][1], "copies <Video 1>, then <Video 2>." in got[1][0]),
               (["Ben", "Video 1", "Video 2"], True))
         check(f"{name}: one clip reused in two segments; a named clip keeps its name",
-              (got[2][1], "<Ann> lands <Spin Kick>; <Ben> repeats <Video 2>." in got[2][0],
-               "<Spin Kick> is the action shown in <Video 1>." in definition_lines(got[2][0])),
-              (["Ann", "Ben", "Spin Kick", "Video 2"], True, True))
+              (got[2][1], "<Ann> lands <Spin Kick>; <Ben> repeats <Video 1>." in got[2][0],
+               "<Spin Kick> is the motion and camera reference in <Video 2> for <Ann> and <Ben>."
+               in definition_lines(got[2][0])),
+              (["Ann", "Ben", "Video 2", "Spin Kick"], True, True))
         check(f"{name}: an authored clip retention line replaces the default",
               [line for line in retention_lines(got[3][0]) if "Video" in line],
               ["<Video 1> (camera): weak_reference - the dolly only."])
@@ -699,8 +706,54 @@ async def videos() -> None:
     check("ref2va: pictures, then the clip, labeled per kind",
           [(assets.info(i).kind, assets.info(i).label) for i in range(len(assets))],
           [("image", "Picture 1"), ("image", "Picture 2"), ("video", "Video 1")])
-    check("ref2va: the clip's motion line and no warning", (retention_lines(sent.prompt)[-1], warnings),
-          (motion, []))
+    check("ref2va: the clip's motion line, and a short description warns once",
+          (retention_lines(sent.prompt)[-1], warnings),
+          (motion, ["Segment 1: <Spin Kick> guides a description of 8 words. H3 copies a clip's own "
+                    "people and setting unless the description establishes each character, the "
+                    "background and the beats in order; MiniMax's guide asks 350-500 words."]))
+    guide = calls(h3.LongFormInput, {"references": [
+        refs[0], {**refs[3], "use_audio": True}, {"name": "Line", "kind": "audio", "audio": clip("4")},
+        refs[1], {"name": "Dojo", "kind": "background", "description": "A dojo."}], "segments": [
+        {"prompt": "summary:\n<Ann> fights <Ben>.\n\ndetailed_description:\n[Shot 1] In <Dojo>, <Ann> "
+                   "spars with <Ben> as in <Video 2>; its sound is <Audio 1>, then <Line> plays.",
+         "duration_s": 5},
+        {"prompt": "summary:\n[video editing] <Ann> replaces the woman in <Video 2>.\n\n"
+                   "detailed_description:\n[Shot 1] <Ann> stands in <Video 2>'s field.", "duration_s": 5},
+        {"prompt": "summary:\n\ndetailed_description:\n[Shot 1] <Ann> waves.", "duration_s": 5},
+    ]})
+    check("request order, a use_audio clip's sound labeled just before it, motion bound per character",
+          (guide[0][1], definition_lines(guide[0][0]), retention_lines(guide[0][0])[1:3],
+           "[reference generation + audio reuse] <Ann> fights <Ben>." in guide[0][0],
+           "its sound is <Audio 1>, then <Line> plays." in guide[0][0]),
+          (["Ann", "Video 2", "Line", "Ben", "Dojo"],
+           ["<Ann> is the character shown in <Picture 1>, whose movements come from <Video 1>. A woman in red.",
+            "<Video 1> is the motion and camera reference for <Ann> and <Ben>.",
+            "<Audio 1> is the synchronized audio track of <Video 1>.",
+            "<Audio 2> is the supplied audio reference for <Line>.",
+            "<Ben> is the character shown in <Picture 2>, whose movements come from <Video 1>. A man in blue.",
+            "<Dojo> is the background shown in <Picture 3>. A dojo."],
+           ["<Audio 1>: partially_copy - the synchronized audio track of <Video 1> is copied into the "
+            "target audio, with other sounds around it.",
+            "<Video 1> (motion, choreography and camera movement): attribute_transfer - its movements, "
+            "timing and camera work are performed by <Ann> and <Ben> in <Dojo>."],
+           True, True))
+    check("an edit source is the source video, kept, with no motion binding",
+          ([line for line in definition_lines(guide[1][0]) if "Video" in line or "<Ann>" in line],
+           [line for line in retention_lines(guide[1][0]) if line.startswith("<Video")],
+           "[video editing + audio reuse] <Ann> replaces" in guide[1][0]),
+          (["<Ann> is the character shown in <Picture 1>. A woman in red.",
+            "<Video 1> is the source video.", "<Audio 1> is the synchronized audio track of <Video 1>."],
+           ["<Video 1> (source video editing): fully_preserved - its framing, setting and subjects are "
+            "kept except where the description changes them."],
+           True))
+    check("an empty summary gains the task type", "summary:\n[reference generation]\n\n" in guide[2][0], True)
+    check("every declared clip is named, so none warns",
+          [warning for row in guide for warning in row[2] if "never named" in warning], [])
+    unnamed = calls(h3.LongFormInput, {"references": refs, "segments": [
+        {"prompt": "<Ann> waves.", "duration_s": 5}, {"prompt": "<Ben> waves.", "duration_s": 5}]})
+    check("an unnamed clip warns once each", [row[2] for row in unnamed],
+          [[f"<{name}> is never named in a prompt, so H3 never sees it; name the clip where its motion "
+            "applies." for name in ("Video 1", "Video 2", "Spin Kick")], []])
     check("a clip keeps its sound only with use_audio", (sound, h3.video_audio(
         request(list[StoryReference], [{**refs[4], "use_audio": True}, refs[3]]))), ((False,), (True, False)))
 
@@ -727,7 +780,7 @@ def voices() -> None:
     check("a voice follows its character, reusing the text's speaker ID",
           (got[0][1], "<Audio 1> is the voice-timbre reference for <Ann> (S1)." in definition_lines(got[0][0]),
            follows in retention_lines(got[0][0])),
-          (["Beach", "Ann", "Ann's voice", "Line"], True, True))
+          (["Ann", "Ann's voice", "Line", "Beach"], True, True))
     check("standalone audio is copied as is by default",
           "<Audio 2>: partially_copy - <Audio 2> is copied into the target audio, with other sounds around it."
           in retention_lines(got[0][0]), True)

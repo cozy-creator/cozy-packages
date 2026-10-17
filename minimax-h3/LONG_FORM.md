@@ -80,30 +80,33 @@ Unknown fields are ignored, not refused; a missing required field, such as a mis
 
 Write prompts in MiniMax's [full-reference format](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md):
 `subject_definitions`, `summary`, `retention_analysis`, `detailed_description`,
-`overall_soundscape`, `non_diegetic_music`, plus `style` after `summary`. Any section may
-be missing. Text before the first heading counts as the description. Headings match in any
-case, with `_`, `-` or a space between words.
+`overall_soundscape`, `non_diegetic_music`. Any section may be missing. Text before the
+first heading counts as the description. Headings match in any case, with `_`, `-` or a
+space between words.
 
 1. **References.** Name them as `<Name>` (any case; `_`, `-` and space alike). Each segment
-   gets every background, and the characters, audio and videos it names. A character's
-   `voice` goes wherever the character does. Backgrounds come
-   first, in the global order; then the rest in the order the text first names them, with
-   videos last.
+   gets every background, and the characters, audio and videos it names, in the order
+   `references` lists them, which is the order H3 reads them. A character's `voice` goes
+   wherever the character does, right after it.
 2. **Numbering.** `<Picture k>`, `<Audio k>` and `<Video k>` count each kind over that
-   attached set. A token such as `<Video 2>` names the reference called "Video 2" if there
-   is one, else the global second video; either way it is renumbered for the call, so a
-   segment naming only `<Video 2>` sends it as its `<Video 1>`. A token that matches
-   nothing stays as written, with a warning.
+   attached set; a `use_audio` clip's sound takes an `<Audio k>` just before its
+   `<Video k>`, as H3 labels it. A token such as `<Video 2>` names the reference called
+   "Video 2" if there is one, else the global second video; either way it is renumbered
+   for the call, so a segment naming only `<Video 2>` sends it as its `<Video 1>`. A token
+   that matches nothing stays as written, with a warning.
 3. **Sections.** The workflow adds `subject_definitions` (one line per attached
    reference), `retention_analysis` (one line per attached reference, with the
-   `[Shot N]` markers that name it), and the global `style` (when set),
-   `overall_soundscape` and `non_diegetic_music`. Audio follows MiniMax's guide (see
-   [Voices and audio](#voices-and-audio)).
+   `[Shot N]` markers that name it), `overall_soundscape` and `non_diegetic_music`. Audio
+   follows MiniMax's guide (see [Voices and audio](#voices-and-audio)).
    - Existing subject, retention, and soundscape sections gain the global content.
-   - If the section is missing, it is added in the order above, under the canonical heading.
+   - If the section is missing, it is added in the order above, under the canonical heading;
+     a description without a heading gains `detailed_description:`.
    - A body of `N/A` gives way to described global content in those sections.
-   - A segment's own music and `style` are kept as written, unless its explicit
-     `non_diegetic_music` field replaces the music section.
+   - A `summary` that does not open with `[task types]` gains `[reference generation]`.
+   - `style` (the segment's own `style:` section, else the global one) becomes the
+     description's opening sentence, where the guide puts it.
+   - A segment's own music is kept as written, unless its explicit `non_diegetic_music`
+     field replaces the music section.
 4. **Everything else** reaches the model byte for byte.
 
 H3's ref2va needs a picture. A segment with no background and no named character
@@ -119,9 +122,20 @@ its first 15 s, and the result's `warnings` says so. A clip guides at half the c
 every second latent frame, and only during the dense denoise steps, so a 15 s render with a
 clip costs ~1.3x the render without one (5.5x at the full sizing).
 A clip's sound is dropped unless the reference sets `use_audio: true`; then it conditions
-the audio and takes the next `<Audio N>` after the call's audio references. Each clip gains
-`<Video k> (motion and choreography): attribute_transfer`, which transfers its movement and
-keeps none of its people or setting; a `<Video k>` line of your own replaces it.
+the audio as `<Audio k>`, "the synchronized audio track of `<Video k>`", copied by default
+(a silent clip with `use_audio` is refused). Each clip is bound to the characters its shots
+name (all of the call's characters if no shot names it): their lines say their movements
+come from it, and it gains `<Video k> (motion, choreography and camera movement):
+attribute_transfer - its movements, timing and camera work are performed by <...> in
+<background>`; a `<Video k>` line of your own replaces it. With `[video editing]` or
+`[video continuation]` in the summary, the clip is the source video instead, kept
+`fully_preserved` except where the description changes it.
+
+Binding alone does not stop H3 from copying a clip's own people and setting: the
+description must establish each character's look, the background and the beats in order
+(MiniMax's guide asks 350-500 words). A segment whose clip guides a shorter description
+gets a warning, as does a declared clip no prompt names.
+
 `clean_references` and `describe_references` leave videos alone. Direct `ref2va` and
 `ref2va_turbo` take video references the same way.
 
@@ -166,8 +180,8 @@ segment with other sounds around it, such as a dialogue line or a piece of music
 clip carries a character's words, write those exact words where the character says them,
 `<Name> (S1) says <d>[English] the exact words</d>`, so the lips follow them. The
 reference's own `retention_analysis` replaces the default, e.g. `fully_copy - ...` for the
-whole track, or `reference - ...` to borrow only its style. A `summary` that opens with
-`[task types]` gains `audio reference` or `audio reuse` to match.
+whole track, or `reference - ...` to borrow only its style. The summary's `[task types]`
+gain `audio reference` or `audio reuse` to match.
 
 ## Unwanted speech
 
