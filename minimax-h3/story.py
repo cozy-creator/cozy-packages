@@ -74,6 +74,8 @@ class StoryReference(msgspec.Struct):
         VideoAsset | None,
         AssetBound(max_bytes=256 << 20, max_decoded_bytes=UNBOUNDED),
     ] = None
+    #: A video's own sound: dropped unless set, so the clip guides motion alone.
+    use_audio: bool = False
     #: A character's voice: a timbre reference wherever the character is named.
     voice: Annotated[
         AudioAsset | None,

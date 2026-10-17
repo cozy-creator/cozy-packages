@@ -2007,7 +2007,10 @@ class ReferenceClip:
 
 
 def read_reference_video(
-    events: Iterable[DecodedMediaHeader | DecodedVideoFrame | DecodedAudioChunk], *, frames: int
+    events: Iterable[DecodedMediaHeader | DecodedVideoFrame | DecodedAudioChunk],
+    *,
+    frames: int,
+    audio: bool = True,
 ) -> ReferenceClip:
     """Decode a reference clip once and keep it small.
 
@@ -2015,8 +2018,8 @@ def read_reference_video(
     whole-frame 24-fps clock and resized onto the canvas of its own aspect ratio with LANCZOS
     as it arrives, the official resample-then-rescale order, so frames arrive exactly as
     the pipeline's own normalization would leave them. Only the call's first `frames` are kept,
-    and no full-size frame outlives its event. The soundtrack is kept whole, on the video's
-    origin to the nearest sample of its own clock.
+    and no full-size frame outlives its event. With `audio`, the soundtrack is kept whole, on
+    the video's origin to the nearest sample of its own clock; without, it is dropped.
     """
     canvas: np.ndarray | None = None
     kept = 0
@@ -2037,6 +2040,8 @@ def read_reference_video(
 
     for event in events:
         if isinstance(event, DecodedAudioChunk):
+            if not audio:
+                continue
             if audio_start is None:
                 audio_start, rate, pcm = event.start_time, event.sample_rate, [[] for _ in event.pcm_f32le]
             for channel, chunk in zip(pcm, event.pcm_f32le, strict=True):

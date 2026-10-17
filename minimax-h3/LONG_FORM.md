@@ -113,9 +113,10 @@ therefore receives every image and audio reference, never a video, with a warnin
 
 A `kind: video` reference guides action: choreography, timing, a fight's beats. Like a
 character, it goes only to the calls whose text names it, so one clip can guide one segment
-or several. Per call: at most three clips, 2–15 s each, 15 s in all, square pixels. A clip
-with sound also conditions the audio and takes the next `<Audio N>` after the call's audio
-references; strip the track (`ffmpeg -an`) to guide motion alone. Each clip gains
+or several. Per call: at most three clips, 2–15 s each, 15 s in all, square pixels; any
+resolution or frame rate, since each is decoded straight onto the call's canvas at 24 fps.
+A clip's sound is dropped unless the reference sets `use_audio: true`; then it conditions
+the audio and takes the next `<Audio N>` after the call's audio references. Each clip gains
 `<Video k> (motion and choreography): attribute_transfer`, which transfers its movement and
 keeps none of its people or setting; a `<Video k>` line of your own replaces it.
 `clean_references` and `describe_references` leave videos alone. Direct `ref2va` and
@@ -219,7 +220,8 @@ A reference has:
 
 - `name` and `kind` (`character`, `background`, `audio` or `video`);
 - its file: `image` (a character or background), `audio` or `video`;
-- optional `description`, `retention_analysis` and `seed`, and on a character `voice`.
+- optional `description`, `retention_analysis` and `seed`; on a character `voice`, on a video
+  `use_audio`.
 
 A supplied image skips generation. Otherwise Qwen-Image-2.1 generates the image once
 from the description. Names normalise: whitespace collapses and `<`/`>` are dropped. Two
