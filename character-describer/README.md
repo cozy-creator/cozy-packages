@@ -16,6 +16,19 @@ The default model is Qwen3.5-9B (`qwen3.5-9b@0.2.0`), chosen over Qwen3.5-4B,
 JoyCaption Beta One and Qwen3-VL-2B in a side-by-side test (tracker se-066). Its token loop
 declares `min_bits=4, phase="decode"`: it serves the release's `nvfp4` lane where there is one.
 
+`describe_places` describes supplied places the same way: one sentence about the place's look,
+people left out. `describe_clip` watches a motion clip as video, the way Qwen-VL reads one:
+about 2 frames a second, at least 16 and at most 32, at most 448 px long, each block stamped with
+its `<t seconds>`. It answers in four parts, `PEOPLE`, `BEATS` (who does what to whom, which way,
+facing the camera how, with times), `CAMERA` and `CUTS`, naming people only as P1, P2. A 15 s
+clip is 30 frames and about 5 s to describe on an RTX A5000. `write_texts` answers text prompts,
+all in one pass. Every entrypoint is memoized: the same file and instruction return the stored
+answer without running the model.
+
+```sh
+cozy run fidika/character-describer/describe_clip --asset video=./fight.mp4
+```
+
 ## Model preparation
 
 The served checkpoint is the plain upload: TensorFS keeps the repository's `config.json` as the
