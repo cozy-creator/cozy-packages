@@ -279,8 +279,8 @@ def lane_treatments(lane: Lane) -> Mapping[str, Treatment]:
 #:     "video_vae": Treatment(cast="f16", encode="fp8-rowwise/1")
 LANES: Mapping[str, Lane] = {
     "bf16-full": Lane("full"),
-    "bf16-pruned": Lane("adaln-pruned"),
-    "fp8-pruned": Lane(
+    "bf16": Lane("adaln-pruned"),
+    "fp8": Lane(
         "adaln-pruned",
         {**_both_dits(_DIT_FP8), "text_encoder": _TEXT_ENCODER_FP8},
     ),

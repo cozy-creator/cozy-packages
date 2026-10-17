@@ -136,10 +136,10 @@ MAX_TEXT_ENCODER_BYTES = 56 << 30
 MAX_QUANTIZED_LANE_BYTES = MAX_QUANTIZED_BYTES + MAX_VIDEO_VAE_BYTES + MAX_TEXT_ENCODER_BYTES
 LANE_OUTPUTS = (
     WeightsOutput("bf16-full", max_new_bytes=MAX_FULL_BYTES + MAX_VIDEO_VAE_BYTES),
-    WeightsOutput("bf16-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),
-    WeightsOutput("fp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),
+    WeightsOutput("bf16", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),
+    WeightsOutput("fp8", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),
 )
-LaneName = Literal["bf16-full", "bf16-pruned", "fp8-pruned"]
+LaneName = Literal["bf16-full", "bf16", "fp8"]
 
 
 def _check_lane_outputs() -> None:
@@ -671,7 +671,7 @@ async def bf16_full(ctx: Context, *, source: Weights[Any], tel: Telemetry) -> Mo
 @invocable(memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
 async def bf16_pruned(ctx: Context, *, source: Weights[Any], tel: Telemetry) -> ModelArtifact:
     """AdaLN-pruned BF16: 106 modulation rows per DiT replaced by timestep tables."""
-    return _produce_lanes(ctx, tel, source, ("bf16-pruned",))["bf16-pruned"]
+    return _produce_lanes(ctx, tel, source, ("bf16",))["bf16"]
 
 
 @invocable(memo_version="h3-lane/1", memo_dependencies=LANES_MEMO)
@@ -683,8 +683,8 @@ async def fp8_pruned(
     tel: Telemetry,
 ) -> ModelArtifact:
     """AdaLN-pruned with both DiTs row-wise FP8."""
-    lane = _produce_lanes(ctx, tel, source, ("fp8-pruned",), max_relative_frobenius)
-    return lane["fp8-pruned"]
+    lane = _produce_lanes(ctx, tel, source, ("fp8",), max_relative_frobenius)
+    return lane["fp8"]
 
 
 app.entrypoint(
@@ -697,12 +697,12 @@ app.entrypoint(
 app.entrypoint(
     bf16_pruned,
     name="bf16-pruned",
-    weights=(WeightsOutput("bf16-pruned", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),),
+    weights=(WeightsOutput("bf16", max_new_bytes=MAX_PRUNED_BYTES + MAX_VIDEO_VAE_BYTES),),
 )
 app.entrypoint(
     fp8_pruned,
     name="fp8-pruned",
-    weights=(WeightsOutput("fp8-pruned", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),),
+    weights=(WeightsOutput("fp8", max_new_bytes=MAX_QUANTIZED_LANE_BYTES),),
 )
 
 
@@ -717,7 +717,7 @@ app.entrypoint(
 QUANTIZER_RECIPES: Mapping[str, Mapping[str, _lanes.Treatment]] = {
     encoding: {
         component: _lanes.Treatment(encode=encoding, keep=treatment.keep)
-        for component, treatment in LANES["fp8-pruned"].components.items()
+        for component, treatment in LANES["fp8"].components.items()
     }
     for encoding in ("fp8-rowwise/1", "int8-convrot256/1")
 } | {
@@ -748,7 +748,7 @@ def _quantizer_selections(
         ):
             raise UnsupportedInput(
                 f"{component} still carries its AdaLN modulation rows; quantize an AdaLN-pruned "
-                "lane (bf16-pruned or fp8-pruned)",
+                "lane (bf16 or fp8)",
                 code="h3_quantize_unpruned",
             )
     dit_plan = prepare_quantization(h3_quantization_plan())
@@ -888,11 +888,15 @@ app.entrypoint(
 )
 
 
+#: The function that writes each lane: the pruned lanes' functions keep their operation names.
+LANE_FUNCTIONS = {"bf16-full": "bf16-full", "bf16": "bf16-pruned", "fp8": "fp8-pruned"}
+
+
 def _check_lane_functions() -> None:
     """Each lane's function declares exactly the catalogue's output for that lane."""
     declared = {output.name: output for output in LANE_OUTPUTS}
     for name in LANES:
-        registered = app.get(name).weights_outputs
+        registered = app.get(LANE_FUNCTIONS[name]).weights_outputs
         if registered != (declared[name],):
             raise ValueError(f"lane function {name!r} declares {registered}, not {declared[name]}")
 

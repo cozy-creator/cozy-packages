@@ -16,6 +16,7 @@ from cozy_runtime.derive.quantization import (
 from h3_tables import lanes as lane_recipes
 from h3_tables.job import (
     FP8_SPEC,
+    LANE_FUNCTIONS,
     MAX_TABLE_BYTES,
     PLAIN_SPEC,
     _lane_targets,
@@ -169,8 +170,8 @@ def main() -> None:
     # Every lane's targets now come from its catalogue row, so this proof drives the exact
     # declaration path the function does rather than a second spelling of it.
     dits = _dit_structure(sections)
-    pruned = _targets_of("bf16-pruned", sections, tables, full_targets, dits, quantization)
-    fp8 = _targets_of("fp8-pruned", sections, tables, full_targets, dits, quantization)
+    pruned = _targets_of("bf16", sections, tables, full_targets, dits, quantization)
+    fp8 = _targets_of("fp8", sections, tables, full_targets, dits, quantization)
 
     measured_bytes: dict[str, int] = {}
     for task, source, component in (
@@ -232,7 +233,7 @@ def main() -> None:
         raise RuntimeError("package retained the retired jobs list")
     functions = {str(row["name"]): row for row in package_interface["entrypoints"]}
     if set(functions) != {
-        *lane_recipes.LANES,
+        *LANE_FUNCTIONS.values(),
         "retable",
         "apply-adaln",
         "compute-adaln-tables",
@@ -245,9 +246,10 @@ def main() -> None:
     }:
         raise RuntimeError(f"package callables changed: {sorted(functions)}")
     for lane in lane_recipes.LANES:
-        function = functions[lane]
+        name = LANE_FUNCTIONS[lane]
+        function = functions[name]
         if [(row["path"], row.get("weights")) for row in function["models"]] != [
-            (f"{lane}.models.source", True)
+            (f"{name}.models.source", True)
         ]:
             raise RuntimeError(f"{lane} changed its one Weights source slot")
         if [output["output_id"] for output in function["weights_outputs"]] != [lane]:

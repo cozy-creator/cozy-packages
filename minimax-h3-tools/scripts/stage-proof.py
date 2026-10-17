@@ -191,7 +191,7 @@ def main() -> None:
     slots = tuple(lanes.LANES)
     for failure, retained in (
         ("tables:ref2va", slots[:1]),
-        ("quantize:fp8-pruned", slots[:2]),
+        ("quantize:fp8", slots[:2]),
     ):
         recorder = Recorder()
         try:

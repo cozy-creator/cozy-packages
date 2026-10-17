@@ -14,8 +14,8 @@ ingested or already fetched the input, its objects are in the pod Store and noth
 | Function | Input (first positional) | Output | Notes |
 |---|---|---|---|
 | `bf16-full` | a full-precision H3 checkpoint: the converted `MiniMaxAI/MiniMax-H3` release or a `bf16-full` lane | `bf16-full` | source-only rows dropped, video VAE decode operands f16 |
-| `bf16-pruned` | same | `bf16-pruned` | AdaLN tables replace the 106 modulation rows per DiT; CUDA |
-| `fp8-pruned` | same | `fp8-pruned` | tables + both DiTs and the conditioner's 350 decoder linears `fp8-rowwise/1`; CUDA; every serving rung |
+| `bf16-pruned` | same | `bf16` | AdaLN tables replace the 106 modulation rows per DiT; CUDA |
+| `fp8-pruned` | same | `fp8` | tables + both DiTs and the conditioner's 350 decoder linears `fp8-rowwise/1`; CUDA; every serving rung |
 | `turbo-lora` | the converted `alibaba-pai/MiniMax-H3-Acc-LoRAs` release (one fl2va and one ref2va component) | `pdd8` | `model.base=<full-precision H3>`; reads its modulation weights and heads only |
 | `retable` | an AdaLN-pruned lane | `adaln-pruned`, `tables` | `model.full=<full-precision H3>`; recomputes tables only |
 | `fp8`, `int8` | an AdaLN-pruned lane | `fp8`, `int8` | `cozy model quantize`; H3's recipe: both DiTs and the text conditioner's 350 decoder linears, encoding what is still plain; CPU |
@@ -23,7 +23,7 @@ ingested or already fetched the input, its objects are in the pod Store and noth
 `cozy model quantize <org>/minimax-h3@<release>/<pruned lane> --fp8|--int8 --rental=NAME` runs
 `fp8`/`int8`. The conditioner keeps `embed_tokens` and its vision tower at bf16
 (`lanes.TEXT_ENCODER_KEEP`); a component already carrying the requested encoding is inherited
-and one carrying the other encoding refuses, so `fp8-pruned --fp8` encodes only the conditioner.
+and one carrying the other encoding refuses, so `fp8 --fp8` encodes only the conditioner.
 
 Runtime requires a receipt for every declared weights output, so each lane is its own
 function, run on the ingest rental:
@@ -31,7 +31,7 @@ function, run on the ingest rental:
 ```sh
 cozy run fidika/minimax-h3-tools/fp8-pruned fidika/minimax-h3@1.0.0/bf16-full fidika/minimax-h3 \
   --rental=NAME --await
-cozy run fidika/minimax-h3-tools/turbo-lora fidika/minimax-h3-acc-loras@1.0.0/original \
+cozy run fidika/minimax-h3-tools/turbo-lora fidika/minimax-h3-acc-loras@1.0.0/bf16 \
   fidika/minimax-h3-turbo-lora model.base=fidika/minimax-h3@1.0.0/bf16-full --rental=NAME --await
 ```
 
@@ -63,8 +63,8 @@ of the community licence, which is a reviewed act rather than a caller choice.
 | lane | modulation | per-component treatment |
 |---|---|---|
 | `bf16-full` | full | none — every component inherited |
-| `bf16-pruned` | AdaLN-pruned | none |
-| `fp8-pruned` | AdaLN-pruned | both DiTs and the conditioner's decoder linears `fp8-rowwise/1` |
+| `bf16` | AdaLN-pruned | none |
+| `fp8` | AdaLN-pruned | both DiTs and the conditioner's decoder linears `fp8-rowwise/1` |
 
 A component a lane does not name is **inherited by reference**: TensorFS copies its tensor
 metadata and ObjectRefs unchanged through the zero-read/zero-hash inherit gate, so the
