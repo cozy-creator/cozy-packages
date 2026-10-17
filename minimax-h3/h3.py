@@ -569,7 +569,14 @@ def _validate_video(video: VideoProbe, field: str, *, sound: bool) -> None:
             fields=[field],
         )
     # Frame and soundtrack clock alignment belong to the model's video_reference.
-    if sound and video.soundtrack is not None:
+    if sound and video.soundtrack is None:
+        # H3 labels a soundtrack `<Audio N>` only if there is one; the prompt counted it.
+        raise InvalidRequest(
+            f"{field} has no soundtrack; set use_audio to false for a silent clip",
+            code="reference_policy",
+            fields=[field],
+        )
+    if sound:
         _validate_audio_channels(video.soundtrack.channels, field)
 
 

@@ -22,7 +22,8 @@ from cozy_runtime.author import (
 
 from minimax_h3.official import MAX_VIDEO_REFERENCES, Task, validate_reference_policy
 
-#: MiniMax's full-reference sections, plus `style`, in their canonical order.
+#: MiniMax's full-reference sections in their canonical order. A `style` section is read and
+#: moved into the description's opening, where the guide puts it (ref guide 5.2).
 SECTIONS = (
     "subject_definitions",
     "summary",
@@ -59,11 +60,12 @@ _SLOT = {"character": "picture", "background": "picture", "audio": "audio", "vid
 _POLICY = {"character": "image", "background": "image", "audio": "audio", "video": "video"}
 _SPEAKER = re.compile(r"\s*\((S\d+)\)")
 _PREFIX = re.compile(r"\s*\[([^\]\n]*)\]")
-#: A clip's default retention: action guidance, never a subject.
-MOTION = (
-    "its movement, timing and choreography transfer to the subjects who perform them; "
-    "its people, faces, clothing and setting are not kept"
-)
+#: The summary's task types (ref guide 3); a summary without one opens with the first.
+TASKS = ("reference generation", "keyframe completion", "video editing", "video continuation",
+         "audio reuse", "audio reference")
+#: A clip guides a description shorter than this (the guide asks 350-500 words): H3 then fills
+#: the gaps from the clip and copies its people and setting (runs 10706, 10783 vs 10707).
+SHORT_DESCRIPTION = 150
 
 
 class StoryReference(msgspec.Struct):
@@ -291,10 +293,6 @@ def compile_segments(
 ) -> list[SegmentCall]:
     """Each child prompt uses its music override, inline score, or overall score."""
     validate_references(references)
-    shared = {
-        "style": style.strip(),
-        "overall_soundscape": overall_soundscape.strip(),
-    }
     overrides = [None] * len(prompts) if segment_music is None else segment_music
     calls = []
     for index, (text, override) in enumerate(zip(prompts, overrides, strict=True)):
@@ -303,37 +301,50 @@ def compile_segments(
             text, {"non_diegetic_music": music.strip() or "N/A"},
             replace_music=override is not None,
         )
-        calls.append(_segment_call(text, references, shared, index))
+        calls.append(_segment_call(text, references, style.strip(), overall_soundscape.strip(), index))
+    sent = {ref.name for call in calls for ref in call.references}
+    for ref in references:
+        if calls and ref.kind == "video" and ref.name not in sent:
+            calls[0].warnings.append(
+                f"<{ref.name}> is never named in a prompt, so H3 never sees it; name the clip "
+                "where its motion applies."
+            )
     return calls
 
 
 def _numbering(references: Sequence[StoryReference]) -> dict[tuple[str, int], StoryReference]:
-    """`<Picture N>`, `<Audio N>` and `<Video N>`: each kind counted in the given order."""
+    """`<Picture N>`, `<Audio N>` and `<Video N>`: each kind counted in the given order, as H3
+    labels them. A `use_audio` clip's soundtrack takes an `<Audio N>` just before its video."""
     counts = dict.fromkeys(("picture", "audio", "video"), 0)
     slots: dict[tuple[str, int], StoryReference] = {}
     for ref in references:
-        slot = _SLOT[ref.kind]
-        counts[slot] += 1
-        slots[slot, counts[slot]] = ref
+        for slot in ("audio", "video") if ref.kind == "video" and ref.use_audio else (_SLOT[ref.kind],):
+            counts[slot] += 1
+            slots[slot, counts[slot]] = ref
     return slots
 
 
 def _segment_call(
     text: str,
     references: Sequence[StoryReference],
-    shared: dict[str, str],
+    style: str,
+    soundscape: str,
     index: int,
 ) -> SegmentCall:
-    """Backgrounds always; characters, audio and videos only where the text names them.
+    """Backgrounds always; characters, audio and videos only where the text names them, all in
+    request order, as H3 packs and labels them.
 
     A token names a reference by its name first (any case, `_`, `-` and space alike), else as
     the global `<Picture N>`/`<Audio N>`/`<Video N>`; these are renumbered for the call. A
-    character's voice follows the character. Videos go last, so the audio references keep
-    their numbers ahead of a clip's soundtrack.
+    character's voice follows the character. The prompt takes MiniMax's full-reference form
+    (ref guide): a summary task type, each clip bound to the characters who perform it, and
+    `style` as the description's opening sentence.
     """
     pool, owners = voices(references)
     by_key = {name_key(ref.name): ref for ref in pool}
     by_slot = _numbering(pool)
+    text, style = _open_with_style(text, style)
+    words = len(_body(text, "detailed_description").split()) - len(style.split())
 
     def lookup(token: re.Match[str]) -> StoryReference | None:
         named = by_key.get(name_key(token.group(1)))
@@ -341,6 +352,12 @@ def _segment_call(
         if named is not None or media is None:
             return named
         return by_slot.get((media.group(1).lower(), int(media.group(2))))
+
+    def part(token: re.Match[str], ref: StoryReference) -> tuple[str, str]:
+        """The reference and which of its labels a token names: a clip's sound or picture."""
+        media = _MEDIA.fullmatch(name_key(token.group(1)))
+        named = by_key.get(name_key(token.group(1))) is not None
+        return ref.name, media.group(1).lower() if media and not named else _SLOT[ref.kind]
 
     def mentioned(span: str) -> list[StoryReference]:
         found = {ref.name: ref for token in _TOKEN.finditer(span) if (ref := lookup(token))}
@@ -355,13 +372,9 @@ def _segment_call(
         [f"Segment {index + 1}: {', '.join(unmatched)} match no reference; left as written."]
         if unmatched else []
     )
-    spoken = {owner.name: by_key[name_key(voice)] for voice, owner in owners.items()}
-    attached = {ref.name: ref for ref in references if ref.kind == "background"}
-    for ref in mentioned(text):
-        attached.setdefault(ref.name, ref)
-        if ref.name in spoken:
-            attached.setdefault(spoken[ref.name].name, spoken[ref.name])
-    used = list(attached.values())
+    named = {ref.name for ref in mentioned(text)}
+    named |= {voice.name for voice in pool if voice.name in owners and owners[voice.name].name in named}
+    used = [ref for ref in pool if ref.kind == "background" or ref.name in named]
     if all(ref.kind == "audio" for ref in used):
         # H3's ref2va needs a picture: with no background and no character named, send every
         # reference but the videos.
@@ -370,17 +383,21 @@ def _segment_call(
             f"Segment {index + 1} names no character and there is no background, so it receives "
             f"all {len(used)} of its image and audio references."
         )
-    used = [ref for ref in used if ref.kind != "video"] + [ref for ref in used if ref.kind == "video"]
     _policy([_POLICY[ref.kind] for ref in used], f"segment {index + 1}: ")
-    _, start, end = _sections(text).get("detailed_description", (0, 0, 0))
+    sections = _sections(text)
+    _, start, end = sections.get("detailed_description", (0, 0, 0))
     markers = list(_SHOT.finditer(text, start, end))
     spans = pairwise([marker.start() for marker in markers] + [end])
     shots = [
         (m.group(1), {ref.name for ref in mentioned(text[a:b])})
         for m, (a, b) in zip(markers, spans, strict=True)
     ]
-    _, start, end = _sections(text).get("retention_analysis", (0, 0, 0))
-    retained = {ref.name for ref in mentioned(text[start:end])}
+    _, start, end = sections.get("retention_analysis", (0, 0, 0))
+    retained = {
+        part(token, ref) for token in _TOKEN.finditer(text, start, end) if (ref := lookup(token))
+    }
+    given = _tasks(text)
+    editing = bool({"video editing", "video continuation"} & {task.casefold() for task in given})
 
     def speaker(owner: StoryReference, span: str) -> str:
         """The `(Sx)` the text gives the voice's character, never a new one (guide §5.4)."""
@@ -389,23 +406,39 @@ def _segment_call(
                 return f" ({sx.group(1)})"
         return ""
 
-    child = {ref.name: slot for slot, ref in _numbering(used).items()}
+    child = {(ref.name, kind): number for (kind, number), ref in _numbering(used).items()}
+
+    def label(ref: StoryReference, kind: str | None = None) -> str:
+        kind = kind or _SLOT[ref.kind]
+        return f"<{kind.capitalize()} {child[ref.name, kind]}>"
 
     def renumber(token: re.Match[str]) -> str:
         ref = lookup(token) if _MEDIA.fullmatch(name_key(token.group(1))) else None
-        if ref is None or ref.name not in child:
+        if ref is None or part(token, ref) not in child:
             return token.group(0)
-        kind, number = child[ref.name]
-        return f"<{kind.capitalize()} {number}>"
+        return label(ref, part(token, ref)[1])
 
+    def names(refs: Sequence[StoryReference]) -> str:
+        tokens = [f"<{ref.name}>" for ref in refs]
+        return ", ".join(tokens[:-1]) + " and " + tokens[-1] if len(tokens) > 1 else "".join(tokens)
+
+    characters = [ref for ref in used if ref.kind == "character"]
+    places = [ref for ref in used if ref.kind == "background"]
+    clips = [ref for ref in used if ref.kind == "video"]
+
+    def performers(clip: StoryReference) -> list[StoryReference]:
+        """The characters a motion clip's shots name, else every character in the call."""
+        cast = set().union(*(found for _, found in shots if clip.name in found))
+        return [ref for ref in characters if ref.name in cast] or characters
+
+    motion = {} if editing else {clip.name: performers(clip) for clip in clips}
     voiced = {ref.name: speaker(owners[ref.name], text) for ref in used if ref.name in owners}
     text = _TOKEN.sub(renumber, text)
     definitions, retention = [], []
     tasks = set()
     for ref in used:
-        kind, number = child[ref.name]
-        slot = f"<{kind.capitalize()} {number}>"
-        label = slot
+        slot = label(ref)
+        line_label = slot
         if ref.name in owners:
             owner = f"<{owners[ref.name].name}>"
             definitions.append(f"{slot} is the voice-timbre reference for {owner}{voiced[ref.name]}.")
@@ -415,40 +448,103 @@ def _segment_call(
             definitions.append(f"{slot} is the supplied audio reference for <{ref.name}>.")
             default = f"partially_copy - {slot} is copied into the target audio, with other sounds around it."
         elif ref.kind == "video":
-            definitions.append(f"{slot} is the supplied action video." if _MEDIA.fullmatch(ref.name)
-                               else f"<{ref.name}> is the action shown in {slot}.")
-            label = f"{slot} (motion and choreography)"
-            default = f"attribute_transfer - {MOTION}."
+            role = "source video" if editing else "motion and camera reference"
+            who = f" for {names(motion[ref.name])}" if motion.get(ref.name) else ""
+            definitions.append(f"{slot} is the {role}{who}." if _MEDIA.fullmatch(ref.name)
+                               else f"<{ref.name}> is the {role} in {slot}{who}.")
+            if ref.use_audio:
+                sound = label(ref, "audio")
+                definitions.append(f"{sound} is the synchronized audio track of {slot}.")
+                if (ref.name, "audio") not in retained:
+                    retention.append(f"{sound}: partially_copy - the synchronized audio track of {slot} "
+                                     "is copied into the target audio, with other sounds around it.")
+                    tasks.add("audio reuse")
+            if editing:
+                line_label = f"{slot} (source video editing)"
+                default = ("fully_preserved - its framing, setting and subjects are kept except where "
+                           "the description changes them.")
+            else:
+                line_label = f"{slot} (motion, choreography and camera movement)"
+                cast = names(motion[ref.name]) or "the target video's subjects"
+                where = f" in {names(places)}" if places else ""
+                default = (f"attribute_transfer - its movements, timing and camera work are performed "
+                           f"by {cast}{where}.")
         else:
-            definitions.append(f"<{ref.name}> is the {ref.kind} shown in {slot}.")
+            moves = [f"<{clip.name}>" if not _MEDIA.fullmatch(clip.name) else label(clip)
+                     for clip in clips if ref in motion.get(clip.name, ())]
+            binding = f", whose movements come from {' and '.join(moves)}" if moves else ""
+            definitions.append(f"<{ref.name}> is the {ref.kind} shown in {slot}{binding}.")
             preserved = (
                 "keep the face, hair, and outfit of the referenced character. Ignore the white background"
                 if ref.kind == "character"
                 else "the architecture, materials and defining features of the referenced environment"
             )
             default = f"fully_preserved - {preserved}."
-            appears = [f"[Shot {n}]" for n, names in shots if ref.name in names]
-            label = f"<{ref.name}>" + (f" (appears in {', '.join(appears)})" if appears else "")
+            appears = [f"[Shot {n}]" for n, found in shots if ref.name in found]
+            line_label = f"<{ref.name}>" + (f" (appears in {', '.join(appears)})" if appears else "")
         if ref.description:
-            definitions[-1] += f" {ref.description}"
+            definitions[-1 - (ref.kind == "video" and ref.use_audio)] += f" {ref.description}"
         line = ref.retention_analysis or default
         if ref.kind == "audio":
             tasks.add("audio reuse" if line.split(" ", 1)[0] in ("fully_copy", "partially_copy")
                       else "audio reference")
-        if ref.kind != "video" or ref.retention_analysis or ref.name not in retained:
-            retention.append(f"{label}: {line}")
-    _, start, end = _sections(text).get("summary", (0, 0, 0))
-    if prefix := _PREFIX.match(text, start, end):
-        named = [part.strip() for part in prefix.group(1).split("+")]
-        missing = sorted(tasks - set(named))
-        if missing:
-            text = text[: prefix.start(1)] + " + ".join([*named, *missing]) + text[prefix.end(1):]
+        if ref.kind != "video" or ref.retention_analysis or (ref.name, "video") not in retained:
+            retention.append(f"{line_label}: {line}")
+    if clips and not editing and words < SHORT_DESCRIPTION:
+        warnings.append(
+            f"Segment {index + 1}: {names(clips)} guide{'s' * (len(clips) == 1)} a description of "
+            f"{words} words. H3 copies a clip's own people and setting unless the description "
+            "establishes each character, the background and the beats in order; MiniMax's guide "
+            "asks 350-500 words."
+        )
+    if "summary" in (sections := _sections(text)):
+        _, start, end = sections["summary"]
+        tag = " + ".join([*(given or ["reference generation"]), *sorted(tasks - set(given))])
+        if prefix := _PREFIX.match(text, start, end) if given else None:
+            text = text[: prefix.start(1)] + tag + text[prefix.end(1):]
+        elif body := text[start:end].lstrip():
+            text = text[: end - len(body)] + f"[{tag}] " + body + text[end:]
+        else:
+            text = text[:start] + f"\n[{tag}]" + text[start:]
     additions = {
         "subject_definitions": "\n".join(definitions),
         "retention_analysis": "\n".join(retention),
-        **shared,
+        "overall_soundscape": soundscape,
     }
     return SegmentCall(_fill(text, additions), used, warnings)
+
+
+def _tasks(text: str) -> list[str]:
+    """The summary's `[task + task]` prefix, when it opens with one."""
+    _, start, end = _sections(text).get("summary", (0, 0, 0))
+    prefix = _PREFIX.match(text, start, end)
+    given = [task.strip() for task in prefix.group(1).split("+")] if prefix else []
+    return given if all(task.casefold() in TASKS for task in given) else []
+
+
+def _body(text: str, name: str) -> str:
+    _, start, end = _sections(text).get(name, (0, 0, 0))
+    return text[start:end]
+
+
+def _open_with_style(text: str, style: str) -> tuple[str, str]:
+    """The segment's own `style` section, else the global style, as the description's opening
+    sentence (ref guide 5.2) rather than a section of its own; and that style."""
+    found = _sections(text)
+    if "style" in found:
+        head, start, end = found["style"]
+        style = text[start:end].strip() or style
+        text = text[:head] + text[end:]
+    if not style:
+        return text, style
+    found = _sections(text)
+    if "detailed_description" not in found:
+        return _fill(text, {"detailed_description": style}), style
+    head, start, end = found["detailed_description"]
+    if head == start:
+        return f"{style}\n{text}", style
+    rest = text[start:end].lstrip(" \t")
+    return text[:start] + "\n" + style + ("" if rest.startswith("\n") else "\n") + rest + text[end:], style
 
 
 def _shot_texts(text: str) -> list[str]:
@@ -515,7 +611,8 @@ def _fill(text: str, additions: dict[str, str], *, replace_music: bool = False) 
     """Append each addition inside its section, or add the section in canonical order.
 
     Only these insertions change the text. An `N/A` body gives way to described content;
-    a segment's own style and music are kept unless a structured music override is given.
+    a segment's own music is kept unless a structured music override is given. A description
+    without a heading gains `detailed_description:` once sections are inserted ahead of it.
     """
     additions = {name: additions[name] for name in SECTIONS if additions.get(name)}
     if not text.strip():
@@ -530,7 +627,7 @@ def _fill(text: str, additions: dict[str, str], *, replace_music: bool = False) 
                 at = text.index(body, start)
                 edits.append((at, order, at + len(body), addition))
                 continue
-            if body and (name in {"style", "non_diegetic_music"} or addition.upper() == "N/A"):
+            if body and (name == "non_diegetic_music" or addition.upper() == "N/A"):
                 continue
             if body.upper() == "N/A":
                 at = text.index(body, start)
@@ -546,6 +643,8 @@ def _fill(text: str, additions: dict[str, str], *, replace_music: bool = False) 
         else:
             at = len(text.rstrip())
             edits.append((at, order, at, "\n\n" + section))
+    if found.get("detailed_description", (1, 0, 0))[:2] == (0, 0) and any(at == 0 for at, *_ in edits):
+        edits.append((0, len(additions), 0, "detailed_description:\n"))
     for start, _, end, insert in sorted(edits, reverse=True):
         text = text[:start] + insert + text[end:]
     return text

@@ -2228,10 +2228,12 @@ def arm_media() -> None:
     root = Path(tempfile.mkdtemp(prefix="h3-references-"))
     fixtures = fake_outputs(fake_attempt("h3-reference-fixtures", spool=root / "spool"))
     media: dict[str, Path] = {}
+    voiced: set[str] = set()
     for name, seconds, sound in (
         ("v1s", 1, False), ("v2", 2, False), ("v7", 7, True), ("v10", 10, True),
         ("v20", 20, True),
     ):
+        voiced |= {name} if sound else set()
         media[name] = mp4_clip(root / f"{name}.mp4", size=(32, 32), fps=24, seconds=seconds, sound=sound)
     for seconds in (2, 4, 5, 6, 10, 16):
         saved = fixtures.save_audio(
@@ -2252,7 +2254,7 @@ def arm_media() -> None:
             [media[name] for name in names],
             pipe=Pipe(),
             frames=frames,
-            video_audio=video_audio or [True] * sum(name.startswith("v") for name in names),
+            video_audio=video_audio or [name in voiced for name in names if name.startswith("v")],
             work=work,
         )
         if outcome.terminal != "succeeded":
@@ -2349,6 +2351,11 @@ def arm_media() -> None:
         "a video keeps its soundtrack only with use_audio",
         [value.soundtrack is None for value in decode("v7", "v7", video_audio=(False, True))],
         [True, False],
+    )
+    refusal(
+        "use_audio on a silent clip refuses: H3 would label no <Audio N> the prompt counted",
+        lambda: decode("v2", video_audio=(True,)),
+        "reference_policy",
     )
     clips = [
         StoryReference("Ann", "character", description="A woman in red."),
