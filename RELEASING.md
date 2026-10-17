@@ -66,7 +66,7 @@ When a package starts using a new Runtime API:
 Private development or custom-image packages can still use `cozy package publish`
 directly. Their requirements need not fit every first-party worker image. The
 worker capability check remains authoritative for new worker APIs, and an existing
-private rental may need `cozy rental update <name>` before using such an API.
+private rental may need `cozy machine update <name>` before using such an API.
 Ordinary dependency updates belong to the package environment and do not require
 updating the worker's global Python environment.
 

@@ -22,12 +22,12 @@ sampling schedule, with no image-to-image strength parameter.
 ```sh
 cozy run paul/qwen-image-2/generate_image \
   prompt='Change the background to a sunset beach; preserve the person and clothing.' \
-  --asset reference_images.0=portrait.png seed=42 --await
+  --asset reference_images.0=portrait.png seed=42
 
 cozy run paul/qwen-image-2/generate_image \
   prompt='Place the person from image 1 in the room from image 2.' \
   --asset reference_images.0=person.png --asset reference_images.1=room.png \
-  seed=42 --await
+  seed=42
 ```
 
 References are ordered. Each accepts PNG, JPEG or WebP up to 32 MiB encoded and
@@ -57,7 +57,7 @@ processor configs) as assets; the package builds its processor from them:
 ```sh
 cozy model upload \
   hf://Qwen/Qwen-Image-2.1@790c92633540aa0cb11d9abf19eb46d861714758 \
-  paul/qwen-image-2.1 --rental=YOUR_RENTAL --await
+  paul/qwen-image-2.1 --on YOUR_MACHINE
 cozy model publish paul/qwen-image-2.1 --release 0.1.0 \
   --lane bf16=sha256:CHECKPOINT_DIGEST
 ```
@@ -75,7 +75,7 @@ Hadamard, int8 per output row), served as W8A8 on the int8 tensor cores. Embeddi
 tower, the input/output projections, the modulation and the VAE keep their source bytes.
 
 ```sh
-cozy model quantize paul/qwen-image-2.1@0.1.0/bf16 --int8 --rental=YOUR_RENTAL --await
+cozy model quantize paul/qwen-image-2.1@0.1.0/bf16 --int8 --on YOUR_MACHINE
 cozy model publish paul/qwen-image-2.1 --release 0.1.0 --lane int8=sha256:CHECKPOINT_DIGEST
 ```
 

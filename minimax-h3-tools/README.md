@@ -4,7 +4,7 @@ The H3 producer package. Every conversion is an ordinary package function with o
 model input and a destination repository, run on the rental that holds the source:
 
 ```sh
-cozy run <org>/minimax-h3-tools/<function> <input model ref> <org/model> --rental=NAME
+cozy run <org>/minimax-h3-tools/<function> <input model ref> <org/model> --on NAME
 ```
 
 Each declared output becomes a checkpoint named by its slot; publish lanes with
@@ -20,7 +20,7 @@ ingested or already fetched the input, its objects are in the pod Store and noth
 | `retable` | an AdaLN-pruned lane | `adaln-pruned`, `tables` | `model.full=<full-precision H3>`; recomputes tables only |
 | `fp8`, `int8` | an AdaLN-pruned lane | `fp8`, `int8` | `cozy model quantize`; H3's recipe: both DiTs and the text conditioner's 350 decoder linears, encoding what is still plain; CPU |
 
-`cozy model quantize <org>/minimax-h3@<release>/<pruned lane> --fp8|--int8 --rental=NAME` runs
+`cozy model quantize <org>/minimax-h3@<release>/<pruned lane> --fp8|--int8 --on NAME` runs
 `fp8`/`int8`. The conditioner keeps `embed_tokens` and its vision tower at bf16
 (`lanes.TEXT_ENCODER_KEEP`); a component already carrying the requested encoding is inherited
 and one carrying the other encoding refuses, so `fp8 --fp8` encodes only the conditioner.
@@ -30,9 +30,9 @@ function, run on the ingest rental:
 
 ```sh
 cozy run fidika/minimax-h3-tools/fp8-pruned fidika/minimax-h3@1.0.0/bf16-full fidika/minimax-h3 \
-  --rental=NAME --await
+  --on NAME
 cozy run fidika/minimax-h3-tools/turbo-lora fidika/minimax-h3-acc-loras@1.0.0/bf16 \
-  fidika/minimax-h3-turbo-lora model.base=fidika/minimax-h3@1.0.0/bf16-full --rental=NAME --await
+  fidika/minimax-h3-turbo-lora model.base=fidika/minimax-h3@1.0.0/bf16-full --on NAME
 ```
 
 The lane functions, `turbo-lora` and `retable` write weights, so they are never memoized; a

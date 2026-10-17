@@ -148,7 +148,7 @@ Segment 2 sends `throw.mp4` as its `<Video 1>`. Attach files by path in the requ
 
 ```sh
 cozy run fidika/minimax-h3/long_form --input fight.json \
-  --asset references.3.video=kick.mp4 --asset references.4.video=throw.mp4 --await
+  --asset references.3.video=kick.mp4 --asset references.4.video=throw.mp4
 ```
 
 ## Voices and audio
@@ -235,7 +235,7 @@ three. Allowed: up to nine images and twelve image and audio references in all; 
 per call. An audio-only set is refused.
 
 ```sh
-cozy run fidika/minimax-h3/long_form --input story.json --await
+cozy run fidika/minimax-h3/long_form --input story.json
 ```
 
 ## Continuation

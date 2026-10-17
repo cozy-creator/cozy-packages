@@ -36,7 +36,7 @@ applies to every GPU child and is never silently reduced.
 ```sh
 cozy run paul/minimax-h3/ref2va_turbo --asset character.png \
   prompt='<Picture 1> waves in a bright studio.' duration_s=15 seed=581203 \
-  resolution=1440p --await
+  resolution=1440p
 ```
 
 The requested 15 seconds follows H3's native frame grid (362 frames at 24 fps, about
@@ -64,7 +64,7 @@ upstream names; it applies only above 768p. Restoration can invent skin texture 
 
 ```sh
 cozy run paul/minimax-h3/fl2va_turbo prompt='...' duration_s=15 resolution=1080p \
-  'upscale:={"latent_noise_scale": 0.1}' --await
+  'upscale:={"latent_noise_scale": 0.1}'
 ```
 
 Measured on the Ref2VA original above at 1080p (seedvr2 README has the full table): colour

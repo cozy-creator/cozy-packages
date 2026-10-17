@@ -1,6 +1,6 @@
 # Private client scripts
 
-Run a Python file directly with `cozy run ./path/to/script.py --rental-only`.
+Run a Python file directly with `cozy run ./path/to/script.py --on any`.
 The client captures the script and its editable dependencies, then executes the
 ordinary `main()` function on the private worker. These files are not published
 packages and have no `package.toml`, App registry, or request/result classes.

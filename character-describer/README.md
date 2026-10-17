@@ -9,7 +9,7 @@ on all of the run's GPUs at once. MiniMax-H3 uses it to fill a supplied characte
 description.
 
 ```sh
-cozy run fidika/character-describer/describe_character --asset image=./character.png --await
+cozy run fidika/character-describer/describe_character --asset image=./character.png
 ```
 
 The default model is Qwen3.5-9B (`qwen3.5-9b@0.2.0`), chosen over Qwen3.5-4B,
@@ -25,7 +25,7 @@ anything.
 
 ```sh
 cozy model upload hf://Qwen/Qwen3.5-9B@c202236235762e1c871ad0ccb60c8ee5ba337b9a <account>/qwen3.5-9b \
-  --rental <name> --await
+  --on <name>
 cozy model publish <account>/qwen3.5-9b --release 0.2.0 --lane bf16=sha256:<checkpoint>
 ```
 
@@ -37,7 +37,8 @@ cozy model publish <account>/qwen3.5-9b --release 0.2.0 --lane bf16=sha256:<chec
 
 ```sh
 cozy run ./character-describer/int8 model.source=<account>/qwen3.5-9b@0.2.0/bf16 \
-  --upload-to <account>/qwen3.5-9b --rental <name> --await
+  --on <name>
+cozy run upload <run> <account>/qwen3.5-9b
 cozy model publish <account>/qwen3.5-9b --release 0.2.0 --lane int8=sha256:<checkpoint>
 ```
 

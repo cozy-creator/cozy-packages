@@ -148,11 +148,11 @@ The dependency floor alone does not establish that this worker fix is present.
 For source qualification, install the local package from this repository:
 
 ```sh
-cozy package install ./minimax-h3 --editable --no-model-download
+cozy package install ./minimax-h3
 ```
 
 This needs no package publication. A published release can instead be installed
-with `cozy package install paul/minimax-h3 --version=1.14.3 --no-model-download`
+with `cozy package install paul/minimax-h3@1.14.3`
 once available. With both checkpoint references available, a turbo invocation
 selects their exact releases and lanes independently:
 
@@ -161,7 +161,7 @@ cozy run local/minimax-h3/fl2va_turbo \
   'prompt=<your H3 prompt>' duration_s=5 seed=24680 \
   'model.base_model=<org/base-model>@<release>/<lane>' \
   'model.turbo_lora=<org/turbo-lora>@<release>/<lane>' \
-  --rental=<existing-rental-name> --await
+  --on <existing-machine-name>
 ```
 
 For the published installation, use `paul/minimax-h3/fl2va_turbo` instead.
@@ -185,7 +185,7 @@ cozy run paul/minimax-h3/ref2va \
   'prompt=<your H3 prompt>' \
   --asset="$HOME/Pictures/character-1.png" \
   --asset="$HOME/Pictures/character-2.png" \
-  duration_s=14 steps=30 seed=24680 --rental-only --await
+  duration_s=14 steps=30 seed=24680 --on any
 ```
 
 The published function supplies the default model unless an owner Hub override exists.
@@ -216,7 +216,7 @@ cozy run paul/minimax-h3/ref2va \
   'prompt=<your H3 prompt>' duration_s=5 \
   --asset="woman=~/Pictures/woman.png" --asset-fidelity=woman=high \
   --asset="background=~/Pictures/background.png" --asset-fidelity=background=low \
-  --rental-only --await
+  --on any
 ```
 
 For Ref2VA, `low`, `medium`, and `high` select a 256, 1024, or 2048 pixel short edge,
