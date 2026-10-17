@@ -5,8 +5,9 @@ At the official sizing (24 fps, the target's canvas) a 12 s clip beside a 15 s r
 it on an H100 (runs 10437, 10446). Three cuts bring it to ~1.25x and keep the motion and the
 camera (h3a-094, owner's choice 2026-10-17):
 
-- After the official normalization each clip's frames go to half the canvas edge, so its
-  latent rows and its vision tokens shrink ~4-fold. The layout puts the smaller grid on the
+- Each clip is read straight to half the edge of the canvas the official normalization would
+  put it on (`official.read_reference_video`), so its latent rows and its vision tokens shrink
+  ~4-fold. The layout puts the smaller grid on the
   same aspect-normalized rotary extent, as it does an image reference at its own size.
 - Every second latent frame of a clip leaves the sequence at its official rotary position:
   the kept rows are exactly the encoded ones, and the target sits where it always does.
@@ -19,12 +20,9 @@ Image references, standalone audio and a continuation's carried rows are untouch
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import replace
 from typing import Any
 
-import numpy as np
 import torch
-from PIL import Image as PILImage
 
 from .continuation import ContextReferenceLayout
 
@@ -51,24 +49,6 @@ def motion_size(height: int, width: int) -> tuple[int, int]:
 
 def public_video(reference: Any) -> bool:
     return reference.kind == "video" and not isinstance(reference, ContextReferenceLayout)
-
-
-def shrink_videos(references: Sequence[Any]) -> list[Any]:
-    """The normalized references with each clip's frames at `motion_size`."""
-    return [
-        replace(ref, frames=_shrink(ref.frames)) if public_video(ref) else ref for ref in references
-    ]
-
-
-def _shrink(frames: Any) -> np.ndarray:
-    pixels = np.asarray(frames)
-    height, width = motion_size(*pixels.shape[1:3])
-    return np.stack(
-        [
-            np.asarray(PILImage.fromarray(f).resize((width, height), PILImage.Resampling.LANCZOS))
-            for f in pixels
-        ]
-    )
 
 
 class ClipRows:

@@ -42,7 +42,9 @@ from cozy_runtime.author import (
     Config,
     Context,
     DecodedAudio,
+    DecodedAudioChunk,
     DecodedVideo,
+    DecodedVideoFrame,
     ImageAsset,
     InvalidRequest,
     Invocation,
@@ -123,7 +125,6 @@ from minimax_h3.official import (  # noqa: E402
     REFERENCE_IMAGE_SHORT_EDGE,
     OfficialH3Pipeline,
     ScheduleFacts,
-    _aligned_soundtrack,
     _apply_transformer_dtype,
     _apply_video_vae_dtype,
     _artifact_sections,
@@ -132,7 +133,6 @@ from minimax_h3.official import (  # noqa: E402
     _dit_specs,
     _processor,
     _ScopedPipeline,
-    _frames,
     _validate_dual_dit_topology,
     _validate_model_contract,
     canonical_timestep_plan,
@@ -1996,21 +1996,26 @@ def _audio(seconds: int, *, rate: int = 4, start: Fraction = Fraction(0)) -> Any
     )
 
 
-def _clocked(slots: int, *, soundtrack: Any | None = None, repeat: int = 1) -> Any:
-    """A clip as `VideoAsset.read(fps=24)` returns it: one slot per 1/24 s, and a source frame
-    that fills `repeat` slots repeated by reference."""
-    distinct = [bytes([index, 0, 0]) for index in range(-(-slots // repeat))]
-    return DecodedVideo(
-        width=1,
-        height=1,
-        frame_count=slots,
-        frames_rgb=tuple(distinct[slot // repeat] for slot in range(slots)),
-        frame_pts=tuple(range(slots)),
-        frame_durations=(1,) * slots,
-        time_base=Fraction(1, FPS),
-        pixel_aspect_ratio=Fraction(1),
-        soundtrack=soundtrack,
+def _events(seconds: int, *, audio_start: Fraction | None = None, size: tuple[int, int] = (64, 36)) -> list[Any]:
+    """A one-frame-per-second clip as `VideoAsset.stream` events, with an optional mono track."""
+    width, height = size
+    video = [
+        DecodedVideoFrame(
+            width=width, height=height, rgb=bytes([index * 40 % 256]) * (width * height * 3),
+            pts=index, duration=1, time_base=Fraction(1), pixel_aspect_ratio=Fraction(1),
+            color_primaries=1, color_transfer=1, color_matrix=1, color_range=1,
+        )
+        for index in range(seconds)
+    ]
+    if audio_start is None:
+        return video
+    samples = 4 * seconds
+    chunk = DecodedAudioChunk(
+        channels=1, sample_count=samples, sample_rate=4, channel_layout="mono",
+        channel_names=("FC",), pcm_f32le=(struct.pack(f"<{samples}f", *([1.0] * samples)),),
+        pts=int(audio_start * 4), time_base=Fraction(1, 4),
     )
+    return [chunk, *video]
 
 
 def mp4_clip(
@@ -2195,27 +2200,17 @@ def arm_media() -> None:
         "reference_policy",
     )
 
-    clip = _clocked(48, soundtrack=_audio(1, start=Fraction(1, 2)))
-    frames = _frames(clip)
-    check("a constant-clock read becomes (T, H, W, 3) uint8 frames", frames.shape, (48, 1, 1, 3))
-    check(
-        "a source frame repeated by reference fills each of its slots",
-        _frames(_clocked(48, repeat=3))[:, 0, 0, 0].tolist(),
-        [slot // 3 for slot in range(48)],
-    )
-    refusal(
-        "a read off the 24-fps clock refuses",
-        lambda: _frames(replace(clip, time_base=Fraction(1, 30))),
-        "reference_policy",
-    )
-    aligned = _aligned_soundtrack(clip)
-    assert aligned is not None
-    check("soundtrack aligns to the full video origin", tuple(aligned.shape), (1, 8))
-    check(
-        "half-second audio offset becomes two silent samples",
-        aligned[0, :2].tolist(),
-        [0.0, 0.0],
-    )
+    clip = official.read_reference_video(_events(2, audio_start=Fraction(1, 2)), frames=362, audio=True)
+    check("two seconds land on 48 slots of the 24-fps clock, at motion size",
+          clip.frames.shape, (48, *motion_size(768, 1344), 3))
+    check("each second holds its own frame", (int(clip.frames[23].max()), int(clip.frames[24].max())), (0, 40))
+    assert clip.soundtrack is not None
+    check("soundtrack aligns to the full video origin", tuple(clip.soundtrack.shape), (1, 8))
+    check("half-second audio offset becomes two silent samples", clip.soundtrack[0, :3].tolist(), [0.0, 0.0, 1.0])
+    check("without use_audio no soundtrack is kept",
+          official.read_reference_video(_events(2, audio_start=Fraction(1, 2)), frames=48, audio=False).soundtrack, None)
+    check("only the call's frames are kept",
+          official.read_reference_video(_events(15), frames=124, audio=False).frames.shape[0], 124)
 
     class Pipe:
         @staticmethod
@@ -2319,7 +2314,7 @@ def arm_media() -> None:
             [type(value).__name__ for value in prepared],
             prepared[0].tobytes() == prepared[3].tobytes(),
         ),
-        (["Image", "DecodedVideo", "DecodedAudio", "Image"], True),
+        (["Image", "ReferenceClip", "DecodedAudio", "Image"], True),
     )
     refusal(
         "metadata preflight refuses audio-only before decoding",
@@ -2373,13 +2368,14 @@ def arm_media() -> None:
     long_clip = decode("v20")[0]
     check(
         "a 20-second video reads its first 15 s on the 24-fps clock, soundtrack included",
-        (long_clip.frame_count, long_clip.duration, long_clip.soundtrack.duration),
+        (len(long_clip.frames), long_clip.duration,
+         Fraction(int(long_clip.soundtrack.shape[1]), long_clip.sample_rate)),
         (360, Fraction(15), Fraction(15)),
     )
     short_call = decode("v20", frames=DEFAULT_FRAMES)[0]
     check(
         "a call reads only the frames the official pipeline keeps",
-        (short_call.frame_count, short_call.soundtrack.duration),
+        (len(short_call.frames), Fraction(int(short_call.soundtrack.shape[1]), short_call.sample_rate)),
         (DEFAULT_FRAMES, Fraction(DEFAULT_FRAMES, FPS)),
     )
 
@@ -2666,9 +2662,10 @@ def arm_reference_media() -> None:
                 continue
             (reference,) = READ["prepared"]
             check(
-                f"{seconds} s: 360 frames of 15 s at source resolution reach the pipeline",
-                (reference.frames.shape, str(reference.frames.dtype), reference.fps),
-                ((360, 1080, 1920, 3), "uint8", float(FPS)),
+                f"{seconds} s: 360 frames of 15 s reach the pipeline at motion size, read once",
+                (reference.motion.shape, str(reference.motion.dtype), reference.fps,
+                 reference.frames.shape, reference.frames.strides),
+                ((360, 384, 672, 3), "uint8", float(FPS), (360, 768, 1344, 3), (0, 0, 0, 1)),
             )
             # Each frame fills the 24-fps slots from its start to the next one's, rounded half up.
             last = next(
@@ -2679,7 +2676,7 @@ def arm_reference_media() -> None:
             )
             check(
                 f"{seconds} s: the last slot is source frame {last}, by the 24-fps clock rule",
-                abs(int(reference.frames[359, 540, 960, 0]) - _limited_rgb(last * 37 % 256)) <= 3,
+                abs(int(reference.motion[359, 192, 336, 0]) - _limited_rgb(last * 37 % 256)) <= 3,
                 True,
             )
             check(
@@ -2716,11 +2713,15 @@ def arm_reference_media() -> None:
         result, outcome, _ = run_references([wide], pipe=pipe, frames=DEFAULT_FRAMES, work=work)
         check("2560x1080: the reference call succeeds", outcome.terminal, "succeeded")
         (reference,) = READ["prepared"]
+        height, width = (int(v) for v in resolve_canvas_size(2560, 1080, *official.CANVAS))
+        motion_height, motion_width = motion_size(height, width)
         check(
-            "2560x1080: the clip reaches the pipeline unresized, with no adjustment",
-            (reference.frames.shape, result.adjustments, result.result.warnings),
-            ((72, 1080, 2560, 3), (), []),
+            "2560x1080: the clip reaches the pipeline at its motion size, with no adjustment",
+            (reference.motion.shape, result.adjustments, result.result.warnings),
+            ((72, motion_height, motion_width, 3), (), []),
         )
+        with av.open(str(wide)) as container:
+            source = next(container.decode(video=0)).to_ndarray(format="rgb24")
         state = pipe.start_ref2va(
             prompt="A dancer spins.",
             references=[reference],
@@ -2730,15 +2731,10 @@ def arm_reference_media() -> None:
             reference_image_short_edges=[],
         )
         normalized = state.normalized_references[0].frames
-        height, width = (int(v) for v in resolve_canvas_size(2560, 1080, *official.CANVAS))
-        canvas = PILImage.fromarray(reference.frames[0]).resize(
-            (width, height), PILImage.Resampling.LANCZOS
-        )
-        motion_height, motion_width = motion_size(height, width)
-        guide = np.asarray(canvas.resize((motion_width, motion_height), PILImage.Resampling.LANCZOS))
+        guide = np.asarray(PILImage.fromarray(source).resize((motion_width, motion_height), PILImage.Resampling.LANCZOS))
         check(
-            "2560x1080: the official canvas LANCZOS resize, then one to its motion size",
-            (normalized.shape, bool(np.array_equal(normalized[0], guide))),
+            "2560x1080: one LANCZOS resize from the source straight to its motion size",
+            (normalized.shape, int(np.abs(normalized[0].astype(int) - guide.astype(int)).max()) <= 2),
             ((72, motion_height, motion_width, 3), True),
         )
         READ.clear()

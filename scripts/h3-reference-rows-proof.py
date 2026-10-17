@@ -25,7 +25,7 @@ from diffusers.modular_pipelines.minimax_h3.before_denoise import (
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "minimax-h3"))
 
 from minimax_h3.continuation import ContextReferenceLayout
-from minimax_h3.reference_rows import FRAME_STRIDE, ClipRows, motion_size, shrink_videos
+from minimax_h3.reference_rows import FRAME_STRIDE, ClipRows, motion_size
 
 PATCH = (1, 2, 2)
 CLIP = MiniMaxH3VideoReference(frames=np.zeros((3, 768, 1344, 3), np.uint8))
@@ -107,8 +107,6 @@ def main() -> None:
     clips.release(state)
     check(state, full, clip_rows(lambda f: True))
 
-    image, clip, *_ = shrink_videos(REFERENCES)
-    assert image is REFERENCES[0] and clip.frames.shape == (3, *motion_size(768, 1344), 3)
     assert motion_size(768, 1344) == (384, 672) and motion_size(768, 768) == (384, 384)
     print("h3 reference rows: clip rows leave, every other row keeps its official fields")
 

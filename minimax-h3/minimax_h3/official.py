@@ -16,10 +16,10 @@ import random
 import struct
 import sys
 import threading
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import CancelledError, Future
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from functools import lru_cache
 from itertools import pairwise
@@ -49,6 +49,7 @@ from diffusers.modular_pipelines.minimax_h3.modular_pipeline import (
     video_latent_num_frames,
 )
 from diffusers.modular_pipelines.modular_pipeline import PipelineState
+from PIL import Image as PILImage
 from torch.nn.utils.weight_norm import WeightNorm
 from transformers import (
     AddedToken,
@@ -63,7 +64,8 @@ from cozy_runtime.author import (
     Config,
     ConformanceError,
     DecodedAudio,
-    DecodedVideo,
+    DecodedAudioChunk,
+    DecodedVideoFrame,
     DerivedCache,
     Image,
     InvalidRequest,
@@ -85,7 +87,7 @@ from .continuation import (
     align_context_rows,
     export_context,
 )
-from .reference_rows import ClipRows, motion_size, public_video, shrink_videos
+from .reference_rows import ClipRows, motion_size, public_video
 from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK, TurboOverlay, TurboSchedule
 from .vae_tiles import TileBatchedVideoVAE, encode_condition
 
@@ -895,17 +897,23 @@ class OfficialH3Pipeline:
         waveform = _resample(_audio_tensor(audio), audio.sample_rate, self.sample_rate)
         return MiniMaxH3AudioReference(audio=waveform, sample_rate=self.sample_rate)
 
-    def video_reference(self, video: DecodedVideo) -> Any:
-        """A clip read on the 24-fps clock (`VideoAsset.read(fps=24)`), at source resolution:
-        the official pipeline resizes it onto its own canvas."""
-        track, soundtrack = video.soundtrack, _aligned_soundtrack(video)
-        if track is not None and soundtrack is not None:
-            soundtrack = _resample(soundtrack, track.sample_rate, self.sample_rate)
-        return MiniMaxH3VideoReference(
-            frames=_frames(video),
+    def video_reference(self, clip: ReferenceClip) -> Any:
+        """A clip already at its motion size (`read_reference_video`). The official
+        normalization sees a free canvas-sized stand-in it leaves as it is, and `start_ref2va`
+        puts the real frames in its place, so nothing is resized twice."""
+        soundtrack = clip.soundtrack
+        if soundtrack is not None:
+            soundtrack = _resample(soundtrack, clip.sample_rate, self.sample_rate)
+        height, width = (int(v) for v in resolve_canvas_size(clip.width, clip.height, *CANVAS))
+        stand_in = np.broadcast_to(
+            np.zeros((1, 1, 1, 3), dtype=np.uint8), (len(clip.frames), height, width, 3)
+        )
+        return MotionVideo(
+            frames=stand_in,
             fps=float(FPS),
             audio=soundtrack,
             sample_rate=None if soundtrack is None else self.sample_rate,
+            motion=clip.frames,
         )
 
     def start_fl2va(
@@ -975,7 +983,11 @@ class OfficialH3Pipeline:
             references=list(references),
             image_short_edges=tuple(reference_image_short_edges),
         )
-        state.set("normalized_references", shrink_videos(state.normalized_references))
+        state.set("normalized_references", [
+            replace(normalized, frames=source.motion[:frames])
+            if isinstance(source, MotionVideo) else normalized
+            for source, normalized in zip(references, state.normalized_references, strict=True)
+        ])
         if context is not None and context.canvas not in (None, (state.height, state.width)):
             raise InvalidRequest(
                 "continuation canvas differs from this render", code="h3_continuation"
@@ -2017,47 +2029,100 @@ def _resample(waveform: Any, rate: int, target: int) -> Any:
     return out.transpose(1, 2).reshape(channels, -1)[:, : math.ceil(target * length / rate)]
 
 
-def _aligned_soundtrack(video: DecodedVideo) -> Any | None:
-    """Put embedded PCM on the video's origin, to the nearest sample of its own clock.
+@dataclass
+class MotionVideo(MiniMaxH3VideoReference):
+    """A reference clip whose real frames, `motion`, are already at their motion size."""
 
-    Runtime keeps a soundtrack's own start: one starting after the first frame is padded with
-    silence here, and samples before it are dropped."""
-    audio = video.soundtrack
-    if audio is None:
-        return None
-    offset = _round_fraction((audio.start_time - video.start_time) * audio.sample_rate)
-    target_samples = _round_fraction(video.duration * audio.sample_rate)
-    waveform = _audio_tensor(audio)
-    start = max(offset, 0)
-    end = min(offset + audio.sample_count, target_samples)
-    if start >= end:
-        raise ConformanceError(
-            "reference soundtrack has no samples on its video's timeline",
-            code="reference_policy",
-        )
-    aligned = torch.zeros((audio.channels, target_samples), dtype=torch.float32)
-    source_start = start - offset
-    aligned[:, start:end] = waveform[:, source_start : source_start + end - start]
-    return aligned
+    motion: Any = None
 
 
-def _frames(video: DecodedVideo) -> Any:
-    """`(T, H, W, 3)` uint8 RGB of a clip on the 24-fps clock: the layout the official
-    pipeline reads as is, one copy per slot. Runtime's read repeats a frame by reference, so a
-    repeated slot copies the slot before it."""
-    if video.time_base != Fraction(1, FPS) or set(video.frame_durations) != {1}:
-        raise ConformanceError(
-            "a reference video must be read on the 24-fps clock", code="reference_policy"
-        )
-    frames = np.empty((video.frame_count, video.height, video.width, 3), dtype=np.uint8)
-    previous: bytes | None = None
-    for index, raw in enumerate(video.frames_rgb):
-        if raw is previous:
-            frames[index] = frames[index - 1]
-        else:
-            frames[index] = np.frombuffer(raw, dtype=np.uint8).reshape(video.height, video.width, 3)
-        previous = raw
-    return frames
+@dataclass(frozen=True, slots=True)
+class ReferenceClip:
+    """A clip as the call uses it: `(T, H, W, 3)` uint8 frames at its motion size on the
+    24-fps clock, the source geometry its canvas follows, and its soundtrack if kept."""
+
+    frames: Any
+    width: int
+    height: int
+    duration: Fraction
+    soundtrack: Any | None = None
+    sample_rate: int = 0
+
+
+def read_reference_video(
+    events: Iterable[Any], *, frames: int, audio: bool
+) -> ReferenceClip:
+    """Decode a reference clip once, straight to the size the call uses.
+
+    Each frame shows until the next starts (the last for its own duration) and lands on the
+    whole-frame 24-fps clock, LANCZOS-resized as it arrives to the motion size of the canvas its
+    aspect ratio resolves to. Only the call's first `frames` are kept and no source-resolution
+    frame outlives its event. With `audio`, the soundtrack is kept on the video's origin, to
+    the nearest sample of its own clock.
+    """
+    out: np.ndarray | None = None
+    kept = 0
+    origin = end = Fraction(0)
+    held: tuple[Fraction, np.ndarray | None] | None = None
+    first: DecodedVideoFrame | None = None
+    pcm: list[list[bytes]] = []
+    audio_start: Fraction | None = None
+    rate = 0
+
+    def place(picture: np.ndarray | None, stop: Fraction) -> None:
+        nonlocal kept
+        assert out is not None
+        upto = min(_round_fraction((stop - origin) * FPS), frames)
+        while picture is not None and kept < upto:
+            out[kept] = picture
+            kept += 1
+
+    for event in events:
+        if isinstance(event, DecodedAudioChunk):
+            if audio:
+                if audio_start is None:
+                    audio_start, rate, pcm = event.start_time, event.sample_rate, [[] for _ in event.pcm_f32le]
+                for channel, chunk in zip(pcm, event.pcm_f32le, strict=True):
+                    channel.append(chunk)
+            continue
+        if not isinstance(event, DecodedVideoFrame):
+            continue
+        start = event.start_time
+        if first is None:
+            first, origin = event, start
+            canvas = resolve_canvas_size(event.width, event.height, *CANVAS)
+            out = np.empty((frames, *motion_size(*(int(v) for v in canvas)), 3), dtype=np.uint8)
+        elif held is not None and start < held[0]:
+            raise ConformanceError("reference video presentation time runs backwards",
+                                   code="reference_policy")
+        if held is not None:
+            place(held[1], start)
+        picture = None
+        if _round_fraction((start - origin) * FPS) < frames:
+            assert out is not None
+            image = PILImage.frombuffer("RGB", (event.width, event.height), event.rgb, "raw", "RGB", 0, 1)
+            size = (out.shape[2], out.shape[1])
+            picture = np.asarray(image if image.size == size else image.resize(size, PILImage.Resampling.LANCZOS))
+        held = (start, picture)
+        end = start + event.duration * event.time_base
+    if first is None or held is None or out is None:
+        raise ConformanceError("reference video has no frames", code="reference_policy")
+    end = min(end, origin + Fraction(frames, FPS))
+    place(held[1], end)
+    if kept == 0:
+        raise ConformanceError("reference video has no frame on the 24-fps clock", code="reference_policy")
+    soundtrack = None
+    if audio_start is not None:
+        waveform = torch.from_numpy(np.stack([np.frombuffer(b"".join(c), dtype="<f4") for c in pcm]))
+        offset = _round_fraction((audio_start - origin) * rate)
+        target = _round_fraction((end - origin) * rate)
+        lo, hi = max(offset, 0), min(offset + int(waveform.shape[1]), target)
+        if lo >= hi:
+            raise ConformanceError("reference soundtrack has no samples on its video's timeline",
+                                   code="reference_policy")
+        soundtrack = torch.zeros((len(pcm), target), dtype=torch.float32)
+        soundtrack[:, lo:hi] = waveform[:, lo - offset : hi - offset]
+    return ReferenceClip(out[:kept], first.width, first.height, end - origin, soundtrack, rate)
 
 
 def _round_fraction(value: Fraction) -> int:
