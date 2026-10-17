@@ -580,7 +580,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.41.3"
+version = "1.41.4"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },
@@ -631,7 +631,7 @@ requires-dist = [
 
 [[package]]
 name = "minimax-h3-tools"
-version = "2.21.0"
+version = "2.22.1"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime" },
@@ -641,7 +641,7 @@ dependencies = [
     { name = "torch" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/minimax-h3-tools/2.21.0/minimax_h3_tools-2.21.0-py3-none-any.whl", hash = "sha256:f3e9f59b44900c26fe95b6700935734d378831bd616f6123e835b4d8019254ac" },
+    { url = "https://tensorhub.com/v1/index/fidika/minimax-h3-tools/2.22.1/minimax_h3_tools-2.22.1-py3-none-any.whl", hash = "sha256:61d6a8c0db765aab500b0b069934e1e584e5ffbcb5cdb3621d4cf2026746fae9" },
 ]
 
 [[package]]
