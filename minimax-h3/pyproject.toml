@@ -1,10 +1,10 @@
 [project]
 name = "minimax-h3"
-version = "1.38.2"
+version = "1.39.0"
 requires-python = ">=3.12"
 dependencies = [
     "birefnet>=0.1.0",
-    "character-describer>=0.2.0",
+    "character-describer>=0.6.1",
     "cozy-runtime[adapters,media]>=0.26.0",
     # MiniMax-H3 and Qwen-Image-2.1 share one Diffusers: the release qwen-image-2 pins.
     "diffusers==0.41.0",

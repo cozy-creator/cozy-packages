@@ -8,6 +8,8 @@ supplied character, as in long-form. The prompt is then compiled like one long-f
 segment. Descriptions without images are generated once with Qwen Image 2.1. The resolved
 assets are then handed to the H3 child, so preprocessing is not repeated. Send
 either `references` or attached `assets`; a references-only request sends `"assets": []`.
+`videos` takes up to three action clips beside `references`, as a long-form segment does
+([Action videos](LONG_FORM.md#action-videos)).
 
 ```json
 {

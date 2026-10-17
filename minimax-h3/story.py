@@ -33,6 +33,11 @@ _TOKEN = re.compile(r"<([^<>\n]+)>")
 _MEDIA = re.compile(r"\s*(picture|audio|video)\s+(\d+)\s*", re.IGNORECASE)
 _SHOT = re.compile(r"\[Shot\s*(\d+)\]", re.IGNORECASE)
 _CUT = re.compile(r"\bcut(?:s|ting)?\b", re.IGNORECASE)
+#: A clip's default retention: action guidance, never a subject.
+MOTION = (
+    "its movement, timing and choreography transfer to the subjects who perform them; "
+    "its people, faces, clothing and setting are not kept"
+)
 
 
 class StoryReference(msgspec.Struct):
@@ -218,22 +223,27 @@ def compile_segments(
     overall_soundscape: str = "",
     non_diegetic_music: str = "N/A",
     segment_music: Sequence[str | None] | None = None,
+    videos: Sequence[int] | None = None,
 ) -> list[SegmentCall]:
-    """Each child prompt uses its music override, inline score, or overall score."""
+    """Each child prompt uses its music override, inline score, or overall score.
+
+    `videos` counts each segment's own clips, `<Video 1>`… in that call, sent after its
+    references."""
     validate_references(references)
     shared = {
         "style": style.strip(),
         "overall_soundscape": overall_soundscape.strip(),
     }
     overrides = [None] * len(prompts) if segment_music is None else segment_music
+    clips = [0] * len(prompts) if videos is None else videos
     calls = []
-    for index, (text, override) in enumerate(zip(prompts, overrides, strict=True)):
+    for index, (text, override, count) in enumerate(zip(prompts, overrides, clips, strict=True)):
         music = non_diegetic_music if override is None else override
         text = _fill(
             text, {"non_diegetic_music": music.strip() or "N/A"},
             replace_music=override is not None,
         )
-        calls.append(_segment_call(text, references, shared, index))
+        calls.append(_segment_call(text, references, shared, index, count))
     return calls
 
 
@@ -256,11 +266,13 @@ def _segment_call(
     references: Sequence[StoryReference],
     shared: dict[str, str],
     index: int,
+    videos: int = 0,
 ) -> SegmentCall:
     """Scenes always; characters, and audio, only where the text names them.
 
     A voice (audio whose description names a character) follows its character. Global
     `<Picture N>`/`<Audio N>` tokens count as mentions and are renumbered for the child.
+    `<Video N>` names the call's own N-th clip and stays as written.
     """
     by_key = {name_key(ref.name): ref for ref in references}
     by_slot = _numbering(references)
@@ -275,10 +287,15 @@ def _segment_call(
         found = {ref.name: ref for token in _TOKEN.finditer(span) if (ref := lookup(token))}
         return list(found.values())
 
+    def clip(token: re.Match[str]) -> int:
+        media = _MEDIA.fullmatch(token.group(1))
+        number = int(media.group(2)) if media and media.group(1).lower() == "video" else 0
+        return number if 1 <= number <= videos else 0
+
     unmatched = dict.fromkeys(
         token.group(0)
         for token in _TOKEN.finditer(text)
-        if _MEDIA.fullmatch(token.group(1)) and lookup(token) is None
+        if _MEDIA.fullmatch(token.group(1)) and lookup(token) is None and not clip(token)
     )
     warnings = (
         [f"Segment {index + 1}: {', '.join(unmatched)} match no reference; left as written."]
@@ -295,7 +312,7 @@ def _segment_call(
         for voice in voices.get(ref.name, []):
             attached.setdefault(voice.name, voice)
     used = list(attached.values())
-    if all(ref.kind == "audio" for ref in used):
+    if not videos and all(ref.kind == "audio" for ref in used):
         # H3's ref2va needs an image: with no scene and no character named, send them all.
         used = list(references)
         warnings.append(
@@ -339,6 +356,17 @@ def _segment_call(
         if ref.description:
             definitions[-1] += f" {ref.description}"
         retention.append(f"{label}: {ref.retention_analysis or f'fully_preserved - {preserved}.'}")
+    _, start, end = _sections(text).get("retention_analysis", (0, 0, 0))
+    authored = {clip(token) for token in _TOKEN.finditer(text, start, end)}
+    retention += [
+        f"<Video {n}> (motion and choreography): attribute_transfer - {MOTION}."
+        for n in range(1, videos + 1) if n not in authored
+    ]
+    try:
+        validate_reference_policy([*("audio" if ref.kind == "audio" else "image" for ref in used),
+                                   *["video"] * videos])
+    except ValueError as exc:
+        raise InvalidRequest(f"segment {index + 1}: {exc}", code="reference_policy") from exc
     additions = {
         "subject_definitions": "\n".join(definitions),
         "retention_analysis": "\n".join(retention),

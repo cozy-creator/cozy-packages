@@ -150,17 +150,29 @@ DirectReferenceAssets = Annotated[
 ]
 
 
-def _label_references(references: Sequence[StoryReference]) -> list[tuple[StoryReference, str]]:
-    pictures = audios = 0
-    labeled: list[tuple[StoryReference, str]] = []
+#: One call's own clips for action guidance: `<Video 1>`… in order, after its references. Each
+#: is 2–15 s with square pixels, 15 s in all; a clip's sound also takes the next `<Audio N>`.
+ReferenceVideos = Annotated[
+    list[VideoAsset],
+    AssetBound(max_bytes=256 << 20, max_decoded_bytes=2 << 30),
+    msgspec.Meta(max_length=MAX_VIDEO_REFERENCES),
+]
+
+
+def _call_assets(
+    images: dict[str, ImageAsset | AudioAsset],
+    references: Sequence[StoryReference],
+    videos: Sequence[VideoAsset],
+) -> Assets[Mixed]:
+    """One H3 call's references, labeled per kind in packed order, then its own clips."""
+    counts = {"Picture": 0, "Audio": 0}
+    labeled: list[ImageAsset | AudioAsset | VideoAsset] = []
     for reference in references:
-        if reference.kind == "audio":
-            audios += 1
-            labeled.append((reference, f"Audio {audios}"))
-        else:
-            pictures += 1
-            labeled.append((reference, f"Picture {pictures}"))
-    return labeled
+        kind = "Audio" if reference.kind == "audio" else "Picture"
+        counts[kind] += 1
+        labeled.append(images[reference.name].with_label(f"{kind} {counts[kind]}"))
+    labeled += [video.with_label(f"Video {n}") for n, video in enumerate(videos, 1)]
+    return Assets[Mixed](labeled)
 
 
 KeyframeAssets = Annotated[Assets[Image], AssetLimits(images=2)]
@@ -275,9 +287,11 @@ class StandardRenderInput(RenderInput, kw_only=True):
 
 
 class ReferenceRenderInput(RenderInput, kw_only=True):
-    """Direct ref2va request using the same named references as ``long_form``."""
+    """Direct ref2va request using the same named references and `videos` as a ``long_form``
+    segment."""
 
     references: list[StoryReference] | None = None
+    videos: ReferenceVideos = []
     style: str = ""
     prepare_references: bool = False
     describe_references: bool = False
@@ -1013,6 +1027,11 @@ async def _direct_reference_assets(
     if payload.references is None:
         if not assets:
             raise InvalidRequest("ref2va requires references or assets", fields=["references"])
+        if payload.videos:
+            raise InvalidRequest(
+                "videos go with named references; with assets, attach the clips as assets",
+                fields=["videos", "assets"],
+            )
         return payload, assets, [], []
     if assets:
         raise InvalidRequest("send references or assets, not both", fields=["references", "assets"])
@@ -1030,11 +1049,13 @@ async def _direct_reference_assets(
         prepare_characters=payload.prepare_references,
         describe_characters=payload.describe_references,
     )
-    call = compile_segments([payload.prompt], references, style=payload.style)[0]
+    call = compile_segments(
+        [payload.prompt], references, style=payload.style, videos=[len(payload.videos)]
+    )[0]
     for warning in call.warnings:
         tel.log("h3 reference prompt", level="warning", warning=warning)
-    labeled = Assets[Mixed]([images[ref.name].with_label(label) for ref, label in _label_references(call.references)])
-    return replace(payload, prompt=call.prompt), labeled, shown, warnings
+    labeled = _call_assets(images, call.references, payload.videos)
+    return replace(payload, prompt=call.prompt), labeled, shown, warnings + call.warnings
 
 
 async def ref2va(ctx: Context, payload: ReferenceStandardRenderInput, out: Outputs, tel: Telemetry,
@@ -1253,9 +1274,10 @@ ContextFrames = Literal[0, 22, 39, 56]
 
 
 class StorySegment(ClipInput, kw_only=True):
-    """One story segment with an optional music override."""
+    """One story segment with an optional music override and its own action clips."""
 
     non_diegetic_music: str | None = None
+    videos: ReferenceVideos = []
 
 
 class LongFormSegment(StorySegment, kw_only=True):
@@ -1326,14 +1348,6 @@ def segment_clock(durations: Sequence[int]) -> tuple[list[int], int]:
     return starts, total
 
 
-CutAssets = Annotated[
-    Assets[Mixed],
-    AssetLimits(images=MAX_IMAGE_REFERENCES, audio=MAX_AUDIO_REFERENCES, total=MAX_REFERENCES),
-    ImagePreparation(max_edge=8192, max_pixels=16_777_216),
-    msgspec.Meta(min_length=1),
-]
-
-
 class CutInput(ClipInput, kw_only=True):
     steps: int
     turbo: bool
@@ -1355,7 +1369,7 @@ def _sampling(payload: CutInput | MotionInput, turbo_lora: H3TurboLoRA) -> H3Tur
 def _render_cut(
     ctx: Context,
     payload: CutInput,
-    assets: CutAssets,
+    assets: ReferenceAssets,
     model: H3Model,
     out: Outputs,
     tel: Telemetry,
@@ -1394,7 +1408,7 @@ async def cut_segment(
     ctx: Context,
     *,
     payload: CutInput,
-    assets: CutAssets,
+    assets: ReferenceAssets,
     base_model: H3TurboBase,
     turbo_lora: H3TurboLoRA,
     out: Outputs,
@@ -1449,7 +1463,7 @@ class MotionOutput(SegmentOutput):
 def _render_motion(
     ctx: Context,
     payload: MotionInput,
-    assets: CutAssets,
+    assets: ReferenceAssets,
     model: H3Model,
     out: Outputs,
     tel: Telemetry,
@@ -1525,7 +1539,7 @@ async def motion_segment(
     ctx: Context,
     *,
     payload: MotionInput,
-    assets: CutAssets,
+    assets: ReferenceAssets,
     base_model: H3TurboBase,
     turbo_lora: H3TurboLoRA,
     out: Outputs,
@@ -1576,6 +1590,7 @@ def segment_calls(payload: LongFormInput | LongFormCutsInput) -> list[SegmentCal
         overall_soundscape=payload.overall_soundscape,
         non_diegetic_music=payload.non_diegetic_music,
         segment_music=[shot.non_diegetic_music for shot in payload.segments],
+        videos=[len(shot.videos) for shot in payload.segments],
     )
 
 
@@ -1723,12 +1738,7 @@ async def long_form_cuts(
                 selected = calls[index].references
                 prompt = calls[index].prompt
                 seed = shot_seed(shot, ctx.request_id, index)
-                assets = Assets[Mixed](
-                    [
-                        images[ref.name].with_label(label)
-                        for ref, label in _label_references(selected)
-                    ]
-                )
+                assets = _call_assets(images, selected, shot.videos)
                 log_prompt(tel, "h3 segment prompt", prompt, segment=index + 1,
                            references=", ".join(ref.name for ref in selected))
                 try:
@@ -1874,12 +1884,7 @@ async def long_form(
                             (completed_work + render_work[index]) / total_work,
                         ),
                     ):
-                        assets = Assets[Mixed](
-                            [
-                                images[ref.name].with_label(label)
-                                for ref, label in _label_references(calls[index].references)
-                            ]
-                        )
+                        assets = _call_assets(images, calls[index].references, shot.videos)
                         log_prompt(tel, "h3 segment prompt", calls[index].prompt, segment=index + 1,
                                    references=", ".join(ref.name for ref in calls[index].references))
                         child_payload = MotionInput(
