@@ -85,6 +85,7 @@ from .continuation import (
     align_context_rows,
     export_context,
 )
+from .reference_rows import ClipRows, motion_size, public_video, shrink_videos
 from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK, TurboOverlay, TurboSchedule
 from .vae_tiles import TileBatchedVideoVAE, encode_condition
 
@@ -636,8 +637,9 @@ CANVAS = (32, 768, 768 * 1344)
 
 
 def reference_video_vision_tokens(width: int, height: int, duration: Fraction) -> int:
-    """Exact official 2-fps, pair-merged vision demand after the target canvas rule."""
-    canvas_height, canvas_width = (int(value) for value in resolve_canvas_size(width, height, *CANVAS))
+    """Exact 2-fps, pair-merged vision demand at the clip's `motion_size` of its canvas."""
+    canvas = (int(value) for value in resolve_canvas_size(width, height, *CANVAS))
+    canvas_height, canvas_width = motion_size(*canvas)
     frames_at_24fps = _round_fraction(duration * FPS)
     sampled_frames = (frames_at_24fps + 11) // 12
     temporal_blocks = (sampled_frames + 1) // 2
@@ -973,6 +975,7 @@ class OfficialH3Pipeline:
             references=list(references),
             image_short_edges=tuple(reference_image_short_edges),
         )
+        state.set("normalized_references", shrink_videos(state.normalized_references))
         if context is not None and context.canvas not in (None, (state.height, state.width)):
             raise InvalidRequest(
                 "continuation canvas differs from this render", code="h3_continuation"
@@ -1031,7 +1034,8 @@ class OfficialH3Pipeline:
         return state
 
     def expected_live_tokens(self, task: Task, state: Any) -> int | None:
-        """The packed length this request's DiT will attend over, read at intake (h3a-087).
+        """The packed length this request's sparse steps will attend over, read at intake
+        (h3a-087): a clip's latent rows have left the sequence by then (`ClipRows.release`).
 
         The workflow's own text block tokenizes the presentation beside a conditioner that
         only counts (`PresentationLength`), and its own layout block packs it, all on `meta`.
@@ -1053,7 +1057,7 @@ class OfficialH3Pipeline:
             references = list(scratch.get("normalized_references"))
             if any(reference.has_audio for reference in references):
                 return None
-            video, audio = [], []
+            video, audio, released = [], [], 0
             for reference in references:
                 if reference.kind == "image":
                     width, height = reference.image.size
@@ -1065,6 +1069,12 @@ class OfficialH3Pipeline:
                         + LATENTS_PER_CHUNK
                     )
                     frames = video_latent_num_frames(snapped, FRAMES_PER_CHUNK, LATENTS_PER_CHUNK)
+                    if public_video(reference):
+                        released += (
+                            frames
+                            * (height // VAE_SPATIAL_RATIO // PATCH_SIZE[1])
+                            * (width // VAE_SPATIAL_RATIO // PATCH_SIZE[2])
+                        )
                 video.append(
                     torch.empty(
                         (1, 1, frames, height // VAE_SPATIAL_RATIO, width // VAE_SPATIAL_RATIO),
@@ -1086,7 +1096,8 @@ class OfficialH3Pipeline:
         blocks["denoise.prepare_layout"](
             _ScopedPipeline(pipe, shell, overrides={"max_duration": _CEILING_S}), scratch
         )
-        return int(scratch.get("token_tags").numel())
+        tokens = int(scratch.get("token_tags").numel())
+        return tokens - released if _TRUNK[task] == "ref2va" else tokens
 
     def _expect(self, task: Task, state: Any) -> None:
         """Tell the runtime this request's attention length while conditioning runs, so a
@@ -1373,8 +1384,15 @@ class OfficialH3Pipeline:
         facts = ScheduleFacts.of(plan, schedule)
         loop = blocks["denoise.denoise"]
         block_state = loop.get_block_state(state)
+        clips = None
+        if _TRUNK[task] == "ref2va":
+            references, latents = state.normalized_references, state.condition_latents
+            clips = ClipRows(block_state, references, latents, scoped.patch_size)
+            clips.thin(block_state)
         for index, timestep in enumerate(block_state.timesteps):
             cancel()
+            if clips is not None and index == sol_dense_steps:
+                clips.release(block_state)
             with attention_scope(
                 _attention_layout(block_state, index, sol_dense_steps=sol_dense_steps)
             ):
