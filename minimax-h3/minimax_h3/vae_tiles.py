@@ -177,7 +177,37 @@ class TileBatchedVideoVAE(AutoencoderKLMiniMaxH3):  # type: ignore[misc]
         return self._stitch_tiles(rows, y_overlaps, x_overlaps)
 
     def _decode_tiles(self, batch: torch.Tensor) -> torch.Tensor:
-        return self.decoder(self.post_quant_conv(batch))
+        """Upstream's ViT decoder over a batch of tiles, block by block: every tile passes a
+        block before any tile enters the next, and `split` cuts each block's rows to the room.
+        Cutting the whole decoder instead re-read all 36 blocks once per piece: on a 24 GB
+        RTX 4090 a chunk ran in 10 pieces at 3.2-3.5 s against 2.4 s with the weights resident
+        (runs 11220, 11228); block by block it holds 2.36-2.46 s (11325, 11335). The tiles share
+        one geometry, so one rotary table serves them all; every op is upstream's `forward`:
+        uncut, the two orders are bit-identical on the release weights."""
+        decoder = self.decoder
+        x = self.post_quant_conv(batch)
+        tiles, channels, frames, height, width = x.shape
+        hidden = decoder.proj_in(
+            x.permute(0, 2, 3, 4, 1).reshape(tiles, frames * height * width, channels)
+        )
+        patches = hidden.shape[1]
+        registers = decoder.register_tokens.expand(tiles, -1, -1).to(hidden.dtype)
+        hidden = torch.cat([hidden, registers, torch.zeros_like(hidden[:, :1, :])], dim=1)
+        grids = [
+            2.0 * (torch.arange(0.5, size, dtype=torch.float32, device=hidden.device) / size) - 1.0
+            for size in (frames, height, width)
+        ]
+        positions = torch.stack(torch.meshgrid(*grids, indexing="ij"), dim=-1).flatten(0, 2)[None]
+        suffix = positions.new_zeros((1, decoder.num_register_tokens + 1, 3))
+        rotary = decoder.rope(torch.cat([positions, suffix], dim=1))
+        for block in decoder.transformer_blocks:
+            hidden = split(_BlockRows(block, rotary), hidden, Cut(0))
+        hidden = decoder.norm_out(hidden).to(get_parameter_dtype(decoder.proj_out))
+        hidden = decoder.proj_out(hidden)[:, :patches, :]
+        p, pt = decoder.patch_size, decoder.patch_size_t
+        hidden = hidden.view(tiles, frames, height, width, decoder.out_channels, pt, p, p)
+        hidden = hidden.permute(0, 4, 1, 5, 2, 6, 3, 7).contiguous()
+        return hidden.reshape(tiles, decoder.out_channels, frames * pt, height * p, width * p)
 
     def encode_condition(
         self,
@@ -189,6 +219,19 @@ class TileBatchedVideoVAE(AutoencoderKLMiniMaxH3):  # type: ignore[misc]
         """`encode_condition` as this component's method, so `author.spread` can run it on
         another rank of the group."""
         return encode_condition(self, pixels, pixel_mean, pixel_std, seed)
+
+
+class _BlockRows:
+    """One decoder block over a window of tile rows, with the tiles' shared rotary table."""
+
+    __slots__ = ("block", "rotary")
+
+    def __init__(self, block: torch.nn.Module, rotary: tuple[torch.Tensor, torch.Tensor]) -> None:
+        self.block = block
+        self.rotary = rotary
+
+    def __call__(self, hidden: torch.Tensor) -> torch.Tensor:
+        return self.block(hidden, self.rotary)
 
 
 def encode_condition(
