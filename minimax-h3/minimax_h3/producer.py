@@ -442,8 +442,16 @@ PRODUCERS = {
         _register(FAST, "kitchen-sol"),
     )
 }
+def validate_sparse(module: object) -> None:
+    # Runtime binds Sol's dense reference only while some site selects `sol-attn` itself, so
+    # transformer_blocks.0 (dense in every step) keeps it (`retain_rotary` marks it).
+    if getattr(module, "_h3_sol_anchor", False):
+        raise ValueError("transformer_blocks.0 keeps sol-attn: it binds Sol's dense reference")
+    validate(module)
+
+
 register_attention(
-    AttentionProducer(SPARSE, "sol-attn", produce_sparse, validate, state=SparseState)
+    AttentionProducer(SPARSE, "sol-attn", produce_sparse, validate_sparse, state=SparseState)
 )
 _BACKENDS = {"_cozy_" + name.replace("-", "_"): name for name in PRODUCERS}
 
@@ -480,6 +488,7 @@ def retain_rotary(component: object) -> None:
     execution plan, so it precedes the Ulysses split hooks Runtime installs later."""
     if not isinstance(component, MiniMaxH3Transformer3DModel):
         return
+    component.transformer_blocks[0].attn._h3_sol_anchor = True
     registry = HookRegistry.check_if_exists_or_initialize(component.rope)
     if registry.get_hook(_ROTARY_HOOK) is not None:
         return
