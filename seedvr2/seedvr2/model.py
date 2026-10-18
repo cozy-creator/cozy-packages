@@ -179,8 +179,10 @@ def _runner(graph: Graph) -> Any:
 
 def _vae(graph: Graph) -> Any:
     vae = cast(Any, graph.components["vae"])
-    # One latent frame a step of the causal scan, its finest; the Runtime cuts each op's rows.
     vae.set_causal_slicing(split_size=4, memory_device="same")
+    # TODO(cr-203): goes once the Runtime bands a conv or group norm before it runs out (OOM-first
+    # banding is 46% slower at 1080p on 8 GB: runs 11049, 11055).
+    vae.set_memory_limit(conv_max_mem=0.5, norm_max_mem=0.5)
     return vae
 
 

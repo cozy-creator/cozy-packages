@@ -13,9 +13,11 @@
 # // limitations under the License.
 
 import math
+from contextlib import contextmanager
 from typing import List, Optional, Union
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from diffusers.models.normalization import RMSNorm
 from einops import rearrange
 from torch import Tensor, nn
@@ -28,8 +30,24 @@ from seedvr2.upstream.common.distributed.advanced import (
     get_sequence_parallel_rank,
     get_sequence_parallel_world_size,
 )
+from seedvr2.upstream.common.utils import safe_pad_operation
+from seedvr2.upstream.common.logger import get_logger
 from seedvr2.upstream.models.video_vae_v3.modules.context_parallel_lib import cache_send_recv, get_cache_size
+from seedvr2.upstream.models.video_vae_v3.modules.global_config import get_norm_limit
 from seedvr2.upstream.models.video_vae_v3.modules.types import MemoryState, _inflation_mode_t, _memory_device_t
+
+logger = get_logger(__name__)
+
+
+@contextmanager
+def ignore_padding(model):
+    orig_padding = model.padding
+    model.padding = (0, 0, 0)
+    try:
+        yield
+    finally:
+        model.padding = orig_padding
+
 
 class InflatedCausalConv3d(Conv3d):
     def __init__(
@@ -45,15 +63,104 @@ class InflatedCausalConv3d(Conv3d):
         self.temporal_padding = self.padding[0]
         self.memory_device = memory_device
         self.padding = (0, *self.padding[1:])  # Remove temporal pad to keep causal.
+        self.memory_limit = float("inf")
+
+    def set_memory_limit(self, value: float):
+        self.memory_limit = value
 
     def set_memory_device(self, memory_device: _memory_device_t):
         self.memory_device = memory_device
 
-    def memory_limit_conv(self, x, *, padding=None, prev_cache=None):
-        """The convolution over `x` after the frames cached from the previous slice."""
+    def memory_limit_conv(
+        self,
+        x,
+        *,
+        split_dim=3,
+        padding=(0, 0, 0, 0, 0, 0),
+        prev_cache=None,
+    ):
+        # Compatible with no limit.
+        if math.isinf(self.memory_limit):
+            if prev_cache is not None:
+                x = torch.cat([prev_cache, x], dim=split_dim - 1)
+            return super().forward(x)
+
+        # Compute tensor shape after concat & padding.
+        shape = torch.tensor(x.size())
         if prev_cache is not None:
-            x = torch.cat([prev_cache, x], dim=2)
-        return super().forward(x)
+            shape[split_dim - 1] += prev_cache.size(split_dim - 1)
+        shape[-3:] += torch.tensor(padding).view(3, 2).sum(-1).flip(0)
+        memory_occupy = shape.prod() * x.element_size() / 1024**3  # GiB
+        logger.debug(
+            f"x:{(shape, x.dtype)} {memory_occupy:.3f}GiB "
+            f"prev_cache:{prev_cache.shape if prev_cache is not None else None}"
+        )
+        if memory_occupy < self.memory_limit or split_dim == x.ndim:
+            if prev_cache is not None:
+                x = torch.cat([prev_cache, x], dim=split_dim - 1)
+            x = safe_pad_operation(x, padding, value=0.0)
+            with ignore_padding(self):
+                return super().forward(x)
+
+        logger.debug(
+            f"Exceed memory limit {memory_occupy} > {self.memory_limit}, split dim {split_dim}"
+        )
+
+        # Split input (& prev_cache).
+        num_splits = math.ceil(memory_occupy / self.memory_limit)
+        size_per_split = x.size(split_dim) // num_splits
+        split_sizes = [size_per_split] * (num_splits - 1)
+        split_sizes += [x.size(split_dim) - sum(split_sizes)]
+
+        x = list(x.split(split_sizes, dim=split_dim))
+        logger.debug(f"Conv inputs: {[inp.size() for inp in x]} {x[0].dtype}")
+        if prev_cache is not None:
+            prev_cache = list(prev_cache.split(split_sizes, dim=split_dim))
+
+        # Loop Fwd.
+        cache = None
+        for idx in range(len(x)):
+            # Concat prev cache from last dim
+            if prev_cache is not None:
+                x[idx] = torch.cat([prev_cache[idx], x[idx]], dim=split_dim - 1)
+
+            # Get padding pattern.
+            lpad_dim = (x[idx].ndim - split_dim - 1) * 2
+            rpad_dim = lpad_dim + 1
+            padding = list(padding)
+            padding[lpad_dim] = self.padding[split_dim - 2] if idx == 0 else 0
+            padding[rpad_dim] = self.padding[split_dim - 2] if idx == len(x) - 1 else 0
+            pad_len = padding[lpad_dim] + padding[rpad_dim]
+            padding = tuple(padding)
+
+            # Prepare cache for next slice (this dim).
+            next_cache = None
+            cache_len = cache.size(split_dim) if cache is not None else 0
+            next_catch_size = get_cache_size(
+                conv_module=self,
+                input_len=x[idx].size(split_dim) + cache_len,
+                pad_len=pad_len,
+                dim=split_dim - 2,
+            )
+            if next_catch_size != 0:
+                assert next_catch_size <= x[idx].size(split_dim)
+                next_cache = (
+                    x[idx].transpose(0, split_dim)[-next_catch_size:].transpose(0, split_dim)
+                )
+
+            # Recursive.
+            x[idx] = self.memory_limit_conv(
+                x[idx],
+                split_dim=split_dim + 1,
+                padding=padding,
+                prev_cache=cache,
+            )
+
+            # Update cache.
+            cache = next_cache
+
+        logger.debug(f"Conv outputs, concat(dim={split_dim}): {[d.size() for d in x]}")
+        return torch.cat(x, split_dim)
 
     def forward(
         self,
@@ -63,7 +170,11 @@ class InflatedCausalConv3d(Conv3d):
         assert memory_state != MemoryState.UNSET
         if memory_state != MemoryState.ACTIVE:
             self.memory = None
-        if torch.is_tensor(input) and get_sequence_parallel_group() is None:
+        if (
+            math.isinf(self.memory_limit)
+            and torch.is_tensor(input)
+            and get_sequence_parallel_group() is None
+        ):
             return self.basic_forward(input, memory_state)
         return self.slicing_forward(input, memory_state)
 
@@ -235,7 +346,22 @@ def causal_norm_wrapper(norm_layer: nn.Module, x: torch.Tensor) -> torch.Tensor:
         if x.ndim == 5:
             t = x.size(2)
             x = rearrange(x, "b c t h w -> (b t) c h w")
-            x = norm_layer(x)
+            memory_occupy = x.numel() * x.element_size() / 1024**3
+            if isinstance(norm_layer, nn.GroupNorm) and memory_occupy > get_norm_limit():
+                num_chunks = min(4 if x.element_size() == 2 else 2, norm_layer.num_groups)
+                logger.debug(f"large tensor {x.shape}, norm in {num_chunks} chunks")
+                assert norm_layer.num_groups % num_chunks == 0
+                num_groups_per_chunk = norm_layer.num_groups // num_chunks
+
+                x = list(x.chunk(num_chunks, dim=1))
+                weights = norm_layer.weight.chunk(num_chunks, dim=0)
+                biases = norm_layer.bias.chunk(num_chunks, dim=0)
+                for i, (w, b) in enumerate(zip(weights, biases)):
+                    x[i] = F.group_norm(x[i], num_groups_per_chunk, w, b, norm_layer.eps)
+                    x[i] = x[i].to(input_dtype)
+                x = torch.cat(x, dim=1)
+            else:
+                x = norm_layer(x)
             x = rearrange(x, "(b t) c h w -> b c t h w", t=t)
             return x.to(input_dtype)
     raise NotImplementedError

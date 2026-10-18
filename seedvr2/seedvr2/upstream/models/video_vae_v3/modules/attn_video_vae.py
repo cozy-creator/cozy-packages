@@ -42,6 +42,7 @@ from seedvr2.upstream.models.video_vae_v3.modules.context_parallel_lib import (
     causal_conv_gather_outputs,
     causal_conv_slice_inputs,
 )
+from seedvr2.upstream.models.video_vae_v3.modules.global_config import set_norm_limit
 from seedvr2.upstream.models.video_vae_v3.modules.types import (
     CausalAutoencoderOutput,
     CausalDecoderOutput,
@@ -1334,3 +1335,9 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
         for module in self.modules():
             if isinstance(module, InflatedCausalConv3d):
                 module.set_memory_device(memory_device)
+
+    def set_memory_limit(self, conv_max_mem: Optional[float], norm_max_mem: Optional[float]):
+        set_norm_limit(norm_max_mem)
+        for m in self.modules():
+            if isinstance(m, InflatedCausalConv3d):
+                m.set_memory_limit(conv_max_mem if conv_max_mem is not None else float("inf"))
