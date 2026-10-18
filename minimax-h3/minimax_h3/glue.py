@@ -632,8 +632,9 @@ class FusedSwiGLU(SwiGLU):  # type: ignore[misc]
         return swiglu(self._glue, self.proj(hidden_states), fp8=self._fusion_fp8)
 
 
-class FusedMiniMaxH3AttnProcessor(MiniMaxH3AttnProcessor):  # type: ignore[misc]
-    _glue: Launch
+class H3AttnProcessor(MiniMaxH3AttnProcessor):  # type: ignore[misc]
+    """Diffusers' H3 attention with its Q, K and V freed before the out projection: at 15 s
+    the three take 4.8 GB beside it (run 11340, 8 GB)."""
 
     def __call__(
         self,
@@ -642,31 +643,47 @@ class FusedMiniMaxH3AttnProcessor(MiniMaxH3AttnProcessor):  # type: ignore[misc]
         rotary_emb: tuple[Any, Any] | None = None,
         attention_mask: Any | None = None,
     ) -> Any:
+        query, key, value = self.qkv(attn, hidden_states, rotary_emb)
+        dtype = query.dtype
+        hidden_states = dispatch_attention_fn(
+            query,
+            key,
+            value,
+            attn_mask=attention_mask,
+            dropout_p=0.0,
+            is_causal=False,
+            backend=self._attention_backend,
+            parallel_config=self._parallel_config,
+        )
+        del query, key, value
+        return attn.to_out[1](attn.to_out[0](hidden_states.flatten(2, 3).to(dtype)))
+
+    def qkv(self, attn: Any, hidden_states: Any, rotary_emb: tuple[Any, Any] | None) -> Any:
+        if attn.fused_projections:
+            query, key, value = attn.to_qkv(hidden_states).chunk(3, dim=-1)
+        else:
+            query, key = attn.to_q(hidden_states), attn.to_k(hidden_states)
+            value = attn.to_v(hidden_states)
+        query, key, value = (t.unflatten(-1, (attn.heads, -1)) for t in (query, key, value))
+        query, key = attn.norm_q(query), attn.norm_k(key)
+        if rotary_emb is not None:
+            query, key = _apply_rotary_emb(query, *rotary_emb), _apply_rotary_emb(key, *rotary_emb)
+        return query, key, value
+
+
+class FusedMiniMaxH3AttnProcessor(H3AttnProcessor):
+    _glue: Launch
+
+    def qkv(self, attn: Any, hidden_states: Any, rotary_emb: tuple[Any, Any] | None) -> Any:
         query = attn.to_q(hidden_states).unflatten(-1, (attn.heads, -1))
         key = attn.to_k(hidden_states).unflatten(-1, (attn.heads, -1))
         value = attn.to_v(hidden_states).unflatten(-1, (attn.heads, -1))
         if rotary_emb is None:
-            query, key = attn.norm_q(query), attn.norm_k(key)
-        else:
-            cos, sin = rotary_emb
-            query = rmsnorm_rope(self._glue, query, attn.norm_q.weight, cos, sin, attn.norm_q.eps)
-            key = rmsnorm_rope(self._glue, key, attn.norm_k.weight, cos, sin, attn.norm_k.eps)
-        hidden_states, dtype = (
-            dispatch_attention_fn(
-                query,
-                key,
-                value,
-                attn_mask=attention_mask,
-                dropout_p=0.0,
-                is_causal=False,
-                backend=self._attention_backend,
-                parallel_config=self._parallel_config,
-            ),
-            query.dtype,
-        )
-        del query, key, value  # not live through `to_out` (memory-varena D10)
-        hidden_states = hidden_states.flatten(2, 3).to(dtype)
-        return attn.to_out[1](attn.to_out[0](hidden_states))
+            return attn.norm_q(query), attn.norm_k(key), value
+        cos, sin = rotary_emb
+        query = rmsnorm_rope(self._glue, query, attn.norm_q.weight, cos, sin, attn.norm_q.eps)
+        key = rmsnorm_rope(self._glue, key, attn.norm_k.weight, cos, sin, attn.norm_k.eps)
+        return query, key, value
 
 
 class FusedMiniMaxH3TransformerBlock(MiniMaxH3TransformerBlock):  # type: ignore[misc]
@@ -864,7 +881,7 @@ def _validate_transformer(transformer: Any, root: str) -> None:
         _shape(
             type(block) is MiniMaxH3TransformerBlock
             and _plain(block)
-            and type(attn.processor) is MiniMaxH3AttnProcessor
+            and type(attn.processor) in (MiniMaxH3AttnProcessor, H3AttnProcessor)
             and not attn.fused_projections
             and type(ff) is FeedForward
             and _plain(ff)
@@ -938,6 +955,15 @@ def _install_transformer(
     return substitutions, fp8_sites
 
 
+def _release_qkv(attn: Any) -> None:
+    current = attn.processor
+    if type(current) is MiniMaxH3AttnProcessor:
+        processor = H3AttnProcessor()
+        processor._attention_backend = current._attention_backend
+        processor._parallel_config = current._parallel_config
+        attn.set_processor(processor)
+
+
 def _transformers(pipe: Any) -> Iterator[tuple[str, Any]]:
     """Every MiniMax-H3 transformer the pipeline holds, by component name."""
     seen: set[int] = set()
@@ -954,7 +980,11 @@ def _eager(model: object, code: str, reason: str) -> str:
 
 def install(model: object, pipe: Any, plan: Plan) -> str:
     """Install the fused glue on every H3 transformer `pipe` holds; the plan's identity, or ""
-    when eager serves (a `NOT_INSTALLABLE` code, reported). Waits for the kernels' build."""
+    when eager serves (a `NOT_INSTALLABLE` code, reported). Waits for the kernels' build.
+    Fused or eager, every block's attention runs `H3AttnProcessor`."""
+    for _, transformer in _transformers(pipe):
+        for block in transformer.transformer_blocks:
+            _release_qkv(block.attn)
     device = torch.device(plan.device)
     if device.type != "cuda":
         return _eager(model, "fusion_device_incapable", f"fused glue serves CUDA, not {device}")

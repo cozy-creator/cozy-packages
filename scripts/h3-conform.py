@@ -87,6 +87,7 @@ from diffusers.modular_pipelines.minimax_h3.denoise import (
 )
 from PIL import Image as PILImage
 from torch.nn import functional as F
+from torch.multiprocessing.reductions import StorageWeakRef
 from torch.utils._python_dispatch import TorchDispatchMode
 from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
@@ -157,7 +158,10 @@ from minimax_h3.turbo import (  # noqa: E402
     _LoRAHook,
 )
 from minimax_h3.vae_tiles import TileBatchedVideoVAE  # noqa: E402
-from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3Attention  # noqa: E402
+from diffusers.models.transformers.transformer_minimax_h3 import (  # noqa: E402
+    MiniMaxH3Attention,
+    MiniMaxH3AttnProcessor,
+)
 from minimax_h3 import glue, producer, vae_glue  # noqa: E402
 from cozy_runtime.author.kernels import Plan, PreQuantized  # noqa: E402
 from h3_tables.lanes import NORMALISED_COMPONENTS, decode_operand  # noqa: E402
@@ -4584,6 +4588,47 @@ def arm_glue() -> None:
         ("", "fusion_device_incapable", "MiniMaxH3TransformerBlock"),
     )
     check("the plan's identity is stable", glue.identity(), glue.identity())
+    check(
+        "eager too, every block's attention is H3's, the producer's dense call with it",
+        [type(b.attn.processor) for b in dit.transformer_blocks],
+        [glue.H3AttnProcessor] * len(dit.transformer_blocks),
+    )
+    producer.validate(dit.transformer_blocks[0].attn)
+    _released_qkv(dit.transformer_blocks[0].attn)
+
+
+def _released_qkv(attn: Any) -> None:
+    """H3's processor computes Diffusers' attention, its Q, K and V freed before `to_out`."""
+    x = torch.randn(1, 37, 256, dtype=torch.bfloat16)
+    angles = torch.randn(37, 96)
+    rope = (angles.cos(), angles.sin())
+
+    def run(processor: Any) -> tuple[Any, int, list[bool]]:
+        operands: list[Any] = []
+        live: list[bool] = []
+
+        class Operands(TorchDispatchMode):  # type: ignore[misc]
+            def __torch_dispatch__(
+                self, func: Any, types: Any, args: Any = (), kwargs: Any = None
+            ) -> Any:
+                if "scaled_dot_product" in str(func):
+                    operands.extend(StorageWeakRef(t.untyped_storage()) for t in args[:3])
+                return func(*args, **(kwargs or {}))
+
+        handle = attn.to_out[0].register_forward_pre_hook(
+            lambda *_: live.append(any(not ref.expired() for ref in operands))
+        )
+        try:
+            with torch.inference_mode(), Operands():
+                return processor(attn, x, rope), len(operands), live
+        finally:
+            handle.remove()
+
+    stock, _, held = run(MiniMaxH3AttnProcessor())
+    ours, count, live = run(attn.processor)
+    check("H3's attention is Diffusers' to the bit", torch.equal(ours, stock), True)
+    check("Q, K and V are freed before the out projection", (count, live), (3, [False]))
+    red("Diffusers' processor holds them through it", held, [False])
 
 
 def arm_vae_glue() -> None:

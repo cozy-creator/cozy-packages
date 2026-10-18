@@ -39,7 +39,7 @@ from cozy_runtime.author import (
 )
 from cozy_runtime.author.kernels import ROWWISE_FP8, PreQuantized
 
-from .glue import FusedMiniMaxH3AttnProcessor
+from .glue import FusedMiniMaxH3AttnProcessor, H3AttnProcessor
 from .turbo import _LoRAHook
 
 FAST = "kitchen-sol-producer-fast-shared-qkv"
@@ -348,7 +348,7 @@ def validate(module: object) -> None:
     if module.head_dim != 128 or module.to_q.out_features != module.heads * 128:
         raise ValueError("Kitchen producer requires H3 head dimension128")
     original = getattr(module.processor, "original", module.processor)
-    if type(original) not in (MiniMaxH3AttnProcessor, FusedMiniMaxH3AttnProcessor):
+    if type(original) not in (MiniMaxH3AttnProcessor, H3AttnProcessor, FusedMiniMaxH3AttnProcessor):
         raise ValueError("Kitchen producer does not replace an unknown H3 processor")
     for projection in (module.to_q, module.to_k, module.to_v):
         # Weight-plane hooks are Runtime custody; author forward hooks must support replay and
