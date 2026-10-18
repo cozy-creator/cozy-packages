@@ -1,7 +1,8 @@
 #!/usr/bin/env python
-"""SDXL's HiDiffusion UNet on the CPU, tiny but keyed as SDXL: a call at one step gives the
-same output and the same RAU-Net switch however often it runs and whatever the RNG did before
-it (the Runtime's out-of-memory recovery runs a call again), and the switch follows the step.
+"""SDXL's HiDiffusion UNet on the CPU, tiny but keyed as SDXL: a UNet call at one step, and one
+RAU-Net block within it, gives the same output and the same switch however often it runs and
+whatever the RNG did before it (the Runtime's out-of-memory recovery runs a call or a block
+again), and the switch follows the step.
 
 Run with the package's own interpreter.
 """
@@ -51,6 +52,15 @@ def main() -> None:
         out = unet(x, 999 - 99 * step, encoder_hidden_states=text, added_cond_kwargs=conditions)
         return out.sample, unet.info["upsample_size"]
 
+    # One RAU-Net block, run again inside the step with the inputs the UNet gave it.
+    block = next(m for m in unet.modules() if type(m).__name__ == "cross_attn_down_block")
+    seen: dict[str, Any] = {}
+    block.register_forward_pre_hook(lambda _, a, k: seen.update(a=a, k=k), with_kwargs=True)
+
+    def rerun() -> tuple[torch.Tensor, Any]:
+        unet.info["upsample_size"] = None
+        return block(*seen["a"], **seen["k"])[0], unet.info["upsample_size"]
+
     switches = []
     with torch.inference_mode():
         for step in range(STEPS):
@@ -58,6 +68,10 @@ def main() -> None:
             again, switch_again = call(step, 1000 + step)
             assert torch.equal(first, again), f"step {step}: a call run again differs"
             assert switch == switch_again, f"step {step}: the RAU-Net switch moved"
+            once, block_switch = rerun()
+            twice, block_switch_again = rerun()
+            assert torch.equal(once, twice), f"step {step}: a block run again differs"
+            assert block_switch == block_switch_again == switch, f"step {step}: its switch moved"
             switches.append(switch)
     assert any(switches) and not all(switches), f"the switch never moved: {switches}"
     print("sdxl model proof: a HiDiffusion call at a step runs the same however often it runs")
