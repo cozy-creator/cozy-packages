@@ -1291,9 +1291,9 @@ class OfficialH3Pipeline:
         attention: SparseAttention | None = None,
     ) -> ScheduleFacts:
         _validate_sol_dense_steps(sol_dense_steps)
-        plan = attention or SparseAttention()
+        sparse = attention or SparseAttention()
         # h3a-095: the attention's dense steps may differ; reference clips still leave at the plan's.
-        dense_steps = sol_dense_steps if plan.dense_steps is None else plan.dense_steps
+        dense_steps = sol_dense_steps if sparse.dense_steps is None else sparse.dense_steps
         _validate_sol_dense_steps(dense_steps)
         tilings: dict[tuple[int, int], Tiling] = {}
         _settle_intake(state)
@@ -1342,7 +1342,7 @@ class OfficialH3Pipeline:
                 clips.release(block_state)
             layout = _attention_layout(block_state, index, sol_dense_steps=dense_steps)
             tiles = None
-            if plan.method == "vsa":
+            if sparse.method == "vsa":
                 shape = (layout.live_tokens, layout.protected_prefix)
                 if shape not in tilings:
                     _, ph, pw = scoped.patch_size
@@ -1353,7 +1353,7 @@ class OfficialH3Pipeline:
                     )
                     tilings[shape] = tiling(block_state, layout, grid)
                 tiles = tilings[shape]
-            with attention_scope(layout), serving(plan, tiles):
+            with attention_scope(layout), serving(sparse, tiles):
                 _, block_state = loop.loop_step(scoped, block_state, i=index, t=timestep)
             on_step(index)
         loop.set_block_state(state, block_state)
