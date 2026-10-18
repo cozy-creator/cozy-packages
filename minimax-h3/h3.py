@@ -101,13 +101,13 @@ from qwen_image_2 import generate_image as generate_reference
 from birefnet import RemoveBackgroundOutput
 from birefnet import remove_background
 from character_describer import (
-    DescribeCharactersOutput,
+    DescribeCharacterOutput,
     DescribeClipOutput,
-    WriteTextsOutput,
-    describe_characters,
+    WriteTextOutput,
+    describe_character,
     describe_clip,
-    describe_places,
-    write_texts,
+    describe_place,
+    write_text,
 )
 from seedvr2 import Resolution as RestorationResolution
 from seedvr2 import UpscaleOutput as RestorationOutput
@@ -1785,30 +1785,29 @@ async def _describe_images(
     references: list[StoryReference], kind: str, tel: Telemetry
 ) -> tuple[dict[str, str], list[str]]:
     """One sentence for each supplied character (identity) or place (look, people left out) the
-    author did not describe, all in one call. Descriptions only help, so a failed call, or an
-    image that shows no character, warns and keeps the reference as written."""
+    author did not describe: a call each, all at once, which Runtime decodes together and spreads
+    over the run's GPUs. Descriptions only help, so a failed call warns and keeps that reference
+    as written."""
     wanted = [ref for ref in references if ref.kind == kind and ref.image is not None and not ref.description.strip()]
-    if not wanted:
-        return {}, []
     describe = cast(
-        Callable[..., Awaitable[DescribeCharactersOutput]],
-        describe_characters if kind == "character" else describe_places,
+        Callable[..., Awaitable[DescribeCharacterOutput]],
+        describe_character if kind == "character" else describe_place,
     )
-    names = ", ".join(ref.name for ref in wanted)
-    try:
-        with tel.scope(f"Describing {names}"):
-            result = await describe(images=[ref.image for ref in wanted])
-    except Exception as exc:
-        tel.log("h3 reference descriptions skipped", level="warning", subjects=names, error=str(exc)[:400])
-        return {}, [f"the descriptions of {names} were skipped: {str(exc)[:200]}"]
-    described = dict(zip((ref.name for ref in wanted), result.descriptions, strict=True))
-    for name, description in described.items():
-        if description:
-            tel.log(f"h3 {kind} description", subject=name, description=description[:400])
-    return described, [
-        f"{name}'s description was skipped: the image shows no character's appearance"
-        for name, description in described.items() if not description
-    ]
+
+    async def one(ref: StoryReference) -> str:
+        with tel.scope(f"Describing {ref.name}"):
+            return (await describe(image=ref.image)).description
+
+    results = await asyncio.gather(*(one(ref) for ref in wanted), return_exceptions=True)
+    described, warnings = {}, []
+    for ref, result in zip(wanted, results, strict=True):
+        if isinstance(result, BaseException):
+            tel.log("h3 reference description skipped", level="warning", subject=ref.name, error=str(result)[:400])
+            warnings.append(f"{ref.name}'s description was skipped: {str(result)[:200]}")
+        else:
+            tel.log(f"h3 {kind} description", subject=ref.name, description=result[:400])
+            described[ref.name] = result
+    return described, warnings
 
 
 async def _describe_clips(
@@ -1843,7 +1842,7 @@ async def _write_prompts(
     soundscape: str,
     tel: Telemetry,
 ) -> tuple[list[str], list[str]]:
-    """Each call with a described clip gains, from one writer pass over all of them, what its text
+    """Each call with a described clip gains, from a writer call of its own (all at once), what its text
     lacks of MiniMax's guide format: the characters' roles in the clip, a 350-500-word
     description, a soundscape (`apply_written`). Writing only helps: a failed pass warns and
     sends the text as written."""
@@ -1856,15 +1855,19 @@ async def _write_prompts(
     ]
     if not asks:
         return prompts, []
-    write = cast(Callable[..., Awaitable[WriteTextsOutput]], write_texts)
-    try:
-        with tel.scope("Writing the prompts"):
-            result = await write(prompts=[request for _, request in asks], max_new_tokens=WRITER_TOKENS)
-    except Exception as exc:
-        tel.log("h3 prompt writing skipped", level="warning", error=str(exc)[:400])
-        return prompts, [f"the prompts were sent as written: writing them failed: {str(exc)[:200]}"]
+    write = cast(Callable[..., Awaitable[WriteTextOutput]], write_text)
+
+    async def one(index: int, request: str) -> str:
+        with tel.scope(f"Writing segment {index + 1}"):
+            return (await write(prompt=request, max_new_tokens=WRITER_TOKENS)).text
+
+    replies = await asyncio.gather(*(one(index, request) for index, request in asks), return_exceptions=True)
     written, warnings = list(prompts), []
-    for (index, _), reply in zip(asks, result.texts, strict=True):
+    for (index, _), reply in zip(asks, replies, strict=True):
+        if isinstance(reply, BaseException):
+            tel.log("h3 prompt writing skipped", level="warning", segment=index + 1, error=str(reply)[:400])
+            warnings.append(f"Segment {index + 1} was sent as written: writing it failed: {str(reply)[:200]}")
+            continue
         tel.log("h3 written prompt", segment=index + 1, reply=reply[:6000])
         written[index], more = apply_written(
             prompts[index], reply, references, calls[index].references, clips, soundscape

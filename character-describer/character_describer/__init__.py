@@ -90,23 +90,6 @@ class DescribeCharacterOutput(msgspec.Struct):
     description: Annotated[str, msgspec.Meta(min_length=1, max_length=2048)]
 
 
-class DescribeCharactersInput(msgspec.Struct):
-    images: Annotated[
-        list[ImageAsset],
-        AssetBound(
-            max_bytes=64 << 20,
-            max_decoded_bytes=256 << 20,
-            media_types=("image/png", "image/jpeg", "image/webp"),
-        ),
-        msgspec.Meta(min_length=1, max_length=16),
-    ]
-
-
-class DescribeCharactersOutput(msgspec.Struct):
-    #: One per image, in order; empty where the image shows no character's appearance.
-    descriptions: list[Annotated[str, msgspec.Meta(max_length=2048)]]
-
-
 class DescribeClipInput(msgspec.Struct):
     video: Annotated[
         VideoAsset,
@@ -121,17 +104,13 @@ class DescribeClipOutput(msgspec.Struct):
     seconds: list[float]
 
 
-class WriteTextsInput(msgspec.Struct):
-    prompts: Annotated[
-        list[Annotated[str, msgspec.Meta(min_length=1, max_length=65536)]],
-        msgspec.Meta(min_length=1, max_length=16),
-    ]
+class WriteTextInput(msgspec.Struct):
+    prompt: Annotated[str, msgspec.Meta(min_length=1, max_length=65536)]
     max_new_tokens: Annotated[int, msgspec.Meta(ge=1, le=4096)] = 1024
 
 
-class WriteTextsOutput(msgspec.Struct):
-    #: One reply per prompt, in order.
-    texts: list[str]
+class WriteTextOutput(msgspec.Struct):
+    text: str
 
 
 #: The int8 lane: every projection of the 32 language layers (gated-delta-net and attention)
@@ -172,7 +151,7 @@ def describe_character(
     """Describe one supplied character's appearance in one sentence."""
     ctx.raise_if_cancelled()
     with tel.stage("describing character"):
-        (text,) = _describe(model, [payload.image.read()], tel)
+        text = _describe(model, payload.image.read(), tel)
     if not text:
         raise UnsupportedInput("the character description names no appearance", code="output_integrity")
     return DescribeCharacterOutput(text)
@@ -181,38 +160,21 @@ def describe_character(
 @app.entrypoint(
     defaults={"model": "qwen3.5-9b@0.2.0"},
     memoize=True,
-    memo_version="identity-batch-v1",
+    memo_version="place-v1",
 )
-def describe_characters(
+def describe_place(
     ctx: Context,
-    payload: DescribeCharactersInput,
+    payload: DescribeCharacterInput,
     model: Describer,
     tel: Telemetry,
-) -> DescribeCharactersOutput:
-    """Describe each supplied character's appearance in one sentence, all images in one pass."""
+) -> DescribeCharacterOutput:
+    """Describe one supplied place in one sentence, people left out."""
     ctx.raise_if_cancelled()
-    with tel.stage("describing characters"):
-        texts = _describe(model, [image.read() for image in payload.images], tel)
-    return DescribeCharactersOutput(texts)
-
-
-@app.entrypoint(
-    defaults={"model": "qwen3.5-9b@0.2.0"},
-    memoize=True,
-    memo_version="place-batch-v1",
-)
-def describe_places(
-    ctx: Context,
-    payload: DescribeCharactersInput,
-    model: Describer,
-    tel: Telemetry,
-) -> DescribeCharactersOutput:
-    """Describe each supplied place in one sentence, people left out, all images in one pass."""
-    ctx.raise_if_cancelled()
-    with tel.stage("describing places"):
-        images = [image.read() for image in payload.images]
-        texts = model.describe(images, [PLACE_PROMPT] * len(images), max_new_tokens=MAX_NEW_TOKENS)
-    return DescribeCharactersOutput(texts)
+    with tel.stage("describing place"):
+        (text,) = model.describe([payload.image.read()], [PLACE_PROMPT], max_new_tokens=MAX_NEW_TOKENS)
+    if not text:
+        raise UnsupportedInput("the place description is empty", code="output_integrity")
+    return DescribeCharacterOutput(text)
 
 
 @app.entrypoint(
@@ -241,19 +203,19 @@ def describe_clip(
 @app.entrypoint(
     defaults={"model": "qwen3.5-9b@0.2.0"},
     memoize=True,
-    memo_version="write-v1",
+    memo_version="write-one-v1",
 )
-def write_texts(
+def write_text(
     ctx: Context,
-    payload: WriteTextsInput,
+    payload: WriteTextInput,
     model: Describer,
     tel: Telemetry,
-) -> WriteTextsOutput:
-    """One greedy reply per text prompt, all in one pass."""
+) -> WriteTextOutput:
+    """One greedy reply to a text prompt."""
     ctx.raise_if_cancelled()
     with tel.stage("writing"):
-        texts = model.write(list(payload.prompts), max_new_tokens=payload.max_new_tokens)
-    return WriteTextsOutput(texts)
+        (text,) = model.write([payload.prompt], max_new_tokens=payload.max_new_tokens)
+    return WriteTextOutput(text)
 
 
 def clip_frames(video: VideoAsset) -> tuple[list[Image], list[float]]:
@@ -285,23 +247,18 @@ def clip_frames(video: VideoAsset) -> tuple[list[Image], list[float]]:
     return frames, seconds
 
 
-def _describe(model: Describer, images: list[Image], tel: Telemetry) -> list[str]:
-    texts = model.describe(images, [IDENTITY_PROMPT] * len(images), max_new_tokens=MAX_NEW_TOKENS)
-    named = {i: sorted({w.lower() for w in SCENE_OR_POSE.findall(text)}) for i, text in enumerate(texts)}
-    named = {i: words for i, words in named.items() if words}
-    if not named:
-        return texts
-    for i, words in named.items():
-        tel.log("description named setting or pose; regenerating", words=", ".join(words), first=texts[i][:400])
-    retries = [
-        f'{IDENTITY_PROMPT} An earlier answer was "{texts[i]}". It mentioned {", ".join(words)}, which '
+def _describe(model: Describer, image: Image, tel: Telemetry) -> str:
+    (text,) = model.describe([image], [IDENTITY_PROMPT], max_new_tokens=MAX_NEW_TOKENS)
+    words = sorted({word.lower() for word in SCENE_OR_POSE.findall(text)})
+    if not words:
+        return text
+    tel.log("description named setting or pose; regenerating", words=", ".join(words), first=text[:400])
+    retry = (
+        f'{IDENTITY_PROMPT} An earlier answer was "{text}". It mentioned {", ".join(words)}, which '
         "describe the pose or surroundings, not the character. Rewrite it without them."
-        for i, words in named.items()
-    ]
-    again = model.describe([images[i] for i in named], retries, max_new_tokens=MAX_NEW_TOKENS)
-    for i, text in zip(named, again, strict=True):
-        texts[i] = strip_scene_or_pose(text)
-    return texts
+    )
+    (text,) = model.describe([image], [retry], max_new_tokens=MAX_NEW_TOKENS)
+    return strip_scene_or_pose(text)
 
 
 def strip_scene_or_pose(text: str) -> str:
