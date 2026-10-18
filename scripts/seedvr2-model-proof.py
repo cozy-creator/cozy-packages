@@ -87,7 +87,6 @@ def host_bytes() -> None:
     torch.manual_seed(1)
     vae = VideoAutoencoderKLWrapper(**{**VAE, "block_out_channels": (32, 32, 64, 64)}).eval()
     vae.set_causal_slicing(split_size=4, memory_device="same")
-    vae.set_memory_limit(conv_max_mem=0.5, norm_max_mem=0.5)
     frames = torch.randint(0, 256, (1, 3, 9, 64, 96), dtype=torch.uint8)
     with torch.inference_mode():
         scaled = vae.encode(frames).posterior.mode()

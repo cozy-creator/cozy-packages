@@ -524,7 +524,7 @@ CHOREOGRAPHY = (
 #: Memory numbers a package once handed the Runtime, or a vendored model's own memory knobs:
 #: the Runtime cuts and sheds by what the device has (cr-203 U7).
 MEMORY_KEYWORDS = {"per_element": "split", "max_bytes": "cache"}
-MEMORY_CALLS = {"batch_fits"}  # TODO(cr-203): set_memory_limit once SeedVR2 drops it
+MEMORY_CALLS = {"batch_fits", "set_memory_limit", "set_norm_limit"}
 
 
 def memory_numbers(source: str) -> list[tuple[int, str]]:
