@@ -29,8 +29,20 @@ from typing import Any, Literal
 import torch
 from torch import nn
 
-from cozy_runtime.author import AttentionLayout, Loader, Model, sequence_parallel, uses_components
+from cozy_runtime.author import (
+    AttentionLayout,
+    Context,
+    Loader,
+    Model,
+    ModelArtifact,
+    Weights,
+    canonical_json,
+    invocable,
+    sequence_parallel,
+    uses_components,
+)
 from cozy_runtime.author.kernels import PreQuantized
+from tensorfs.derived import Config, Derivation, Target
 
 BLOCKS = 50
 HIDDEN, INNER = 5376, 7168
@@ -300,3 +312,31 @@ class H3VSAGates(Model[VSAGates]):
         """`sample` with the gates in scope: every sparse step projects through them."""
         plan = replace(attention, gates=self.pipe.components["model"])
         return sample(state, on_step=on_step, cancel=cancel, attention=plan)
+
+
+@invocable
+async def normalize_vsa_gates(ctx: Context, *, gates: Weights[Any]) -> ModelArtifact:
+    """The as-is FastH3 gate upload as a model `H3VSAGates` constructs: its bytes unchanged, plus a
+    config. `cozy run ./minimax-h3/normalize_vsa_gates model.gates=<as-is checkpoint>`, then
+    `cozy run upload <run> <org>/minimax-h3-vsa-gate`."""
+    source = ctx.tensorfs_source(gates)
+    tensors = source.inspect().components
+    keys = [f"blocks.{index}.attn.to_gate_compress.weight" for index in range(BLOCKS)]
+    found = tensors.get("model", {})
+    if set(tensors) != {"model"} or set(found) != set(keys) or any(
+        tuple(found[key].shape) != (INNER, HIDDEN) or found[key].logical_dtype != "bf16" for key in keys
+    ):
+        raise ValueError("expected FastH3's 50 bf16 [7168, 5376] blocks.N.attn.to_gate_compress weights")
+    definition = Derivation(
+        sources={"gates": source},
+        targets={"model": Target(source="gates", source_component="model")},
+        configs={"model": Config("add")},
+        order=tuple(("model", key) for key in keys),
+    )
+    with ctx.output("model").open(definition) as transaction:
+        if transaction.receipt is not None:
+            return ctx.adopt_model(transaction.receipt)
+        if "model" not in set(transaction.completed_configs()):
+            transaction.add_config("model", canonical_json.encode({"architecture": "fasth3-vsa-gate"}))
+            transaction.checkpoint()
+        return ctx.adopt_model(transaction.commit())

@@ -48,6 +48,7 @@ from cozy_runtime.author import (
     UnsupportedInput,
     VideoAsset,
     VideoProbe,
+    WeightsOutput,
     data_values,
     invocable,
     prefetch,
@@ -72,7 +73,7 @@ from minimax_h3.model import (
     H3TurboLoRA as H3TurboLoRA,
     condition_references,
 )
-from minimax_h3.vsa import H3VSAGates as H3VSAGates, SparseAttention
+from minimax_h3.vsa import H3VSAGates as H3VSAGates, SparseAttention, normalize_vsa_gates
 from minimax_h3.official import (
     FPS,
     MAX_AUDIO_REFERENCES,
@@ -1071,6 +1072,7 @@ app.entrypoint(internal=True)(generate_fl2va_turbo)
 app.entrypoint(internal=True)(generate_ref2va)
 app.entrypoint(internal=True)(generate_ref2va_turbo)
 app.entrypoint(internal=True)(generate_ref2va_turbo_vsa)
+app.entrypoint(normalize_vsa_gates, weights=(WeightsOutput("model", max_new_bytes=2 << 20),), accelerator=False)
 
 
 async def _render_workflow(
