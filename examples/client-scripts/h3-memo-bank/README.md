@@ -54,17 +54,17 @@ and must be measured. No new rental is requested by this plan.
 
 ## Ordinary CLI entry and genuine artifact boundary
 
-First dry-run the metadata-only adoption leaf, then execute it only on the chosen
-existing worker when the root authorizes the paid phase:
+First check the metadata-only adoption leaf's request contract with `--describe`, then
+run it only on the chosen existing worker when the root authorizes the paid phase:
 
 ```sh
+cozy run /ABSOLUTE/PATH/adopt_full.py --describe
 cozy run /ABSOLUTE/PATH/adopt_full.py \
   'model.source=paul/minimax-h3#sha256:f1e86cb6b4935fbf9e79d90ee87366b6d13e2280b1846b4e9bfa0a00242793eb' \
-  --dry-run --json
-# Later: replace --dry-run with --on ROOT_OWNED_WORKER.
+  --on ROOT_OWNED_WORKER --json
 # Retain stdout as adoption.json, then:
 python3 prepare_callers.py adoption.json
-cozy run ~/.cozy/outputs/h3-bank-qualification/compute.py --dry-run --json
+cozy run ~/.cozy/outputs/h3-bank-qualification/compute.py --describe
 ```
 
 The adoption script refuses pruned inputs and produces a real native receipt with
