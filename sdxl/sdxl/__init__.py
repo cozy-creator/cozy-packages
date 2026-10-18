@@ -75,7 +75,7 @@ from cozy_runtime.author import (
     invocable,
     uses_components,
 )
-from diffusers import AutoencoderKL, EulerDiscreteScheduler, UNet2DConditionModel
+from diffusers import AutoencoderKL, DDIMScheduler, EulerDiscreteScheduler, UNet2DConditionModel
 from hidiffusion import (  # type: ignore[import-not-found,import-untyped]
     apply_hidiffusion,
     remove_hidiffusion,
@@ -177,9 +177,10 @@ class Txt2ImgInput(msgspec.Struct):
     hidiffusion: bool | None = None
     #: LAYER 1 of the two-layer clamp. These bounds REJECT; they never quietly clip.
     #: `ModelDefault` lets a checkpoint or adapter recipe supply an omitted value.
-    #: None, from the wire or a recipe: 30 steps when HiDiffusion runs, else 20.
+    #: None, from the wire or a recipe: HiDiffusion's recipe (30 steps, guidance 7.5) when it
+    #: runs, else 20 steps at 7.0.
     steps: ModelDefault[Annotated[int, msgspec.Meta(ge=1, le=50)] | None] = None
-    guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=0.0, le=20.0)] = 7.0
+    guidance: ModelDefault[Annotated[float, msgspec.Meta(ge=0.0, le=20.0)] | None] = None
     #: Given, the request is memoized; omitted, the package draws one and reports it.
     seed: int | None = None
 
@@ -200,6 +201,10 @@ class ImageOutput(msgspec.Struct):
     height: int
     steps: int
     guidance: float
+    sampler: str
+    """`ddim eta=1.0` (HiDiffusion's recipe) or `euler`."""
+    negative_prompt: str
+    """The negative prompt that ran."""
     classifier_free: bool
     """Whether the negative branch ran. Value-plane gating, made observable: a caller can
     see that `guidance <= 1.0` bought it a one-pass step rather than having to trust it."""
@@ -505,6 +510,20 @@ def _integrity(torch: Any, image: Any, pixels: Any, tel: Telemetry) -> None:
     tel.metric("image_spread", round(float(pixels.to(torch.float32).std()), 4))
 
 
+#: HiDiffusion's README SDXL negative prompt, part of the recipe it publishes.
+_HIDIFFUSION_NEGATIVE = (
+    "blurry, ugly, duplicate, poorly drawn face, deformed, mosaic, artifacts, bad limbs"
+)
+
+
+def _negative_prompt(requested: str, hidiffusion: bool) -> str:
+    """With HiDiffusion, the request's negative prompt followed by its recipe's: DDIM alone
+    still hatched 2 of 5 seeds at 4 MP that the full recipe left clean."""
+    if not hidiffusion:
+        return requested
+    return f"{requested}, {_HIDIFFUSION_NEGATIVE}" if requested else _HIDIFFUSION_NEGATIVE
+
+
 def _request_generator(torch: Any, source: object, *, device: Any) -> Any:
     """Adapt Runtime's public request generator to a device-placed torch generator.
 
@@ -536,6 +555,8 @@ def generate(
     above_native = payload.megapixels is not Megapixels.MP1
     hidiffusion_applied = above_native if payload.hidiffusion is None else payload.hidiffusion
     steps = payload.steps if payload.steps is not None else 30 if hidiffusion_applied else 20
+    guidance = payload.guidance if payload.guidance is not None else 7.5 if hidiffusion_applied else 7.0
+    negative_prompt = _negative_prompt(payload.negative_prompt, hidiffusion_applied)
     warnings: list[str] = []
     if above_native and not hidiffusion_applied:
         warnings.append("HiDiffusion off above 1 MP: expect duplicated or tiled subjects")
@@ -543,12 +564,12 @@ def generate(
         warnings.append("HiDiffusion at 1 MP composes at half resolution: expect simpler scenes")
     # The value plane, and the only branch in this file that reads a request number: above
     # 1.0 the negative branch is worth its second forward pass, at or below it is not.
-    classifier_free = payload.guidance > 1.0
+    classifier_free = guidance > 1.0
 
     with tel.stage("tokenize", overall_range=(0.00, 0.02)):
         ids, ids_2 = _tokenize(model.tokenizers, payload.prompt)
         if classifier_free:
-            neg, neg_2 = _tokenize(model.tokenizers, payload.negative_prompt)
+            neg, neg_2 = _tokenize(model.tokenizers, negative_prompt)
 
     with tel.stage("encode", overall_range=(0.02, 0.10)):
         prompt, pooled = model.encode(ids, ids_2)
@@ -562,11 +583,17 @@ def generate(
     tel.metric("prompt_absmax", _finite(torch, prompt))
     tel.metric("pooled_absmax", _finite(torch, pooled))
 
-    scheduler = EulerDiscreteScheduler.from_config(  # type: ignore[no-untyped-call]
-        model.pipe.scheduler_config
-    )
+    # HiDiffusion's recipe samples with DDIM at eta=1.0: fresh noise every step, from the request's
+    # generator. Without HiDiffusion, deterministic Euler.
+    sampler = DDIMScheduler if hidiffusion_applied else EulerDiscreteScheduler
+    scheduler = sampler.from_config(model.pipe.scheduler_config)  # type: ignore[no-untyped-call]
     scheduler.set_timesteps(steps, device=device)
     generator = _request_generator(torch, view.generator, device=device)
+    step = (
+        functools.partial(scheduler.step, eta=1.0, generator=generator)
+        if hidiffusion_applied
+        else scheduler.step
+    )
     latents = (
         torch.randn(
             1, 4, height // 8, width // 8, generator=generator, device=device,
@@ -607,10 +634,10 @@ def generate(
             )
             if classifier_free:
                 uncond, cond = noise.chunk(2)
-                noise = uncond + payload.guidance * (cond - uncond)
+                noise = uncond + guidance * (cond - uncond)
             if index == 0:
                 tel.metric("noise_absmax_step0", _finite(torch, noise))
-            latents = scheduler.step(noise, timestep, latents).prev_sample
+            latents = step(noise, timestep, latents).prev_sample
             on_step(index)
     tel.metric("latent_absmax", _finite(torch, latents))
 
@@ -630,7 +657,9 @@ def generate(
         width=decoded_w,
         height=decoded_h,
         steps=steps,
-        guidance=payload.guidance,
+        guidance=guidance,
+        sampler="ddim eta=1.0" if hidiffusion_applied else "euler",
+        negative_prompt=negative_prompt if classifier_free else "",
         classifier_free=classifier_free,
         hidiffusion_applied=hidiffusion_applied,
         digest=hashlib.sha256(rgb).hexdigest(),
