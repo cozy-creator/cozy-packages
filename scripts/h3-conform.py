@@ -160,7 +160,7 @@ from minimax_h3.turbo import (  # noqa: E402
 )
 from minimax_h3.vae_tiles import TileBatchedVideoVAE  # noqa: E402
 from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3Attention  # noqa: E402
-from minimax_h3 import glue, producer  # noqa: E402
+from minimax_h3 import glue, producer, vae_glue  # noqa: E402
 from cozy_runtime.author.kernels import Plan, PreQuantized  # noqa: E402
 from h3_tables.lanes import NORMALISED_COMPONENTS, decode_operand  # noqa: E402
 from h3_tables.model_config import (  # noqa: E402
@@ -2781,8 +2781,14 @@ def arm_video_stream() -> None:
     pipe, state = finish_scaffold(39)
     injected = False
 
-    def infinity(_module: Any, _args: Any, output: Any) -> Any:
+    vae = pipe.components["video_vae"]
+    decode_tiles = vae._decode_tiles
+
+    def infinity(batch: Any) -> Any:
+        # The decoder's output for a batch of tiles; the decoder runs block by block, so its
+        # own `forward` (and a hook on it) never runs.
         nonlocal injected
+        output = decode_tiles(batch)
         if not injected:
             output = output.clone()
             # This frame survives temporal padding and lies outside the overlap blend.
@@ -2790,7 +2796,7 @@ def arm_video_stream() -> None:
             injected = True
         return output
 
-    handle = pipe.components["video_vae"].decoder.register_forward_hook(infinity)
+    vae._decode_tiles = infinity
     with tempfile.TemporaryDirectory(prefix="h3-stream-infinity-") as directory:
         spool = Path(directory)
         stream = stream_at(spool, 39, lambda: None)
@@ -2803,7 +2809,7 @@ def arm_video_stream() -> None:
             refusal("decoder infinity refuses before clipping", encode, "output_integrity")
         finally:
             stream.abandon()
-            handle.remove()
+            del vae._decode_tiles
         check("the real decoder emitted the planted infinity", injected, True)
         check("infinity refusal leaves no partial video", list(spool.iterdir()), [])
 
@@ -4500,6 +4506,35 @@ def arm_glue() -> None:
     check("the plan's identity is stable", glue.identity(), glue.identity())
 
 
+def arm_vae_glue() -> None:
+    """The VAE decoder glue matches the release decoder as the package builds it (float16
+    linears, float32 norms and scales) and refuses anything else; a CPU plan serves eager."""
+    with torch.device("meta"):
+        vae = TileBatchedVideoVAE().eval()
+    # The served lanes store the decoder's matrix weights at float16 (`_apply_video_vae_dtype`).
+    for name, parameter in vae.decoder.named_parameters():
+        if name.endswith("weight") and parameter.dim() >= 2:
+            parameter.data = parameter.data.half()
+    blocks = list(vae.decoder.transformer_blocks)
+    check("every release decoder block matches the fused shape", all(map(vae_glue._matches, blocks)), True)
+    block = blocks[0]
+    block.attn.to_q.weight.data = block.attn.to_q.weight.data.float()
+    red("a float32 linear is not the fused shape", vae_glue._matches(block), True)
+    block.attn.to_q.weight.data = block.attn.to_q.weight.data.half()
+    handle = block.ff.register_forward_hook(lambda *_: None)
+    red("a hooked block is not the fused shape", vae_glue._matches(block), True)
+    handle.remove()
+
+    def never(kernels: object) -> Any:
+        raise AssertionError("a CPU plan loaded kernels")
+
+    check(
+        "a CPU executor serves the eager decoder",
+        (vae_glue.install(vae, Plan("cpu", never)), type(block).__name__),
+        ("", "MiniMaxH3VideoTransformerBlock"),
+    )
+
+
 def arm_producer() -> None:
     """The shared-QKV producers: registrations, carrier views, rotary presentation, step policy,
     adjacent-step statistics, request-state cleanup and the processors they refuse."""
@@ -4612,6 +4647,7 @@ ARMS = {
     "rgb8-handoff": arm_rgb8_handoff,
     "interface": arm_interface,
     "glue": arm_glue,
+    "vae-glue": arm_vae_glue,
     "attention-producer": arm_producer,
 }
 

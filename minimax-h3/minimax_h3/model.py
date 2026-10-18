@@ -21,7 +21,7 @@ from cozy_runtime.author import (
 )
 from cozy_runtime.author.kernels import Plan
 
-from . import glue, producer
+from . import glue, producer, vae_glue
 from .official import (
     OfficialH3Pipeline,
     OfficialH3TurboLoRA,
@@ -104,10 +104,12 @@ class H3Model(
         return None
 
     def execution_plan(self, plan: Plan) -> str:
-        """The fused glue on every filled H3 DiT, and the CP producer's rotary hook."""
+        """The fused glue on every filled H3 DiT and on the video VAE's decoder, and the CP
+        producer's rotary hook."""
         for component in self.pipe.components.values():
             producer.retain_rotary(component)
-        return glue.install(self, self.pipe, plan)
+        plans = (glue.install(self, self.pipe, plan), vae_glue.install(self.pipe.components["video_vae"], plan))
+        return "+".join(identity for identity in plans if identity)
 
     @uses_components("text_encoder")
     def condition_text(self, task: Task, state: Any) -> None:
