@@ -61,14 +61,14 @@ Apache-2.0 FP16 conversions of the ByteDance-Seed model. Upstream provenance and
 are in `seedvr2/upstream/NOTICE`.
 
 The normalize callable takes `model.dit`, `model.vae`, and a `conditioning` Tree containing the
-upstream `pos_emb.pt`/`neg_emb.pt` constants. It verifies their exact published hashes, reads
+upstream `pos_emb.pt`/`neg_emb.pt` constants: a local directory, which `cozy run` sends with the run. It verifies their exact published hashes, reads
 them with PyTorch `weights_only=True`, and writes managed BF16 tensors. The installed package
 carries no model files and inference performs no file loading or upstream download.
 
 ```sh
 cozy model upload 'hf://numz/SeedVR2_comfyUI@09ced71023636e9bc8cdf9cdecfb2625d1e691e8/seedvr2_ema_7b_fp16.safetensors' paul/seedvr2-7b-dit-raw --source-profile=as-is/1 --tensorhub local
 cozy model upload 'hf://numz/SeedVR2_comfyUI@09ced71023636e9bc8cdf9cdecfb2625d1e691e8/ema_vae_fp16.safetensors' paul/seedvr2-vae-raw --source-profile=as-is/1 --tensorhub local
-cozy run ./seedvr2/normalize model.dit=paul/seedvr2-7b-dit-raw#sha256:DIT_CHECKPOINT model.vae=paul/seedvr2-vae-raw#sha256:VAE_CHECKPOINT conditioning=conditioning --input-tree conditioning=/path/to/upstream/constants --tensorhub local
+cozy run ./seedvr2/normalize model.dit=paul/seedvr2-7b-dit-raw#sha256:DIT_CHECKPOINT model.vae=paul/seedvr2-vae-raw#sha256:VAE_CHECKPOINT conditioning=/path/to/upstream/constants --tensorhub local
 cozy run upload <run> paul/seedvr2-7b --tensorhub local
 ```
 
