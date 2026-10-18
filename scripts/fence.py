@@ -26,7 +26,8 @@ than as a convention someone remembers:
   4. no-memory-choreography
                           the mechanisms se-001 DELETED are gone from the source: runtime
                           quantization, source-format parsing, offload/pinning, allocator
-                          and stream commands, compile markers, checkpoint reads.
+                          and stream commands, compile markers, checkpoint reads, and
+                          memory numbers handed to the Runtime (cr-203: it sizes memory).
   5. no-test-suite        tracker README #160.
   6. h3-media-boundary    H3 consumes Runtime decoded values; it does not open media itself.
   7. h3-official-hardcut  the official dual-task implementation has no legacy/community route.
@@ -520,6 +521,26 @@ CHOREOGRAPHY = (
 )
 
 
+#: Memory numbers a package once handed the Runtime, or a vendored model's own memory knobs:
+#: the Runtime cuts and sheds by what the device has (cr-203 U7).
+MEMORY_KEYWORDS = {"per_element": "split", "max_bytes": "cache"}
+MEMORY_CALLS = {"batch_fits", "set_memory_limit", "set_norm_limit"}
+
+
+def memory_numbers(source: str) -> list[tuple[int, str]]:
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        name = ast.unparse(node.func).rsplit(".", 1)[-1]
+        if name in MEMORY_CALLS:
+            found.append((node.lineno, f"{name}()"))
+        for keyword in node.keywords:
+            if keyword.arg in MEMORY_KEYWORDS and name == MEMORY_KEYWORDS[keyword.arg]:
+                found.append((node.lineno, f"{name}({keyword.arg}=)"))
+    return found
+
+
 def fence_no_choreography() -> Fence:
     """se-001's structural deletion proof: the replaced mechanisms are gone from the
     SOURCE, not from a reviewer's memory. Applies to every file in a package project,
@@ -570,6 +591,8 @@ def fence_no_choreography() -> Fence:
                         f"placement, offload and encoding are the runtime's, not the "
                         f"author's: {line.strip()[:80]}"
                     )
+        for line_no, call in memory_numbers(source):
+            bad.append(f"{rel(path)}:{line_no}: {call} hands the Runtime a memory number")
     modules = len(package_modules())
     return bad, f"{len(CHOREOGRAPHY)} deleted-mechanism shapes over {modules} modules"
 

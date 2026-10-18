@@ -35,10 +35,9 @@ from .official import (
 )
 from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK
 
-#: Reference latents one generation keeps (`ReferenceMemo`), least recently used first out. A
-#: 2048-edge image reference is ~6 MB of float32 latents, a 5 s video reference ~25 MB.
+#: Reference latents one generation keeps (`ReferenceMemo`), least recently used first out; the
+#: Runtime sheds them sooner when memory is short.
 REFERENCE_MEMO_ENTRIES = 256
-REFERENCE_MEMO_BYTES = 1 << 30
 
 
 def condition_references(model: H3Model, task: Task, state: Any, *, tel: Telemetry) -> None:
@@ -99,11 +98,7 @@ class H3Model(
 
     def _declare_caches(self, loader: Loader) -> None:
         """The generation's reference latents (`ReferenceMemo`): memory only, bounded."""
-        self.reference_latents = loader.cache(
-            "reference_latents",
-            max_entries=REFERENCE_MEMO_ENTRIES,
-            max_bytes=REFERENCE_MEMO_BYTES,
-        )
+        self.reference_latents = loader.cache("reference_latents", max_entries=REFERENCE_MEMO_ENTRIES)
 
     def unload(self, loader: Loader) -> None:
         return None

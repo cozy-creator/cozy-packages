@@ -67,10 +67,6 @@ VAE = dict(
 ARCHITECTURE = "SeedVR2-7B"
 #: SeedVR's configs_7b: the VAE's latent scaling factor (no shift).
 SCALE = 0.9152
-#: Peak device bytes per element of the DiT's (t, h, w, 33) input, before Runtime measures it:
-#: ComfyUI's 0.55 GiB per megapixel latent frame (`SEEDVR2_CHUNK_GIB_PER_MPX_FRAME`); an RTX 4090
-#: on the int8 lane peaked at 913 (run 9920, 12 latent frames at 1080p).
-DIT_BYTES = 0.55 * 2**30 * 64 / 33 / 1e6
 
 
 class Conditioning(torch.nn.Module):
@@ -143,7 +139,7 @@ class RestorationModel(Model[Graph], encoded_leaves="accept"):
                     [x], [c], [conditioning.positive], [conditioning.negative], decode=False
                 )[0]
 
-        return split(dit, torch.cat([noise, condition], dim=-1), Cut(0), per_element=DIT_BYTES)
+        return split(dit, torch.cat([noise, condition], dim=-1), Cut(0))
 
     @uses_components("vae")
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
@@ -183,8 +179,8 @@ def _runner(graph: Graph) -> Any:
 
 def _vae(graph: Graph) -> Any:
     vae = cast(Any, graph.components["vae"])
+    # One latent frame a step of the causal scan, its finest; the Runtime cuts each op's rows.
     vae.set_causal_slicing(split_size=4, memory_device="same")
-    vae.set_memory_limit(conv_max_mem=0.5, norm_max_mem=0.5)
     return vae
 
 
