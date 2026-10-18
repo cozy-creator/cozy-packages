@@ -38,6 +38,7 @@ checkpoint or revision — `package.toml` and the deploy binding do.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
@@ -219,12 +220,20 @@ class ImageOutput(msgspec.Struct):
 def _hidiffusion_unet_type() -> type[Any]:
     """The patched UNet owner, imported only when Runtime constructs the model."""
     class HiDiffusionUNet(UNet2DConditionModel):
-        """Select and reset the request's denoising implementation before step zero."""
+        """Select and reset the request's denoising implementation before step zero.
+
+        HiDiffusion's blocks count steps on themselves, and its window blocks draw their shift
+        from torch's CPU RNG. A call that runs again (the Runtime's out-of-memory recovery)
+        would advance both twice. So every call sets each counter to the request's step
+        (`cozy_step`), and each window block draws from the request's seed, step and its own
+        index: a call runs the same however often it runs."""
 
         _cozy_base_num_upsamplers: int
         _cozy_hidiffusion_active: bool
+        cozy_step = 0
+        _cozy_seed = 0
 
-        def begin_denoise_request(self, steps: int, hidiffusion: bool) -> None:
+        def begin_denoise_request(self, steps: int, hidiffusion: bool, seed: int) -> None:
             if steps <= 0:
                 raise ValueError("HiDiffusion requires a positive timestep count")
             active = bool(getattr(self, "_cozy_hidiffusion_active", False))
@@ -232,22 +241,32 @@ def _hidiffusion_unet_type() -> type[Any]:
                 if hidiffusion:
                     self.num_upsamplers = self._cozy_base_num_upsamplers
                     apply_hidiffusion(self)
+                    windows = [m for m in self.modules() if hasattr(m, "_parent")]
+                    for index, block in enumerate(m for m in windows if not hasattr(m, "timestep")):
+                        hook = functools.partial(self._cozy_draw, index)
+                        self.info["hooks"].append(block.register_forward_pre_hook(hook))
                 else:
                     remove_hidiffusion(self)
                     self.num_upsamplers = self._cozy_base_num_upsamplers
                 self._cozy_hidiffusion_active = hidiffusion
             if not hidiffusion:
                 return
-            self._num_timesteps = steps
-            info = getattr(self, "info", None)
-            if isinstance(info, dict):
-                info["size"] = None
-                info["upsample_size"] = None
+            self._num_timesteps, self._cozy_seed = steps, seed
+            self.info["size"] = self.info["upsample_size"] = None
             for module in self.modules():  # type: ignore[attr-defined]
-                if hasattr(module, "timestep"):
-                    module.timestep = 0
                 if hasattr(module, "max_timestep"):
                     module.max_timestep = steps
+
+        def forward(self, *args: Any, **kwargs: Any) -> Any:
+            if self._cozy_hidiffusion_active:
+                for module in self.modules():  # type: ignore[attr-defined]
+                    if hasattr(module, "max_timestep"):
+                        module.timestep = self.cozy_step
+            return super().forward(*args, **kwargs)
+
+        def _cozy_draw(self, index: int, *_: Any) -> None:
+            draw = (self._cozy_seed * 1_000_003 + self.cozy_step * 1_009 + index) % 2**63
+            torch.default_generator.manual_seed(draw)  # the CPU RNG `torch.rand(1)` reads
 
     return HiDiffusionUNet
 
@@ -375,10 +394,12 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
         step: int,
         total_steps: int,
         hidiffusion: bool,
+        seed: int,
     ) -> Any:
         unet = self.pipe.components["unet"]
         if step == 0:
-            unet.begin_denoise_request(total_steps, hidiffusion)
+            unet.begin_denoise_request(total_steps, hidiffusion, seed)
+        unet.cozy_step = step
         with torch.inference_mode():
             return unet(
                 latents,
@@ -567,10 +588,9 @@ def generate(
         batch_prompt, batch_pooled, batch_ids = prompt, pooled, time_ids
 
     on_step = tel.step_callback(steps, stage="denoise", overall_range=(0.10, 0.90))
-    # HiDiffusion's window-attention shift uses torch's CPU RNG. Isolate and seed it from
-    # the request so a canceled or concurrent history cannot change this request's output.
+    # HiDiffusion's window blocks seed torch's CPU RNG from the request (`_cozy_draw`): the
+    # RNG state outside the loop is left as it was.
     with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(seed)
         with tel.stage("denoise", overall_range=(0.10, 0.90)):
             for index, timestep in enumerate(scheduler.timesteps):
                 ctx.raise_if_cancelled()
@@ -585,6 +605,7 @@ def generate(
                     index,
                     steps,
                     hidiffusion_applied,
+                    seed,
                 )
                 if classifier_free:
                     uncond, cond = noise.chunk(2)
