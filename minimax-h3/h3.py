@@ -72,6 +72,7 @@ from minimax_h3.model import (
     H3TurboLoRA as H3TurboLoRA,
     condition_references,
 )
+from minimax_h3.vsa import H3VSAGates as H3VSAGates, SparseAttention
 from minimax_h3.official import (
     FPS,
     MAX_AUDIO_REFERENCES,
@@ -291,6 +292,11 @@ class ClipInput(msgspec.Struct, kw_only=True):
     prompt: str
     seed: int | None = None
     duration_s: DurationSeconds
+    # h3a-095 experiment, never merged: what serves the sparse steps (`ref2va_turbo` only), how
+    # many initial evaluations stay dense (None keeps the plan's 4), and VSA's dropped fraction.
+    sparse_attention: Literal["sol", "vsa"] = "sol"
+    dense_steps: Annotated[int, msgspec.Meta(ge=0, le=8)] | None = None
+    vsa_sparsity: Annotated[float, msgspec.Meta(ge=0, lt=1)] = 0.75
 
 
 class StandardClipInput(ClipInput, kw_only=True):
@@ -1027,10 +1033,44 @@ async def generate_ref2va_turbo(
 
 
 
+@invocable(
+    defaults={"base_model": _MODEL, "turbo_lora": _TURBO_LORA},
+    components={"base_model": _REF2VA, "turbo_lora": ("ref2va_turbo",), "vsa_gates": ("model",)},
+    memoize=True,
+)
+async def generate_ref2va_turbo_vsa(
+    ctx: Context,
+    *,
+    payload: ReferenceClipInput,
+    assets: ReferenceAssets,
+    base_model: H3TurboBase,
+    turbo_lora: H3TurboLoRA,
+    vsa_gates: H3VSAGates,
+    out: Outputs,
+    tel: Telemetry,
+) -> H3VideoOutput:
+    """h3a-095: `generate_ref2va_turbo` with VSA on its sparse steps. The run names the gates:
+    `model.generate_ref2va_turbo_vsa.models.vsa_gates=local/<the as-is FastH3 gate upload>`."""
+    _reference_policy(assets)
+    return _references_to_video(
+        ctx,
+        "ref2va_turbo",
+        payload,
+        assets,
+        base_model,
+        out,
+        tel,
+        steps=TURBO_STEPS,
+        turbo_lora=turbo_lora,
+        vsa_gates=vsa_gates,
+    )
+
+
 app.entrypoint(internal=True)(generate_fl2va)
 app.entrypoint(internal=True)(generate_fl2va_turbo)
 app.entrypoint(internal=True)(generate_ref2va)
 app.entrypoint(internal=True)(generate_ref2va_turbo)
+app.entrypoint(internal=True)(generate_ref2va_turbo_vsa)
 
 
 async def _render_workflow(
@@ -1039,7 +1079,14 @@ async def _render_workflow(
     video_audio: tuple[bool, ...] = (),
 ) -> RenderOutput:
     seed = shot_seed(payload, ctx.request_id, 0)
-    fields: dict[str, Any] = {"prompt": payload.prompt, "seed": seed, "duration_s": payload.duration_s}
+    fields: dict[str, Any] = {
+        "prompt": payload.prompt,
+        "seed": seed,
+        "duration_s": payload.duration_s,
+        "sparse_attention": payload.sparse_attention,
+        "dense_steps": payload.dense_steps,
+        "vsa_sparsity": payload.vsa_sparsity,
+    }
     if steps is not None:
         fields["steps"] = steps
     request = (
@@ -1051,6 +1098,8 @@ async def _render_workflow(
     )
     functions = {"fl2va": generate_fl2va, "fl2va_turbo": generate_fl2va_turbo,
                  "ref2va": generate_ref2va, "ref2va_turbo": generate_ref2va_turbo}
+    if task == "ref2va_turbo" and payload.sparse_attention == "vsa":
+        functions[task] = generate_ref2va_turbo_vsa
     generate = cast(Callable[..., Awaitable[H3VideoOutput]], functions[task])
     with tel.scope("Generating original 768p video"):
         source = await generate(payload=request, assets=assets)
@@ -1269,6 +1318,7 @@ def _references_to_video(
     delivery: ContinuationPlan | None = None,
     expected_context_provenance: str | None = None,
     completed: Callable[[Any], None] | None = None,
+    vsa_gates: H3VSAGates | None = None,
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
@@ -1320,6 +1370,20 @@ def _references_to_video(
     else:
         assert isinstance(model, H3TurboBase)
         sample = partial(model.sample_ref2va_turbo, turbo_lora=turbo_lora)
+        plan = SparseAttention(payload.sparse_attention, payload.dense_steps, payload.vsa_sparsity)
+        if plan.method == "vsa" and vsa_gates is None:
+            raise InvalidRequest("VSA runs through generate_ref2va_turbo_vsa", fields=["sparse_attention"])
+        sample = (
+            partial(sample, attention=plan)
+            if vsa_gates is None
+            else partial(vsa_gates.sample, sample, attention=plan)
+        )
+        tel.log(
+            "h3a-095 attention",
+            method=plan.method,
+            dense_steps=-1 if plan.dense_steps is None else plan.dense_steps,
+            sparsity=plan.sparsity,
+        )
     with tel.stage("denoise", overall_range=(0.15, 0.85)):
         schedule = sample(
             state,

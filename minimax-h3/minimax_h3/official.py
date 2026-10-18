@@ -90,6 +90,7 @@ from .continuation import (
 from .reference_rows import ClipRows, motion_size, public_video
 from .turbo import ATTENTION_KWARG, TURBO_BANK, TurboOverlay, TurboSchedule
 from .vae_tiles import TileBatchedVideoVAE, encode_condition
+from .vsa import SparseAttention, Tiling, serving, tiling
 
 #: A trunk is one DiT and its conditioning workflow; a task is one served function — the
 #: trunk's official plan, or the trunk under the turbo bank's fixed 8-evaluation plan.
@@ -1287,8 +1288,14 @@ class OfficialH3Pipeline:
         on_step: Callable[[int], None],
         cancel: Callable[[], None],
         sol_dense_steps: int = 10,
+        attention: SparseAttention | None = None,
     ) -> ScheduleFacts:
         _validate_sol_dense_steps(sol_dense_steps)
+        plan = attention or SparseAttention()
+        # h3a-095: the attention's dense steps may differ; reference clips still leave at the plan's.
+        dense_steps = sol_dense_steps if plan.dense_steps is None else plan.dense_steps
+        _validate_sol_dense_steps(dense_steps)
+        tilings: dict[tuple[int, int], Tiling] = {}
         _settle_intake(state)
         blocks = self._blocks[self._workflow(task, state)].sub_blocks
         scoped = _ScopedPipeline(
@@ -1333,9 +1340,20 @@ class OfficialH3Pipeline:
             cancel()
             if clips is not None and index == sol_dense_steps:
                 clips.release(block_state)
-            with attention_scope(
-                _attention_layout(block_state, index, sol_dense_steps=sol_dense_steps)
-            ):
+            layout = _attention_layout(block_state, index, sol_dense_steps=dense_steps)
+            tiles = None
+            if plan.method == "vsa":
+                shape = (layout.live_tokens, layout.protected_prefix)
+                if shape not in tilings:
+                    _, ph, pw = scoped.patch_size
+                    grid = (
+                        int(state.get("num_latent_frames")),
+                        int(state.get("latent_height")) // ph,
+                        int(state.get("latent_width")) // pw,
+                    )
+                    tilings[shape] = tiling(block_state, layout, grid)
+                tiles = tilings[shape]
+            with attention_scope(layout), serving(plan, tiles):
                 _, block_state = loop.loop_step(scoped, block_state, i=index, t=timestep)
             on_step(index)
         loop.set_block_state(state, block_state)

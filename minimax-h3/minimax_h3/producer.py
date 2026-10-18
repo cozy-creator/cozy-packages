@@ -39,12 +39,16 @@ from cozy_runtime.author import (
 )
 from cozy_runtime.author.kernels import ROWWISE_FP8, PreQuantized
 
+from . import vsa
 from .glue import FusedMiniMaxH3AttnProcessor
 from .turbo import _LoRAHook
 
 FAST = "kitchen-sol-producer-fast-shared-qkv"
 FP4_LOWMEM = "kitchen-sol-producer-fp4-lowmem-shared-qkv"
 FIXED_MEANS = "kitchen-sol-producer-fp4-fixed-means-shared-qkv"
+#: h3a-095: stands in before Runtime's `sol-attn`. Serves a request's sparse steps with VSA when
+#: it asked for VSA (`vsa.SparseAttention`), else hands every call to `sol-attn` unchanged.
+SPARSE = "h3-sparse"
 CHUNK = 4096
 _ROTARY_HOOK = "cozy_cp_producer_rotary"
 
@@ -114,23 +118,35 @@ def qkv_chunks(
     refusal = shared_qkv_refusal(attn) if shared else "disabled"
     for start in range(0, tokens, CHUNK):
         chunk = rows(hidden, start, min(tokens, start + CHUNK))
-        operand = None
-        outcome = refusal
-        if shared and isinstance(chunk, PreQuantized):
-            outcome = "already-quantized"
-        elif shared and not refusal:
-            operand = quantize(chunk)
-            outcome = "shared"
-        if shared and counts is not None:
-            counts[outcome] = counts.get(outcome, 0) + 1
-        # Original module calls retain encoded leaves, resident weights and Turbo hooks.
-        yield torch.cat(
-            [
-                projection(chunk) if operand is None else projection(chunk, prequantized=operand)
-                for projection in (attn.to_q, attn.to_k, attn.to_v)
-            ],
-            dim=-1,
-        ).squeeze(0)
+        yield project_qkv(attn, chunk, quantize, refusal, shared, counts)
+
+
+def project_qkv(
+    attn: MiniMaxH3Attention,
+    chunk: torch.Tensor | PreQuantized,
+    quantize: Callable[[Any], PreQuantized],
+    refusal: str,
+    shared: bool,
+    counts: dict[str, int] | None,
+) -> torch.Tensor:
+    """One chunk's fused [M, 3*heads*128] q|k|v, sharing one quantization where it may."""
+    operand = None
+    outcome = refusal
+    if shared and isinstance(chunk, PreQuantized):
+        outcome = "already-quantized"
+    elif shared and not refusal:
+        operand = quantize(chunk)
+        outcome = "shared"
+    if shared and counts is not None:
+        counts[outcome] = counts.get(outcome, 0) + 1
+    # Original module calls retain encoded leaves, resident weights and Turbo hooks.
+    return torch.cat(
+        [
+            projection(chunk) if operand is None else projection(chunk, prequantized=operand)
+            for projection in (attn.to_q, attn.to_k, attn.to_v)
+        ],
+        dim=-1,
+    ).squeeze(0)
 
 
 def rope_presentation(
@@ -226,6 +242,52 @@ def produce(
     call.served(
         f"comfy_kitchen.sol_attn_chunked(int8, stats={statistics}, vmargin=1.1, "
         f"prefix=int8, qkv={shared})"
+    )
+    return attn.to_out[1](attn.to_out[0](output.flatten(2, 3)))
+
+
+@dataclass
+class SparseState(RequestState):
+    vsa: vsa.State = field(default_factory=vsa.State)
+
+    def close(self) -> None:
+        self.vsa.close()
+        super().close()
+
+
+def produce_sparse(
+    call: ProducerCall,
+    hidden_states: torch.Tensor | PreQuantized,
+    rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+    attention_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """h3a-095: VSA on a VSA request's sparse steps; everything else is `sol-attn`'s call."""
+    step = vsa.active()
+    if step is None or not sparse_step(call.layout, call.path):
+        return call.original(hidden_states, rotary_emb, attention_mask)
+    if call.group is not None or attention_mask is not None or rotary_emb is None:
+        raise ValueError("H3 VSA serves one GPU, unmasked, with rotary tables")
+    attn, layout, state = call.module, call.layout, call.state
+    tokens = layout.live_tokens
+    if hidden_states.shape[0] != 1 or hidden_states.shape[1] != tokens:
+        raise ValueError("H3 VSA expects the unpadded batch-1 live document")
+    plan, tiles = step
+    freqs = rope_presentation(rotary_emb, tokens, state)
+    refusal = shared_qkv_refusal(attn)
+    counts: dict[str, int] = {}
+    output = vsa.attend(
+        call,
+        hidden_states,
+        freqs,
+        state.vsa,
+        plan,
+        tiles,
+        lambda chunk: project_qkv(attn, chunk, call.quantize, refusal, True, counts),
+    )
+    shared = ",".join(f"{kind}:{count}" for kind, count in sorted(counts.items()))
+    call.served(
+        f"comfy_kitchen.sol_attn_chunked(int8, vsa, keep={1 - plan.sparsity:.2f}, "
+        f"tiles=4x4x4, gate=fasth3, qkv={shared})"
     )
     return attn.to_out[1](attn.to_out[0](output.flatten(2, 3)))
 
@@ -380,6 +442,9 @@ PRODUCERS = {
         _register(FAST, "kitchen-sol"),
     )
 }
+register_attention(
+    AttentionProducer(SPARSE, "sol-attn", produce_sparse, validate, state=SparseState)
+)
 _BACKENDS = {"_cozy_" + name.replace("-", "_"): name for name in PRODUCERS}
 
 

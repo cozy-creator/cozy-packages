@@ -34,6 +34,7 @@ from .official import (
     build_h3_turbo_lora,
 )
 from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK
+from .vsa import SparseAttention
 
 #: Reference latents one generation keeps (`ReferenceMemo`), least recently used first out; the
 #: Runtime sheds them sooner when memory is short.
@@ -190,6 +191,7 @@ class H3TurboBase(H3Model, encoded_leaves="accept"):
         on_step: Any,
         cancel: Any,
         sol_dense_steps: int = 4,
+        attention: SparseAttention | None = None,
     ) -> ScheduleFacts:
         return turbo_lora.sample_ref2va(
             self,
@@ -197,6 +199,7 @@ class H3TurboBase(H3Model, encoded_leaves="accept"):
             on_step=on_step,
             cancel=cancel,
             sol_dense_steps=sol_dense_steps,
+            attention=attention,
         )
 
 
@@ -240,6 +243,7 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
         on_step: Any,
         cancel: Any,
         sol_dense_steps: int = 4,
+        attention: SparseAttention | None = None,
     ) -> ScheduleFacts:
         return self._sample(
             base,
@@ -248,6 +252,7 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
             on_step=on_step,
             cancel=cancel,
             sol_dense_steps=sol_dense_steps,
+            attention=attention,
         )
 
     def _sample(
@@ -259,6 +264,7 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
         on_step: Any,
         cancel: Any,
         sol_dense_steps: int,
+        attention: SparseAttention | None = None,
     ) -> ScheduleFacts:
         _validate_sol_dense_steps(sol_dense_steps)
         task: Task = "fl2va_turbo" if trunk == "fl2va" else "ref2va_turbo"
@@ -274,7 +280,12 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
         )
         try:
             return base.pipe.denoise(
-                task, state, on_step=on_step, cancel=cancel, sol_dense_steps=sol_dense_steps
+                task,
+                state,
+                on_step=on_step,
+                cancel=cancel,
+                sol_dense_steps=sol_dense_steps,
+                attention=attention,
             )
         finally:
             state.set("attention_kwargs", original)
