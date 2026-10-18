@@ -223,10 +223,10 @@ def _hidiffusion_unet_type() -> type[Any]:
         """Select and reset the request's denoising implementation before step zero.
 
         HiDiffusion's blocks count steps on themselves, and its window blocks draw their shift
-        from torch's CPU RNG. A call that runs again (the Runtime's out-of-memory recovery)
-        would advance both twice. So every call sets each counter to the request's step
-        (`cozy_step`), and each window block draws from the request's seed, step and its own
-        index: a call runs the same however often it runs."""
+        from torch's CPU RNG. A block that runs again (the Runtime's out-of-memory recovery, a
+        band) would advance both. So before every call each counting block is set to the
+        request's step (`cozy_step`), and each window block draws from the request's seed, step
+        and its own index: a block runs the same however often it runs."""
 
         _cozy_base_num_upsamplers: int
         _cozy_hidiffusion_active: bool
@@ -241,9 +241,12 @@ def _hidiffusion_unet_type() -> type[Any]:
                 if hidiffusion:
                     self.num_upsamplers = self._cozy_base_num_upsamplers
                     apply_hidiffusion(self)
-                    windows = [m for m in self.modules() if hasattr(m, "_parent")]
-                    for index, block in enumerate(m for m in windows if not hasattr(m, "timestep")):
-                        hook = functools.partial(self._cozy_draw, index)
+                    window = 0
+                    for block in [m for m in self.modules() if hasattr(m, "_parent")]:
+                        if hasattr(block, "max_timestep"):
+                            hook: Any = self._cozy_count
+                        else:
+                            hook, window = functools.partial(self._cozy_draw, window), window + 1
                         self.info["hooks"].append(block.register_forward_pre_hook(hook))
                 else:
                     remove_hidiffusion(self)
@@ -257,12 +260,8 @@ def _hidiffusion_unet_type() -> type[Any]:
                 if hasattr(module, "max_timestep"):
                     module.max_timestep = steps
 
-        def forward(self, *args: Any, **kwargs: Any) -> Any:
-            if self._cozy_hidiffusion_active:
-                for module in self.modules():  # type: ignore[attr-defined]
-                    if hasattr(module, "max_timestep"):
-                        module.timestep = self.cozy_step
-            return super().forward(*args, **kwargs)
+        def _cozy_count(self, block: Any, *_: Any) -> None:
+            block.timestep = self.cozy_step
 
         def _cozy_draw(self, index: int, *_: Any) -> None:
             draw = (self._cozy_seed * 1_000_003 + self.cozy_step * 1_009 + index) % 2**63
