@@ -175,10 +175,10 @@ class Txt2ImgInput(msgspec.Struct):
     #: None runs HiDiffusion where base SDXL cannot go: above tier 1. An explicit choice
     #: always runs, and the result warns where it is known to hurt.
     hidiffusion: bool | None = None
-    #: LAYER 1 of the two-layer clamp. These bounds REJECT; they never quietly clip. The
-    #: `ModelDefault` marker is what makes the field omittable on the wire and concrete
-    #: before the handler runs — the handler sees `int`, never `int | None`.
-    steps: Annotated[ModelDefault[int], msgspec.Meta(ge=1, le=50)] = 20
+    #: LAYER 1 of the two-layer clamp. These bounds REJECT; they never quietly clip.
+    #: `ModelDefault` lets a checkpoint or adapter recipe supply an omitted value.
+    #: None, from the wire or a recipe: 30 steps when HiDiffusion runs, else 20.
+    steps: ModelDefault[Annotated[int, msgspec.Meta(ge=1, le=50)] | None] = None
     guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=0.0, le=20.0)] = 7.0
     #: Given, the request is memoized; omitted, the package draws one and reports it.
     seed: int | None = None
@@ -533,9 +533,9 @@ def generate(
     seed = payload.seed if payload.seed is not None else secrets.randbits(53)
     view = model.for_request(ctx, seed=seed)
     width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
-    steps = payload.steps
     above_native = payload.megapixels is not Megapixels.MP1
     hidiffusion_applied = above_native if payload.hidiffusion is None else payload.hidiffusion
+    steps = payload.steps if payload.steps is not None else 30 if hidiffusion_applied else 20
     warnings: list[str] = []
     if above_native and not hidiffusion_applied:
         warnings.append("HiDiffusion off above 1 MP: expect duplicated or tiled subjects")
@@ -589,30 +589,29 @@ def generate(
     on_step = tel.step_callback(steps, stage="denoise", overall_range=(0.10, 0.90))
     # HiDiffusion's window blocks seed torch's CPU RNG from the request (`_cozy_draw`): the
     # RNG state outside the loop is left as it was.
-    with torch.random.fork_rng(devices=[]):
-        with tel.stage("denoise", overall_range=(0.10, 0.90)):
-            for index, timestep in enumerate(scheduler.timesteps):
-                ctx.raise_if_cancelled()
-                batch = torch.cat([latents] * 2) if classifier_free else latents
-                model_input = scheduler.scale_model_input(batch, timestep)
-                noise = model.denoise(
-                    model_input,
-                    timestep,
-                    batch_prompt,
-                    batch_pooled,
-                    batch_ids,
-                    index,
-                    steps,
-                    hidiffusion_applied,
-                    seed,
-                )
-                if classifier_free:
-                    uncond, cond = noise.chunk(2)
-                    noise = uncond + payload.guidance * (cond - uncond)
-                if index == 0:
-                    tel.metric("noise_absmax_step0", _finite(torch, noise))
-                latents = scheduler.step(noise, timestep, latents).prev_sample
-                on_step(index)
+    with torch.random.fork_rng(devices=[]), tel.stage("denoise", overall_range=(0.10, 0.90)):
+        for index, timestep in enumerate(scheduler.timesteps):
+            ctx.raise_if_cancelled()
+            batch = torch.cat([latents] * 2) if classifier_free else latents
+            model_input = scheduler.scale_model_input(batch, timestep)
+            noise = model.denoise(
+                model_input,
+                timestep,
+                batch_prompt,
+                batch_pooled,
+                batch_ids,
+                index,
+                steps,
+                hidiffusion_applied,
+                seed,
+            )
+            if classifier_free:
+                uncond, cond = noise.chunk(2)
+                noise = uncond + payload.guidance * (cond - uncond)
+            if index == 0:
+                tel.metric("noise_absmax_step0", _finite(torch, noise))
+            latents = scheduler.step(noise, timestep, latents).prev_sample
+            on_step(index)
     tel.metric("latent_absmax", _finite(torch, latents))
 
     with tel.stage("decode", overall_range=(0.90, 0.98)):
