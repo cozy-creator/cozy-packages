@@ -72,10 +72,9 @@ Code never reads the GPU's compute capability or name, or a kernel name, to choo
 ## SDXL sources
 
 A Civitai SDXL single file uploads servable: `cozy model upload civitai://<version> <org/model>`.
-TensorFS's routed converter writes the Diffusers constructor's keys in its order (f16), and the
-upload embeds the index, configs and tokenizers of the converter's pinned SDXL base reference.
-`convert_cozytensors` produces the same checkpoint. `cozy model quantize` (below) writes its
-quantized lanes.
+TensorFS's `sdxl.single_file` table writes Diffusers' keys (`text_encoder.text_model.…` included)
+in constructor order (f16), with the index, configs and tokenizers of its pinned SDXL base
+reference. `cozy model quantize` (below) writes its quantized lanes.
 
 ## Quantization
 
@@ -422,7 +421,7 @@ The cheap gates require no weights or GPU:
 ```bash
 uv venv --python 3.12 .venv-check
 uv pip install --python .venv-check/bin/python \
-  "cozy-runtime>=0.27,<1" \
+  "cozy-runtime>=0.30,<1" \
   msgspec protobuf grpcio av mypy ruff
 
 .venv-check/bin/python scripts/fence.py
