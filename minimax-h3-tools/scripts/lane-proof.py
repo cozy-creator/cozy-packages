@@ -23,7 +23,7 @@ from h3_tables.model_config import COMPONENTS, DIT_COMPONENT, parse_production_c
 from h3_tables.order import current_order, full_order
 
 ROOT = Path(__file__).resolve().parents[2]
-VECTORS = ROOT / "scripts" / "vectors"
+VECTORS = ROOT / "scripts" / "lane-headers"
 
 
 def source(path: Path) -> Any:

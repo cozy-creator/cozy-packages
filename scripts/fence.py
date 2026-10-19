@@ -161,6 +161,7 @@ def imports(tree: ast.AST, package: str = "") -> Iterator[tuple[str, int]]:
 PUBLIC_RUNTIME_ROOTS = (
     ["cozy_runtime", "author"],
     ["cozy_runtime", "derive"],
+    ["cozy_runtime", "tensord_channels"],
 )
 
 
