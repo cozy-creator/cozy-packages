@@ -17,9 +17,8 @@ long-form workflow calls it for supplied character references once before the
 video segments. Supplied scenes and generated references are not processed.
 
 The source weights keep their original FP16 values and integer buffers in
-CozyTensors. TensorFS's `birefnet` converter table recognizes the upstream file by its
-tensor names and adds the constructor configuration and order at import, without
-rewriting weights. Inference uses one GPU at 1024×1024;
+CozyTensors. The upload imports upstream's file and `config.json` as they are; the
+constructor reads its `bb_pretrained: false`. Inference uses one GPU at 1024×1024;
 its predicted soft mask is resized
 to the input dimensions. This selects the salient foreground, so it can retain
 multiple people or objects when several appear in one reference.
