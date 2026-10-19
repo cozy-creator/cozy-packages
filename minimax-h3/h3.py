@@ -1213,6 +1213,9 @@ def _render_keyframes(
     turbo_lora: H3TurboLoRA | None = None,
 ) -> H3VideoOutput:
     """Shared FL2VA rendering for direct requests and chained asset handoffs."""
+    keyframes = ("vae",) if first is not None or last is not None else ()
+    dit = "transformer" if turbo_lora is None else {"transformer", "fl2va_turbo"}
+    ctx.plan("text_encoder", *keyframes, dit, "audio_vae", "vae")
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=seed)
     log_prompt(tel, "h3 encoder prompt", prompt)
@@ -1270,6 +1273,8 @@ def _references_to_video(
     expected_context_provenance: str | None = None,
     completed: Callable[[Any], None] | None = None,
 ) -> H3VideoOutput:
+    dit = "transformer_ref" if turbo_lora is None else {"transformer_ref", "ref2va_turbo"}
+    ctx.plan("text_encoder", {"vae", "audio_vae"}, dit, "audio_vae", "vae")
     ctx.raise_if_cancelled()
     view = model.for_request(ctx, seed=payload.seed)
     frames = frames_for(payload.duration_s) if delivery is None else delivery.sample_frames
