@@ -46,9 +46,10 @@ class PerWindow:
 
 def windows() -> None:
     torch.manual_seed(0)
+    config: dict[str, Any] = DIT
     dit = NaDiT(
         **{
-            **DIT,
+            **config,
             "vid_dim": 64,
             "txt_in_dim": 40,
             "txt_dim": 64,
@@ -56,13 +57,13 @@ def windows() -> None:
             "heads": 2,
             "head_dim": 32,
             "num_layers": LAYERS,
-            "block_type": DIT["block_type"][:LAYERS],
-            "window": DIT["window"][:LAYERS],
-            "window_method": DIT["window_method"][:LAYERS],
+            "block_type": config["block_type"][:LAYERS],
+            "window": config["window"][:LAYERS],
+            "window_method": config["window_method"][:LAYERS],
         }
     ).eval()
     roots = {"dit": dit}
-    sites = [module for _, module, _ in attention.sites(roots)]
+    sites: list[Any] = [module for _, module, _ in attention.sites(roots)]
     assert len(sites) == LAYERS and all(isinstance(m, WindowAttention) for m in sites)
     assert {(attention._dtype(m), attention._head_dim(m)) for m in sites} == {("bfloat16", 32)}
     sdpa = attention.BY_NAME["sdpa"]

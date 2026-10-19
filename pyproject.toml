@@ -22,7 +22,7 @@ exclude = ["^birefnet/birefnet/upstream/", "^seedvr2/seedvr2/upstream/"]
 module = [
     "torch.*", "torchvision.*", "transformers.*", "tokenizers.*", "numpy.*", "PIL.*",
     "safetensors.*", "diffusers.*", "tfsbench", "tensorfs", "tensorfs.*", "cozy_eval.*",
-    "av", "av.*",
+    "av", "av.*", "omegaconf", "omegaconf.*",
 ]
 ignore_missing_imports = true
 
@@ -41,10 +41,11 @@ disallow_subclassing_any = false
 disallow_untyped_decorators = false
 warn_unused_ignores = false
 
-# The staged pipeline subclasses Diffusers' own, which this light environment does not carry.
+# Model classes subclass Diffusers' and Torch's own, which this light environment does not carry.
 [[tool.mypy.overrides]]
-module = ["qwen_image_2.model"]
+module = ["qwen_image_2.model", "flux_3_klein.klein", "seedvr2.model"]
 disallow_subclassing_any = false
+warn_unused_ignores = false
 
 # Attributed upstream architecture is exercised by its real constructor and model proof.
 [[tool.mypy.overrides]]

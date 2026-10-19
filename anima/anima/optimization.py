@@ -373,7 +373,7 @@ def _block_forward(
     attn1, attn2, ff = block.attn1, block.attn2, block.ff
     # Rows quantized in the norm's pass reach the projections through modules nothing hooks.
     fused = not _hooked(attn1, attn2, ff, *ff.net)
-    consumers = (attn1.to_q, attn1.to_k, attn1.to_v) if fused else ()
+    consumers: tuple[Any, ...] = (attn1.to_q, attn1.to_k, attn1.to_v) if fused else ()
     normalized, gate = _normed(block.norm1, hidden_states, embedded_timestep, temb, consumers)
     output = attn1(normalized, image_rotary_emb=image_rotary_emb)
     hidden_states = torch.addcmul(hidden_states, gate, output)
