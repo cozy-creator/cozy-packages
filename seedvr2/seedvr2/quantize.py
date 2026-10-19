@@ -24,7 +24,7 @@ INT8 = QuantizationPlan(
 
 @invocable(memo_version="seedvr2-int8/1")
 async def int8(ctx: Context, *, source: Weights[RestorationModel], tel: Telemetry) -> ModelArtifact:
-    """The int8 lane (`int8-convrot256/1`): W8A8 on the int8 tensor cores."""
+    """The int8 lane (`int8.convrot`): W8A8 on the int8 tensor cores."""
     return quantize_into(
-        ctx, tel, source=source, plan=INT8, encoding="int8-convrot256/1", output="int8"
+        ctx, tel, source=source, plan=INT8, encoding="int8.convrot", output="int8"
     )

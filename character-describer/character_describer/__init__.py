@@ -151,8 +151,8 @@ INT8 = QuantizationPlan(
 
 @invocable(memo_version="character-describer-int8/1")
 async def int8(ctx: Context, *, source: Weights[Describer], tel: Telemetry) -> ModelArtifact:
-    """The int8 lane (`int8-convrot256/1`): W8A8 on int8 tensor cores; see `INT8`."""
-    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8-convrot256/1", output="int8")
+    """The int8 lane (`int8.convrot`): W8A8 on int8 tensor cores; see `INT8`."""
+    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8.convrot", output="int8")
 
 
 app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=24 << 30),), accelerator=False)

@@ -679,7 +679,7 @@ _QUANTIZER = (  # the Runtime code and native libraries that decide a lane's byt
     "cozy_runtime.derive.quantization",
     "cozy_runtime.derive.microscale",
     "cozy_runtime.derive.safetensors_io",
-    "tensorfs.derived",
+    "cozy_runtime.tensord_channels",
     MemoDistribution("tensorfs"),
     MemoDistribution("numpy"),
 )
@@ -701,7 +701,7 @@ async def fp8(
     tel: Telemetry,
 ) -> ModelArtifact:
     """Row-wise FP8 UNet weights from one BF16/F16 source; everything else inherits."""
-    return _quantize(ctx, tel, source, "fp8", "fp8-rowwise/1", max_relative_frobenius)
+    return _quantize(ctx, tel, source, "fp8", "fp8.rowwise", max_relative_frobenius)
 
 
 
@@ -725,8 +725,8 @@ INT8 = QuantizationPlan(
         ),
         "unet.*_blocks.1.attentions.*.transformer_blocks.*.attn2.to_[kv].weight",
         "unet.*_blocks.1.attentions.*.transformer_blocks.*.ff.net.2.weight",
-        "text_encoder.encoder.layers.*.self_attn.*_proj.weight",
-        "text_encoder.encoder.layers.*.mlp.fc[12].weight",
+        "text_encoder.text_model.encoder.layers.*.self_attn.*_proj.weight",
+        "text_encoder.text_model.encoder.layers.*.mlp.fc[12].weight",
         "text_encoder_2.text_model.encoder.layers.*.self_attn.*_proj.weight",
         "text_encoder_2.text_model.encoder.layers.*.mlp.fc[12].weight",
     ),
@@ -736,8 +736,8 @@ INT8 = QuantizationPlan(
 
 @invocable(memo_version="sdxl-int8/1")
 async def int8(ctx: Context, *, source: Weights[SdxlModel], tel: Telemetry) -> ModelArtifact:
-    """The int8 lane (`int8-convrot256/1`): W8A8 on int8 tensor cores; see `INT8`."""
-    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8-convrot256/1", output="int8")
+    """The int8 lane (`int8.convrot`): W8A8 on int8 tensor cores; see `INT8`."""
+    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8.convrot", output="int8")
 
 
 app.entrypoint(int8, name="int8", weights=(WeightsOutput("int8", max_new_bytes=_LANE_BYTES),), accelerator=False)

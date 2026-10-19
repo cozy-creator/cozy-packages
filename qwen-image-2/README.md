@@ -70,7 +70,7 @@ alone do not qualify GPU inference or the generated image.
 ## The int8 lane
 
 `int8` writes the fast lane for consumer cards: every linear of the 32 DiT blocks and of the
-text encoder's 36 language layers as `int8-convrot256/1` (each 256 input channels rotated by a
+text encoder's 36 language layers as `int8.convrot` (each 256 input channels rotated by a
 Hadamard, int8 per output row), served as W8A8 on the int8 tensor cores. Embeddings, the vision
 tower, the input/output projections, the modulation and the VAE keep their source bytes.
 

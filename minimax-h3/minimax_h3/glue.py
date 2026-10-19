@@ -16,7 +16,7 @@ between fused and eager.
 The `@triton.jit` functions are the kernel SOURCES (`GLUE`): the Runtime compiles them on the
 machine that runs them when the executor starts and `plan.load` waits for that build; a request
 never compiles. An fp8 epilogue is chosen per site from what the fill installed: a site whose
-every consumer is an `fp8-rowwise` encoded leaf hands it a `PreQuantized` operand; any other
+every consumer is an `fp8.rowwise` encoded leaf hands it a `PreQuantized` operand; any other
 consumer gets bf16.
 
 Not installable (eager serves, the code is reported): no CUDA sm80+, kernels absent or failed,

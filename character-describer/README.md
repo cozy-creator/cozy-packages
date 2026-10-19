@@ -44,7 +44,7 @@ cozy model publish <account>/qwen3.5-9b --release 0.2.0 --lane bf16=sha256:<chec
 
 ## The int8 lane
 
-`int8` writes every projection and MLP of the 32 language layers as `int8-convrot256/1`
+`int8` writes every projection and MLP of the 32 language layers as `int8.convrot`
 (W8A8 on the int8 tensor cores). The checkpoint drops from 17.5 to 11.1 GiB, so it fits a
 16 GB card; the vision tower, embeddings and LM head keep their bytes.
 

@@ -80,7 +80,7 @@ quantized lanes.
 ## Quantization
 
 Each family package owns its quantization recipe; `cozy_runtime.derive` owns the encodings
-(`int8-convrot256/1`, `fp8-rowwise/1`), the checkpoint transaction and the round-trip tripwire. A
+(`int8.convrot`, `fp8.rowwise`), the checkpoint transaction and the round-trip tripwire. A
 quantizer is a function that takes the family's raw checkpoint (`Weights[M]`, never constructed)
 and declares one weights output named for the lane it writes. A writer is never memoized;
 `memo_dependencies` names the code that decides its bytes, so a committed derivation replays
@@ -89,7 +89,7 @@ only for the same code:
 ```python
 @invocable(memo_dependencies=_QUANTIZER)
 async def fp8(ctx: Context, *, source: Weights[SdxlModel], max_relative_frobenius: float | None = None, tel: Telemetry) -> ModelArtifact:
-    plan = derive.plan(("unet",), "fp8-rowwise/1", max_relative_frobenius=max_relative_frobenius)
+    plan = derive.plan(("unet",), "fp8.rowwise", max_relative_frobenius=max_relative_frobenius)
     return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output="fp8")
 
 app.entrypoint(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=16 << 30),), accelerator=False)
