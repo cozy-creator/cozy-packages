@@ -89,7 +89,7 @@ def modules() -> dict[str, torch.nn.Module]:
 class Graph:
     def __init__(self, config: Config) -> None:
         if config.mapping().get("architecture") != ARCHITECTURE:
-            raise ValueError("SeedVR2 requires a normalized 7B checkpoint")
+            raise ValueError("SeedVR2 requires the 7B checkpoint TensorFS's seedvr2 table makes")
         self.components = {**modules(), "conditioning": Conditioning()}
 
 

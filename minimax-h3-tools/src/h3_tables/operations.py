@@ -13,9 +13,6 @@ from cozy_runtime.author import (
 )
 from cozy_runtime.derive.operations import QuantizationPlan
 from cozy_runtime.derive.operations import quantize as runtime_quantize
-from cozy_runtime.derive.quantization import (
-    prepare_quantization,
-)
 
 from .adaln_operations import (
     Selection,
@@ -26,26 +23,17 @@ from .adaln_operations import (
     select_adaln_weights,
 )
 from .lanes import Encoding
-from .model_config import parse_production_config
+from .model_config import DIT_COMPONENT, parse_production_config
 from .order import current_order, full_order
-from .quantization import h3_quantization_plan
-from .source import TARGET_COMPONENT
+from .quantization import dit_plan
 
 
 def quantization_plan() -> QuantizationPlan:
     """Bind reviewed H3 geometry and canonical order without loading a source model."""
-    reviewed = prepare_quantization(h3_quantization_plan())
-    components = tuple(TARGET_COMPONENT.values())
+    plan = dit_plan()
+    components = tuple(DIT_COMPONENT.values())
     selected = [
-        [
-            component,
-            tensor.key,
-            tensor.logical_dtype,
-            list(tensor.shape),
-            [[tensor.source_role, tensor.logical_dtype, list(tensor.shape)]],
-        ]
-        for component in components
-        for tensor in reviewed.tensors
+        [component, key, "bf16", list(shape)] for component in components for key, shape in plan
     ]
     assets = files(__package__).joinpath("assets")
     pruned = current_order(assets.joinpath("whole-order.json").read_bytes())
@@ -53,7 +41,7 @@ def quantization_plan() -> QuantizationPlan:
     full = full_order(sections, pruned.rows)
     return QuantizationPlan(
         components=components,
-        keys=tuple(tensor.key for tensor in reviewed.tensors),
+        keys=tuple(key for key, _ in plan),
         selected_schema_digest=canonical_json.digest(selected),
         source_order_digests=(
             pruned.digest,

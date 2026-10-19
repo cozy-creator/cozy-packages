@@ -16,9 +16,8 @@ from .upstream.birefnet import BiRefNet
 
 class BiRefNetGraph:
     def __init__(self, config: Config) -> None:
-        settings = config.mapping()
-        if settings.get("architecture") != "BiRefNet" or settings.get("bb_pretrained") is not False:
-            raise ValueError("BiRefNet requires its prepared complete-model checkpoint")
+        if config.mapping().get("bb_pretrained") is not False:
+            raise ValueError("BiRefNet's checkpoint is the complete model (bb_pretrained: false)")
         self.components = {
             "model": BiRefNet(config=BiRefNetConfig(bb_pretrained=False)).eval().half(),
         }

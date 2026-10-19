@@ -72,15 +72,14 @@ Code never reads the GPU's compute capability or name, or a kernel name, to choo
 ## SDXL sources
 
 A Civitai SDXL single file uploads servable: `cozy model upload civitai://<version> <org/model>`.
-TensorFS's routed converter writes the Diffusers constructor's keys in its order (f16), and the
-upload embeds the index, configs and tokenizers of the converter's pinned SDXL base reference.
-`convert_cozytensors` produces the same checkpoint. `cozy model quantize` (below) writes its
-quantized lanes.
+TensorFS's `sdxl.single_file` table writes Diffusers' keys (`text_encoder.text_model.…` included)
+in constructor order (f16), with the index, configs and tokenizers of its pinned SDXL base
+reference. `cozy model quantize` (below) writes its quantized lanes.
 
 ## Quantization
 
 Each family package owns its quantization recipe; `cozy_runtime.derive` owns the encodings
-(`int8-convrot256/1`, `fp8-rowwise/1`), the checkpoint transaction and the round-trip tripwire. A
+(`int8.convrot`, `fp8.rowwise`), the checkpoint transaction and the round-trip tripwire. A
 quantizer is a function that takes the family's raw checkpoint (`Weights[M]`, never constructed)
 and declares one weights output named for the lane it writes. A writer is never memoized;
 `memo_dependencies` names the code that decides its bytes, so a committed derivation replays
@@ -89,7 +88,7 @@ only for the same code:
 ```python
 @invocable(memo_dependencies=_QUANTIZER)
 async def fp8(ctx: Context, *, source: Weights[SdxlModel], max_relative_frobenius: float | None = None, tel: Telemetry) -> ModelArtifact:
-    plan = derive.plan(("unet",), "fp8-rowwise/1", max_relative_frobenius=max_relative_frobenius)
+    plan = derive.plan(("unet",), "fp8.rowwise", max_relative_frobenius=max_relative_frobenius)
     return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output="fp8")
 
 app.entrypoint(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=16 << 30),), accelerator=False)
@@ -221,10 +220,9 @@ Qwen3-VL conditioner, one video VAE and one audio VAE at their official FP32 des
 and one scheduler contract. The conditioner retains the complete vision stack, token embedding,
 and language layers 0–49; its parameterless final norm exposes the same pre-norm
 `hidden_states[50]` as full Qwen, while layers 50–63 and the language head are absent from both
-fill and execution. The same construction carries task-stamped
-`fl2va_dit` and `ref2va_dit` components; Runtime's component leases make only the selected task DiT
-resident while its action runs. `transformer` and `transformer_ref` exist only as the explicit
-adapter names expected by the two upstream Diffusers workflows. The interim community curve
+fill and execution. The same construction carries task-stamped `transformer` and `transformer_ref`
+components (Diffusers' names); Runtime's component leases make only the selected task DiT
+resident while its action runs. The interim community curve
 architecture was deleted instead of retained as a second graph.
 
 Artifact production takes ordering only from Runtime's exact construction contract. The
@@ -423,7 +421,7 @@ The cheap gates require no weights or GPU:
 ```bash
 uv venv --python 3.12 .venv-check
 uv pip install --python .venv-check/bin/python \
-  "cozy-runtime>=0.27,<1" \
+  "cozy-runtime>=0.30,<1" \
   msgspec protobuf grpcio av mypy ruff
 
 .venv-check/bin/python scripts/fence.py

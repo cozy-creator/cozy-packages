@@ -1,460 +1,117 @@
 #!/usr/bin/env python3
-"""What each lane DECLARES, proved over the exact H3 census with no weights and no GPU.
+"""The H3 lanes and quantize recipes resolved against real cozytensors/1 headers, on the CPU.
 
-The five source components are rebuilt from facts already in this tree: the two DiTs from
-the package's own 638-row Diffusers contract plus the one native-only buffer, and the
-conditioner and both VAEs from the banked upstream safetensors headers under
-`tensorfs/vectors/h3-headers/` — headers only, so not one weight byte is read or fetched.
-Every lane's target declaration is then computed by the shipping `job._lane_targets`, and
-this proof checks what each lane replaces, what it leaves inherited by reference, that the
-declared output ceilings are the ones the shipped descriptor publishes, that a treatment
-selects exactly the rows the acceleration lanes ruled on, and every refusal.
-
-Run: .venv/bin/python scripts/lane-proof.py
+`--pruned` is a released AdaLN-pruned bf16 lane's header and `--full` a bf16-full lane's, both
+with D4's component names. Everything that decides an output's tensors runs on them: the rows a
+lane copies and computes, every treatment's selection, the recipes' per-component counts (the
+production lanes': 313/313/350, nvfp4 276/276 plus the conditioner at int8.convrot) and the
+refusals. No weight byte is read.
 """
 
 from __future__ import annotations
 
-import glob
-import json
-import math
-import struct
-import sys
+import argparse
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, NoReturn
+from types import SimpleNamespace
+from typing import Any
 
-from cozy_runtime.author import (
-    UnsupportedInput,
-)
-from cozy_runtime.derive.quantization import (
-    prepare_quantization,
-)
-from h3_tables import job, lanes
-from h3_tables.model_config import parse_production_config
-from h3_tables.quantization import h3_quantization_plan
-from h3_tables.source import full_targets as source_full_targets
-from h3_tables.source import official_full_specs
-from source_geometry import VIDEO_VAE_ROWS, conditioner_rows
-from tensorfs.derived import Part, Source, SourceInspection, Target, Tensor
+import tensorfs
+from cozy_runtime.author import UnsupportedInput
+from h3_tables import adaln_operations, job, lanes
+from h3_tables.model_config import COMPONENTS, DIT_COMPONENT, parse_production_config
+from h3_tables.order import current_order, full_order
 
-PROJECT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
+VECTORS = ROOT / "scripts" / "lane-headers"
 
 
-def _headers() -> Path:
-    """The banked upstream H3 safetensors headers — metadata only, no weight bytes.
-
-    A worktree lives beside its repo rather than inside the workspace, so the corpus is
-    located by walking up from this file.
-    """
-    if len(sys.argv) > 1:
-        return Path(sys.argv[1])
-    for parent in (PROJECT, *PROJECT.parents):
-        candidate = parent / "tensorfs/vectors/h3-headers"
-        if candidate.is_dir():
-            return candidate
-    _fail("no tensorfs/vectors/h3-headers corpus found beside this checkout")
+def source(path: Path) -> Any:
+    """A granted checkpoint as the producer reads it: its parsed header."""
+    return SimpleNamespace(checkpoint=tensorfs.Checkpoint.parse(path.read_bytes()), manifest="")
 
 
-LOGICAL = {"F32": "f32", "F16": "f16", "BF16": "bf16"}
-
-
-def _fail(what: str) -> NoReturn:
-    raise SystemExit(f"lane-proof: {what}")
-
-
-def _refuses(what: str, code: str, action: Any) -> None:
+def refuses(code: str, call: Callable[[], object]) -> None:
     try:
-        action()
-    except (UnsupportedInput, ValueError) as error:
-        detail = getattr(error, "code", "")
-        if code and detail and detail != code:
-            _fail(f"{what} refused with code {detail!r}, expected {code!r}")
-        print(f"  refused {what}: {str(error).splitlines()[0][:110]}")
+        call()
+    except UnsupportedInput as exc:
+        assert exc.code == code, f"refused {exc.code}, expected {code}: {exc}"
         return
-    _fail(f"{what} did not refuse")
+    raise AssertionError(f"expected the refusal {code}")
 
 
-# ------------------------------------------------------------------ arm A: declarations
+def counts(selections: list[lanes.Selection]) -> dict[str, tuple[str | None, int]]:
+    return {s.component: (s.treatment.encode, len(s.encoded)) for s in selections}
 
 
-def _banked(pattern: str) -> dict[str, dict[str, Any]]:
-    corpus = _headers()
-    rows: dict[str, dict[str, Any]] = {}
-    for path in sorted(glob.glob(str(corpus / pattern))):
-        raw = Path(path).read_bytes()
-        length = struct.unpack("<Q", raw[:8])[0]
-        document = json.loads(raw[8 : 8 + length])
-        document.pop("__metadata__", None)
-        rows.update(document)
-    if not rows:
-        _fail(f"no banked header rows matched {pattern!r} under {corpus}")
-    return rows
-
-
-def full_source_structures() -> dict[str, SourceInspection]:
-    """The exact FULL H3 source structure, rebuilt from facts already in this tree."""
-    sections = parse_production_config(job._asset("model-config.json"))
-    components: dict[str, dict[str, Tensor]] = {}
-    for component, section in (("fl2va_dit", "transformer"), ("ref2va_dit", "transformer_ref")):
-        components[component] = {
-            key: Tensor(dtype, tuple(shape), job.PLAIN_SPEC, {"value": Part(dtype, tuple(shape))})
-            for key, (dtype, shape) in official_full_specs(sections[section]).items()
-        }
-        components[component]["rope.inv_freq"] = Tensor(
-            "f32", (16,), job.PLAIN_SPEC, {"value": Part("f32", (16,))}
-        )
-    for component, pattern in (
-        ("text_encoder", "text_encoder__model-*.safetensors"),
-        ("video_vae", "vae__diffusion_pytorch_model-*.safetensors"),
-        ("audio_vae", "audio_vae__diffusion_pytorch_model.safetensors"),
+def recipes(pruned: Any) -> None:
+    dits = {"transformer", "transformer_ref"}
+    for encoding, dit_scheme, dit_rows, te_scheme in (
+        ("fp8.rowwise", "fp8.rowwise", 313, "fp8.rowwise"),
+        ("int8.convrot", "int8.convrot", 313, "int8.convrot"),
+        ("nvfp4", "nvfp4", 276, "int8.convrot"),
     ):
-        components[component] = {
-            key: Tensor(
-                LOGICAL[row["dtype"]],
-                tuple(row["shape"]),
-                job.PLAIN_SPEC,
-                {"value": Part(LOGICAL[row["dtype"]], tuple(row["shape"]))},
-            )
-            for key, row in _banked(pattern).items()
-        }
-    census = {
-        "fl2va_dit": 639,
-        "ref2va_dit": 639,
-        "text_encoder": 1058,
-        "video_vae": 703,
-        "audio_vae": 1087,
-    }
-    observed = {component: len(rows) for component, rows in components.items()}
-    if observed != census:
-        _fail(f"rebuilt source census is {observed}, expected {census}")
-    # The geometry the conformance proofs derive without this corpus is these headers.
-    banked = {
-        component: {key: (tensor.logical_dtype, tensor.shape) for key, tensor in rows.items()}
-        for component, rows in components.items()
-    }
-    if banked["text_encoder"] != conditioner_rows() or VIDEO_VAE_ROWS.items() - banked[
-        "video_vae"
-    ].items():
-        _fail("source_geometry.py is not the banked conditioner and video VAE geometry")
-    # Header census only: this fixture grants no native source or payload access.
-    return {
-        alias: SourceInspection(
-            Source("sha256:" + "00" * 32, 0),
-            {component: components[component] for component in names},
-            {"model": b"{}"},
-        )
-        for alias, names in {
-            "dits": ("fl2va_dit", "ref2va_dit"),
-            "shared": ("text_encoder", "video_vae", "audio_vae"),
-        }.items()
-    }
+        got = counts(job.quantizer_selections(pruned, encoding))
+        want = {dit: (dit_scheme, dit_rows) for dit in dits} | {"text_encoder": (te_scheme, 350)}
+        assert got == want, f"{encoding}: {got}"
+        print(f"PASS --{encoding}: {got}")
+    present = pruned.checkpoint.tensors
+    refuses("h3_component_refused", lambda: lanes.select(
+        "audio_vae", lanes.Treatment(encode="fp8.rowwise"), pruned, present["audio_vae"]))
+    refuses("h3_keep_unmatched", lambda: lanes.select(
+        "text_encoder", lanes.Treatment(encode="fp8.rowwise", keep=("model.no_such.weight",)),
+        pruned, present["text_encoder"]))
+    refuses("h3_lane_source", lambda: job.lane_rows("bf16-full", present))
+    print("PASS refusals: audio_vae, an unmatched keep, a pruned source for a lane")
 
 
-def _targets(lane: lanes.Lane, granted: dict[str, SourceInspection]) -> dict[str, Target]:
+def lanes_from_full(full: Any) -> None:
+    present = full.checkpoint.tensors
     sections = parse_production_config(job._asset("model-config.json"))
-    full_targets = source_full_targets()
-    plan = prepare_quantization(h3_quantization_plan())
-    selections = {
-        component: lanes.select(
-            component,
-            treatment,
-            lanes.carried(full_targets[component], granted[full_targets[component].source]),
-            dit_plan=plan,
-        )
-        for component, treatment in lane.components.items()
-    }
-    targets: dict[str, Target] = job._lane_targets(
-        lane, sections, job._table_additions(sections), full_targets, selections
-    )
-    return targets
-
-
-def arm_census() -> None:
-    print("arm A — lane declarations over the exact H3 census")
-    granted = full_source_structures()
-    sections = parse_production_config(job._asset("model-config.json"))
-    tables = job._table_additions(sections)
-    table_rows = {task: len(rows) for task, rows in tables.items()}
-    if set(table_rows.values()) != {51}:
-        _fail(f"table additions are {table_rows}, expected 51 rows per task")
-
-    inherited_everywhere = {"video_vae", "audio_vae"}
-    for name, lane in lanes.LANES.items():
-        targets = _targets(lane, granted)
-        if set(targets) != set(lanes.COMPONENTS):
-            _fail(f"{name} declares components {sorted(targets)}")
-        untouched = {
-            component
-            for component in inherited_everywhere
-            if not targets[component].add and component not in lane.components
-        }
-        if untouched != inherited_everywhere:
-            _fail(f"{name} rewrites a shared component: {sorted(inherited_everywhere - untouched)}")
-        conditioner = len(targets["text_encoder"].add)
-        if conditioner != (350 if lane.components else 0):
-            _fail(f"{name} encodes {conditioner} conditioner rows, expected 350 or none")
-        dit = targets["fl2va_dit"]
-        added = len(dit.add)
-        replaced = len(dit.drop)
-        print(
-            f"  {name:<20} modulation={lane.modulation:<13} "
-            f"fl2va_dit +{added} -{replaced}  text_encoder +{len(targets['text_encoder'].add)}"
-        )
-        if lane.modulation == "full":
-            if added or replaced != 1:
-                _fail(f"{name} FULL DiT target is +{added} -{replaced}, expected +0 -1")
-        else:
-            encoded = 313 if lane.components else 0
-            # 51 table rows added; 1 native-only + 106 modulation + the encoded set dropped.
-            if added != 51 + encoded or replaced != 1 + 106 + encoded:
-                _fail(
-                    f"{name} pruned DiT target is +{added} -{replaced}, "
-                    f"expected +{51 + encoded} -{1 + 106 + encoded}"
-                )
-
-    # The ceilings the descriptor publishes are derived from the catalogue, not typed twice.
-    ceilings = {output.name: output.max_new_bytes for output in job.LANE_OUTPUTS}
-    shipped = {
-        "bf16-full": 12884967424,
-        "bf16": 15032516608,
-        "fp8": 83751993344 + (56 << 30),
-    }
-    if ceilings != shipped:
-        _fail(f"lane ceilings changed: {ceilings}")
-    print(f"  lane output ceilings: {shipped}")
-
-    _component_selection(granted)
-    _refusals(granted)
-
-
-def _component_selection(granted: dict[str, SourceInspection]) -> None:
-    print("\n  per-component selection on the real components")
-    shared = granted["shared"]
-
-    # The video VAE: h3a-027 §5 predicted 216 decoder ViT linears. The structural selector
-    # takes 217 — the 216 block linears PLUS decoder.proj_out.weight [3072, 2048]. It skips
-    # decoder.proj_in.weight [2048, 24] on block alignment and every Conv3d on rank.
-    video = lanes.select(
-        "video_vae",
-        lanes.Treatment(cast="f16", encode="fp8-rowwise/1"),
-        lanes.carried(source_full_targets()["video_vae"], shared),
-    )
-    encoded = set(video.encoded)
-    if len(encoded) != 217 or any(not key.startswith("decoder.") for key in encoded):
-        _fail(f"video_vae selected {len(encoded)} keys, or reached outside the decoder")
-    if "decoder.proj_out.weight" not in encoded or "decoder.proj_in.weight" in encoded:
-        _fail("video_vae selection is not the exact 216 block linears + proj_out")
-    rows = shared.components["video_vae"]
-    if len(video.cast) != len(rows) - len(encoded):
-        _fail(f"video_vae casts {len(video.cast)} of {len(rows)} rows, expected the remainder")
-    print(
-        f"    video_vae cast=f16 encode=fp8-rowwise/1 -> {len(encoded)} encoded "
-        f"(216 block linears + decoder.proj_out.weight), {len(video.cast)} cast, "
-        f"{len(rows) - len(video.replaced)} inherited"
-    )
-
-    # The conditioner, scoped to the rows the reviewed 902-row target actually carries.
-    # h3a-028's ruling: fp8-rowwise/1 over exactly the 350 layers.{0..49} projections, with
-    # TEXT_ENCODER_KEEP holding back the token embedding, the 27-block visual tower and the
-    # mergers. This arm proves the mechanism expresses that ruling EXACTLY, and it is the
-    # one place the two lanes' numbers must agree.
-    conditioner = lanes.carried(source_full_targets()["text_encoder"], shared)
-    if len(conditioner.components["text_encoder"]) != 902:
-        _fail(
-            f"conditioner carries {len(conditioner.components['text_encoder'])} rows, expected 902"
-        )
-    naive = lanes.select("text_encoder", lanes.Treatment(encode="fp8-rowwise/1"), conditioner)
-    curated = lanes.select(
-        "text_encoder",
-        lanes.Treatment(encode="fp8-rowwise/1", keep=lanes.TEXT_ENCODER_KEEP),
-        conditioner,
-    )
-    if "lm_head.weight" in naive.encoded:
-        _fail("the selection reached a row the reviewed conditioner target drops")
-    if len(naive.encoded) != 441 or len(curated.encoded) != 350:
-        _fail(
-            f"conditioner selection is {len(naive.encoded)} structural / "
-            f"{len(curated.encoded)} kept, expected 441 / 350 (h3a-028)"
-        )
-    if any(".layers." not in key for key in curated.encoded):
-        _fail("the kept conditioner selection reached outside layers.{0..49}")
-    sizes = {key: math.prod(t.shape) for key, t in conditioner.components["text_encoder"].items()}
-    encoded_bytes = sum(sizes[key] for key in curated.encoded) * 2
-    if encoded_bytes != 48_758_784_000:
-        _fail(f"conditioner selection is {encoded_bytes} source bytes, expected 48758784000")
-    held = sum(sizes[key] for key in lanes.TEXT_ENCODER_KEEP) * 2
-    print(
-        f"    text_encoder encode=fp8-rowwise/1 -> {len(naive.encoded)} selected structurally, "
-        f"{len(curated.encoded)} with TEXT_ENCODER_KEEP ({len(lanes.TEXT_ENCODER_KEEP)} keys); "
-        f"{encoded_bytes / 10**9:.2f} GB encoded, {held / 2**30:.2f} GiB of embedding + visual "
-        "tower held at bf16 that the shape rule would have taken"
-    )
-    _refuses(
-        "naming linear_fc2 in the keep list (4304 % 32 == 16, never selected)",
-        "h3_keep_unmatched",
-        lambda: lanes.select(
-            "text_encoder",
-            lanes.Treatment(
-                encode="fp8-rowwise/1",
-                keep=(*lanes.TEXT_ENCODER_KEEP, "model.visual.blocks.0.mlp.linear_fc2.weight"),
-            ),
-            conditioner,
-        ),
-    )
-
-
-def _refusals(granted: dict[str, SourceInspection]) -> None:
-    print("\n  red arms")
-    shared = granted["shared"]
-    audio = shared.components["audio_vae"]
-    representable = [
-        key
-        for key, t in audio.items()
-        if key.endswith(".weight") and len(t.shape) == 2 and t.shape[1] % 32 == 0
-    ]
-    if len(representable) != 6 or any("pre_block" not in key for key in representable):
-        _fail(f"audio_vae has {len(representable)} structurally selectable rows, expected 6")
-    print(
-        f"    audio_vae carries {len(representable)} structurally selectable rows "
-        f"({', '.join(sorted(representable)[:2])}, ...) — all encoder "
-        "pre_block linears, so a shape rule would NOT refuse it"
-    )
-    _refuses(
-        "audio_vae fp8 treatment",
-        "h3_component_refused",
-        lambda: lanes.select("audio_vae", lanes.Treatment(encode="fp8-rowwise/1"), shared),
-    )
-    _refuses(
-        "audio_vae f16 cast",
-        "h3_component_refused",
-        lambda: lanes.select("audio_vae", lanes.Treatment(cast="f16"), shared),
-    )
-    _refuses(
-        "a lane with an encoding no lane of the vocabulary stores",
-        "",
-        lambda: lanes.validate_catalogue(
-            {"int4": lanes.Lane("adaln-pruned", {"fl2va_dit": lanes.Treatment(encode="int4/1")})}  # type: ignore[arg-type]
-        ),
-    )
-    _refuses(
-        "a lane that treats the audio VAE",
-        "",
-        lambda: lanes.validate_catalogue(
-            {"audio-fp8": lanes.Lane("adaln-pruned", {"audio_vae": lanes._DIT_FP8})}
-        ),
-    )
-    _refuses(
-        "a FULL lane that treats a component",
-        "",
-        lambda: lanes.validate_catalogue(
-            {"full-cast": lanes.Lane("full", {"video_vae": lanes.Treatment(cast="f16")})}
-        ),
-    )
-    _refuses(
-        "a keep entry that excludes nothing",
-        "h3_keep_unmatched",
-        lambda: lanes.select(
-            "video_vae",
-            lanes.Treatment(encode="fp8-rowwise/1", keep=("decoder.no_such.weight",)),
-            shared,
-        ),
-    )
-    _refuses(
-        "a cast that changes nothing",
-        "h3_treatment_inert",
-        lambda: lanes.select("text_encoder", lanes.Treatment(cast="bf16"), shared),
-    )
-    _refuses(
-        "a treatment that neither casts nor encodes",
-        "",
-        lambda: lanes.Treatment(),
-    )
-    _refuses(
-        "a lane requesting a repeated output",
-        "h3_lanes_repeated",
-        lambda: job._requested(("bf16-full", "bf16-full")),
-    )
-
-
-def _pruned_source(dit_spec: str | None) -> SourceInspection:
-    """One AdaLN-pruned lane's structure: DiT plan keys plain or carrying `dit_spec`."""
-    granted = full_source_structures()
-    sections = parse_production_config(job._asset("model-config.json"))
-    tables = job._table_additions(sections)
-    plan = prepare_quantization(h3_quantization_plan())
-    encoded = {tensor.key for tensor in plan.tensors}
-    components: dict[str, dict[str, Tensor]] = {}
-    for task, section in job.SOURCE_SECTION.items():
-        component = job.TARGET_COMPONENT[task]
-        removed = set(job.removed_keys(job.H3Topology.from_config(sections[section])))
-        rows = {
-            key: tensor
-            for key, tensor in granted["dits"].components[component].items()
-            if key not in removed and key != "rope.inv_freq"
-        }
-        rows.update(tables[task])
-        if dit_spec is not None:
-            for key in encoded:
-                rows[key] = Tensor(
-                    "bf16", rows[key].shape, dit_spec, {"data": Part("u8", rows[key].shape)}
-                )
-        components[component] = rows
-    dropped = set(source_full_targets()["text_encoder"].drop)
-    components["text_encoder"] = {
-        key: tensor
-        for key, tensor in granted["shared"].components["text_encoder"].items()
-        if key not in dropped
-    }
-    for component in ("video_vae", "audio_vae"):
-        components[component] = dict(granted["shared"].components[component])
-    return SourceInspection(Source("sha256:" + "00" * 32, 0), components, {"model": b"{}"})
-
-
-def arm_quantizer() -> None:
-    """`cozy model quantize --fp8|--int8|--nvfp4`: what H3's recipe encodes on each lane."""
-    print("\narm B — the fp8/int8 quantizer over pruned lanes")
-    cases = (
-        ("bf16 --fp8", None, "fp8-rowwise/1", [313, 313, 350]),
-        ("bf16 --int8", None, "int8-convrot256/1", [313, 313, 350]),
-        ("bf16 --nvfp4", None, "nvfp4-w4a4/1", [276, 276, 350]),
-        ("fp8 --fp8", job.FP8_SPEC, "fp8-rowwise/1", [350]),
-    )
-    for name, spec, encoding, expected in cases:
-        selections = job._quantizer_selections(_pruned_source(spec), encoding)  # type: ignore[arg-type]
-        counts = [len(selection.encoded) for selection in selections]
-        if counts != expected or selections[-1].component != "text_encoder":
-            _fail(f"{name} encodes {counts}, expected {expected}")
-        print(f"  {name:<22} encodes {', '.join(s.component for s in selections)} {counts}")
-    te = job._quantizer_selections(_pruned_source(job.FP8_SPEC), "fp8-rowwise/1")[0]
-    if any(".layers." not in key for key in te.encoded) or set(te.encoded) & set(
-        lanes.TEXT_ENCODER_KEEP
+    current = current_order(job._asset("whole-order.json")).rows
+    for name, order_want, computed_want in (
+        ("bf16-full", full_order(sections, current), 0),
+        ("bf16", current, 102),
+        ("fp8", current, 102),
     ):
-        _fail("the conditioner selection reached outside layers.{0..49}")
-    _refuses(
-        "--int8 over an fp8 DiT",
-        "h3_quantize_mixed",
-        lambda: job._quantizer_selections(_pruned_source(job.FP8_SPEC), "int8-convrot256/1"),
-    )
-    _refuses(
-        "a full-modulation source",
-        "h3_quantize_unpruned",
-        lambda: job._quantizer_selections(full_source_structures()["dits"], "fp8-rowwise/1"),
-    )
-    source = _pruned_source(job.FP8_SPEC)
-    te_rows = source.components["text_encoder"]
-    for key in te.encoded:
-        te_rows[key] = Tensor("bf16", te_rows[key].shape, job.FP8_SPEC, {})
-    _refuses(
-        "a lane whose recipe is already fp8",
-        "h3_quantize_nothing",
-        lambda: job._quantizer_selections(source, "fp8-rowwise/1"),
-    )
+        order, carried, computed = job.lane_rows(name, present)
+        assert order == tuple(order_want) and len(computed) == computed_want, name
+        assert set(carried) == set(COMPONENTS), name
+        assert all(row in computed or row[1] in carried[row[0]] for row in order), name
+        selections = [
+            lanes.select(c, t, full, carried[c], dit_plan=job.dit_plan(),
+                         allow_inert=c in lanes.NORMALISED_COMPONENTS)
+            for c, t in lanes.lane_treatments(job.LANES[name]).items()
+        ]  # fmt: skip
+        encoded = {s.component: len(s.encoded) for s in selections if s.encoded}
+        cast = {s.component: len(s.cast) for s in selections}
+        sizes = {c: len(rows) for c, rows in carried.items()}
+        print(f"PASS {name}: {len(order)} rows ({len(computed)} computed), carried {sizes}, "
+              f"encoded {encoded}, cast {cast}")  # fmt: skip
+        if name == "fp8":
+            assert encoded == {"transformer": 313, "transformer_ref": 313, "text_encoder": 350}
+    refuses("h3_quantize_unpruned", lambda: job.quantizer_selections(full, "fp8.rowwise"))
+    print("PASS a full source is refused by the quantize recipes")
+
+
+def adaln(pruned: Any, full: Any) -> None:
+    tables = job.retable_rows(pruned.checkpoint.tensors, full.checkpoint.tensors)
+    assert {c: len(keys) for c, keys in tables.items()} == {c: 51 for c in DIT_COMPONENT.values()}
+    assert adaln_operations._body_kind(pruned.checkpoint.tensors) is True
+    assert adaln_operations._body_kind(full.checkpoint.tensors) is False
+    print("PASS retable reads 51 tables per DiT; the AdaLN operations tell full from pruned")
 
 
 def main() -> None:
-    arm_census()
-    arm_quantizer()
-    print("\nlane-proof green")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pruned", type=Path, default=VECTORS / "minimax-h3.cozytensors")
+    parser.add_argument("--full", type=Path, default=VECTORS / "minimax-h3-full.cozytensors")
+    args = parser.parse_args()
+    pruned, full = source(args.pruned), source(args.full)
+    recipes(pruned)
+    lanes_from_full(full)
+    adaln(pruned, full)
+    print("lane-proof green")
 
 
 if __name__ == "__main__":

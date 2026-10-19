@@ -7,15 +7,11 @@ from typing import Annotated
 import msgspec
 from PIL import Image
 
-from cozy_runtime.author import (
-    App, AssetBound, Context, ImageAsset, Outputs, Telemetry, WeightsOutput,
-)
+from cozy_runtime.author import App, AssetBound, Context, ImageAsset, Outputs, Telemetry
 
 from .model import BackgroundRemovalModel
-from .normalize import normalize
 
 app = App()
-app.entrypoint(normalize, weights=(WeightsOutput("model", max_new_bytes=1 << 20),), accelerator=False)
 
 
 class RemoveBackgroundInput(msgspec.Struct):

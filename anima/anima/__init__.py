@@ -218,17 +218,14 @@ _QUANTIZER = (  # the Runtime code and native libraries that decide a lane's byt
     "cozy_runtime.derive.quantization",
     "cozy_runtime.derive.microscale",
     "cozy_runtime.derive.safetensors_io",
-    "tensorfs.derived",
+    "cozy_runtime.tensord_channels",
     MemoDistribution("tensorfs"),
     MemoDistribution("numpy"),
 )
 
 
-def _quantize(
-    ctx: Context, tel: Telemetry, source: Weights[AnimaModel], lane: str, encoding: str, tripwire: float | None
-) -> ModelArtifact:
-    plan = derive.plan(("transformer",), encoding, max_relative_frobenius=tripwire)
-    return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output=lane)
+#: The fp8 lane: the DiT's block-aligned rank-2 weights, row-wise.
+FP8 = ("transformer",)
 
 
 @invocable(memo_dependencies=_QUANTIZER)
@@ -240,8 +237,8 @@ async def fp8(
     tel: Telemetry,
 ) -> ModelArtifact:
     """Row-wise FP8 DiT weights from one BF16/F16 source; everything else inherits."""
-    return _quantize(ctx, tel, source, "fp8", "fp8-rowwise/1", max_relative_frobenius)
-
+    plan = derive.plan(FP8, "fp8.rowwise", max_relative_frobenius=max_relative_frobenius)
+    return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output="fp8")
 
 
 #: The int8 lane: every attention and MLP linear of the 28 DiT blocks and of the Qwen3 text
@@ -262,8 +259,8 @@ INT8 = QuantizationPlan(
 
 @invocable(memo_version="anima-int8/1")
 async def int8(ctx: Context, *, source: Weights[AnimaModel], tel: Telemetry) -> ModelArtifact:
-    """The int8 lane (`int8-convrot256/1`): W8A8 on int8 tensor cores; see `INT8`."""
-    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8-convrot256/1", output="int8")
+    """The int8 lane (`int8.convrot`): W8A8 on int8 tensor cores; see `INT8`."""
+    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8.convrot", output="int8")
 
 
 app.entrypoint(int8, name="int8", weights=(WeightsOutput("int8", max_new_bytes=_LANE_BYTES),), accelerator=False)

@@ -38,6 +38,7 @@ checkpoint or revision — `package.toml` and the deploy binding do.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
@@ -74,7 +75,7 @@ from cozy_runtime.author import (
     invocable,
     uses_components,
 )
-from diffusers import AutoencoderKL, EulerDiscreteScheduler, UNet2DConditionModel
+from diffusers import AutoencoderKL, DDIMScheduler, EulerDiscreteScheduler, UNet2DConditionModel
 from hidiffusion import (  # type: ignore[import-not-found,import-untyped]
     apply_hidiffusion,
     remove_hidiffusion,
@@ -174,11 +175,12 @@ class Txt2ImgInput(msgspec.Struct):
     #: None runs HiDiffusion where base SDXL cannot go: above tier 1. An explicit choice
     #: always runs, and the result warns where it is known to hurt.
     hidiffusion: bool | None = None
-    #: LAYER 1 of the two-layer clamp. These bounds REJECT; they never quietly clip. The
-    #: `ModelDefault` marker is what makes the field omittable on the wire and concrete
-    #: before the handler runs — the handler sees `int`, never `int | None`.
-    steps: Annotated[ModelDefault[int], msgspec.Meta(ge=1, le=50)] = 20
-    guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=0.0, le=20.0)] = 7.0
+    #: LAYER 1 of the two-layer clamp. These bounds REJECT; they never quietly clip.
+    #: `ModelDefault` lets a checkpoint or adapter recipe supply an omitted value.
+    #: None, from the wire or a recipe: HiDiffusion's recipe (30 steps, guidance 7.5) when it
+    #: runs, else 20 steps at 7.0.
+    steps: ModelDefault[Annotated[int, msgspec.Meta(ge=1, le=50)] | None] = None
+    guidance: ModelDefault[Annotated[float, msgspec.Meta(ge=0.0, le=20.0)] | None] = None
     #: Given, the request is memoized; omitted, the package draws one and reports it.
     seed: int | None = None
 
@@ -199,6 +201,10 @@ class ImageOutput(msgspec.Struct):
     height: int
     steps: int
     guidance: float
+    sampler: str
+    """`ddim eta=1.0` (HiDiffusion's recipe) or `euler`."""
+    negative_prompt: str
+    """The negative prompt that ran."""
     classifier_free: bool
     """Whether the negative branch ran. Value-plane gating, made observable: a caller can
     see that `guidance <= 1.0` bought it a one-pass step rather than having to trust it."""
@@ -219,12 +225,20 @@ class ImageOutput(msgspec.Struct):
 def _hidiffusion_unet_type() -> type[Any]:
     """The patched UNet owner, imported only when Runtime constructs the model."""
     class HiDiffusionUNet(UNet2DConditionModel):
-        """Select and reset the request's denoising implementation before step zero."""
+        """Select and reset the request's denoising implementation before step zero.
+
+        HiDiffusion's blocks count steps on themselves, and its window blocks draw their shift
+        from torch's CPU RNG. A block that runs again (the Runtime's out-of-memory recovery, a
+        band) would advance both. So before every call each counting block is set to the
+        request's step (`cozy_step`), and each window block draws from the request's seed, step
+        and its own index: a block runs the same however often it runs."""
 
         _cozy_base_num_upsamplers: int
         _cozy_hidiffusion_active: bool
+        cozy_step = 0
+        _cozy_seed = 0
 
-        def begin_denoise_request(self, steps: int, hidiffusion: bool) -> None:
+        def begin_denoise_request(self, steps: int, hidiffusion: bool, seed: int) -> None:
             if steps <= 0:
                 raise ValueError("HiDiffusion requires a positive timestep count")
             active = bool(getattr(self, "_cozy_hidiffusion_active", False))
@@ -232,22 +246,31 @@ def _hidiffusion_unet_type() -> type[Any]:
                 if hidiffusion:
                     self.num_upsamplers = self._cozy_base_num_upsamplers
                     apply_hidiffusion(self)
+                    window = 0
+                    for block in [m for m in self.modules() if hasattr(m, "_parent")]:
+                        if hasattr(block, "max_timestep"):
+                            hook: Any = self._cozy_count
+                        else:
+                            hook, window = functools.partial(self._cozy_draw, window), window + 1
+                        self.info["hooks"].append(block.register_forward_pre_hook(hook))
                 else:
                     remove_hidiffusion(self)
                     self.num_upsamplers = self._cozy_base_num_upsamplers
                 self._cozy_hidiffusion_active = hidiffusion
             if not hidiffusion:
                 return
-            self._num_timesteps = steps
-            info = getattr(self, "info", None)
-            if isinstance(info, dict):
-                info["size"] = None
-                info["upsample_size"] = None
+            self._num_timesteps, self._cozy_seed = steps, seed
+            self.info["size"] = self.info["upsample_size"] = None
             for module in self.modules():  # type: ignore[attr-defined]
-                if hasattr(module, "timestep"):
-                    module.timestep = 0
                 if hasattr(module, "max_timestep"):
                     module.max_timestep = steps
+
+        def _cozy_count(self, block: Any, *_: Any) -> None:
+            block.timestep = self.cozy_step
+
+        def _cozy_draw(self, index: int, *_: Any) -> None:
+            draw = (self._cozy_seed * 1_000_003 + self.cozy_step * 1_009 + index) % 2**63
+            torch.default_generator.manual_seed(draw)  # the CPU RNG `torch.rand(1)` reads
 
     return HiDiffusionUNet
 
@@ -375,10 +398,12 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
         step: int,
         total_steps: int,
         hidiffusion: bool,
+        seed: int,
     ) -> Any:
         unet = self.pipe.components["unet"]
         if step == 0:
-            unet.begin_denoise_request(total_steps, hidiffusion)
+            unet.begin_denoise_request(total_steps, hidiffusion, seed)
+        unet.cozy_step = step
         with torch.inference_mode():
             return unet(
                 latents,
@@ -485,6 +510,20 @@ def _integrity(torch: Any, image: Any, pixels: Any, tel: Telemetry) -> None:
     tel.metric("image_spread", round(float(pixels.to(torch.float32).std()), 4))
 
 
+#: HiDiffusion's README SDXL negative prompt, part of the recipe it publishes.
+_HIDIFFUSION_NEGATIVE = (
+    "blurry, ugly, duplicate, poorly drawn face, deformed, mosaic, artifacts, bad limbs"
+)
+
+
+def _negative_prompt(requested: str, hidiffusion: bool) -> str:
+    """With HiDiffusion, the request's negative prompt followed by its recipe's: DDIM alone
+    still hatched 2 of 5 seeds at 4 MP that the full recipe left clean."""
+    if not hidiffusion:
+        return requested
+    return f"{requested}, {_HIDIFFUSION_NEGATIVE}" if requested else _HIDIFFUSION_NEGATIVE
+
+
 def _request_generator(torch: Any, source: object, *, device: Any) -> Any:
     """Adapt Runtime's public request generator to a device-placed torch generator.
 
@@ -510,12 +549,15 @@ def generate(
     tel: Telemetry,
 ) -> ImageOutput:
     """One text-to-image generation: tokenize, encode, denoise, decode, encode a PNG."""
+    ctx.plan({"text_encoder", "text_encoder_2"}, "unet", "vae")
     seed = payload.seed if payload.seed is not None else secrets.randbits(53)
     view = model.for_request(ctx, seed=seed)
     width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
-    steps = payload.steps
     above_native = payload.megapixels is not Megapixels.MP1
     hidiffusion_applied = above_native if payload.hidiffusion is None else payload.hidiffusion
+    steps = payload.steps if payload.steps is not None else 30 if hidiffusion_applied else 20
+    guidance = payload.guidance if payload.guidance is not None else 7.5 if hidiffusion_applied else 7.0
+    negative_prompt = _negative_prompt(payload.negative_prompt, hidiffusion_applied)
     warnings: list[str] = []
     if above_native and not hidiffusion_applied:
         warnings.append("HiDiffusion off above 1 MP: expect duplicated or tiled subjects")
@@ -523,12 +565,12 @@ def generate(
         warnings.append("HiDiffusion at 1 MP composes at half resolution: expect simpler scenes")
     # The value plane, and the only branch in this file that reads a request number: above
     # 1.0 the negative branch is worth its second forward pass, at or below it is not.
-    classifier_free = payload.guidance > 1.0
+    classifier_free = guidance > 1.0
 
     with tel.stage("tokenize", overall_range=(0.00, 0.02)):
         ids, ids_2 = _tokenize(model.tokenizers, payload.prompt)
         if classifier_free:
-            neg, neg_2 = _tokenize(model.tokenizers, payload.negative_prompt)
+            neg, neg_2 = _tokenize(model.tokenizers, negative_prompt)
 
     with tel.stage("encode", overall_range=(0.02, 0.10)):
         prompt, pooled = model.encode(ids, ids_2)
@@ -542,11 +584,17 @@ def generate(
     tel.metric("prompt_absmax", _finite(torch, prompt))
     tel.metric("pooled_absmax", _finite(torch, pooled))
 
-    scheduler = EulerDiscreteScheduler.from_config(  # type: ignore[no-untyped-call]
-        model.pipe.scheduler_config
-    )
+    # HiDiffusion's recipe samples with DDIM at eta=1.0: fresh noise every step, from the request's
+    # generator. Without HiDiffusion, deterministic Euler.
+    sampler = DDIMScheduler if hidiffusion_applied else EulerDiscreteScheduler
+    scheduler = sampler.from_config(model.pipe.scheduler_config)  # type: ignore[no-untyped-call]
     scheduler.set_timesteps(steps, device=device)
     generator = _request_generator(torch, view.generator, device=device)
+    step = (
+        functools.partial(scheduler.step, eta=1.0, generator=generator)
+        if hidiffusion_applied
+        else scheduler.step
+    )
     latents = (
         torch.randn(
             1, 4, height // 8, width // 8, generator=generator, device=device,
@@ -567,32 +615,31 @@ def generate(
         batch_prompt, batch_pooled, batch_ids = prompt, pooled, time_ids
 
     on_step = tel.step_callback(steps, stage="denoise", overall_range=(0.10, 0.90))
-    # HiDiffusion's window-attention shift uses torch's CPU RNG. Isolate and seed it from
-    # the request so a canceled or concurrent history cannot change this request's output.
-    with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(seed)
-        with tel.stage("denoise", overall_range=(0.10, 0.90)):
-            for index, timestep in enumerate(scheduler.timesteps):
-                ctx.raise_if_cancelled()
-                batch = torch.cat([latents] * 2) if classifier_free else latents
-                model_input = scheduler.scale_model_input(batch, timestep)
-                noise = model.denoise(
-                    model_input,
-                    timestep,
-                    batch_prompt,
-                    batch_pooled,
-                    batch_ids,
-                    index,
-                    steps,
-                    hidiffusion_applied,
-                )
-                if classifier_free:
-                    uncond, cond = noise.chunk(2)
-                    noise = uncond + payload.guidance * (cond - uncond)
-                if index == 0:
-                    tel.metric("noise_absmax_step0", _finite(torch, noise))
-                latents = scheduler.step(noise, timestep, latents).prev_sample
-                on_step(index)
+    # HiDiffusion's window blocks seed torch's CPU RNG from the request (`_cozy_draw`): the
+    # RNG state outside the loop is left as it was.
+    with torch.random.fork_rng(devices=[]), tel.stage("denoise", overall_range=(0.10, 0.90)):
+        for index, timestep in enumerate(scheduler.timesteps):
+            ctx.raise_if_cancelled()
+            batch = torch.cat([latents] * 2) if classifier_free else latents
+            model_input = scheduler.scale_model_input(batch, timestep)
+            noise = model.denoise(
+                model_input,
+                timestep,
+                batch_prompt,
+                batch_pooled,
+                batch_ids,
+                index,
+                steps,
+                hidiffusion_applied,
+                seed,
+            )
+            if classifier_free:
+                uncond, cond = noise.chunk(2)
+                noise = uncond + guidance * (cond - uncond)
+            if index == 0:
+                tel.metric("noise_absmax_step0", _finite(torch, noise))
+            latents = step(noise, timestep, latents).prev_sample
+            on_step(index)
     tel.metric("latent_absmax", _finite(torch, latents))
 
     with tel.stage("decode", overall_range=(0.90, 0.98)):
@@ -611,7 +658,9 @@ def generate(
         width=decoded_w,
         height=decoded_h,
         steps=steps,
-        guidance=payload.guidance,
+        guidance=guidance,
+        sampler="ddim eta=1.0" if hidiffusion_applied else "euler",
+        negative_prompt=negative_prompt if classifier_free else "",
         classifier_free=classifier_free,
         hidiffusion_applied=hidiffusion_applied,
         digest=hashlib.sha256(rgb).hexdigest(),
@@ -631,17 +680,14 @@ _QUANTIZER = (  # the Runtime code and native libraries that decide a lane's byt
     "cozy_runtime.derive.quantization",
     "cozy_runtime.derive.microscale",
     "cozy_runtime.derive.safetensors_io",
-    "tensorfs.derived",
+    "cozy_runtime.tensord_channels",
     MemoDistribution("tensorfs"),
     MemoDistribution("numpy"),
 )
 
 
-def _quantize(
-    ctx: Context, tel: Telemetry, source: Weights[SdxlModel], lane: str, encoding: str, tripwire: float | None
-) -> ModelArtifact:
-    plan = derive.plan(("unet",), encoding, max_relative_frobenius=tripwire)
-    return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output=lane)
+#: The fp8 lane: the UNet's block-aligned rank-2 weights, row-wise.
+FP8 = ("unet",)
 
 
 @invocable(memo_dependencies=_QUANTIZER)
@@ -653,8 +699,8 @@ async def fp8(
     tel: Telemetry,
 ) -> ModelArtifact:
     """Row-wise FP8 UNet weights from one BF16/F16 source; everything else inherits."""
-    return _quantize(ctx, tel, source, "fp8", "fp8-rowwise/1", max_relative_frobenius)
-
+    plan = derive.plan(FP8, "fp8.rowwise", max_relative_frobenius=max_relative_frobenius)
+    return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output="fp8")
 
 
 #: The int8 lane: every transformer-block linear of the UNet whose input width is a multiple of
@@ -677,8 +723,8 @@ INT8 = QuantizationPlan(
         ),
         "unet.*_blocks.1.attentions.*.transformer_blocks.*.attn2.to_[kv].weight",
         "unet.*_blocks.1.attentions.*.transformer_blocks.*.ff.net.2.weight",
-        "text_encoder.encoder.layers.*.self_attn.*_proj.weight",
-        "text_encoder.encoder.layers.*.mlp.fc[12].weight",
+        "text_encoder.text_model.encoder.layers.*.self_attn.*_proj.weight",
+        "text_encoder.text_model.encoder.layers.*.mlp.fc[12].weight",
         "text_encoder_2.text_model.encoder.layers.*.self_attn.*_proj.weight",
         "text_encoder_2.text_model.encoder.layers.*.mlp.fc[12].weight",
     ),
@@ -688,8 +734,8 @@ INT8 = QuantizationPlan(
 
 @invocable(memo_version="sdxl-int8/1")
 async def int8(ctx: Context, *, source: Weights[SdxlModel], tel: Telemetry) -> ModelArtifact:
-    """The int8 lane (`int8-convrot256/1`): W8A8 on int8 tensor cores; see `INT8`."""
-    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8-convrot256/1", output="int8")
+    """The int8 lane (`int8.convrot`): W8A8 on int8 tensor cores; see `INT8`."""
+    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8.convrot", output="int8")
 
 
 app.entrypoint(int8, name="int8", weights=(WeightsOutput("int8", max_new_bytes=_LANE_BYTES),), accelerator=False)

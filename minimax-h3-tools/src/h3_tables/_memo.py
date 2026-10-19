@@ -4,7 +4,7 @@ from cozy_runtime.author import MemoDistribution, MemoResource
 STRUCTURE = (
     "h3_tables.source", "h3_tables.order", "h3_tables.model_config",
     "h3_tables.table_layout",
-    "h3_tables.kernel", "h3_tables.plans", "tensorfs.derived",
+    "h3_tables.kernel", "h3_tables.plans", "cozy_runtime.tensord_channels",
     MemoResource("h3_tables", "assets/dit-full-specs.json"),
     MemoResource("h3_tables", "assets/model-config.json"),
     MemoResource("h3_tables", "assets/whole-order.json"),
