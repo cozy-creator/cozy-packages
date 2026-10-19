@@ -2738,9 +2738,14 @@ def arm_reference_media() -> None:
             reference_image_short_edges=[],
         )
         normalized = state.normalized_references[0].frames
-        guide = np.asarray(PILImage.fromarray(source).resize((motion_width, motion_height), PILImage.Resampling.LANCZOS))
+        guide = torch.nn.functional.interpolate(
+            torch.from_numpy(source).permute(2, 0, 1)[None],
+            size=(motion_height, motion_width),
+            mode="bicubic",
+            antialias=True,
+        )[0].permute(1, 2, 0).numpy()
         check(
-            "2560x1080: one LANCZOS resize from the source straight to its motion size",
+            "2560x1080: one antialiased resize from the source straight to its motion size",
             (normalized.shape, int(np.abs(normalized[0].astype(int) - guide.astype(int)).max()) <= 2),
             ((72, motion_height, motion_width, 3), True),
         )

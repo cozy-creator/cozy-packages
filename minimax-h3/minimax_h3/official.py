@@ -49,7 +49,6 @@ from diffusers.modular_pipelines.minimax_h3.modular_pipeline import (
     video_latent_num_frames,
 )
 from diffusers.modular_pipelines.modular_pipeline import PipelineState
-from PIL import Image as PILImage
 from torch.nn.utils.weight_norm import WeightNorm
 from transformers import (
     AddedToken,
@@ -1983,10 +1982,10 @@ def read_reference_video(
     """Decode a reference clip once, straight to the size the call uses.
 
     Each frame shows until the next starts (the last for its own duration) and lands on the
-    whole-frame 24-fps clock, LANCZOS-resized as it arrives to the motion size of the canvas its
-    aspect ratio resolves to. Only the call's first `frames` are kept and no source-resolution
-    frame outlives its event. With `audio`, the soundtrack is kept on the video's origin, to
-    the nearest sample of its own clock.
+    whole-frame 24-fps clock, resized once (antialiased bicubic) as it arrives to the motion
+    size of the canvas its aspect ratio resolves to. Only the call's first `frames` are kept
+    and no source-resolution frame outlives its event. With `audio`, the soundtrack is kept on
+    the video's origin, to the nearest sample of its own clock.
     """
     out: np.ndarray | None = None
     kept = 0
@@ -2028,9 +2027,12 @@ def read_reference_video(
         picture = None
         if _round_fraction((start - origin) * FPS) < frames:
             assert out is not None
-            image = PILImage.frombuffer("RGB", (event.width, event.height), event.rgb, "raw", "RGB", 0, 1)
-            size = (out.shape[2], out.shape[1])
-            picture = np.asarray(image if image.size == size else image.resize(size, PILImage.Resampling.LANCZOS))
+            rgb = torch.frombuffer(bytearray(event.rgb), dtype=torch.uint8).view(event.height, event.width, 3)
+            if rgb.shape[:2] != out.shape[1:3]:
+                chw = rgb.permute(2, 0, 1)[None]
+                rgb = torch.nn.functional.interpolate(chw, size=out.shape[1:3], mode="bicubic", antialias=True)
+                rgb = rgb[0].permute(1, 2, 0)
+            picture = rgb.numpy()
         held = (start, picture)
         end = start + event.duration * event.time_base
     if first is None or held is None or out is None:
