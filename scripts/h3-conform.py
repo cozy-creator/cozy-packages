@@ -132,6 +132,7 @@ from minimax_h3.official import (  # noqa: E402
     _attention_layout,
     _dit_specs,
     _processor,
+    _DIT_COMPONENT,
     _ScopedPipeline,
     _validate_dual_dit_topology,
     _validate_model_contract,
@@ -1340,7 +1341,7 @@ def arm_graph_and_dtypes() -> None:
     )
     with torch.device("meta"):
         supplied = {
-            f"video_vae.{name}": "f16" if decode_operand(name, tuple(value.shape)) else "f32"
+            f"vae.{name}": "f16" if decode_operand(name, tuple(value.shape)) else "f32"
             for name, value in video_vae.state_dict().items()
         }
         cast_vae = _apply_video_vae_dtype(
@@ -3150,7 +3151,7 @@ def arm_interface() -> None:
             check(
                 f"{name} base turbo sampling lease",
                 base_slot["component_use"][f"sample_{trunk}_turbo"],
-                [f"{trunk}_dit"],
+                [_DIT_COMPONENT[trunk]],
             )
             check(
                 f"{name} LoRA sampling lease",
@@ -4153,7 +4154,7 @@ def turbo_h3_config() -> dict[str, Any]:
         dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
     )
     for trunk in ("fl2va", "ref2va"):
-        overlay = copy.deepcopy(document[f"{trunk}_dit"])
+        overlay = copy.deepcopy(document[_DIT_COMPONENT[trunk]])
         overlay["cozy_h3"] = {
             "task": trunk,
             "modulation": "adaln-pruned",
@@ -4309,7 +4310,7 @@ def arm_turbo_artifact() -> None:
             set(config),
         )
     for trunk in ("fl2va", "ref2va"):
-        dit = base.components[f"{trunk}_dit"]
+        dit = base.components[_DIT_COMPONENT[trunk]]
         overlay = lora.components[f"{trunk}_turbo"]
         check(
             f"{trunk} base installs permanent LoRA consumers",
