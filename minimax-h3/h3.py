@@ -922,8 +922,8 @@ _TURBO_LORA = "minimax-h3-turbo-lora@1.0.0-audit.1"
 
 #: The components each task runs. A machine downloads these first and the rest behind the
 #: run, so a pod's first request pays for one DiT, not two.
-_FL2VA = ("text_encoder", "fl2va_dit", "video_vae", "audio_vae")
-_REF2VA = ("text_encoder", "ref2va_dit", "video_vae", "audio_vae")
+_FL2VA = ("text_encoder", "transformer", "vae", "audio_vae")
+_REF2VA = ("text_encoder", "transformer_ref", "vae", "audio_vae")
 
 app.entrypoint(defaults={"model": _MODEL}, components={"model": ("text_encoder",)})(
     encode_text

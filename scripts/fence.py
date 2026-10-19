@@ -400,9 +400,6 @@ IDENTIFIERS = (
 #: identifier rule applies to these files unchanged.
 DIGEST_PINNED_PREFIXES = (
     "minimax-h3-tools/src/h3_tables/",
-    # Native plain-tensor encoding identity, not a selected checkpoint. The CPU
-    # normalization function writes explicit source conditioning into managed tensors.
-    "seedvr2/seedvr2/normalize.py",
 )
 
 
@@ -565,25 +562,11 @@ def fence_no_choreography() -> Fence:
             and node.names
             and all(alias.name in own for alias in node.names)
         }
-        # This CPU conversion function ingests two explicitly granted, SHA-checked
-        # upstream conditioning tensors. It does not load inference weights.
-        # Keep the exception at the safe standard-library call, not the whole file.
-        source_reads = {
-            node.lineno
-            for node in ast.walk(ast.parse(source))
-            if rel(path) == "seedvr2/seedvr2/normalize.py"
-            and isinstance(node, ast.Call)
-            and ast.unparse(node.func) == "torch.load"
-            and any(k.arg == "weights_only" and isinstance(k.value, ast.Constant)
-                    and k.value.value is True for k in node.keywords)
-        }
         for line_no, line in enumerate(code.splitlines(), 1):
             if line_no in serializers:
                 # Remove only the permitted import token, not other operations on
                 # the same line (for example a semicolon followed by torch.load).
                 line = line.replace("safetensors.torch", "", 1)
-            if line_no in source_reads:
-                line = line.replace("torch.load", "", 1)
             for pattern, what in CHOREOGRAPHY:
                 if pattern.search(line):
                     bad.append(
@@ -742,7 +725,7 @@ ARM_GPU_CHOICES = (
 )
 ARM_GPU_DECLARATIONS = (
     "register(Producer('kitchen-sol-producer-fast-shared-qkv', 'kitchen-sol'))\n",
-    "class M(Model, attention_bits={'fl2va_dit': 4}): pass\n",
+    "class M(Model, attention_bits={'transformer': 4}): pass\n",
     "if device.type != 'cuda': pass\n",
 )
 

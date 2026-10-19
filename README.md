@@ -221,10 +221,9 @@ Qwen3-VL conditioner, one video VAE and one audio VAE at their official FP32 des
 and one scheduler contract. The conditioner retains the complete vision stack, token embedding,
 and language layers 0–49; its parameterless final norm exposes the same pre-norm
 `hidden_states[50]` as full Qwen, while layers 50–63 and the language head are absent from both
-fill and execution. The same construction carries task-stamped
-`fl2va_dit` and `ref2va_dit` components; Runtime's component leases make only the selected task DiT
-resident while its action runs. `transformer` and `transformer_ref` exist only as the explicit
-adapter names expected by the two upstream Diffusers workflows. The interim community curve
+fill and execution. The same construction carries task-stamped `transformer` and `transformer_ref`
+components (Diffusers' names); Runtime's component leases make only the selected task DiT
+resident while its action runs. The interim community curve
 architecture was deleted instead of retained as a second graph.
 
 Artifact production takes ordering only from Runtime's exact construction contract. The

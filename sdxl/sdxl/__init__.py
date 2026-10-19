@@ -685,11 +685,8 @@ _QUANTIZER = (  # the Runtime code and native libraries that decide a lane's byt
 )
 
 
-def _quantize(
-    ctx: Context, tel: Telemetry, source: Weights[SdxlModel], lane: str, encoding: str, tripwire: float | None
-) -> ModelArtifact:
-    plan = derive.plan(("unet",), encoding, max_relative_frobenius=tripwire)
-    return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output=lane)
+#: The fp8 lane: the UNet's block-aligned rank-2 weights, row-wise.
+FP8 = ("unet",)
 
 
 @invocable(memo_dependencies=_QUANTIZER)
@@ -701,8 +698,8 @@ async def fp8(
     tel: Telemetry,
 ) -> ModelArtifact:
     """Row-wise FP8 UNet weights from one BF16/F16 source; everything else inherits."""
-    return _quantize(ctx, tel, source, "fp8", "fp8.rowwise", max_relative_frobenius)
-
+    plan = derive.plan(FP8, "fp8.rowwise", max_relative_frobenius=max_relative_frobenius)
+    return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output="fp8")
 
 
 #: The int8 lane: every transformer-block linear of the UNet whose input width is a multiple of
