@@ -5,7 +5,8 @@ Seventeen properties CI must not let drift, each checked as a fact about the sou
 than as a convention someone remembers:
 
   1. author-surface-only  package code AND the repo's drivers import the PUBLIC
-                          `cozy_runtime.author` surface and nothing else from the runtime
+                          `cozy_runtime.author` surface (and the `derive`, `fusion` and `lm`
+                          planes Runtime fences like it) and nothing else from the runtime
                           (boundaries.md). `cozy_runtime.internal`, an underscored
                           `author._*` mechanism, the worker protocol, TensorFS or a hub
                           client is the boundary violation the author surface exists to
@@ -120,8 +121,9 @@ def rel(path: pathlib.Path) -> str:
 
 def ours(path: pathlib.Path) -> bool:
     """Source WE wrote. A venv under the repo is not: it holds other people's test suites,
-    and a fence that reports mypy's own `test_emit.py` is a fence nobody reads."""
-    return not any(
+    and a fence that reports mypy's own `test_emit.py` is a fence nobody reads. `research/` is
+    neither a package nor a driver: CI's `compile` job parses it, the fences do not."""
+    return not path.is_relative_to(ROOT / "research") and not any(
         part.startswith(".venv") or part in ("site-packages", "__pycache__", ".git")
         for part in path.parts
     )
@@ -152,8 +154,18 @@ def imports(tree: ast.AST, package: str = "") -> Iterator[tuple[str, int]]:
                 yield name, node.lineno
 
 
-#: The runtime surface anything in this repo may import: `cozy_runtime.author` and
-#: `cozy_runtime.derive` (the public derivation plane), and their PUBLIC submodules. An
+def runtime_imports(tree: ast.AST) -> Iterator[tuple[str, int]]:
+    """`imports`, with `from cozy_runtime import lm` read as the module it names."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "cozy_runtime":
+            yield from ((f"cozy_runtime.{alias.name}", node.lineno) for alias in node.names)
+        elif isinstance(node, ast.Import | ast.ImportFrom):
+            yield from imports(node)
+
+
+#: The runtime surface anything in this repo may import: `cozy_runtime.author`, the
+#: `derive` (derivation), `fusion` (fused DiT blocks) and `lm` (LM decode) planes Runtime's
+#: `checks/architecture.py` fences like it, and their PUBLIC submodules. An
 #: underscored submodule — `author._assets`, `author._services` — is Runtime's own
 #: mechanism, and `cozy_runtime.internal` is the plane the author surface exists to hide.
 #: Both break the same way: the name stops existing on a later Runtime with nothing here
@@ -161,6 +173,8 @@ def imports(tree: ast.AST, package: str = "") -> Iterator[tuple[str, int]]:
 PUBLIC_RUNTIME_ROOTS = (
     ["cozy_runtime", "author"],
     ["cozy_runtime", "derive"],
+    ["cozy_runtime", "fusion"],
+    ["cozy_runtime", "lm"],
 )
 
 
@@ -212,6 +226,10 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "selected sandboxed build seat and has no in-process entry point for one synthetic "
         "model. Retire this entry when it grows one. "
     ),
+    ("scripts/seedvr2-model-proof.py", "cozy_runtime.internal"): (
+        "Find SeedVR2's window-attention sites and install Runtime's kernel on them, as the "
+        "executor does; retire with a public attention-site harness."
+    ),
 }
 
 STORE_AND_NETWORK = ("tensorfs", "tensorhub", "cozy_creator", "grpc", "requests", "httpx")
@@ -225,7 +243,7 @@ def surface_violations(label: str, source: str, *, driver: bool) -> list[str]:
     in this repo and not a hypothetical one.
     """
     bad: list[str] = []
-    for module, line in imports(ast.parse(source, filename=label)):
+    for module, line in runtime_imports(ast.parse(source, filename=label)):
         top = module.split(".")[0]
         if top == "cozy_runtime" and not public_runtime_surface(module):
             if (label, module) in (DRIVER_INTERNALS if driver else PACKAGE_INTERNALS):
@@ -257,7 +275,8 @@ def fence_author_surface() -> Fence:
             source = path.read_text()
             bad += surface_violations(rel(path), source, driver=driver)
             imported |= {
-                (rel(path), module) for module, _ in imports(ast.parse(source, filename=rel(path)))
+                (rel(path), module)
+                for module, _ in runtime_imports(ast.parse(source, filename=rel(path)))
             }
     for label, module in (*DRIVER_INTERNALS, *PACKAGE_INTERNALS):
         if (label, module) not in imported:
@@ -280,12 +299,14 @@ ARM_PRIVATE = (
     "import cozy_runtime.internal.executor",
     "import cozy_runtime",
     "from cozy_runtime.models.minimax_h3 import H3Model",
+    "from cozy_runtime import internal",
 )
 ARM_PUBLIC = (
     "from cozy_runtime.author import Outputs, decode_request",
     "from cozy_runtime.author.fakes import fake_attempt, fake_input",
     "import cozy_runtime.author",
     "from cozy_runtime.derive.quantization import derive_fp8",
+    "from cozy_runtime import fusion, lm",
 )
 
 
