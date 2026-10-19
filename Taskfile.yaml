@@ -24,7 +24,7 @@ tasks:
           seedvr2) $py scripts/seedvr2-model-proof.py ;;
           sdxl) $py scripts/sdxl-model-proof.py ;;
           minimax-h3) for s in conform prompt-proof turbo-cp-proof reference-fidelity-proof reference-rows-proof; do $py "scripts/h3-$s.py"; done; $py scripts/h3-assembly-proof.py assembly ;;
-          minimax-h3-tools) for s in order stage full-source table-metadata; do PYTHONPATH=$p/src $py "$p/scripts/$s-proof.py"; done; PYTHONPATH=$p/src $py scripts/tensorfs_seeds.py ;;
+          minimax-h3-tools) for s in lane table-metadata; do PYTHONPATH=$p/src $py "$p/scripts/$s-proof.py"; done ;;
         esac
         $py scripts/lane-plans-proof.py "$p"
         uv build -q --project "$p" --wheel --out-dir dist; uv pip install -q --python "$py" --no-deps dist/*.whl

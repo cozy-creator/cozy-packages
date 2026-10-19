@@ -1,33 +1,22 @@
-"""Bounded source-header validation for the two identical H3 DiT topologies."""
+"""The producer's channels: a granted H3 checkpoint's rows, configs and bytes; tensors written."""
 
 from __future__ import annotations
 
-import re
-from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from collections.abc import Callable, Mapping, Sequence
 from importlib.resources import files
 from typing import Any, Protocol
 
 import msgspec
+import torch
 from cozy_runtime.author import Context, Weights, canonical_json
-from tensorfs.derived import SourceInspection, Target
+from cozy_runtime.tensord_channels import HEADER, Output, Source
 
-from .kernel import H3Topology, removed_keys, table_shapes
+from .kernel import H3Topology, LowRankAdapter, precompute_tables, table_shapes
+from .model_config import read_config
 from .plans import TimestepPlan
 
-TARGET_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
-
-
-def inspection(ctx: Context, source: Weights[Any]) -> SourceInspection:
-    """Read H3 planning facts through the exact native source capability."""
-    with ctx.tensorfs_source(source) as capability:
-        return capability.inspect()
-
-
-_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _FULL_SPECS_DIGEST = "sha256:3af7354b5080f4c117922157971261fd079f12790f9584615e87b4fdd95ae3e2"
 _FULL_CONFIG_DIGEST = "sha256:4150e2b9009aad13cf5a18b9878337346b2bfa7662b3f8037a0286cdaa806382"
-_NATIVE_ONLY_SOURCE_SPECS = {"rope.inv_freq": ("f32", (16,))}
 _TEXT_LAYER_SUFFIXES = (
     "input_layernorm.weight",
     "mlp.down_proj.weight",
@@ -41,11 +30,13 @@ _TEXT_LAYER_SUFFIXES = (
     "self_attn.q_proj.weight",
     "self_attn.v_proj.weight",
 )
+READ_CHUNK = 32 << 20
+DTYPE = {"bf16": torch.bfloat16, "f16": torch.float16, "f32": torch.float32}
+_NAMES = {torch.bfloat16: "BF16", torch.float16: "F16", torch.float32: "F32"}
 
 
-class PartView(Protocol):
-    @property
-    def role(self) -> str: ...
+class Row(Protocol):
+    """A header tensor (`tensorfs.Info`): TensorFS dtype, shape, encoding (None when plain)."""
 
     @property
     def dtype(self) -> str: ...
@@ -53,22 +44,92 @@ class PartView(Protocol):
     @property
     def shape(self) -> tuple[int, ...]: ...
 
-
-class TensorView(Protocol):
     @property
-    def key(self) -> str: ...
+    def encoding(self) -> Any: ...
 
-    @property
-    def logical_dtype(self) -> str: ...
 
-    @property
-    def shape(self) -> tuple[int, ...]: ...
+Rows = Mapping[str, Mapping[str, Row]]
 
-    @property
-    def encoding(self) -> str: ...
 
-    @property
-    def parts(self) -> tuple[PartView, ...]: ...
+def dtype(row: Row) -> str:
+    """The Runtime's spelling of a row's dtype: `bf16`, `f16`, `f32`."""
+    return row.dtype.lower()
+
+
+def plain(row: Row, expected: str, shape: tuple[int, ...]) -> bool:
+    return row.encoding is None and dtype(row) == expected and tuple(row.shape) == shape
+
+
+def open_source(ctx: Context, weights: Weights[Any]) -> Source:
+    return ctx.tensorfs_source(weights)
+
+
+def rows(source: Source) -> Rows:
+    """`[component][key]` in header (construction) order."""
+    return source.checkpoint.tensors
+
+
+def config(source: Source) -> bytes:
+    """The checkpoint's `{component: config}` document."""
+    return read_config({path: source.file(path) for path in source.files if path != HEADER})
+
+
+def read(source: Source, component: str, key: str, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
+    """One plain tensor's stored bytes on the CPU."""
+    value = torch.empty(shape, dtype=dtype)
+    view = memoryview(value.view(torch.uint8).numpy()).cast("B")
+    for offset in range(0, len(view), READ_CHUNK):
+        source.read_into(component, key, "value", offset, view[offset : offset + READ_CHUNK])
+    return value
+
+
+def put(out: Output, component: str, key: str, value: torch.Tensor) -> int:
+    """One plain tensor's bytes into `out`; the bytes written."""
+    data = value.detach().to("cpu").contiguous()
+    raw = memoryview(data.view(torch.uint8).numpy()).cast("B")
+    out.put(component, key, _NAMES[data.dtype], tuple(data.shape), raw)
+    return len(raw)
+
+
+def write_tables(
+    ctx: Context,
+    *,
+    plan: TimestepPlan,
+    topology: H3Topology,
+    source: Source,
+    component: str,
+    outputs: Sequence[Output],
+    progress: Callable[[int, int], None],
+    target: str | None = None,
+    adapter: LowRankAdapter | None = None,
+) -> tuple[int, int, int]:
+    """One DiT's AdaLN tables from `source`'s `component` modulation weights, into `target`
+    (default `component`) of each of `outputs` that lacks them; (bytes read, bytes written,
+    tables reused)."""
+    into = target or component
+    tables = table_shapes(topology, plan)
+    completed = frozenset(k for k in tables if all(out.has(into, k) for out in outputs))
+    read_bytes = written = 0
+
+    def reader(key: str, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
+        nonlocal read_bytes
+        ctx.raise_if_cancelled()
+        value = read(source, component, key, dtype, shape)
+        read_bytes += value.numel() * value.element_size()
+        return value
+
+    def writer(key: str, value: torch.Tensor) -> None:
+        nonlocal written
+        ctx.raise_if_cancelled()
+        for out in outputs:
+            if not out.has(into, key):
+                written += put(out, into, key, value)
+
+    precompute_tables(
+        plan=plan, topology=topology, read=reader, write=writer, progress=progress,
+        device=torch.device(str(ctx.device)), completed=completed, adapter=adapter,
+    )  # fmt: skip
+    return read_bytes, written, len(completed)
 
 
 class _FullSpec(msgspec.Struct, forbid_unknown_fields=True):
@@ -112,24 +173,6 @@ def official_full_specs(
     return result
 
 
-def validate_full_component(tensors: Sequence[TensorView], config: dict[str, Any]) -> str:
-    """Require the exact production source topology and return its plain encoding id.
-
-    The canonicalized official-native sources retain one 64-byte ``rope.inv_freq``
-    buffer that Diffusers derives internally and therefore omits from its persistent
-    ``state_dict``. It is the sole admitted source-only tensor and is removed from the
-    derived target. Any other extra remains a closed-set refusal.
-    """
-    expected = official_full_specs(config)
-    expected.update(_NATIVE_ONLY_SOURCE_SPECS)
-    return _validate_component(tensors, expected, "FULL source")
-
-
-def source_only_keys() -> tuple[str, ...]:
-    """Exact native buffers with no Diffusers persistent destination."""
-    return tuple(sorted(_NATIVE_ONLY_SOURCE_SPECS))
-
-
 def text_source_only_keys() -> tuple[str, ...]:
     """Official Qwen rows excluded by the reviewed 50-layer pre-norm conditioner."""
     rows = [
@@ -141,113 +184,3 @@ def text_source_only_keys() -> tuple[str, ...]:
     if len(rows) != 156:
         raise AssertionError("the text-conditioner source-only census changed")
     return tuple(sorted(rows))
-
-
-def _validate_component(
-    tensors: Sequence[TensorView],
-    expected: dict[str, tuple[str, tuple[int, ...]]],
-    label: str,
-) -> str:
-    actual = {value.key: value for value in tensors}
-    if len(actual) != len(tensors) or set(actual) != set(expected):
-        missing = sorted(set(expected) - set(actual))[:5]
-        unexpected = sorted(set(actual) - set(expected))[:5]
-        raise ValueError(
-            f"{label} H3 component has the wrong closed tensor set: "
-            f"missing={missing}, unexpected={unexpected}"
-        )
-    encodings: set[str] = set()
-    for key, (dtype, shape) in expected.items():
-        value = actual[key]
-        parts = tuple((part.role, part.dtype, tuple(part.shape)) for part in value.parts)
-        if value.logical_dtype != dtype or tuple(value.shape) != shape:
-            raise ValueError(
-                f"{label} H3 tensor {key} is {value.logical_dtype} {tuple(value.shape)}, "
-                f"expected {dtype} {shape}"
-            )
-        if parts != (("value", dtype, shape),):
-            raise ValueError(f"{label} H3 tensor {key} is not one plain value role: {parts}")
-        if _DIGEST.fullmatch(value.encoding) is None:
-            raise ValueError(f"{label} H3 tensor {key} has no exact encoding identity")
-        encodings.add(value.encoding)
-    if len(encodings) != 1:
-        raise ValueError(f"{label} H3 component is not one plain encoding: {sorted(encodings)}")
-    return encodings.pop()
-
-
-def validate_adaln_pruned_component(
-    tensors: Sequence[TensorView], config: dict[str, Any], plan: TimestepPlan
-) -> str:
-    """Require FULL minus 106 modulation tensors plus the exact 51 table destinations."""
-    topology = H3Topology.from_config(config)
-    expected = official_full_specs(config)
-    for key in removed_keys(topology):
-        expected.pop(key)
-    expected.update({key: ("bf16", shape) for key, shape in table_shapes(topology, plan).items()})
-    return _validate_component(tensors, expected, "AdaLN-pruned")
-
-
-def full_targets() -> dict[str, Target]:
-    return {
-        "fl2va_dit": Target(
-            source="dits",
-            source_component="fl2va_dit",
-            drop=source_only_keys(),
-        ),
-        "ref2va_dit": Target(
-            source="dits",
-            source_component="ref2va_dit",
-            drop=source_only_keys(),
-        ),
-        "text_encoder": Target(
-            source="shared",
-            source_component="text_encoder",
-            drop=text_source_only_keys(),
-        ),
-        "video_vae": Target(source="shared", source_component="video_vae"),
-        "audio_vae": Target(source="shared", source_component="audio_vae"),
-    }
-
-
-def structures(
-    ctx: Context, sources: Mapping[str, Weights[Any]]
-) -> dict[str, SourceInspection]:
-    """One bounded structure read per DISTINCT granted checkpoint, keyed by source alias.
-
-    Both slots may bind the same complete checkpoint, and every consumer here — target
-    selection and per-component treatment selection alike — wants the same facts.
-    """
-    read: dict[str, SourceInspection] = {}
-    for source in sources.values():
-        if source.checkpoint_ref not in read:
-            read[source.checkpoint_ref] = inspection(ctx, source)
-    return {alias: read[source.checkpoint_ref] for alias, source in sources.items()}
-
-
-def select_full_targets(
-    ctx: Context,
-    sources: Mapping[str, Weights[Any]],
-    granted: Mapping[str, SourceInspection] | None = None,
-) -> dict[str, Target]:
-    """Drop source-only rows that remain in these exact granted checkpoints."""
-    observed = structures(ctx, sources) if granted is None else granted
-    keys: dict[str, set[tuple[str, str]]] = {}
-    for alias, source in sources.items():
-        if source.checkpoint_ref not in keys:
-            keys[source.checkpoint_ref] = {
-                (component, key)
-                for component, tensors in observed[alias].components.items()
-                for key in tensors
-            }
-    targets = full_targets()
-    return {
-        component: replace(
-            target,
-            drop=tuple(
-                key
-                for key in target.drop
-                if (target.source_component, key) in keys[sources[target.source].checkpoint_ref]
-            ),
-        )
-        for component, target in targets.items()
-    }

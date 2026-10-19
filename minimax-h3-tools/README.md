@@ -15,7 +15,7 @@ ingested or already fetched the input, its objects are in the pod Store and noth
 |---|---|---|---|
 | `bf16-full` | a full-precision H3 checkpoint: the converted `MiniMaxAI/MiniMax-H3` release or a `bf16-full` lane | `bf16-full` | source-only rows dropped, video VAE decode operands f16 |
 | `bf16-pruned` | same | `bf16` | AdaLN tables replace the 106 modulation rows per DiT; CUDA |
-| `fp8-pruned` | same | `fp8` | tables + both DiTs and the conditioner's 350 decoder linears `fp8-rowwise/1`; CUDA; every serving rung |
+| `fp8-pruned` | same | `fp8` | tables + both DiTs and the conditioner's 350 decoder linears `fp8.rowwise`; CUDA; every serving rung |
 | `turbo-lora` | the converted `alibaba-pai/MiniMax-H3-Acc-LoRAs` release (one fl2va and one ref2va component) | `pdd8` | `model.base=<full-precision H3>`; reads its modulation weights and heads only |
 | `retable` | an AdaLN-pruned lane | `adaln-pruned`, `tables` | `model.full=<full-precision H3>`; recomputes tables only |
 | `fp8`, `int8` | an AdaLN-pruned lane | `fp8`, `int8` | `cozy model quantize`; H3's recipe: both DiTs and the text conditioner's 350 decoder linears, encoding what is still plain; CPU |
@@ -64,13 +64,12 @@ of the community licence, which is a reviewed act rather than a caller choice.
 |---|---|---|
 | `bf16-full` | full | none — every component inherited |
 | `bf16` | AdaLN-pruned | none |
-| `fp8` | AdaLN-pruned | both DiTs and the conditioner's decoder linears `fp8-rowwise/1` |
+| `fp8` | AdaLN-pruned | both DiTs and the conditioner's decoder linears `fp8.rowwise` |
 
-A component a lane does not name is **inherited by reference**: TensorFS copies its tensor
-metadata and ObjectRefs unchanged through the zero-read/zero-hash inherit gate, so the
-58.2 GiB conditioner/VAE trio is the same stored objects in every lane above. Naming a
-component costs its bytes once per lane that names it, which is why the treatment map is
-sparse and must stay sparse.
+A component a lane does not name is **copied unchanged**: the output's copy keeps the
+source's stored objects, so the 58.2 GiB conditioner/VAE trio is the same objects in every
+lane above. Naming a component costs its bytes once per lane that names it, which is why the
+treatment map is sparse and must stay sparse.
 
 A treatment is a dtype `cast` over the component's float32 rows, an `encode` over its
 block-aligned rank-2 float weights, or both; `keep` names exact keys the encoding must not
@@ -80,7 +79,7 @@ audio VAE, that uses an encoding no lane of the vocabulary stores, or whose decl
 ceiling disagrees with its treatments.
 
 A lane encodes only as the vocabulary's encoded lanes do (`LANE_ENCODINGS`): int8
-`int8-convrot256/1`, fp8 `fp8-rowwise/1`, nvfp4 `nvfp4-w4a4/1`. One component
+`int8.convrot`, fp8 `fp8.rowwise`, nvfp4 `nvfp4`. One component
 is refused outright. **The `audio_vae`, by name**: 637 of its 1,087 rows are rank-3 — including the BigVGAN decoder's
 344 `weight_norm` `weight_g`/`weight_v` parameters — and the rank-2 encoding cannot
 represent any of them; the only six rank-2 float weights the component carries are the
@@ -88,10 +87,11 @@ represent any of them; the only six rank-2 float weights the component carries a
 the component, it silently quantizes the audio conditioning path and leaves the BigVGAN
 decoder untouched.
 
-Each lane contains both FL2VA and Ref2VA DiTs plus the shared 902/703/1,087 components.
-Full assembly drops the native-only `rope.inv_freq` buffer, leaving the exact 638-row
-Diffusers DiTs. It also drops the official text model's layers 50–63, final norm, and
-language-model head—156 inherited refs—to produce the reviewed 902-row, 50-layer
+Each lane holds the components `transformer` (FL2VA), `transformer_ref` (Ref2VA),
+`text_encoder`, `vae` and `audio_vae` (Diffusers' names), each with its own
+`<component>/config.json`; the DiTs are the exact 638-row Diffusers DiTs (import drops the
+native-only `rope.inv_freq`). Full assembly drops the official text model's layers 50–63,
+final norm and language-model head (156 rows) to produce the reviewed 902-row, 50-layer
 pre-norm conditioner without rewriting any retained payload. Each pruned task then
 replaces 106 dynamic AdaLN rows with 51 BF16 timestep-table rows carrying the union of
 every schedule in the task plan (30, 40 and 50 evaluations: 315 block rows and 207
@@ -101,27 +101,20 @@ served step count. FP8 is a child of those pruned BF16 task components.
 The ordinary `retable` function recomputes only those tables for an existing AdaLN-pruned
 checkpoint of any encoding: `pruned` (the checkpoint to inherit, BF16, FP8 or int8) and
 `full` (the complete BF16 checkpoint whose modulation weights the rows are computed from).
-Every non-table tensor is inherited by reference and nothing is requantized, so widening the
-plan's schedule set costs table bytes only. It emits two outputs from one table pass:
-`adaln-pruned` (the retabled checkpoint, every component inherited from `pruned`) and
-`tables` (a two-DiT table bank derived from `full` with every other row dropped) — a
-transaction may read only the source components its targets derive from, so the bank
-transaction is where the modulation weights are read. The retabled checkpoint commits
-first. It refuses before any read unless `pruned` carries table rows and no dynamic
+Every non-table tensor carries over and nothing is requantized, so widening the plan's
+schedule set costs table bytes only. It emits two outputs from one table pass: `adaln-pruned`
+(the retabled checkpoint, `pruned` with its tables written again) and `tables` (a two-DiT
+table bank). The retabled checkpoint commits first. It refuses before any read unless `pruned` carries table rows and no dynamic
 modulation weights for both DiTs and `full` carries the exact modulation weights.
 
 The package declares no GPU, SM, VRAM, or host-RAM guess. Creator derives accelerator-class work
 from the typed model inputs; exact artifact residency and measured request/scratch envelopes drive
-fit. The function opens the three pruned-output transactions together, computes each task's timestep tables once,
-and writes the exact same table bytes to every active output. FP8 then reads the
-original BF16 DiTs through its own caller-owned transaction. There is no
-workflow graph and no nested call. Tensorhub owns final retention or publication;
+fit. A lane function opens its one output, copies what it keeps, computes each task's
+timestep tables once and encodes what its treatments name. There is no workflow graph and
+no nested call. Tensorhub owns final retention or publication;
 the function receives no publisher credential or store path.
 
-Each checkpoint commits as soon as its computation finishes: full BF16 first, pruned
-BF16 after both table passes, FP8 after both FP8 passes. A retry replays
-retained native receipts and computes only the remaining outputs. Terminal owner
-abandonment can release those outputs; a receipt alone is not retained payload custody.
+A retry computes only what TensorD has not journaled (`has`); a committed output replays.
 A local commit does not imply remote custody; Creator still verifies uploads before
 publishing a release.
 
@@ -134,13 +127,10 @@ this package's full/pruned construction-order digests for the single Runtime-own
 model bytes or executable policy. Noncanonical source order refuses; the lane
 functions and AdaLN producers already emit the accepted orders. These are not
 Creator-supplied assets. Run
-`scripts/order-proof.py` to recheck their closed census and
-`../../proofs/producer-callable.py` to validate the generated graph-free descriptor.
-
-`scripts/lane-proof.py` covers the lane catalogue without a GPU, a rental or one weight byte. It rebuilds the exact five-component source structure from this
-package's own 638-row contract and the banked upstream safetensors HEADERS, then checks
-every lane's declaration, the selection each treatment resolves to on the real components,
-and every refusal.
+`scripts/lane-proof.py` covers the lanes and recipes without a GPU, a rental or one weight
+byte: on real cozytensors/1 headers of a released bf16-full and AdaLN-pruned lane it checks
+each lane's rows, every treatment's selection (313/313/350; nvfp4 276/276 plus 350 int8) and
+every refusal.
 
 The result preserves the Runtime quantizer's existing weight measurements in
 `weight_fidelity_this_run`, a list of rows naming output slot, component, the treatment that
@@ -158,13 +148,12 @@ matched output distance and output quality require separate inference/evaluation
 `MiniMax-H3-FL2VA-Acc-8Step.safetensors` and `MiniMax-H3-Ref2VA-Acc-8Step.safetensors`
 (`alibaba-pai/MiniMax-H3-Acc-LoRAs`, revision `335001fb9e5455d68a0caa18ec2e319072150328`)
 and the base model's original modulation weights. The adapter checkpoint must hold exactly two
-components whose names contain `fl2va` and `ref2va`. `build_turbo_adapter` composes the same
-producer from two single-component adapter checkpoints in a client script.
+components whose names contain `fl2va` and `ref2va`.
 
-The output holds only the `fl2va_turbo` and `ref2va_turbo` components. Their six inference LoRA families inherit
-source objects. Only adapted AdaLN tables and eight collapsed output heads are
-written. The consumed AdaLN factors are absent from the output. One native transaction
-checkpoints each completed tensor, so a resubmitted run continues unfinished work and a
+The output holds only the `fl2va_turbo` and `ref2va_turbo` components. Their six inference LoRA families are copied
+with the adapters' objects. Only adapted AdaLN tables and eight collapsed output heads are
+written. The consumed AdaLN factors are absent from the output. The output journals each
+completed tensor, so a resubmitted run continues unfinished work and a
 completed replay returns the same artifact. Ordinary `retable` keeps its two inputs
 and two outputs; turbo preparation does not change the base schedule.
 

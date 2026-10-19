@@ -241,7 +241,7 @@ def surface_violations(label: str, source: str, *, driver: bool) -> list[str]:
                 f"`cozy_runtime.author` surface and nothing else from the runtime; a "
                 f"private module is a coupling that breaks silently.{how}"
             )
-        if not driver and top in STORE_AND_NETWORK and module != "tensorfs.derived":
+        if not driver and top in STORE_AND_NETWORK and "/scripts/" not in label:
             bad.append(
                 f"{label}:{line}: {module!r} — package code speaks to no store, "
                 "no hub and no network; every byte it sees arrives as a typed input"

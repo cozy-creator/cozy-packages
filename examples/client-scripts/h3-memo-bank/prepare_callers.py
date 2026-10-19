@@ -28,7 +28,7 @@ if not isinstance(artifact["manifest"]["length"], int) or artifact["manifest"]["
 body = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
 code = '''# /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime>=0.27.0,<1", "minimax-h3-tools"]
+# dependencies = ["cozy-runtime>=0.30.0,<1", "minimax-h3-tools"]
 # [tool.cozy]
 # accelerator = false
 # ///
