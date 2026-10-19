@@ -134,9 +134,10 @@ class Describer(Model[Pipeline], encoded_leaves="accept", min_bits=4, phase="dec
         return [reply.strip() for reply in self._generate(self._inputs(text=texts), max_new_tokens)]
 
     def _chat(self, messages: list[dict[str, Any]]) -> str:
-        return self.processor.apply_chat_template(
+        text: str = self.processor.apply_chat_template(
             messages, add_generation_prompt=True, tokenize=False, enable_thinking=False
         )
+        return text
 
     def _inputs(self, **kwargs: Any) -> Any:
         model = self.pipe.components[COMPONENT]
