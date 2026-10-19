@@ -1,19 +1,17 @@
 name: ci
-# Automatic: one ~20 s job on master pushes that touch Python: syntax errors and undefined
-# names across every package (Python has no compile step; a package's own proofs only see
-# the modules they import).
-# On demand (fences, types, locks, wheels, and `task conform` of each package):
+# Every PR and every push to master: lint, fences, types, locks, wheels, and `task conform` of
+# each package. On demand for chosen packages:
 #   gh workflow run ci.yaml -R cozy-creator/cozy-packages --ref <branch> [-f packages='["sdxl"]']
 on:
+  pull_request:
   push:
     branches: [master]
-    paths: ["**.py", "**/pyproject.toml", ".github/workflows/ci.yaml"]
   workflow_dispatch:
     inputs:
       packages:
-        description: JSON list of packages to conform
+        description: JSON list of packages to conform; empty conforms every package
         type: string
-        default: '["anima","birefnet","character-describer","seedvr2","sdxl","minimax-h3-tools","qwen-image-2","flux-3-klein","minimax-h3"]'
+        default: ''
       account_index:
         description: Account index the committed locks are bound to (`cozy package lock`)
         type: string
@@ -22,8 +20,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  # Syntax errors and undefined names in every Python file, research/ included.
   compile:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -32,7 +30,6 @@ jobs:
       - run: uvx ruff@0.16.4 check --select E9,F63,F7,F82 .
 
   checks:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -70,7 +67,7 @@ jobs:
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          scripts/bind-account-index.sh "${{ inputs.account_index }}" anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 flux-3-klein
+          scripts/bind-account-index.sh "${{ inputs.account_index || 'https://tensorhub.com/v1/index/fidika/simple/' }}" anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 flux-3-klein
           for package in anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 flux-3-klein; do
             uv lock --check --project "$package"
           done
@@ -105,7 +102,7 @@ jobs:
 
   conform:
     name: Package conformance
-    if: github.event_name == 'workflow_dispatch' && inputs.packages != '[]'
+    if: inputs.packages != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -116,7 +113,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: ${{ fromJSON(inputs.packages) }}
+        package: ${{ fromJSON(inputs.packages || '["anima","birefnet","character-describer","seedvr2","sdxl","minimax-h3-tools","qwen-image-2","flux-3-klein","minimax-h3"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v7
