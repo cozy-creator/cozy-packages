@@ -1,13 +1,16 @@
 # Qwen Image 2
 
-`generate_image` creates or edits one PNG using Qwen-Image-2.1. The model checkpoint is
-selected independently from the package. TensorFS owns model downloads and bytes;
+`generate_image` creates or edits one PNG using Qwen-Image-2.1, and `generate_image_turbo` does
+the same with Qwen-Image-2.1-Turbo. Both take the same inputs. The model checkpoint is selected
+independently from the package. TensorFS owns model downloads and bytes;
 Runtime owns construction, memory residency and component execution.
 
 `prompt` reaches the model exactly as given. Native RGBA decoding is composited over white because the v1 API produces RGB PNGs;
 it does not promise transparent outputs. `seed` is optional and the chosen seed is
 returned. Seeds range from 0 through 9007199254740991 (the interoperable 53-bit
-integer range); omitting one chooses a random seed in that range. Steps default to 40.
+integer range); omitting one chooses a random seed in that range. Steps default to 40; a checkpoint
+that names its own schedule (Turbo's `sample_sigmas`, 8 steps) runs it, and a different `steps` is
+reported as a `clamp` adjustment.
 Unknown fields, such as the removed width/height inputs, are ignored with a warning.
 
 `aspect_ratio` is any `W:H` and `megapixels` is 1, 2 or 4 (1024² pixels each). The size is
@@ -64,6 +67,11 @@ cozy model upload \
   fidika/qwen-image-2.1 --on YOUR_MACHINE
 cozy model publish fidika/qwen-image-2.1 --release 0.1.0 \
   --lane bf16=sha256:CHECKPOINT_DIGEST
+cozy model upload \
+  hf://Qwen/Qwen-Image-2.1-Turbo@fc13ba1986fcb905854dc8de2f52eee395f49b5b \
+  fidika/qwen-image-2.1-turbo --on YOUR_MACHINE
+cozy model publish fidika/qwen-image-2.1-turbo --release 0.1.0 \
+  --lane bf16=sha256:CHECKPOINT_DIGEST
 ```
 
 Replace `YOUR_MACHINE` and `CHECKPOINT_DIGEST` with the selected machine name and
@@ -113,8 +121,8 @@ image = await generate_image(
 ```
 
 The Hub package is `<account>/qwen-image-2`, e.g. `paul/qwen-image-2` on the local
-Hub and `fidika/qwen-image-2` on tensorhub.com; its callable is `generate_image`. The
-default model is the org-relative `qwen-image-2.1@0.1.0`: the publishing
-account's `qwen-image-2.1` model.
+Hub and `fidika/qwen-image-2` on tensorhub.com; its callables are `generate_image` and
+`generate_image_turbo`. Their default models are the org-relative `qwen-image-2.1@0.1.0` and
+`qwen-image-2.1-turbo@0.1.0`: the publishing account's models.
 Installing the wheel alone does not turn GPU execution into an in-process call;
 Cozy supplies the managed caller when composing package functions.

@@ -207,6 +207,25 @@ def staged(tmp_path: Path) -> None:
     rebuilt = build_processor(assets(files))
     assert rebuilt.tokenizer.encode("blue jacket") == processor.tokenizer.encode("blue jacket")
     assert rebuilt.chat_template == chat
+    # Turbo's Transformers 5 layout: one processor_config.json and the new tokenizer_config keys.
+    turbo_files = {
+        "tokenizer.json": files["tokenizer.json"],
+        "tokenizer_config.json": json.dumps(
+            {
+                **tokenizer_config,
+                "backend": "tokenizers",
+                "is_local": True,
+                "extra_special_tokens": [],
+            }
+        ).encode(),
+        "processor_config.json": json.dumps(
+            {"image_processor": geometry, "video_processor": geometry, "processor_class": "X"}
+        ).encode(),
+        "chat_template.jinja": chat.encode(),
+    }
+    turbo = build_processor(assets(turbo_files))
+    assert turbo.tokenizer.encode("blue jacket") == processor.tokenizer.encode("blue jacket")
+    assert turbo.to_dict() == rebuilt.to_dict()
     try:
         build_processor(assets({k: v for k, v in files.items() if k != "chat_template.jinja"}))
     except Exception as missing:
@@ -277,10 +296,55 @@ def staged(tmp_path: Path) -> None:
     assert actual.shape == (1, 4, 32, 32)
     assert torch.isfinite(actual).all()
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    # A checkpoint naming its own schedule (Turbo's `model_index.sample_sigmas`, the first value
+    # stored as an integer) runs that schedule, as upstream's pipeline configured with it does.
+    schedule = [1, 0.8, 0.5]
+    turbo_graph = build_qwen_image21(Config({**config, "model_index": {"sample_sigmas": schedule}}))
+    turbo_graph.components = graph.components
+    turbo_model = QwenImage21Model.for_test(graph=turbo_graph, processor=processor)
+    assert turbo_model.sample_sigmas == [1.0, 0.8, 0.5] and model.sample_sigmas is None
+    embeds, mask = turbo_model.encode("a person in a blue jacket")
+    latents = turbo_model.denoise(
+        embeds,
+        mask,
+        width=32,
+        height=32,
+        steps=len(schedule),
+        seed=44,
+        on_step=lambda i: None,
+        cancel=lambda: None,
+    )
+    distilled = (turbo_model.decode(latents, width=32, height=32) / 2 + 0.5).clamp(0, 1)
+    upstream = QwenImage21Pipeline(
+        **{**graph.components, "text_encoder": upstream_encoder},
+        processor=processor,
+        scheduler=FlowMatchEulerDiscreteScheduler.from_config(config["scheduler"]),
+        sample_sigmas=[1.0, 0.8, 0.5],
+    )
+    expected = upstream(
+        prompt="a person in a blue jacket",
+        width=32,
+        height=32,
+        generator=torch.Generator().manual_seed(44),
+        output_type="pt",
+    ).images
+    torch.testing.assert_close(distilled, expected, rtol=0, atol=0)
+    assert not torch.equal(distilled, actual)
 
     assert {x.dtype for x in graph.components["vae"].parameters()} == {torch.float32}
     assert {x.dtype for x in graph.components["transformer"].parameters()} == {torch.bfloat16}
     shapes(model, tmp_path)
+    # `generate_image_turbo` through the real kernel: the checkpoint's schedule wins over `steps`.
+    turbo_run = invoke_with_fakes(
+        app.get("generate_image_turbo"),
+        {"prompt": "a person", "megapixels": 1, "steps": 5, "seed": 7},
+        request_id="turbo",
+        spool=tmp_path / "turbo",
+        models={"model": turbo_model},
+    )
+    assert (turbo_run.result.width, turbo_run.result.height) == (1024, 1024)
+    rows = [(row.kind, row.field, row.requested, row.applied) for row in turbo_run.adjustments]
+    assert rows == [("clamp", "steps", 5, 3)], rows
     # The editing path: separately leased reference, prompt and denoise stages equal one upstream
     # call with the same reference. Upstream encodes references in the prompt's dtype, so both
     # run in float32 here.
