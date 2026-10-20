@@ -19,7 +19,9 @@ from typing import Any
 import torch
 from cozy_runtime.author import Config, ModelAssets
 from cozy_runtime.author._activity import event_loop, observing
+from cozy_runtime.author.fakes import granted_input, invoke_with_fakes
 from diffusers import FlowMatchEulerDiscreteScheduler, QwenImage21Pipeline
+from PIL import Image
 from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import (
     PreTrainedTokenizerFast,
@@ -31,12 +33,55 @@ from transformers import (
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "qwen-image-2"))
 
+from qwen_image_2 import app  # noqa: E402
 from qwen_image_2.model import (  # noqa: E402
     QwenImage21Model,
     _StagedPipeline,
     build_processor,
     build_qwen_image21,
 )
+
+
+def photo(path: Path, size: tuple[int, int], orientation: int = 1) -> Path:
+    exif = Image.Exif()
+    exif[0x0112] = orientation
+    Image.linear_gradient("L").resize(size).convert("RGB").save(path, exif=exif, quality=80)
+    return path
+
+
+def shapes(model: QwenImage21Model, tmp_path: Path) -> None:
+    """generate_image through the real kernel on real JPEGs: an omitted aspect ratio takes the
+    last reference's, an omitted tier the one nearest its pixels, and explicit values win."""
+    square = photo(tmp_path / "square.jpg", (512, 512))
+    cases: list[tuple[list[Path], dict[str, object], tuple[int, int]]] = [
+        ([square, photo(tmp_path / "3x2.jpg", (1200, 800))], {}, (1248, 832)),
+        # Stored landscape, EXIF-rotated upright: the output follows the displayed 9:16.
+        ([photo(tmp_path / "9x16.jpg", (1280, 720), orientation=6)], {}, (768, 1376)),
+        ([photo(tmp_path / "small.jpg", (640, 480))], {}, (1184, 896)),
+        ([photo(tmp_path / "12mp.jpg", (4000, 3000))], {}, (2368, 1760)),
+        ([tmp_path / "3x2.jpg"], {"megapixels": 2}, (1760, 1184)),
+        ([tmp_path / "3x2.jpg"], {"aspect_ratio": "1:1", "megapixels": 2}, (1440, 1440)),
+        ([], {}, (1024, 1024)),
+    ]
+    for index, (paths, given, expected) in enumerate(cases):
+        grants = {
+            f"reference_images.{n}": granted_input(path, input_id=f"reference_images.{n}", order=n)
+            for n, path in enumerate(paths)
+        }
+        wire = {"prompt": "a person", "steps": 1, "seed": 7, **given}
+        wire["reference_images"] = [grant.digest for grant in grants.values()]
+        result = invoke_with_fakes(
+            app.get("generate_image"),
+            wire,
+            request_id=f"shape-{index}",
+            spool=tmp_path / f"shape-{index}",
+            models={"model": model},
+            assets=grants,
+        )
+        image = result.result
+        assert (image.width, image.height) == expected, (paths, given, image)
+        with Image.open(tmp_path / f"shape-{index}" / "image-0001") as png:
+            assert (png.format, png.size) == ("PNG", expected), (png.format, png.size)
 
 
 def staged(tmp_path: Path) -> None:
@@ -64,6 +109,11 @@ def staged(tmp_path: Path) -> None:
             latents_std=[1.0] * 8,
         ),
         "text_encoder": dict(
+            # The tiny vocabulary's special tokens, so reference images reach the encoder.
+            image_token_id=2,
+            video_token_id=5,
+            vision_start_token_id=6,
+            vision_end_token_id=7,
             text_config=dict(
                 vocab_size=64,
                 hidden_size=16,
@@ -129,7 +179,7 @@ def staged(tmp_path: Path) -> None:
     )
     processor = Qwen3VLProcessor(
         image_processor=Qwen2VLImageProcessor(
-            patch_size=16, merge_size=2, temporal_patch_size=2, min_pixels=1024, max_pixels=4096
+            patch_size=16, merge_size=2, temporal_patch_size=2, min_pixels=1024, max_pixels=1 << 21
         ),
         video_processor=Qwen3VLVideoProcessor(patch_size=16, merge_size=2, temporal_patch_size=2),
         tokenizer=tok,
@@ -225,6 +275,7 @@ def staged(tmp_path: Path) -> None:
 
     assert {x.dtype for x in graph.components["vae"].parameters()} == {torch.float32}
     assert {x.dtype for x in graph.components["transformer"].parameters()} == {torch.bfloat16}
+    shapes(model, tmp_path)
 
 
 def progress() -> None:
