@@ -13,12 +13,14 @@ from cozy_runtime.author import (
     AssetBound,
     Context,
     ImageAsset,
+    ImagePreparation,
     Memoize,
     Outputs,
     Shape,
     Telemetry,
     WeightsOutput,
 )
+from diffusers.pipelines.qwenimage21.pipeline_qwenimage21 import calculate_dimensions
 from PIL import Image
 
 from .model import QwenImage21Model
@@ -82,19 +84,28 @@ _BUCKETS: dict[tuple[AspectRatio, Megapixels], tuple[int, int]] = {
     (AspectRatio.ULTRATALL, Megapixels.MP4): (1344, 3136),
 }
 
-_TIER_DEMAND: dict[Megapixels, tuple[int, int]] = {
+# A derived tier (None) is known only once the references are read: admission sees 4 MP.
+_DEMAND: dict[Megapixels | None, tuple[int, int]] = {
     tier: max(
-        (size for (_, t), size in _BUCKETS.items() if t is tier),
+        (size for (_, t), size in _BUCKETS.items() if t is (tier or Megapixels.MP4)),
         key=lambda size: size[0] * size[1],
     )
-    for tier in Megapixels
+    for tier in (*Megapixels, None)
 }
+# Upstream's area is 1024² per megapixel. Ratios beyond 8:1 would round past the tier's demand.
+_MAX_RATIO = 8
+
+
+def _nearest_tier(pixels: int) -> Megapixels:
+    return min(Megapixels, key=lambda tier: abs(tier * 1024 * 1024 - pixels))
 
 
 class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Annotated[str, msgspec.Meta(min_length=1)]
-    aspect_ratio: AspectRatio = AspectRatio.SQUARE
-    megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP1
+    # None: the last reference's exact ratio, else 1:1.
+    aspect_ratio: AspectRatio | None = None
+    # None: the tier nearest the last reference's pixel count, else 1 MP.
+    megapixels: Annotated[Megapixels | None, Shape(pixels=_DEMAND)] = None
     steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 40
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     reference_images: Annotated[
@@ -104,14 +115,24 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
             max_decoded_bytes=20 << 20,
             media_types=("image/png", "image/jpeg", "image/webp"),
         ),
+        ImagePreparation(max_pixels=4 << 20),
         msgspec.Meta(max_length=10),
     ] = msgspec.field(default_factory=list)
 
     def resolved_seed(self) -> int:
         return self.seed if self.seed is not None else secrets.randbits(53)
 
-    def dimensions(self) -> tuple[int, int]:
-        return _BUCKETS[(self.aspect_ratio, self.megapixels)]
+    def dimensions(self, reference: tuple[int, int] | None = None) -> tuple[int, int]:
+        """Output size; `reference` is the last reference image's displayed (width, height)."""
+        if self.megapixels is not None:
+            tier = self.megapixels
+        else:
+            tier = _nearest_tier(reference[0] * reference[1]) if reference else Megapixels.MP1
+        if self.aspect_ratio is not None or reference is None:
+            return _BUCKETS[(self.aspect_ratio or AspectRatio.SQUARE, tier)]
+        ratio = min(max(reference[0] / reference[1], 1 / _MAX_RATIO), _MAX_RATIO)
+        width, height, _ = calculate_dimensions(tier * 1024 * 1024, ratio)
+        return width, height
 
 
 class ImageOutput(msgspec.Struct):
@@ -153,7 +174,6 @@ def generate_image(
     tel: Telemetry,
 ) -> ImageOutput:
     seed = payload.resolved_seed()
-    width, height = payload.dimensions()
     ctx.raise_if_cancelled()
     reference_images, reference_latents, image_pad_mask = None, None, None
     if payload.reference_images:
@@ -161,6 +181,7 @@ def generate_image(
             reference_images = [asset.read() for asset in payload.reference_images]
             conditioning_images, reference_latents = model.encode_reference_images(reference_images)
         ctx.raise_if_cancelled()
+    width, height = payload.dimensions(reference_images[-1].size if reference_images else None)
     with tel.stage("encoding prompt", overall_range=(0.08 if reference_images else 0.0, 0.1)):
         if reference_images is None:
             embeds, mask = model.encode(payload.prompt)
