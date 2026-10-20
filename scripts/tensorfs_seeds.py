@@ -46,7 +46,7 @@ def main() -> None:
             if not isinstance(held, tensorfs.Encoded):
                 raise RuntimeError(f"{key} did not retain its native stored parts")
             into = bytearray(512)
-            raw.decode_into(scheme, {name: (part.dtype, part.shape, part)
+            raw.decode_into(scheme, {name: (part.dtype, part.shape, part.tobytes())
                                     for name, part in held.parts.items()}, into,
                             dtype="BF16", shape=[1, 256], params=encoding.params)
             if any(into):
