@@ -8,7 +8,7 @@ owns weight loading, placement and residency; the model never fetches a backbone
 ```sh
 cozy run ./birefnet/normalize model.source=hf://ZhengPeng7/BiRefNet@e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4 --tensorhub local
 cozy run upload <run> paul/birefnet --tensorhub local
-cozy model publish paul/birefnet --release 0.1.0 --lane fp16=sha256:<checkpoint-from-upload> --tensorhub local
+cozy model publish paul/birefnet --release 0.1.0 --commit main --tensorhub local
 cozy run paul/birefnet/remove_background --asset image=./character.png
 ```
 

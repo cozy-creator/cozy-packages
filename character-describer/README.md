@@ -39,7 +39,7 @@ anything.
 ```sh
 cozy model upload hf://Qwen/Qwen3.5-9B@c202236235762e1c871ad0ccb60c8ee5ba337b9a <account>/qwen3.5-9b \
   --on <name>
-cozy model publish <account>/qwen3.5-9b --release 0.2.0 --lane bf16=sha256:<checkpoint>
+cozy model publish <account>/qwen3.5-9b --release 0.2.0 --commit main
 ```
 
 ## The int8 lane

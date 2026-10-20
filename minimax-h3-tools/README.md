@@ -7,8 +7,8 @@ model input and a destination repository, run on the rental that holds the sourc
 cozy run <org>/minimax-h3-tools/<function> <input model ref> <org/model> --on NAME
 ```
 
-Each declared output becomes a checkpoint named by its slot; publish lanes with
-`cozy model publish <org/model> --release R --lane <slot>=<checkpoint>`. On the rental that
+Each declared output becomes a commit holding its slot's variant; release one with
+`cozy model publish <org/model> --release R --commit <sha256:commit>`. On the rental that
 ingested or already fetched the input, its objects are in the pod Store and nothing moves.
 
 | Function | Input (first positional) | Output | Notes |

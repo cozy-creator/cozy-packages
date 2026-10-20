@@ -65,18 +65,15 @@ processor configs) as assets; the package builds its processor from them:
 cozy model upload \
   hf://Qwen/Qwen-Image-2.1@790c92633540aa0cb11d9abf19eb46d861714758 \
   fidika/qwen-image-2.1 --on YOUR_MACHINE
-cozy model publish fidika/qwen-image-2.1 --release 0.1.0 \
-  --lane bf16=sha256:CHECKPOINT_DIGEST
+cozy model publish fidika/qwen-image-2.1 --release 0.1.0 --commit main
 cozy model upload \
   hf://Qwen/Qwen-Image-2.1-Turbo@fc13ba1986fcb905854dc8de2f52eee395f49b5b \
   fidika/qwen-image-2.1-turbo --on YOUR_MACHINE
-cozy model publish fidika/qwen-image-2.1-turbo --release 0.1.0 \
-  --lane bf16=sha256:CHECKPOINT_DIGEST
+cozy model publish fidika/qwen-image-2.1-turbo --release 0.1.0 --commit main
 ```
 
-Replace `YOUR_MACHINE` and `CHECKPOINT_DIGEST` with the selected machine name and
-returned checkpoint digest. Upload creates the checkpoint; the separate publish
-command creates the package's default release. Preparation and descriptor checks
+Replace `YOUR_MACHINE` with the selected machine name. Upload makes a commit and moves
+the private tag `main` to it; publish releases that commit as the package's default. Preparation and descriptor checks
 alone do not qualify GPU inference or the generated image.
 
 ## The int8 lane
