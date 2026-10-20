@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime>=0.27.0,<1", "tensorfs>=0.10"]
+# dependencies = ["cozy-runtime>=0.30.0,<1", "tensorfs>=0.13,<0.14"]
 # [tool.cozy]
 # accelerator = false
 # [tool.cozy.weights]
@@ -10,22 +10,18 @@
 from typing import Any
 
 from cozy_runtime.author import Context, ModelArtifact, Weights
-from tensorfs.derived import Config, Derivation, Target
+from cozy_runtime.derive import Derivation
 
 
 def main(ctx: Context, *, source: Weights[Any]) -> ModelArtifact:
     capability = ctx.tensorfs_source(source)
-    structure = capability.inspect()
-    for component in ("fl2va_dit", "ref2va_dit"):
-        tensors = structure.components[component]
+    for component in ("transformer", "transformer_ref"):
+        tensors = capability.components[component].tensors
         if "transformer_blocks.0.adaln_proj.linear.weight" not in tensors:
             raise ValueError("positive bank qualification requires original generating weights")
         if "transformer_blocks.0.adaln_proj.table" in tensors:
             raise ValueError("an already pruned model is not a positive bank source")
-    with ctx.output("original").open(Derivation(
-        sources={"source": capability},
-        targets={name: Target("source", name) for name in structure.components},
-        configs={name: Config("copy", "source", name) for name in structure.configs},
-        order=tuple((name, key) for name, tensors in structure.components.items() for key in tensors),
-    )) as writer:
-        return ctx.adopt_model(writer.receipt if writer.receipt is not None else writer.commit())
+    order = tuple((name, key) for name, component in capability.components.items()
+                  for key in component.tensors)
+    with ctx.output("original", Derivation(capability, order=order)) as output:
+        return ctx.adopt_model(output)

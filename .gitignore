@@ -1,5 +1,6 @@
 .venv/
 .venv-check/
+.candidate-dependencies/
 __pycache__/
 *.pyc
 

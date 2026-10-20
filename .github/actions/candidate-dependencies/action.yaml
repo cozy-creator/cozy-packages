@@ -1,0 +1,55 @@
+name: Candidate dependencies
+description: Lock against exact hosted Runtime and TensorFS development wheels
+inputs:
+  runtime_run:
+    description: cozy-runtime dev-build run ID
+    required: true
+  tensorfs_run:
+    description: tensorfs dev-build run ID
+    required: true
+  projects:
+    description: Space-separated package directories
+    required: true
+  account_index:
+    description: Same-account package index
+    required: true
+  token:
+    description: Actions read token for the source repositories
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        RUNTIME_RUN: ${{ inputs.runtime_run }}
+        TENSORFS_RUN: ${{ inputs.tensorfs_run }}
+      run: test -n "$RUNTIME_RUN" && test -n "$TENSORFS_RUN"
+    - uses: actions/download-artifact@v4
+      with:
+        repository: cozy-creator/cozy-runtime
+        run-id: ${{ inputs.runtime_run }}
+        github-token: ${{ inputs.token }}
+        pattern: cozy-runtime-*
+        merge-multiple: true
+        path: ${{ runner.temp }}/candidate-wheels/runtime
+    - uses: actions/download-artifact@v4
+      with:
+        repository: cozy-creator/tensorfs
+        run-id: ${{ inputs.tensorfs_run }}
+        github-token: ${{ inputs.token }}
+        pattern: tensorfs-wheel-*
+        merge-multiple: true
+        path: ${{ runner.temp }}/candidate-wheels/tensorfs
+    - shell: bash
+      env:
+        PROJECTS: ${{ inputs.projects }}
+        ACCOUNT_INDEX: ${{ inputs.account_index }}
+      run: |
+        runtime=("$RUNNER_TEMP"/candidate-wheels/runtime/*manylinux*x86_64.whl)
+        tensorfs=("$RUNNER_TEMP"/candidate-wheels/tensorfs/*.whl)
+        test "${#runtime[@]}" -eq 1 && test -f "${runtime[0]}"
+        test "${#tensorfs[@]}" -eq 1 && test -f "${tensorfs[0]}"
+        read -ra projects <<< "$PROJECTS"
+        python scripts/candidate-dependencies.py \
+          --runtime-wheel "${runtime[0]}" --tensorfs-wheel "${tensorfs[0]}" \
+          --account-index "$ACCOUNT_INDEX" "${projects[@]}"

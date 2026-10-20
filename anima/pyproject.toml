@@ -4,8 +4,9 @@ version = "0.11.0"
 description = "Anima anime text-to-image package for Cozy"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media]>=0.27.0",
-    "diffusers>=0.40.0",
+    "av>=19.0.1",
+    "cozy-runtime>=0.27.0",
+    "diffusers>=0.40,<0.41",
     "hf-xet>=1.6.0",
     "msgspec>=0.19",
     "numpy>=2.0",
@@ -31,7 +32,8 @@ build-backend = "hatchling.build"
 packages = ["anima"]
 
 [tool.uv]
-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'", "sys_platform == 'linux' and platform_machine == 'aarch64'"]
+override-dependencies = ["cozy-runtime @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-lifetime-candidate-20261020/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl", "tensorfs @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-lifetime-candidate-20261020/tensorfs-0.13.0-cp312-abi3-manylinux_2_28_x86_64.whl"]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 
 [dependency-groups]
 dev = ["mypy>=2.3.1", "ruff>=0.16.4"]

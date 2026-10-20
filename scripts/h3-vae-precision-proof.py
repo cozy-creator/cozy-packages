@@ -43,7 +43,7 @@ def _half_decode_config(module: torch.nn.Module) -> Config:
     return Config(
         {},
         tensor_dtypes={
-            f"video_vae.{name}": "f16"
+            f"vae.{name}": "f16"
             if (
                 name == "post_quant_conv.weight"
                 or (name.startswith("decoder.") and name.endswith(".weight") and value.dim() >= 2)

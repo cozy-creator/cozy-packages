@@ -28,6 +28,7 @@ from .turbo import (
     ATTENTION_KWARG,
     LORA_FAMILIES,
     OVERLAY_KWARG,
+    OVERLAY_SOURCE_KWARG,
     TURBO_BANK,
     TurboArming,
     TurboOverlay,
@@ -288,7 +289,7 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
             cleaned = {
                 key: value
                 for key, value in selector.items()
-                if key not in (ATTENTION_KWARG, OVERLAY_KWARG)
+                if key not in (ATTENTION_KWARG, OVERLAY_KWARG, OVERLAY_SOURCE_KWARG)
             }
             return args, {**kwargs, "attention_kwargs": cleaned}
         return None

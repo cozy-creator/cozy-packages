@@ -63,6 +63,21 @@ When a package starts using a new Runtime API:
 4. Install the published release with the local Creator CLI and verify its input
    and callable interface. Include execution qualification appropriate to the change.
 
+Before public release, a hosted runner can use the exact candidate wheels:
+
+```sh
+python scripts/candidate-dependencies.py --runtime-wheel /path/cozy_runtime.whl \
+  --tensorfs-wheel /path/tensorfs.whl sdxl minimax-h3 qwen-image-2
+```
+
+This prepares temporary overrides and locks for the runner's platform. Install the light
+checking environment with `uv pip install --overrides .candidate-dependencies/requirements.txt`
+plus CI's normal requirements, then run the same fences, Ruff, strict mypy and
+`task conform -- <package>` commands. Keep candidate locks out of release commits.
+`ci.yaml` also accepts paired `runtime_run` and `tensorfs_run` development-build IDs
+when its token can read both artifacts. A private build caller can use the local-wheel
+command above without granting another repository access or publishing the wheels.
+
 Private development or custom-image packages can still use `cozy package publish`
 directly. Their requirements need not fit every first-party worker image. The
 worker capability check remains authoritative for new worker APIs, and an existing

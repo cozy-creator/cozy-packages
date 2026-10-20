@@ -1,0 +1,186 @@
+{
+  "status": "published and verified; all nine repos are private unreleased checkpoints",
+  "slots": {
+    "local/minimax-h3/generate_fl2va.models.model": {
+      "source": "fidika/minimax-h3@1.0.0-rc.3",
+      "ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7/int8"
+    },
+    "local/minimax-h3/generate_ref2va.models.model": {
+      "source": "fidika/minimax-h3@1.0.0-rc.3",
+      "ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7/int8"
+    },
+    "local/minimax-h3/encode_text.models.model": {
+      "source": "fidika/minimax-h3@1.0.0-rc.3",
+      "ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7/int8"
+    },
+    "local/minimax-h3/generate_fl2va_turbo.models.base_model": {
+      "source": "fidika/minimax-h3@1.0.0-rc.3",
+      "ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7/int8"
+    },
+    "local/minimax-h3/generate_fl2va_turbo.models.turbo_lora": {
+      "source": "fidika/minimax-h3-turbo-lora@1.0.0-audit.1",
+      "ref": "fidika/varena-slim-20261020-minimax-h3-turbo-lora@sha256:235f376cbb339094d8cbe89930a0e099ae62de54b604ec7d6b5a3422276ef4d9",
+      "variant": "pdd8",
+      "native_ref": "fidika/varena-slim-20261020-minimax-h3-turbo-lora@sha256:235f376cbb339094d8cbe89930a0e099ae62de54b604ec7d6b5a3422276ef4d9/pdd8"
+    },
+    "local/minimax-h3/generate_ref2va_turbo.models.base_model": {
+      "source": "fidika/minimax-h3@1.0.0-rc.3",
+      "ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7/int8"
+    },
+    "local/minimax-h3/generate_ref2va_turbo.models.turbo_lora": {
+      "source": "fidika/minimax-h3-turbo-lora@1.0.0-audit.1",
+      "ref": "fidika/varena-slim-20261020-minimax-h3-turbo-lora@sha256:235f376cbb339094d8cbe89930a0e099ae62de54b604ec7d6b5a3422276ef4d9",
+      "variant": "pdd8",
+      "native_ref": "fidika/varena-slim-20261020-minimax-h3-turbo-lora@sha256:235f376cbb339094d8cbe89930a0e099ae62de54b604ec7d6b5a3422276ef4d9/pdd8"
+    },
+    "local/sdxl/generate.models.model": {
+      "source": "fidika/sdxl@1.0.0",
+      "ref": "fidika/varena-slim-20261020-sdxl@sha256:adf93e44c2811d9768369ddf22ac05a434e21a26079e1cb6761175b8655d9fb3",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-sdxl@sha256:adf93e44c2811d9768369ddf22ac05a434e21a26079e1cb6761175b8655d9fb3/int8"
+    },
+    "local/qwen-image-2/generate_image.models.model": {
+      "source": "fidika/qwen-image-2.1@0.1.0",
+      "ref": "fidika/varena-slim-20261020-qwen-image-2.1@sha256:d6322b3dba3f25d59abfe573f2629b239be57d6da6459af9da6df5ad9de9a2cd",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-qwen-image-2.1@sha256:d6322b3dba3f25d59abfe573f2629b239be57d6da6459af9da6df5ad9de9a2cd/int8"
+    },
+    "local/flux-3-klein/generate.models.model": {
+      "source": "fidika/flux-3-klein@0.1.0",
+      "ref": "fidika/varena-slim-20261020-flux-3-klein@sha256:f7b2bd76bf4939de6afa73cbee67678e9d2f4fa6c8facb9db4c1fa57f026f674",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-flux-3-klein@sha256:f7b2bd76bf4939de6afa73cbee67678e9d2f4fa6c8facb9db4c1fa57f026f674/int8"
+    },
+    "local/flux-3-klein/generate.models.upsampler": {
+      "source": "fidika/flux-3-klein-upsampler@0.2.0",
+      "ref": "fidika/varena-slim-20261020-flux-3-klein-upsampler@sha256:94d6caa4477c26b52f505d913b555ebc64470cc686e0b0a1986da053003c34a8",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-flux-3-klein-upsampler@sha256:94d6caa4477c26b52f505d913b555ebc64470cc686e0b0a1986da053003c34a8/int8"
+    },
+    "local/flux-3-klein/generate.models.drafter": {
+      "source": "fidika/qwen3.5-9b-mtp@0.2.0",
+      "ref": "fidika/varena-slim-20261020-qwen3.5-9b-mtp@sha256:c9888d6b2165684865c4598cc9d0aa33ebf0a5597fa90c03971d016b21cb2a28",
+      "variant": "bf16",
+      "native_ref": "fidika/varena-slim-20261020-qwen3.5-9b-mtp@sha256:c9888d6b2165684865c4598cc9d0aa33ebf0a5597fa90c03971d016b21cb2a28/bf16"
+    },
+    "local/flux-3-klein/edit.models.model": {
+      "source": "fidika/flux-3-klein@0.1.0",
+      "ref": "fidika/varena-slim-20261020-flux-3-klein@sha256:f7b2bd76bf4939de6afa73cbee67678e9d2f4fa6c8facb9db4c1fa57f026f674",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-flux-3-klein@sha256:f7b2bd76bf4939de6afa73cbee67678e9d2f4fa6c8facb9db4c1fa57f026f674/int8"
+    },
+    "local/flux-3-klein/edit.models.upsampler": {
+      "source": "fidika/flux-3-klein-upsampler@0.2.0",
+      "ref": "fidika/varena-slim-20261020-flux-3-klein-upsampler@sha256:94d6caa4477c26b52f505d913b555ebc64470cc686e0b0a1986da053003c34a8",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-flux-3-klein-upsampler@sha256:94d6caa4477c26b52f505d913b555ebc64470cc686e0b0a1986da053003c34a8/int8"
+    },
+    "local/flux-3-klein/edit.models.drafter": {
+      "source": "fidika/qwen3.5-9b-mtp@0.2.0",
+      "ref": "fidika/varena-slim-20261020-qwen3.5-9b-mtp@sha256:c9888d6b2165684865c4598cc9d0aa33ebf0a5597fa90c03971d016b21cb2a28",
+      "variant": "bf16",
+      "native_ref": "fidika/varena-slim-20261020-qwen3.5-9b-mtp@sha256:c9888d6b2165684865c4598cc9d0aa33ebf0a5597fa90c03971d016b21cb2a28/bf16"
+    },
+    "local/flux-3-klein/generate_base.models.model": {
+      "source": "fidika/flux-3-klein-base@0.1.0",
+      "ref": "fidika/varena-slim-20261020-flux-3-klein-base@sha256:4a5b737757dac9129cff4e49786eba60226b79bda069291b72e7543bb903a210",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-flux-3-klein-base@sha256:4a5b737757dac9129cff4e49786eba60226b79bda069291b72e7543bb903a210/int8"
+    },
+    "local/flux-3-klein/generate_base.models.upsampler": {
+      "source": "fidika/flux-3-klein-upsampler@0.2.0",
+      "ref": "fidika/varena-slim-20261020-flux-3-klein-upsampler@sha256:94d6caa4477c26b52f505d913b555ebc64470cc686e0b0a1986da053003c34a8",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-flux-3-klein-upsampler@sha256:94d6caa4477c26b52f505d913b555ebc64470cc686e0b0a1986da053003c34a8/int8"
+    },
+    "local/flux-3-klein/generate_base.models.drafter": {
+      "source": "fidika/qwen3.5-9b-mtp@0.2.0",
+      "ref": "fidika/varena-slim-20261020-qwen3.5-9b-mtp@sha256:c9888d6b2165684865c4598cc9d0aa33ebf0a5597fa90c03971d016b21cb2a28",
+      "variant": "bf16",
+      "native_ref": "fidika/varena-slim-20261020-qwen3.5-9b-mtp@sha256:c9888d6b2165684865c4598cc9d0aa33ebf0a5597fa90c03971d016b21cb2a28/bf16"
+    },
+    "local/flux-3-klein/edit_base.models.model": {
+      "source": "fidika/flux-3-klein-base@0.1.0",
+      "ref": "fidika/varena-slim-20261020-flux-3-klein-base@sha256:4a5b737757dac9129cff4e49786eba60226b79bda069291b72e7543bb903a210",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-flux-3-klein-base@sha256:4a5b737757dac9129cff4e49786eba60226b79bda069291b72e7543bb903a210/int8"
+    },
+    "local/flux-3-klein/edit_base.models.upsampler": {
+      "source": "fidika/flux-3-klein-upsampler@0.2.0",
+      "ref": "fidika/varena-slim-20261020-flux-3-klein-upsampler@sha256:94d6caa4477c26b52f505d913b555ebc64470cc686e0b0a1986da053003c34a8",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-flux-3-klein-upsampler@sha256:94d6caa4477c26b52f505d913b555ebc64470cc686e0b0a1986da053003c34a8/int8"
+    },
+    "local/flux-3-klein/edit_base.models.drafter": {
+      "source": "fidika/qwen3.5-9b-mtp@0.2.0",
+      "ref": "fidika/varena-slim-20261020-qwen3.5-9b-mtp@sha256:c9888d6b2165684865c4598cc9d0aa33ebf0a5597fa90c03971d016b21cb2a28",
+      "variant": "bf16",
+      "native_ref": "fidika/varena-slim-20261020-qwen3.5-9b-mtp@sha256:c9888d6b2165684865c4598cc9d0aa33ebf0a5597fa90c03971d016b21cb2a28/bf16"
+    },
+    "local/character-describer/describe_character.models.model": {
+      "source": "fidika/qwen3.5-9b@0.2.0",
+      "ref": "fidika/varena-slim-20261020-qwen3.5-9b@sha256:3a48268a740c9daeb6712578cf20bc71e539332ab58946108dd7c771cada4a72",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-qwen3.5-9b@sha256:3a48268a740c9daeb6712578cf20bc71e539332ab58946108dd7c771cada4a72/int8"
+    },
+    "local/character-describer/describe_characters.models.model": {
+      "source": "fidika/qwen3.5-9b@0.2.0",
+      "ref": "fidika/varena-slim-20261020-qwen3.5-9b@sha256:3a48268a740c9daeb6712578cf20bc71e539332ab58946108dd7c771cada4a72",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-qwen3.5-9b@sha256:3a48268a740c9daeb6712578cf20bc71e539332ab58946108dd7c771cada4a72/int8"
+    },
+    "local/character-describer/describe_clip.models.model": {
+      "source": "fidika/qwen3.5-9b@0.2.0",
+      "ref": "fidika/varena-slim-20261020-qwen3.5-9b@sha256:3a48268a740c9daeb6712578cf20bc71e539332ab58946108dd7c771cada4a72",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-qwen3.5-9b@sha256:3a48268a740c9daeb6712578cf20bc71e539332ab58946108dd7c771cada4a72/int8"
+    },
+    "local/character-describer/describe_places.models.model": {
+      "source": "fidika/qwen3.5-9b@0.2.0",
+      "ref": "fidika/varena-slim-20261020-qwen3.5-9b@sha256:3a48268a740c9daeb6712578cf20bc71e539332ab58946108dd7c771cada4a72",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-qwen3.5-9b@sha256:3a48268a740c9daeb6712578cf20bc71e539332ab58946108dd7c771cada4a72/int8"
+    },
+    "local/character-describer/write_texts.models.model": {
+      "source": "fidika/qwen3.5-9b@0.2.0",
+      "ref": "fidika/varena-slim-20261020-qwen3.5-9b@sha256:3a48268a740c9daeb6712578cf20bc71e539332ab58946108dd7c771cada4a72",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-qwen3.5-9b@sha256:3a48268a740c9daeb6712578cf20bc71e539332ab58946108dd7c771cada4a72/int8"
+    },
+    "local/minimax-h3/cut_segment.models.base_model": {
+      "source": "fidika/minimax-h3@1.0.0-rc.3",
+      "ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7/int8"
+    },
+    "local/minimax-h3/cut_segment.models.turbo_lora": {
+      "source": "fidika/minimax-h3-turbo-lora@1.0.0-audit.1",
+      "ref": "fidika/varena-slim-20261020-minimax-h3-turbo-lora@sha256:235f376cbb339094d8cbe89930a0e099ae62de54b604ec7d6b5a3422276ef4d9",
+      "variant": "pdd8",
+      "native_ref": "fidika/varena-slim-20261020-minimax-h3-turbo-lora@sha256:235f376cbb339094d8cbe89930a0e099ae62de54b604ec7d6b5a3422276ef4d9/pdd8"
+    },
+    "local/minimax-h3/motion_segment.models.base_model": {
+      "source": "fidika/minimax-h3@1.0.0-rc.3",
+      "ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7",
+      "variant": "int8",
+      "native_ref": "fidika/varena-slim-20261020-minimax-h3@sha256:ac9154fa2111ca55cce92cc28d2386ff6e610b2768e0cef534b1d67245a03bc7/int8"
+    },
+    "local/minimax-h3/motion_segment.models.turbo_lora": {
+      "source": "fidika/minimax-h3-turbo-lora@1.0.0-audit.1",
+      "ref": "fidika/varena-slim-20261020-minimax-h3-turbo-lora@sha256:235f376cbb339094d8cbe89930a0e099ae62de54b604ec7d6b5a3422276ef4d9",
+      "variant": "pdd8",
+      "native_ref": "fidika/varena-slim-20261020-minimax-h3-turbo-lora@sha256:235f376cbb339094d8cbe89930a0e099ae62de54b604ec7d6b5a3422276ef4d9/pdd8"
+    }
+  },
+  "publication_proof": "23 fresh-cache native digest/variant opens; anonymous refs hidden; public source docs and ETags unchanged"
+}

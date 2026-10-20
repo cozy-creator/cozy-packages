@@ -131,6 +131,8 @@ def _generate(
     adj: Adjustments,
 ) -> ImageOutput:
     """Both functions' body: the checkpoint decides the schedule."""
+    reference_steps = ("vae",) if payload.reference_images else ()
+    ctx.plan(*reference_steps, "text_encoder", "transformer", "vae")
     sigmas = model.sample_sigmas
     steps = len(sigmas) if sigmas else payload.steps or 40
     if sigmas and payload.steps not in (None, steps):

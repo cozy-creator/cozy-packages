@@ -14,7 +14,7 @@ _SOURCE_SECTIONS = {
     "transformer",
     "transformer_ref",
     "text_encoder",
-    "video_vae",
+    "vae",
     "audio_vae",
 }
 _TEXT_CONDITIONER_CONFIG = {
@@ -64,17 +64,17 @@ def parse_production_config(raw: bytes) -> dict[str, dict[str, Any]]:
     except ValueError as exc:
         raise ValueError("production H3 model config is not JSON") from exc
     if not isinstance(value, dict) or set(value) != {
-        "fl2va_dit",
-        "ref2va_dit",
+        "transformer",
+        "transformer_ref",
         "text_encoder",
-        "video_vae",
+        "vae",
         "audio_vae",
     }:
         raise ValueError("model config is not a dual-task H3 config")
     sections: dict[str, dict[str, Any]] = {}
     stamps: tuple[tuple[str, str, Task], ...] = (
-        ("fl2va_dit", "transformer", "fl2va"),
-        ("ref2va_dit", "transformer_ref", "ref2va"),
+        ("transformer", "transformer", "fl2va"),
+        ("transformer_ref", "transformer_ref", "ref2va"),
     )
     for target, source, expected_task in stamps:
         row = value[target]
@@ -92,7 +92,7 @@ def parse_production_config(raw: bytes) -> dict[str, dict[str, Any]]:
             raise ValueError(f"model config {target!r} changed its task/table metadata")
         TableLayout.parse(stamp["table_keys"])
         sections[source] = config
-    for component in ("text_encoder", "video_vae", "audio_vae"):
+    for component in ("text_encoder", "vae", "audio_vae"):
         row = value[component]
         if not isinstance(row, dict):
             raise TypeError(f"model config {component!r} is not a mapping")
@@ -103,23 +103,23 @@ def parse_production_config(raw: bytes) -> dict[str, dict[str, Any]]:
 def dual_full_config(sections: dict[str, dict[str, Any]]) -> bytes:
     document: dict[str, dict[str, Any]] = {
         "audio_vae": sections["audio_vae"],
-        "fl2va_dit": {
+        "transformer": {
             **sections["transformer"],
             "cozy_h3": {"task": "fl2va", "modulation": "full"},
         },
-        "ref2va_dit": {
+        "transformer_ref": {
             **sections["transformer_ref"],
             "cozy_h3": {"task": "ref2va", "modulation": "full"},
         },
         "text_encoder": sections["text_encoder"],
-        "video_vae": sections["video_vae"],
+        "vae": sections["vae"],
     }
     return canonical_json.encode(document)
 
 
 def task_config(sections: dict[str, dict[str, Any]], plan: TimestepPlan) -> dict[str, Any]:
     source_name = "transformer" if plan.task == "fl2va" else "transformer_ref"
-    component = "fl2va_dit" if plan.task == "fl2va" else "ref2va_dit"
+    component = "transformer" if plan.task == "fl2va" else "transformer_ref"
     config = dict(sections[source_name])
     config["cozy_h3"] = {
         "task": plan.task,
@@ -136,9 +136,9 @@ def dual_adaln_pruned_config(
         raise ValueError("dual AdaLN-pruned config requires each task's own table layout")
     document = {
         "audio_vae": sections["audio_vae"],
-        "fl2va_dit": task_config(sections, fl2va)["fl2va_dit"],
-        "ref2va_dit": task_config(sections, ref2va)["ref2va_dit"],
+        "transformer": task_config(sections, fl2va)["transformer"],
+        "transformer_ref": task_config(sections, ref2va)["transformer_ref"],
         "text_encoder": sections["text_encoder"],
-        "video_vae": sections["video_vae"],
+        "vae": sections["vae"],
     }
     return canonical_json.encode(document)

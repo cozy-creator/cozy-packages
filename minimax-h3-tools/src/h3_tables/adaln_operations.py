@@ -16,26 +16,19 @@ from cozy_runtime.author import (
     canonical_json,
     invocable,
 )
-from tensorfs.derived import (
-    Config,
-    Derivation,
-    DerivedTransaction,
-    Part,
-    PartSource,
-    SourceInspection,
-    Target,
-    Tensor,
-)
 
 from ._memo import ADALN
 from .kernel import H3Topology, precompute_tables, removed_keys, source_shapes, table_shapes
 from .model_config import dual_adaln_pruned_config, dual_full_config, parse_production_config
 from .order import current_order, full_order
 from .plans import Task, TimestepPlan, parse_declared_plan
+from .metadata import (ComponentSelection, SourceLayout, TensorShape, PartShape,
+                       PLAIN, SCHEMES, NATIVE_DTYPES, model_output, adopt_output)
+from cozy_runtime.derive import Checkpoint, Output, read_into
 from .source import TARGET_COMPONENT, inspection
 from .table_layout import TableLayout
 
-PLAIN = "sha256:1fb882a7e46d0aff520f9d8a28cefd643954c19371737443101ba3c5fcc3613f"
+
 _SOURCE_SECTION = {"fl2va": "transformer", "ref2va": "transformer_ref"}
 _BINDING = "generating_projection_digest"
 _METADATA = "adaln"
@@ -84,7 +77,7 @@ def _projection_config(task: Task, topology: H3Topology | None = None) -> bytes:
     )
 
 
-def _body_kind(structure: SourceInspection) -> bool:
+def _body_kind(structure: SourceLayout) -> bool:
     """Return whether the exact assembled source is already pruned."""
     current = current_order(_asset("whole-order.json")).rows
     actual = {(component, key) for component, rows in structure.components.items() for key in rows}
@@ -97,7 +90,7 @@ def _body_kind(structure: SourceInspection) -> bool:
     )
 
 
-def _bindings(structure: SourceInspection) -> dict[str, str]:
+def _bindings(structure: SourceLayout) -> dict[str, str]:
     value = canonical_json.decode(structure.configs["model"])
     if not isinstance(value, dict):
         raise UnsupportedInput("pruned H3 model has no config bindings", code="adaln_binding")
@@ -119,7 +112,7 @@ def _bindings(structure: SourceInspection) -> dict[str, str]:
     return result
 
 
-def _validate_body_config(structure: SourceInspection, pruned: bool) -> dict[str, dict[str, Any]]:
+def _validate_body_config(structure: SourceLayout, pruned: bool) -> dict[str, dict[str, Any]]:
     if set(structure.configs) != {"model"}:
         raise UnsupportedInput(
             "H3 body requires its single construction config", code="adaln_config"
@@ -167,7 +160,7 @@ def _validate_body_config(structure: SourceInspection, pruned: bool) -> dict[str
 
 
 def _validate_generators(
-    structure: SourceInspection, task: Task, topology: H3Topology | None = None
+    structure: SourceLayout, task: Task, topology: H3Topology | None = None
 ) -> None:
     tensors = {
         (component, key): tensor
@@ -182,7 +175,7 @@ def _validate_generators(
             or tensor.encoding != PLAIN
             or tensor.logical_dtype != expected
             or tensor.shape != shape
-            or tensor.parts != {"value": Part(expected, shape)}
+            or tensor.parts != {"value": PartShape(expected, shape)}
         ):
             raise UnsupportedInput(
                 f"H3 generating weight {key} must preserve its exact plain dtype and shape",
@@ -204,21 +197,14 @@ def _project(
     selected = removed_keys(topology)
     present = tuple(structure.components[component])
     config = _projection_config(task, topology)
-    with ctx.output(output).open(
-        Derivation(
-            sources={"source": structure.source},
-            targets={
-                component: Target(
-                    "source", component, drop=tuple(key for key in present if key not in selected)
-                )
-            },
-            configs={_METADATA: Config("add")},
-            order=tuple((component, key) for key in selected),
-        )
+    with model_output(
+        ctx, output, sources={"source": structure.checkpoint},
+        components={component: ComponentSelection(
+            "source", component, drop=tuple(key for key in present if key not in selected)
+        )},
+        configs={_METADATA: config}, order=tuple((component, key) for key in selected),
     ) as transaction:
-        if transaction.receipt is None:
-            transaction.add_config(_METADATA, config)
-        return ctx.adopt_model(transaction.commit())
+        return adopt_output(ctx, transaction)
 
 
 @invocable(memo_dependencies=ADALN)
@@ -235,17 +221,13 @@ async def select_adaln_weights(ctx: Context, *, source: Weights[Any], task: Task
                 code="adaln_generating_weights",
             )
         _validate_table_rows(structure, task, bank=False)
-        with ctx.output("model").open(
-            Derivation(
-                sources={"source": structure.source},
-                targets={
-                    component: Target("source", component) for component in structure.components
-                },
-                configs={"model": Config("copy", "source", "model")},
-                order=current_order(_asset("whole-order.json")).rows,
-            )
+        with model_output(
+            ctx, "model", sources={"source": structure.checkpoint},
+            components={component: ComponentSelection("source", component)
+                        for component in structure.components},
+            configs=structure.configs, order=current_order(_asset("whole-order.json")).rows,
         ) as transaction:
-            ready = ctx.adopt_model(transaction.commit())
+            ready = adopt_output(ctx, transaction)
         return Selection(ready, True)
     return Selection(_project(ctx, source, task, "model"), False)
 
@@ -264,7 +246,7 @@ def _bank_config(task: Task, projection: str) -> bytes:
 
 
 def _read_weight(
-    transaction: DerivedTransaction,
+    source: Checkpoint,
     component: str,
     key: str,
     dtype: torch.dtype,
@@ -273,8 +255,8 @@ def _read_weight(
     value = torch.empty(shape, dtype=dtype, device="cpu")
     buffer = memoryview(value.view(torch.uint8).numpy()).cast("B")
     for offset in range(0, len(buffer), 32 << 20):
-        transaction.source_read_into(
-            "source", component, key, "value", offset, buffer[offset : offset + (32 << 20)]
+        read_into(
+            source, component, key, "", offset, buffer[offset : offset + (32 << 20)]
         )
     return value
 
@@ -282,16 +264,15 @@ def _read_weight(
 def _compute_into(
     ctx: Context,
     tel: Telemetry,
-    transaction: DerivedTransaction,
+    transaction: Output,
+    source: Checkpoint,
     task: Task,
     plan: TimestepPlan,
     topology: H3Topology,
 ) -> None:
     component = TARGET_COMPONENT[task]
     completed = frozenset(
-        key
-        for selected, key, role in transaction.completed_parts()
-        if selected == component and role == "value"
+        key for key in table_shapes(topology, plan) if transaction.has(component, key)
     )
 
     source_bytes = 0
@@ -299,15 +280,14 @@ def _compute_into(
     def read(key: str, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
         nonlocal source_bytes
         ctx.raise_if_cancelled()
-        value = _read_weight(transaction, component, key, dtype, shape)
+        value = _read_weight(source, component, key, dtype, shape)
         source_bytes += value.numel() * value.element_size()
         return value
 
     def write(key: str, value: torch.Tensor) -> None:
         ctx.raise_if_cancelled()
         raw = value.detach().to(device="cpu").contiguous().view(torch.uint16).numpy().tobytes()
-        transaction.add_part(component, key, "value", raw)
-        transaction.checkpoint()
+        transaction.put(component, key, "BF16", tuple(value.shape), raw)
 
     def progress(done: int, total: int) -> None:
         ctx.raise_if_cancelled()
@@ -357,29 +337,18 @@ async def compute_adaln_tables(
     topology = _topology(task)
     tables = table_shapes(topology, plan)
     metadata = _bank_config(task, source.checkpoint_ref)
-    with ctx.output("model").open(
-        Derivation(
-            sources={"source": structure.source},
-            targets={
-                component: Target(
-                    "source",
-                    component,
-                    drop=removed_keys(topology),
-                    add={
-                        key: Tensor("bf16", shape, PLAIN, {"value": Part("bf16", shape)})
-                        for key, shape in tables.items()
-                    },
-                )
-            },
-            configs={_METADATA: Config("add")},
-            order=tuple((component, key) for key in tables),
-        )
+    with model_output(
+        ctx, "model", sources={"source": structure.checkpoint},
+        components={component: ComponentSelection(
+            "source", component, drop=removed_keys(topology),
+            add={key: TensorShape("bf16", shape, PLAIN, {"value": PartShape("bf16", shape)})
+                 for key, shape in tables.items()},
+        )},
+        configs={_METADATA: metadata}, order=tuple((component, key) for key in tables),
     ) as transaction:
-        if transaction.receipt is not None:
-            return ctx.adopt_model(transaction.receipt)
-        _compute_into(ctx, tel, transaction, task, plan, topology)
-        transaction.add_config(_METADATA, metadata)
-        return ctx.adopt_model(transaction.commit())
+        if transaction.done is None:
+            _compute_into(ctx, tel, transaction, structure.checkpoint, task, plan, topology)
+        return adopt_output(ctx, transaction)
 
 
 def _bank_projection(
@@ -399,7 +368,7 @@ def _bank_projection(
 
 
 def _validate_table_rows(
-    structure: SourceInspection, task: Task, *, bank: bool, topology: H3Topology | None = None
+    structure: SourceLayout, task: Task, *, bank: bool, topology: H3Topology | None = None
 ) -> None:
     component = TARGET_COMPONENT[task]
     tables = table_shapes(topology or _topology(task), _plan(task))
@@ -420,7 +389,7 @@ def _validate_table_rows(
             tensor.encoding != PLAIN
             or tensor.logical_dtype != "bf16"
             or tensor.shape != shape
-            or tensor.parts != {"value": Part("bf16", shape)}
+            or tensor.parts != {"value": PartShape("bf16", shape)}
         ):
             raise UnsupportedInput(
                 "AdaLN bank has changed table geometry or encoding", code="adaln_bank"
@@ -460,29 +429,26 @@ def _apply_adaln(
         _bindings(structure)
         if pruned
         else {
-            task: _project(ctx, source, task, f"{task}-weights").manifest.digest for task in _TASKS
+            task: _project(ctx, source, task, f"{task}-weights").checkpoint for task in _TASKS
         }
     )
     banks = {"fl2va": fl2va, "ref2va": ref2va}
-    targets = {component: Target("source", component) for component in structure.components}
+    targets = {component: ComponentSelection("source", component) for component in structure.components}
     for task in _TASKS:
         _require_bank_binding(ctx, banks[task], task, bindings[task])
         component = TARGET_COMPONENT[task]
         tables = table_shapes(_topology(task), _plan(task))
-        targets[component] = Target(
+        targets[component] = ComponentSelection(
             "source",
             component,
             drop=tuple(tables) if pruned else removed_keys(_topology(task)),
             add={
-                key: Tensor(
+                key: TensorShape(
                     "bf16",
                     shape,
                     PLAIN,
-                    {
-                        "value": Part(
-                            "bf16", shape, source=PartSource(task, component, key, "value")
-                        )
-                    },
+                    {"value": PartShape("bf16", shape)},
+                    copy_from=(task, component, key),
                 )
                 for key, shape in tables.items()
             },
@@ -492,24 +458,15 @@ def _apply_adaln(
     )
     for bound_task in _TASKS:
         config[TARGET_COMPONENT[bound_task]]["cozy_h3"][_BINDING] = bindings[bound_task]
-    configs = {
-        name: Config("copy", "source", name) for name in structure.configs if name != "model"
-    }
-    configs["model"] = Config("add")
-    with ctx.output("model").open(
-        Derivation(
-            sources={
-                "source": structure.source,
-                **{name: inspection(ctx, bank).source for name, bank in banks.items()},
-            },
-            targets=targets,
-            configs=configs,
-            order=current_order(_asset("whole-order.json")).rows,
-        )
+    configs = {name: data for name, data in structure.configs.items() if name != "model"}
+    configs["model"] = canonical_json.encode(config)
+    with model_output(
+        ctx, "model",
+        sources={"source": structure.checkpoint,
+                 **{name: inspection(ctx, bank).checkpoint for name, bank in banks.items()}},
+        components=targets, configs=configs, order=current_order(_asset("whole-order.json")).rows,
     ) as transaction:
-        if transaction.receipt is None:
-            transaction.add_config("model", canonical_json.encode(config))
-        return ctx.adopt_model(transaction.commit())
+        return adopt_output(ctx, transaction)
 
 
 @invocable(memo_dependencies=ADALN)
