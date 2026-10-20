@@ -15,22 +15,25 @@ from dataclasses import replace
 from typing import Any
 
 from cozy_runtime.author import Weights, canonical_json
-from cozy_runtime.derive.quantization import (
-    prepare_quantization,
-)
 from h3_tables import job, lanes, operations
+import h3_tables.source as source_api
 from h3_tables.kernel import H3Topology, removed_keys
 from h3_tables.model_config import parse_production_config
 from h3_tables.order import current_order
 from h3_tables.order import full_order as compute_order
-from h3_tables.quantization import h3_quantization_plan
-from h3_tables.source import TARGET_COMPONENT, full_targets
+from h3_tables.quantization import reviewed_plan
+from h3_tables.source import TARGET_COMPONENT, full_targets, official_full_specs
 from source_geometry import VIDEO_VAE_ROWS, conditioner_rows, plain
-from tensorfs.derived import Part, Source, SourceCapability, SourceInspection, Tensor
+from h3_tables.metadata import PartShape, TensorShape, SourceLayout, ComponentSelection
 
 GEOMETRY = {("text_encoder", key): spec for key, spec in conditioner_rows().items()} | {
     ("vae", key): spec for key, spec in VIDEO_VAE_ROWS.items()
 }
+for component in TARGET_COMPONENT.values():
+    sections = parse_production_config(job._asset("model-config.json"))
+    GEOMETRY.update({(component, key): spec
+                     for key, spec in official_full_specs(sections[component]).items()})
+
 
 
 def weights(name: str) -> Weights[Any]:
@@ -42,19 +45,18 @@ class Structures:
         self.rows = rows
         self.calls: Counter[str] = Counter()
 
-    def tensorfs_source(self, source: Any) -> SourceCapability:
-        def inspect(_components: Any, _configs: Any) -> SourceInspection:
-            self.calls[source.checkpoint_ref] += 1
-            components: dict[str, dict[str, Tensor]] = {}
-            for component, key in self.rows[source.checkpoint_ref]:
-                spec = GEOMETRY.get((component, key), ("f32", (1,)))
-                components.setdefault(component, {})[key] = plain(*spec)
-            return SourceInspection(Source(source.checkpoint_ref, 1), components, {})
-
-        return SourceCapability(source.checkpoint_ref, 1, inspect)
+    def inspect(self, source: Any) -> SourceLayout:
+        self.calls[source.checkpoint_ref] += 1
+        components: dict[str, dict[str, TensorShape]] = {}
+        for component, key in self.rows[source.checkpoint_ref]:
+            spec = GEOMETRY.get((component, key), ("f32", (1,)))
+            components.setdefault(component, {})[key] = plain(*spec)
+        # Geometry-only source fixture: this driver grants no native payload custody.
+        return SourceLayout(None, components, {})
 
 
 def main() -> None:
+    source_api.inspection = lambda ctx, source: ctx.inspect(source)
     module: Any = job
     sections = parse_production_config(job._asset("model-config.json"))
     whole = current_order(job._asset("whole-order.json"))
@@ -94,10 +96,10 @@ def main() -> None:
     assert native.calls == {dits.checkpoint_ref: 1, shared.checkpoint_ref: 1}
 
     tables = job._table_additions(sections)
-    quantization = prepare_quantization(h3_quantization_plan())
+    quantization = reviewed_plan()
 
     def declared(
-        lane_name: str, full_targets: dict[str, Any], granted: dict[str, SourceInspection]
+        lane_name: str, full_targets: dict[str, Any], granted: dict[str, SourceLayout]
     ) -> dict[str, Any]:
         """The lane's targets as `_produce_lanes` declares them over this granted source."""
         lane = lanes.LANES[lane_name]
@@ -174,7 +176,7 @@ def main() -> None:
         for tensor in quantization.tensors
     )
 
-    def identity(tensors: tuple[tuple[str, str, Tensor], ...]) -> str:
+    def identity(tensors: tuple[tuple[str, str, TensorShape], ...]) -> str:
         return canonical_json.digest(
             [
                 [
@@ -182,7 +184,6 @@ def main() -> None:
                     key,
                     tensor.logical_dtype,
                     list(tensor.shape),
-                    [[role, part.dtype, list(part.shape)] for role, part in tensor.parts.items()],
                 ]
                 for component, key, tensor in tensors
             ]
@@ -195,12 +196,10 @@ def main() -> None:
         (*selected, (component, "unexpected.weight", first)),
         ((component, key, replace(first, shape=(1, 32))), *selected[1:]),
         ((component, key, replace(first, logical_dtype="f32")), *selected[1:]),
-        (
-            (component, key, replace(first, parts={"data": Part("f8_e4m3fn", first.shape)})),
-            *selected[1:],
-        ),
+
     ):
         assert identity(bad) != policy.selected_schema_digest
+    assert not lanes._plain_value(replace(first, parts={"data": PartShape("f8_e4m3fn", first.shape)}))
     print(
         "H3 full-source targets PASS native declarations unchanged; one read per exact source; "
         "158 already-removed optional rows omitted; required pruning/replacement drops unchanged"

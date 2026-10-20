@@ -6,14 +6,11 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from importlib.resources import files
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
 import msgspec
 from cozy_runtime.author import Context, Weights, canonical_json
-
-if TYPE_CHECKING:
-    from tensorfs.derived import SourceInspection, Target
-
+from .metadata import ComponentSelection, PLAIN, SourceLayout, inspect_checkpoint
 
 from .kernel import H3Topology, removed_keys, table_shapes
 from .plans import TimestepPlan
@@ -21,10 +18,9 @@ from .plans import TimestepPlan
 TARGET_COMPONENT = {"fl2va": "transformer", "ref2va": "transformer_ref"}
 
 
-def inspection(ctx: Context, source: Weights[Any]) -> SourceInspection:
+def inspection(ctx: Context, source: Weights[Any]) -> SourceLayout:
     """Read H3 planning facts through the exact native source capability."""
-    with ctx.tensorfs_source(source) as capability:
-        return capability.inspect()
+    return inspect_checkpoint(ctx.tensorfs_source(source))
 
 
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -170,8 +166,8 @@ def _validate_component(
             )
         if parts != (("value", dtype, shape),):
             raise ValueError(f"{label} H3 tensor {key} is not one plain value role: {parts}")
-        if _DIGEST.fullmatch(value.encoding) is None:
-            raise ValueError(f"{label} H3 tensor {key} has no exact encoding identity")
+        if value.encoding != PLAIN:
+            raise ValueError(f"{label} H3 tensor {key} does not use the native plain encoding")
         encodings.add(value.encoding)
     if len(encodings) != 1:
         raise ValueError(f"{label} H3 component is not one plain encoding: {sorted(encodings)}")
@@ -190,41 +186,37 @@ def validate_adaln_pruned_component(
     return _validate_component(tensors, expected, "AdaLN-pruned")
 
 
-def full_targets() -> dict[str, Target]:
-    from tensorfs.derived import Target
-
+def full_targets() -> dict[str, ComponentSelection]:
     return {
-        "transformer": Target(
+        "transformer": ComponentSelection(
             source="dits",
             source_component="transformer",
             drop=source_only_keys(),
         ),
-        "transformer_ref": Target(
+        "transformer_ref": ComponentSelection(
             source="dits",
             source_component="transformer_ref",
             drop=source_only_keys(),
         ),
-        "text_encoder": Target(
+        "text_encoder": ComponentSelection(
             source="shared",
             source_component="text_encoder",
             drop=text_source_only_keys(),
         ),
-        "vae": Target(source="shared", source_component="vae"),
-        "audio_vae": Target(source="shared", source_component="audio_vae"),
+        "vae": ComponentSelection(source="shared", source_component="vae"),
+        "audio_vae": ComponentSelection(source="shared", source_component="audio_vae"),
     }
 
 
 def structures(
     ctx: Context, sources: Mapping[str, Weights[Any]]
-) -> dict[str, SourceInspection]:
+) -> dict[str, SourceLayout]:
     """One bounded structure read per DISTINCT granted checkpoint, keyed by source alias.
 
     Both slots may bind the same complete checkpoint, and every consumer here — target
     selection and per-component treatment selection alike — wants the same facts.
     """
-    from tensorfs.derived import SourceInspection
-
-    read: dict[str, SourceInspection] = {}
+    read: dict[str, SourceLayout] = {}
     for source in sources.values():
         if source.checkpoint_ref not in read:
             read[source.checkpoint_ref] = inspection(ctx, source)
@@ -234,8 +226,8 @@ def structures(
 def select_full_targets(
     ctx: Context,
     sources: Mapping[str, Weights[Any]],
-    granted: Mapping[str, SourceInspection] | None = None,
-) -> dict[str, Target]:
+    granted: Mapping[str, SourceLayout] | None = None,
+) -> dict[str, ComponentSelection]:
     """Drop source-only rows that remain in these exact granted checkpoints."""
     observed = structures(ctx, sources) if granted is None else granted
     keys: dict[str, set[tuple[str, str]]] = {}

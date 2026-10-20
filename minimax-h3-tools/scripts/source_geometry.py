@@ -12,7 +12,7 @@ from h3_tables import job
 from h3_tables.model_config import parse_production_config
 from h3_tables.order import current_order
 from h3_tables.source import text_source_only_keys
-from tensorfs.derived import Part, Tensor
+from h3_tables.metadata import PartShape, TensorShape, SourceLayout, ComponentSelection
 
 Spec = tuple[str, tuple[int, ...]]
 
@@ -24,8 +24,8 @@ VIDEO_VAE_ROWS: dict[str, Spec] = {
 }
 
 
-def plain(dtype: str, shape: tuple[int, ...]) -> Tensor:
-    return Tensor(dtype, shape, job.PLAIN_SPEC, {"value": Part(dtype, shape)})
+def plain(dtype: str, shape: tuple[int, ...]) -> TensorShape:
+    return TensorShape(dtype, shape, job.PLAIN_SPEC, {"value": PartShape(dtype, shape)})
 
 
 def conditioner_rows() -> dict[str, Spec]:

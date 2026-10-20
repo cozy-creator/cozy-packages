@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import torch
 from cozy_runtime.author import (
@@ -17,19 +17,17 @@ from cozy_runtime.author import (
     invocable,
 )
 
-if TYPE_CHECKING:
-    from tensorfs.derived import Config, Derivation, DerivedTransaction, Part, PartSource, SourceInspection, Target, Tensor
-
-
 from ._memo import TURBO
 from .adaln_operations import (
-    PLAIN,
     _asset,
     _sections,
     _validate_generators,
 )
 from .kernel import H3Topology, LowRankAdapter, adapter_shapes, precompute_tables, table_shapes
 from .plans import Task, TimestepPlan, parse_plan
+from .metadata import (ComponentSelection, SourceLayout, TensorShape, PartShape,
+                       PLAIN, model_output, adopt_output)
+from cozy_runtime.derive import Checkpoint, Output, read_into
 from .source import TARGET_COMPONENT, inspection
 from .source import structures as _structures
 
@@ -129,7 +127,7 @@ def overlay_shapes(
 
 
 def _adapter_component(
-    structure: SourceInspection,
+    structure: SourceLayout,
     component: str,
     config: dict[str, Any],
     plan: TimestepPlan,
@@ -161,7 +159,7 @@ def _adapter_component(
             )
 
 
-def adapter_components(structure: SourceInspection) -> dict[Task, str]:
+def adapter_components(structure: SourceLayout) -> dict[Task, str]:
     """Name each task's adapter in one PDD checkpoint: the one component naming the task."""
     found = {
         task: [name for name in structure.components if task in name.lower()] for task in TASKS
@@ -176,8 +174,7 @@ def adapter_components(structure: SourceInspection) -> dict[Task, str]:
 
 
 def _read(
-    transaction: DerivedTransaction,
-    source: str,
+    source: Checkpoint,
     component: str,
     key: str,
     dtype: torch.dtype,
@@ -186,17 +183,18 @@ def _read(
     value = torch.empty(shape, dtype=dtype, device="cpu")
     buffer = memoryview(value.view(torch.uint8).numpy()).cast("B")
     for offset in range(0, len(buffer), 32 << 20):
-        transaction.source_read_into(
-            source, component, key, "value", offset, buffer[offset : offset + (32 << 20)]
+        read_into(
+            source, component, key, "", offset, buffer[offset : offset + (32 << 20)]
         )
     return value
 
 
-def _write(transaction: DerivedTransaction, component: str, key: str, value: torch.Tensor) -> None:
-    transaction.add_part(
-        component, key, "value", value.cpu().contiguous().view(torch.uint8).numpy().tobytes()
+def _write(transaction: Output, component: str, key: str, value: torch.Tensor) -> None:
+    dtype = {torch.bfloat16: "BF16", torch.float32: "F32"}[value.dtype]
+    transaction.put(
+        component, key, dtype, tuple(value.shape),
+        value.cpu().contiguous().view(torch.uint8).numpy().tobytes(),
     )
-    transaction.checkpoint()
 
 
 def _progress(ctx: Context, tel: Telemetry, task: Task, done: int, total: int) -> None:
@@ -219,39 +217,29 @@ def _produce(
     ``sources`` names the granted models; ``full`` is the base H3 model and ``adapters``
     maps each task to its (source name, component) PDD adapter.
     """
-    from tensorfs.derived import Config, Derivation, Part, PartSource, Target, Tensor
-
     structures = _structures(ctx, sources)
     plans = {task: turbo_plan(task) for task in TASKS}
     for task, (name, component) in adapters.items():
         _adapter_component(
             structures[name], component, configs[TARGET_COMPONENT[task]], plans[task], topologies[task]
         )
-    targets: dict[str, Target] = {}
+    targets: dict[str, ComponentSelection] = {}
     output_order: list[tuple[str, str]] = []
     for task in TASKS:
         component = f"{task}_turbo"
         specs = overlay_shapes(configs[TARGET_COMPONENT[task]], plans[task])
-        targets[component] = Target(
+        targets[component] = ComponentSelection(
             "full",
             TARGET_COMPONENT[task],
             drop=tuple(structures["full"].components[TARGET_COMPONENT[task]]),
             add={
-                key: Tensor(
+                key: TensorShape(
                     dtype,
                     shape,
                     PLAIN,
-                    {
-                        "value": Part(
-                            dtype,
-                            shape,
-                            source=(
-                                PartSource(*adapters[task], key, "value")
-                                if key.endswith((".lora_down", ".lora_up"))
-                                else None
-                            ),
-                        )
-                    },
+                    {"value": PartShape(dtype, shape)},
+                    copy_from=((*adapters[task], key)
+                               if key.endswith((".lora_down", ".lora_up")) else None),
                 )
                 for key, (dtype, shape) in specs.items()
             },
@@ -273,16 +261,12 @@ def _produce(
             },
         }
     raw = canonical_json.encode(config)
-    with ctx.output(output).open(
-        Derivation(
-            sources={name: structure.source for name, structure in structures.items()},
-            targets=targets,
-            configs={"model": Config("add")},
-            order=tuple(output_order),
-        )
+    with model_output(
+        ctx, output, sources={name: structure.checkpoint for name, structure in structures.items()},
+        components=targets, configs={"model": raw}, order=tuple(output_order),
     ) as transaction:
-        if transaction.receipt is not None:
-            return ctx.adopt_model(transaction.receipt)
+        if transaction.done is not None:
+            return adopt_output(ctx, transaction)
         if ctx.device.type == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = False
         torch.set_float32_matmul_precision("highest")
@@ -291,9 +275,7 @@ def _produce(
             ctx.raise_if_cancelled()
             component = f"{task}_turbo"
             completed = {
-                key
-                for owner, key, role in transaction.completed_parts()
-                if owner == component and role == "value"
+                key for key in targets[component].add if transaction.has(component, key)
             }
             tables = table_shapes(topologies[task], plans[task])
             produced = tables.keys() | {
@@ -303,11 +285,11 @@ def _produce(
             }
             reused += len(produced & completed)
             computed += len(produced - completed)
-            reader = partial(_read, transaction, *adapters[task])
+            reader = partial(_read, structures[adapters[task][0]].checkpoint, adapters[task][1])
             precompute_tables(
                 plan=plans[task],
                 topology=topologies[task],
-                read=partial(_read, transaction, "full", TARGET_COMPONENT[task]),
+                read=partial(_read, structures["full"].checkpoint, TARGET_COMPONENT[task]),
                 write=partial(_write, transaction, component),
                 progress=partial(_progress, ctx, tel, task),
                 device=torch.device(str(ctx.device)),
@@ -329,8 +311,7 @@ def _produce(
                         _write(transaction, component, f"{prefix}.{suffix}", value)
         tel.metric("h3.turbo.reused_tensors", float(reused))
         tel.metric("h3.turbo.computed_tensors", float(computed))
-        transaction.add_config("model", raw)
-        return ctx.adopt_model(transaction.commit())
+        return adopt_output(ctx, transaction)
 
 
 def _topologies() -> tuple[dict[str, Any], dict[Task, H3Topology]]:

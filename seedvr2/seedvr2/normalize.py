@@ -12,9 +12,9 @@ from cozy_runtime.author import (
     Context,
     ModelArtifact,
     Weights,
-    canonical_json,
     invocable,
 )
+from cozy_runtime.derive import Derivation
 from .model import ARCHITECTURE, modules
 
 
@@ -26,22 +26,22 @@ async def normalize(
     vae: Weights[Any],
     conditioning: Annotated[Tree, AssetBound(max_bytes=2 << 20)],
 ) -> ModelArtifact:
-    from tensorfs.derived import Config, Derivation, Target, Tensor, Part
-
     sources = {"dit": ctx.tensorfs_source(dit), "vae": ctx.tensorfs_source(vae)}
     with torch.device("meta"):
         expected = modules()
     order = []
     for name, module in expected.items():
-        found = sources[name].inspect().components
-        tensors = found.get("model", {})
+        found = sources[name].components
         state = module.state_dict()
-        if set(found) != {"model"} or set(tensors) != set(state):
+        if set(found) != {"model"}:
+            raise ValueError(f"{name} does not have exactly its model component")
+        tensors = found["model"].tensors
+        if set(tensors) != set(state):
             raise ValueError(f"{name} does not match the {ARCHITECTURE} tensor census")
         for key, tensor in state.items():
             if (
                 tuple(tensors[key].shape) != tuple(tensor.shape)
-                or tensors[key].logical_dtype != "f16"
+                or tensors[key].dtype != "F16"
             ):
                 raise ValueError(f"SeedVR2 geometry or dtype differs: {name}.{key}")
             order.append((name, key))
@@ -69,37 +69,24 @@ async def normalize(
         constants[key] = tensor
         order.append(("conditioning", key))
     upstream = files("seedvr2.upstream")
-    definition = Derivation(
-        sources=sources,
-        targets={
-            **{name: Target(source=name, source_component="model") for name in sources},
-            "conditioning": Target(
-                add={
-                    key: Tensor(
-                        "bf16",
-                        tuple(value.shape),
-                        "sha256:1fb882a7e46d0aff520f9d8a28cefd643954c19371737443101ba3c5fcc3613f",
-                        {"value": Part("bf16", tuple(value.shape))},
-                    )
-                    for key, value in constants.items()
-                }
-            ),
-        },
-        configs={"model": Config("add")},
-        order=tuple(order),
-        files={name: upstream.joinpath(name).read_bytes() for name in ("LICENSE", "NOTICE")},
-    )
-    with ctx.output("model").open(definition) as transaction:
-        if transaction.receipt is not None:
-            return ctx.adopt_model(transaction.receipt)
-        done = set(transaction.completed_parts())
+    definition = Derivation(None, sources=tuple(sources.values()), order=tuple(order))
+    with ctx.output("model", definition) as output:
+        if output.done is not None:
+            return ctx.adopt_model(output)
+        for name, checkpoint in sources.items():
+            original = checkpoint.components["model"]
+            writer = output.component(name, cls=original.cls, config=original.config)
+            for asset in original.assets:
+                writer.asset(asset, original.asset(asset))
+            for key in original.tensors:
+                output.copy(name, key, checkpoint, "model")
+        output.component("conditioning", cls="", config={})
         for key, value in constants.items():
-            if ("conditioning", key, "value") not in done:
-                transaction.add_part(
-                    "conditioning", key, "value", value.view(torch.uint16).numpy().tobytes()
-                )
-                transaction.checkpoint()
-        if "model" not in set(transaction.completed_configs()):
-            transaction.add_config("model", canonical_json.encode({"architecture": ARCHITECTURE}))
-            transaction.checkpoint()
-        return ctx.adopt_model(transaction.commit())
+            if not output.has("conditioning", key):
+                ctx.raise_if_cancelled()
+                output.put("conditioning", key, "BF16", tuple(value.shape),
+                           value.contiguous().view(torch.uint16).numpy().tobytes())
+        output.component("model", cls="", config={"architecture": ARCHITECTURE})
+        for name in ("LICENSE", "NOTICE"):
+            output.asset("model", name, upstream.joinpath(name).read_bytes())
+        return ctx.adopt_model(output)
