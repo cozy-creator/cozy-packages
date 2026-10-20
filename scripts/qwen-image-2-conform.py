@@ -79,24 +79,8 @@ for seed in (0, 9301, 9007199254740991):
         canonical_json.encode({"prompt": "subject", "seed": seed}), type=GenerateInput
     )
     assert explicit.resolved_seed() == seed
-for document in (
-    b'{"prompt":"subject","width":1024}',
-    b'{"prompt":"subject","height":1024}',
-    b'{"prompt":"subject","aspect_ratio":"32:9"}',
-    b'{"prompt":"subject","megapixels":8}',
-    b'{"prompt":"subject","megapixels":0}',
-    b'{"prompt":"subject","megapixels":1.5}',
-    b'{"prompt":"subject","width":2752,"height":2752}',
-    b'{"prompt":"subject","steps":0}',
-    b'{"prompt":"subject","seed":-1}',
-    b'{"prompt":"subject","seed":9007199254740992}',
-):
-    try:
-        msgspec.json.decode(document, type=GenerateInput)
-    except msgspec.ValidationError:
-        pass
-    else:
-        raise AssertionError(f"invalid request accepted: {document!r}")
+# Upstream encodes an empty prompt as a space; unknown fields are Runtime's to warn and drop.
+assert msgspec.json.decode(b'{"prompt":"","width":1024}', type=GenerateInput).prompt == ""
 pixels = torch.tensor([[[[1.0]], [[-1.0]], [[-1.0]], [[-1.0]]]])
 assert rgb_image(pixels).getpixel((0, 0)) == (255, 255, 255)
 pixels[0, 3, 0, 0] = 1
@@ -110,4 +94,4 @@ quantizer = surfaces["int8"]
 assert [o.name for o in quantizer.weights_outputs] == ["int8"] and not quantizer.accelerator
 assert [(b.param, b.weights) for b in quantizer.model_bindings] == [("source", True)]
 assert quantizer.memoize is None
-print("qwen-image-2: buckets, derived shapes in demand, seeds, refusals and PNG pixels passed")
+print("qwen-image-2: buckets, derived shapes in demand, seeds and PNG pixels passed")

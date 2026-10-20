@@ -9,7 +9,7 @@ it does not promise transparent outputs. `seed` is optional and the chosen seed 
 returned. Seeds range from 0 through 9007199254740991 (the interoperable 53-bit
 integer range); omitting one chooses a random seed in that range. Select `aspect_ratio` and `megapixels` (1, 2 or 4); without references the default is `1:1` at 1 MP,
 exactly 1024×1024. Steps default to 40. Width and height are output fields only.
-Unknown ratios, tiers, and the removed width/height inputs are refused.
+Unknown ratios and tiers are refused; unknown fields, such as the removed width/height inputs, are ignored with a warning.
 
 ## Image editing and references
 
@@ -19,11 +19,11 @@ Qwen-Image-2.1 checkpoint handles both modes; editing runs its complete instruct
 sampling schedule, with no image-to-image strength parameter.
 
 ```sh
-cozy run paul/qwen-image-2/generate_image \
+cozy run fidika/qwen-image-2/generate_image \
   prompt='Change the background to a sunset beach; preserve the person and clothing.' \
   --asset reference_images.0=portrait.png seed=42
 
-cozy run paul/qwen-image-2/generate_image \
+cozy run fidika/qwen-image-2/generate_image \
   prompt='Place the person from image 1 in the room from image 2.' \
   --asset reference_images.0=person.png --asset reference_images.1=room.png \
   seed=42
@@ -56,12 +56,12 @@ processor configs) as assets; the package builds its processor from them:
 ```sh
 cozy model upload \
   hf://Qwen/Qwen-Image-2.1@790c92633540aa0cb11d9abf19eb46d861714758 \
-  paul/qwen-image-2.1 --on YOUR_MACHINE
-cozy model publish paul/qwen-image-2.1 --release 0.1.0 \
+  fidika/qwen-image-2.1 --on YOUR_MACHINE
+cozy model publish fidika/qwen-image-2.1 --release 0.1.0 \
   --lane bf16=sha256:CHECKPOINT_DIGEST
 ```
 
-Replace `YOUR_RENTAL` and `CHECKPOINT_DIGEST` with the selected rental name and
+Replace `YOUR_MACHINE` and `CHECKPOINT_DIGEST` with the selected machine name and
 returned checkpoint digest. Upload creates the checkpoint; the separate publish
 command creates the package's default release. Preparation and descriptor checks
 alone do not qualify GPU inference or the generated image.
@@ -74,8 +74,8 @@ Hadamard, int8 per output row), served as W8A8 on the int8 tensor cores. Embeddi
 tower, the input/output projections, the modulation and the VAE keep their source bytes.
 
 ```sh
-cozy model quantize paul/qwen-image-2.1@0.1.0/bf16 --int8 --on YOUR_MACHINE
-cozy model publish paul/qwen-image-2.1 --release 0.1.0 --lane int8=sha256:CHECKPOINT_DIGEST
+cozy model quantize fidika/qwen-image-2.1@0.1.0/bf16 --int8 --on YOUR_MACHINE
+cozy model publish fidika/qwen-image-2.1 --release 0.1.0 --lane int8=sha256:CHECKPOINT_DIGEST
 ```
 
 ## Resolution buckets
