@@ -648,17 +648,21 @@ class FusedMiniMaxH3AttnProcessor(MiniMaxH3AttnProcessor):  # type: ignore[misc]
             cos, sin = rotary_emb
             query = rmsnorm_rope(self._glue, query, attn.norm_q.weight, cos, sin, attn.norm_q.eps)
             key = rmsnorm_rope(self._glue, key, attn.norm_k.weight, cos, sin, attn.norm_k.eps)
-        hidden_states = dispatch_attention_fn(
-            query,
-            key,
-            value,
-            attn_mask=attention_mask,
-            dropout_p=0.0,
-            is_causal=False,
-            backend=self._attention_backend,
-            parallel_config=self._parallel_config,
+        hidden_states, dtype = (
+            dispatch_attention_fn(
+                query,
+                key,
+                value,
+                attn_mask=attention_mask,
+                dropout_p=0.0,
+                is_causal=False,
+                backend=self._attention_backend,
+                parallel_config=self._parallel_config,
+            ),
+            query.dtype,
         )
-        hidden_states = hidden_states.flatten(2, 3).type_as(query)
+        del query, key, value  # not live through `to_out` (memory-varena D10)
+        hidden_states = hidden_states.flatten(2, 3).to(dtype)
         return attn.to_out[1](attn.to_out[0](hidden_states))
 
 
@@ -799,14 +803,27 @@ def _rowwise_leaf(module: Any) -> bool:
     )
 
 
+def _pointer(value: Any) -> int:
+    try:
+        return int(value.data_ptr())
+    except RuntimeError:  # the memory's stand-in for an unbound weight has no storage
+        return 0
+
+
 def _tensor_census(module: Any) -> tuple[object, ...]:
     return tuple(
-        (name, tuple(value.shape), str(value.dtype), id(value), int(value.data_ptr()))
+        (name, tuple(value.shape), str(value.dtype), id(value), _pointer(value))
         for name, value in (
             *module.named_parameters(remove_duplicate=False),
             *module.named_buffers(remove_duplicate=False),
         )
     )
+
+
+def _plain(module: Any) -> bool:
+    """No forward of its own but the memory's wrapper, which calls the class's at each call."""
+    own = vars(module).get("forward")
+    return own is None or getattr(own, "_varena", False)
 
 
 def _shape(condition: bool, detail: str) -> None:
@@ -831,7 +848,7 @@ def _widths(transformer: Any, root: str) -> None:
 def _validate_transformer(transformer: Any, root: str) -> None:
     _shape(
         type(transformer).forward is MiniMaxH3Transformer3DModel.forward
-        and "forward" not in vars(transformer),
+        and _plain(transformer),
         f"{root}: {_type_name(transformer)} overrides the Diffusers MiniMax-H3 forward",
     )
     for index, block in enumerate(transformer.transformer_blocks):
@@ -839,18 +856,18 @@ def _validate_transformer(transformer: Any, root: str) -> None:
         attn, ff = block.attn, block.ff
         _shape(
             type(block) is MiniMaxH3TransformerBlock
-            and "forward" not in vars(block)
+            and _plain(block)
             and type(attn.processor) is MiniMaxH3AttnProcessor
             and not attn.fused_projections
             and type(ff) is FeedForward
-            and "forward" not in vars(ff)
+            and _plain(ff)
             and len(ff.net) == 3
             and type(ff.net[0]) is SwiGLU
-            and "forward" not in vars(ff.net[0])
+            and _plain(ff.net[0])
             and type(ff.net[0].activation) is torch.nn.SiLU
-            and "forward" not in vars(ff.net[0].activation)
+            and _plain(ff.net[0].activation)
             and type(ff.net[1]) is torch.nn.Dropout
-            and "forward" not in vars(ff.net[1])
+            and _plain(ff.net[1])
             and ff.net[1].p == 0.0
             and not any(
                 m._forward_hooks or m._forward_pre_hooks
@@ -868,7 +885,7 @@ def _validate_transformer(transformer: Any, root: str) -> None:
                 )
             )
             and all(
-                type(m) is torch.nn.RMSNorm and "forward" not in vars(m)
+                type(m) is torch.nn.RMSNorm and _plain(m)
                 for m in (block.norm1, block.norm2, attn.norm_q, attn.norm_k)
             )
             and block.norm1.weight is not None
