@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from importlib.resources import files
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import msgspec
 import torch
@@ -16,16 +16,10 @@ from cozy_runtime.author import (
     canonical_json,
     invocable,
 )
-from tensorfs.derived import (
-    Config,
-    Derivation,
-    DerivedTransaction,
-    Part,
-    PartSource,
-    SourceInspection,
-    Target,
-    Tensor,
-)
+
+if TYPE_CHECKING:
+    from tensorfs.derived import Config, Derivation, DerivedTransaction, Part, PartSource, SourceInspection, Target, Tensor
+
 
 from ._memo import ADALN
 from .kernel import H3Topology, precompute_tables, removed_keys, source_shapes, table_shapes
@@ -169,6 +163,8 @@ def _validate_body_config(structure: SourceInspection, pruned: bool) -> dict[str
 def _validate_generators(
     structure: SourceInspection, task: Task, topology: H3Topology | None = None
 ) -> None:
+    from tensorfs.derived import Part
+
     tensors = {
         (component, key): tensor
         for component, rows in structure.components.items()
@@ -197,6 +193,8 @@ def _project(
     output: str,
     topology: H3Topology | None = None,
 ) -> ModelArtifact:
+    from tensorfs.derived import Config, Derivation, Target
+
     structure = inspection(ctx, source)
     topology = topology or _topology(task)
     _validate_generators(structure, task, topology)
@@ -223,6 +221,8 @@ def _project(
 
 @invocable(memo_dependencies=ADALN)
 async def select_adaln_weights(ctx: Context, *, source: Weights[Any], task: Task) -> Selection:
+    from tensorfs.derived import Config, Derivation, Target
+
     ctx.raise_if_cancelled()
     structure = inspection(ctx, source)
     pruned = _body_kind(structure)
@@ -339,6 +339,8 @@ async def compute_adaln_tables(
     plan_digest: str,
     tel: Telemetry,
 ) -> ModelArtifact:
+    from tensorfs.derived import Config, Derivation, Part, Target, Tensor
+
     plan = _plan(task)
     if plan_digest != plan.digest:
         raise UnsupportedInput(
@@ -401,6 +403,8 @@ def _bank_projection(
 def _validate_table_rows(
     structure: SourceInspection, task: Task, *, bank: bool, topology: H3Topology | None = None
 ) -> None:
+    from tensorfs.derived import Part
+
     component = TARGET_COMPONENT[task]
     tables = table_shapes(topology or _topology(task), _plan(task))
     rows = {
@@ -448,6 +452,8 @@ def _apply_adaln(
     ref2va: Weights[Any],
     require_pruned: bool,
 ) -> ModelArtifact:
+    from tensorfs.derived import Config, Derivation, Part, PartSource, Target, Tensor
+
     ctx.raise_if_cancelled()
     structure = inspection(ctx, source)
     pruned = _body_kind(structure)

@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from cozy_runtime.author import (
@@ -30,14 +30,15 @@ from cozy_runtime.author import (
 from cozy_runtime.derive import safetensors_io as st
 from cozy_runtime.derive.quantization import (
     BF16_ROUND_TRIP_BOUND,
-    MAX_OUTPUT_BYTES,
-    PLAIN_SPEC,
     ArtifactQuantizationPlan,
     QuantizationTensor,
     prepare_source_quantization,
-    quantization_additions,
 )
-from tensorfs.derived import DerivedTransaction, Part, SourceInspection, Target, Tensor
+
+if TYPE_CHECKING:
+    from cozy_runtime.derive.quantization import PLAIN_SPEC, quantization_additions
+    from tensorfs.derived import DerivedTransaction, Part, SourceInspection, Target, Tensor
+
 
 from .source import TARGET_COMPONENT
 
@@ -110,8 +111,8 @@ REFUSED_COMPONENTS: Mapping[str, str] = {
 #: which is a decorator-time fact and cannot be measured from a source nobody has granted
 #: yet. Each is comfortably above the component's whole plain size.
 COMPONENT_MAX_NEW_BYTES: Mapping[str, int] = {
-    "transformer": MAX_OUTPUT_BYTES,
-    "transformer_ref": MAX_OUTPUT_BYTES,
+    "transformer": 32 << 30,
+    "transformer_ref": 32 << 30,
     "text_encoder": 56 << 30,
     "vae": 12 << 30,
 }
@@ -367,6 +368,8 @@ def carried(target: Target, structure: SourceInspection) -> SourceInspection:
 
 
 def _plain_value(tensor: Tensor) -> bool:
+    from tensorfs.derived import Part
+
     return tensor.parts == {"value": Part(tensor.logical_dtype, tensor.shape)}
 
 
@@ -475,6 +478,9 @@ def replace_plan(plan: ArtifactQuantizationPlan, tensors: list[QuantizationTenso
 
 def additions(selection: Selection) -> dict[str, Tensor]:
     """The declared replacement tensors for one resolved treatment."""
+    from cozy_runtime.derive.quantization import PLAIN_SPEC, quantization_additions
+    from tensorfs.derived import Part, Tensor
+
     dtype = selection.treatment.cast
     result: dict[str, Tensor] = {}
     for key, shape in selection.cast:
@@ -504,6 +510,8 @@ def apply(target: Target, selection: Selection) -> Target:
     tables — are pure creations with no source row to drop, and TensorFS refuses a drop of
     a key its selected source component does not carry.
     """
+    from tensorfs.derived import Target
+
     return Target(
         source=target.source,
         source_component=target.source_component,

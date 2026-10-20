@@ -6,11 +6,14 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from importlib.resources import files
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import msgspec
 from cozy_runtime.author import Context, Weights, canonical_json
-from tensorfs.derived import SourceInspection, Target
+
+if TYPE_CHECKING:
+    from tensorfs.derived import SourceInspection, Target
+
 
 from .kernel import H3Topology, removed_keys, table_shapes
 from .plans import TimestepPlan
@@ -188,6 +191,8 @@ def validate_adaln_pruned_component(
 
 
 def full_targets() -> dict[str, Target]:
+    from tensorfs.derived import Target
+
     return {
         "transformer": Target(
             source="dits",
@@ -217,6 +222,8 @@ def structures(
     Both slots may bind the same complete checkpoint, and every consumer here — target
     selection and per-component treatment selection alike — wants the same facts.
     """
+    from tensorfs.derived import SourceInspection
+
     read: dict[str, SourceInspection] = {}
     for source in sources.values():
         if source.checkpoint_ref not in read:

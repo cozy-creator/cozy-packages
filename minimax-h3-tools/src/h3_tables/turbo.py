@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from cozy_runtime.author import (
@@ -16,16 +16,10 @@ from cozy_runtime.author import (
     canonical_json,
     invocable,
 )
-from tensorfs.derived import (
-    Config,
-    Derivation,
-    DerivedTransaction,
-    Part,
-    PartSource,
-    SourceInspection,
-    Target,
-    Tensor,
-)
+
+if TYPE_CHECKING:
+    from tensorfs.derived import Config, Derivation, DerivedTransaction, Part, PartSource, SourceInspection, Target, Tensor
+
 
 from ._memo import TURBO
 from .adaln_operations import (
@@ -225,6 +219,8 @@ def _produce(
     ``sources`` names the granted models; ``full`` is the base H3 model and ``adapters``
     maps each task to its (source name, component) PDD adapter.
     """
+    from tensorfs.derived import Config, Derivation, Part, PartSource, Target, Tensor
+
     structures = _structures(ctx, sources)
     plans = {task: turbo_plan(task) for task in TASKS}
     for task, (name, component) in adapters.items():
