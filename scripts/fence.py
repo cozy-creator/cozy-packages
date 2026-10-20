@@ -754,7 +754,10 @@ GPU_NAMES = re.compile(
     re.IGNORECASE,
 )
 #: Capability reads a package has EARNED: a floor its own kernels need, never a choice.
-GPU_FLOORS = {"minimax-h3/minimax_h3/glue.py": "the fused glue's sm80 floor (bf16 tensor cores)"}
+GPU_FLOORS = {
+    "minimax-h3/minimax_h3/glue.py": "the fused glue's sm80 floor (bf16 tensor cores)",
+    "minimax-h3/minimax_h3/vae_glue.py": "the VAE decoder glue's same sm80 floor",
+}
 ARM_GPU_CHOICES = (
     "major, _ = torch.cuda.get_device_capability()\n",
     "if 'H100' in torch.cuda.get_device_name(0): pass\n",

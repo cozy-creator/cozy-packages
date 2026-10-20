@@ -450,22 +450,23 @@ def _segment_call(
     # description joins the text's line.
     _, start, end = sections.get("subject_definitions", (0, 0, 0))
     own: dict[tuple[str, str], int] = {}
-    for line in re.finditer(r"[^\n]+", text[start:end]):
-        first = _TOKEN.match(line.group(0).lstrip(" \t-*"))
+    for definition in re.finditer(r"[^\n]+", text[start:end]):
+        first = _TOKEN.match(definition.group(0).lstrip(" \t-*"))
         if not first or (ref := lookup(first)) is None or ref not in used:
             continue
         cited = FILE[ref.kind] != "image" or any(
             lookup(token) is ref and _MEDIA.fullmatch(name_key(token.group(1)))
-            for token in _TOKEN.finditer(line.group(0))
+            for token in _TOKEN.finditer(definition.group(0))
         )
         if cited:
-            own.setdefault(part(first, ref), start + line.end())
+            own.setdefault(part(first, ref), start + definition.end())
     for (name, kind), at in sorted(own.items(), key=lambda item: -item[1]):
         ref = by_key[name_key(name)]
         if kind == _SLOT[ref.kind] and ref.description and ref.description.strip() not in text[start:at]:
             text = text[:at] + f" {ref.description.strip()}" + text[at:]
     text = _TOKEN.sub(renumber, text)
-    definitions, retention = [], []
+    definitions: list[str] = []
+    retention: list[str] = []
     tasks = set()
     for ref in used:
         slot = label(ref)
