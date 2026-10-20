@@ -27,7 +27,7 @@ from transformers import PreTrainedTokenizerFast
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "flux-3-klein"))
 
-from flux_3_klein import AspectRatio, Megapixels, output_size  # noqa: E402
+from flux_3_klein import _DEMAND, Megapixels, output_size  # noqa: E402
 from flux_3_klein.klein import (  # noqa: E402
     PATCH,
     TEXT_LAYERS,
@@ -137,13 +137,21 @@ def proof(flow_map: bool, references: list[Image.Image]) -> None:
 
 
 def sizes() -> None:
-    assert output_size(AspectRatio.SQUARE, Megapixels.MP1, None) == (1024, 1024)
-    for aspect in AspectRatio:
-        for tier in Megapixels:
-            w, h = output_size(aspect, tier, None)
-            assert w % PATCH == h % PATCH == 0
-    w, h = output_size(None, Megapixels.MP1, Image.new("RGB", (3000, 2000)))
-    assert (w, h) == (1248, 832) and w % PATCH == h % PATCH == 0, (w, h)
+    """Any W:H at the tier's area, rounded to 32 px, inside BFL's 64-4096 px sides and the demand
+    admission declared; held only past them."""
+    assert output_size(Megapixels.MP1, "1:1") == (1024, 1024, False)
+    assert output_size(Megapixels.MP1, "3000:2000") == (1248, 832, False)
+    assert output_size(Megapixels.MP4, "16:9") == (2720, 1536, False)
+    assert output_size(Megapixels.MP4, "8:1") == (4096, 1024, True)
+    for tier in Megapixels:
+        for step in range(-500, 501):
+            w, h = round(10**4 * 10 ** (step / 125)), 10**4
+            width, height, held = output_size(tier, f"{w}:{h}")
+            assert width % 32 == height % 32 == 0 and 64 <= min(width, height) <= max(width, height) <= 4096
+            assert width * height <= _DEMAND[tier][0] * _DEMAND[tier][1], (tier, w, h)
+            assert output_size(tier, f"{h}:{w}")[:2] == (height, width)
+            if max(w / h, h / w) <= min(4096**2 / (tier << 20), 13):
+                assert not held, (tier, w, h)
     fit, canvas = reference_canvas(3000, 2000)
     assert canvas[0] * canvas[1] <= 4 * 1024 * 1024 and canvas[0] % 16 == canvas[1] % 16 == 0
     padded, box = prepare_reference(Image.new("RGB", (1000, 1001)))
