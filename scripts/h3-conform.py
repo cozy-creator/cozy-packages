@@ -40,6 +40,7 @@ from cozy_runtime.author import (
     AudioAsset,
     Cancelled,
     Config,
+    ConformanceError,
     Context,
     DecodedAudio,
     DecodedAudioChunk,
@@ -152,6 +153,7 @@ from minimax_h3.turbo import (  # noqa: E402
     ATTENTION_KWARG,
     LORA_FAMILIES,
     OVERLAY_KWARG,
+    OVERLAY_SOURCE_KWARG,
     TURBO_BANK,
     LoRAFactors,
     TurboHeads,
@@ -3633,6 +3635,44 @@ def tiny_overlay(config: Mapping[str, Any]) -> Any:
     ).eval()
 
 
+def arm_turbo_call_source() -> None:
+    a, b = tiny_overlay(TURBO_CONFIG), tiny_overlay(TURBO_CONFIG)
+    owner = tiny_pruned_dit(TURBO_CONFIG)
+    path = "transformer_blocks.0.attn.to_q"
+    hook = _LoRAHook(owner, path)
+
+    def selected(overlay: Any, source: str) -> Any:
+        return hook.lora_for_call(
+            {
+                "attention_kwargs": {
+                    ATTENTION_KWARG: TURBO_BANK,
+                    OVERLAY_KWARG: overlay,
+                    OVERLAY_SOURCE_KWARG: (source, "ref2va_turbo"),
+                }
+            }
+        )
+
+    first = selected(a, "sha256:source-a")
+    again = selected(a, "sha256:source-a")
+    second = selected(b, "sha256:source-b")
+    assert first is not None and again is not None and second is not None
+    check("call selector names base without forward arming", hook.lora_for_call({}), None)
+    check("same immutable source reuses the factor identity", first[0] == again[0], True)
+    check("different source changes factor identity", first[0] != second[0], True)
+    factors = a.get_submodule(path)
+    check("selection retains lazy down ref without a tensor copy", first[1] is factors.lora_down, True)
+    check("selection retains lazy up ref without a tensor copy", first[2] is factors.lora_up, True)
+    check("selection preserves alpha/rank", first[3], TURBO_ALPHA / TURBO_RANK)
+    try:
+        hook.lora_for_call(
+            {"attention_kwargs": {ATTENTION_KWARG: TURBO_BANK, OVERLAY_KWARG: a}}
+        )
+    except ConformanceError:
+        pass
+    else:
+        raise AssertionError("a selected overlay without immutable provenance was admitted")
+
+
 def tiny_pruned_dit(config: Mapping[str, Any], task: str = "fl2va") -> Any:
     timesteps, block_keys = canonical_timestep_plan(cast(Any, task)).table_layout()
     return AdaLNPrunedMiniMaxH3Transformer.from_official_config(
@@ -4626,6 +4666,7 @@ def arm_producer() -> None:
 
 
 ARMS = {
+    "turbo-call-source": arm_turbo_call_source,
     "attention-scope": arm_attention_scope,
     "checkpoint-table-layout": arm_checkpoint_table_layout,
     "turbo-plan": arm_turbo_plan,

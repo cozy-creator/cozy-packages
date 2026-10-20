@@ -23,12 +23,13 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from cozy_runtime.author import ConformanceError
+from cozy_runtime.author import ConformanceError, canonical_json
 
 #: The forward-call selector: `attention_kwargs={ATTENTION_KWARG: TURBO_BANK}` names the bank
 #: one DiT forward serves. Absent, the forward is the base's, whatever overlay is attached.
 ATTENTION_KWARG = "cozy_h3_bank"
 OVERLAY_KWARG = "cozy_h3_overlay"
+OVERLAY_SOURCE_KWARG = "cozy_h3_overlay_source"
 TURBO_BANK = "turbo"
 #: The families applied at inference, as the checkpoint names them under a block.
 LORA_FAMILIES = ("to_q", "to_k", "to_v", "to_out.0", "ff.net.0.proj", "ff.net.2")
@@ -104,6 +105,29 @@ class _LoRAHook:
             return None
         factors = armed.overlay.get_submodule(self.path)
         return factors, factors.lora_down, factors.lora_up, float(factors.scale)
+
+    def lora_for_call(
+        self, arguments: Mapping[str, object]
+    ) -> tuple[str, torch.Tensor, torch.Tensor, float] | None:
+        """Resolve this call before page-in, without reading mutable forward arming."""
+        selector = arguments.get("attention_kwargs")
+        if not isinstance(selector, Mapping) or selector.get(ATTENTION_KWARG) is None:
+            return None
+        overlay, origin = selector.get(OVERLAY_KWARG), selector.get(OVERLAY_SOURCE_KWARG)
+        if (
+            selector.get(ATTENTION_KWARG) != TURBO_BANK
+            or not isinstance(overlay, TurboOverlay)
+            or not isinstance(origin, tuple)
+            or len(origin) != 2
+            or not all(isinstance(value, str) and value for value in origin)
+            or origin[1] not in ("fl2va_turbo", "ref2va_turbo")
+        ):
+            raise ConformanceError(
+                "turbo LoRA selection needs its immutable source identity", code="artifact_config"
+            )
+        factors = overlay.get_submodule(self.path)
+        identity = canonical_json.digest([*origin, self.path])
+        return identity, factors.lora_down, factors.lora_up, float(factors.scale)
 
 
 class _Site(nn.Module):  # type: ignore[misc]
