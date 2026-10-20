@@ -23,7 +23,7 @@ tasks:
           flux-3-klein) $py scripts/flux-3-klein-model-proof.py ;;
           seedvr2) $py scripts/seedvr2-model-proof.py ;;
           minimax-h3) for s in conform prompt-proof turbo-cp-proof reference-fidelity-proof reference-rows-proof; do $py "scripts/h3-$s.py"; done; $py scripts/h3-assembly-proof.py assembly ;;
-          minimax-h3-tools) for s in order stage full-source table-metadata writer; do PYTHONPATH=$p/src $py "$p/scripts/$s-proof.py"; done; PYTHONPATH=$p/src $py scripts/tensorfs_seeds.py ;;
+          minimax-h3-tools) for s in order stage full-source table-metadata; do PYTHONPATH=$p/src $py "$p/scripts/$s-proof.py"; done; PYTHONPATH=$p/src $py scripts/h3-producer-writer-proof.py; PYTHONPATH=$p/src $py scripts/tensorfs_seeds.py ;;
         esac
         uv build -q --project "$p" --wheel --out-dir dist; uv pip install -q --python "$py" --no-deps dist/*.whl
         $py -P scripts/package_import.py "$p" --installed
