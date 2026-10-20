@@ -20,13 +20,12 @@ from qwen_image_2 import (  # noqa: E402
     GenerateInput,
     Megapixels,
     app,
-    reference_prompt,
     rgb_image,
 )
 
 payload = msgspec.json.decode(b'{"prompt":"An explorer in a blue coat"}', type=GenerateInput)
 assert payload.seed is None and payload.steps == 40
-assert payload.dimensions() == (1024, 1024) and payload.background == "normal"
+assert payload.dimensions() == (1024, 1024)
 assert len(AspectRatio) == 9 and {tier.value for tier in Megapixels} == {1, 2, 4}
 for aspect in AspectRatio:
     previous_area = 0
@@ -77,7 +76,6 @@ for document in (
     b'{"prompt":"subject","steps":0}',
     b'{"prompt":"subject","seed":-1}',
     b'{"prompt":"subject","seed":9007199254740992}',
-    b'{"prompt":"subject","background":"transparent"}',
 ):
     try:
         msgspec.json.decode(document, type=GenerateInput)
@@ -85,8 +83,6 @@ for document in (
         pass
     else:
         raise AssertionError(f"invalid request accepted: {document!r}")
-assert reference_prompt("a railway platform", "normal") == "a railway platform"
-assert "pure white studio background" in reference_prompt("a character", "white")
 pixels = torch.tensor([[[[1.0]], [[-1.0]], [[-1.0]], [[-1.0]]]])
 assert rgb_image(pixels).getpixel((0, 0)) == (255, 255, 255)
 pixels[0, 3, 0, 0] = 1

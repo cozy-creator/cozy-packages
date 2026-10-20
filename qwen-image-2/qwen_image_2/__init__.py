@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 from enum import Enum, IntEnum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 import msgspec
 import numpy as np
@@ -26,7 +26,6 @@ from .quantize import int8
 
 app = App()
 app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=24 << 30),), accelerator=False)
-Background = Literal["normal", "white"]
 
 
 class AspectRatio(Enum):
@@ -98,7 +97,6 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP1
     steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 40
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
-    background: Background = "normal"
     reference_images: Annotated[
         list[ImageAsset],
         AssetBound(
@@ -124,15 +122,6 @@ class ImageOutput(msgspec.Struct):
     width: int
     height: int
     seed: int
-
-
-def reference_prompt(prompt: str, background: Background) -> str:
-    if background == "white":
-        return (
-            f"{prompt}\nSingle subject isolated against a seamless pure white studio background. "
-            "Show the whole subject clearly, with no scenery, text, labels or other people."
-        )
-    return prompt
 
 
 def rgb_image(decoded: Any) -> Image.Image:
@@ -173,11 +162,12 @@ def generate_image(
             conditioning_images, reference_latents = model.encode_reference_images(reference_images)
         ctx.raise_if_cancelled()
     with tel.stage("encoding prompt", overall_range=(0.08 if reference_images else 0.0, 0.1)):
-        prompt = reference_prompt(payload.prompt, payload.background)
         if reference_images is None:
-            embeds, mask = model.encode(prompt)
+            embeds, mask = model.encode(payload.prompt)
         else:
-            embeds, mask, image_pad_mask = model.encode_image_prompt(prompt, conditioning_images)
+            embeds, mask, image_pad_mask = model.encode_image_prompt(
+                payload.prompt, conditioning_images
+            )
     with tel.stage("generating image", overall_range=(0.1, 0.9)):
         latents = model.denoise(
             embeds,

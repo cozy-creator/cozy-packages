@@ -494,6 +494,8 @@ async def references() -> None:
     scene_prompt = image_prompt(StoryReference("Depot", "background", "A wet train platform."))
     for forbidden in ("no people", "human figures", "silhouettes", "human-like subjects"):
         check(f"scene generation explicitly excludes {forbidden}", forbidden in scene_prompt.lower(), True)
+    check("only a character sheet asks for the white studio background",
+          ["white studio" in image_prompt(ref) for ref in (hero, depot)], [True, False])
     mixed = await resolve_reference_images([hero, depot], generate)
     check("only the missing image is generated", (mixed["Depot"] is generated, made), (True, ["Depot"]))
     prepared = ImageAsset("sha256:" + "c" * 64)

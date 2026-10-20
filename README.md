@@ -17,7 +17,7 @@ dependencies or qualifying a worker image.
 | `sdxl/` | SDXL text-to-image package plus the family's `int8`/`fp8` quantizers (se-008, cr-073, se-023) |
 | `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
 | `minimax-h3-tools/` | H3 timestep-table and structural precompute functions (cr-071) |
-| `qwen-image-2/` | Qwen-Image-2.1 reference image generation; optional white background and native Runtime execution (research model licence) |
+| `qwen-image-2/` | Qwen-Image-2.1 image generation and reference editing with native Runtime execution (research model licence) |
 | `examples/` | private `main()` scripts for conversions, uploads and diagnostics; run directly with `cozy run` |
 | `*/package.toml` | the `[application]` entry point only; it carries no model bindings |
 | `*/pyproject.toml` | release metadata; its one `cozy.application` entry point matches `package.toml` |

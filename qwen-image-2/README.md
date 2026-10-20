@@ -4,8 +4,7 @@
 selected independently from the package. TensorFS owns model downloads and bytes;
 Runtime owns construction, memory residency and component execution.
 
-Use `background=white` for a character reference or `background=normal` for a scene.
-Native RGBA decoding is composited over white because the v1 API produces RGB PNGs;
+`prompt` reaches the model exactly as given. Native RGBA decoding is composited over white because the v1 API produces RGB PNGs;
 it does not promise transparent outputs. `seed` is optional and the chosen seed is
 returned. Seeds range from 0 through 9007199254740991 (the interoperable 53-bit
 integer range); omitting one chooses a random seed in that range. Select `aspect_ratio` and `megapixels` (1, 2 or 4); the default is `1:1` at 1 MP,
