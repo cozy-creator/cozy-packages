@@ -286,33 +286,37 @@ def staged(tmp_path: Path) -> None:
     # run in float32 here.
     for module in (encoder, upstream_encoder, graph.components["transformer"]):
         module.float()
-    reference = Image.linear_gradient("L").resize((96, 64)).convert("RGB")
-    conditioning, reference_latents = model.encode_reference_images([reference])
-    embeds, mask, pad_mask = model.encode_image_prompt("make it blue", conditioning)
-    latents = model.denoise(
-        embeds,
-        mask,
-        width=32,
-        height=32,
-        steps=2,
-        seed=45,
-        on_step=lambda i: None,
-        cancel=lambda: None,
-        reference_images=[reference],
-        reference_latents=reference_latents,
-        image_pad_mask=pad_mask,
-    )
-    edited = (model.decode(latents, width=32, height=32) / 2 + 0.5).clamp(0, 1)
-    expected = pipe(
-        prompt="make it blue",
-        image=[reference],
-        width=32,
-        height=32,
-        num_inference_steps=2,
-        generator=torch.Generator().manual_seed(45),
-        output_type="pt",
-    ).images
-    torch.testing.assert_close(edited, expected, rtol=0, atol=0)
+    opaque = Image.linear_gradient("L").resize((96, 64)).convert("RGB")
+    # An RGBA reference: the VAE reads its alpha, the vision encoder a copy over white.
+    cutout = opaque.convert("RGBA")
+    cutout.putalpha(Image.linear_gradient("L").rotate(90).resize((96, 64)))
+    for reference in (opaque, cutout):
+        conditioning, reference_latents = model.encode_reference_images([reference])
+        embeds, mask, pad_mask = model.encode_image_prompt("make it blue", conditioning)
+        latents = model.denoise(
+            embeds,
+            mask,
+            width=32,
+            height=32,
+            steps=2,
+            seed=45,
+            on_step=lambda i: None,
+            cancel=lambda: None,
+            reference_images=[reference],
+            reference_latents=reference_latents,
+            image_pad_mask=pad_mask,
+        )
+        edited = (model.decode(latents, width=32, height=32) / 2 + 0.5).clamp(0, 1)
+        expected = pipe(
+            prompt="make it blue",
+            image=[reference],
+            width=32,
+            height=32,
+            num_inference_steps=2,
+            generator=torch.Generator().manual_seed(45),
+            output_type="pt",
+        ).images
+        torch.testing.assert_close(edited, expected, rtol=0, atol=0)
 
 
 def progress() -> None:

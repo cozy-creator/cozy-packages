@@ -4,8 +4,8 @@
 selected independently from the package. TensorFS owns model downloads and bytes;
 Runtime owns construction, memory residency and component execution.
 
-`prompt` reaches the model exactly as given. Native RGBA decoding is composited over white because the v1 API produces RGB PNGs;
-it does not promise transparent outputs. `seed` is optional and the chosen seed is
+`prompt` reaches the model exactly as given. The PNG keeps the decoder's alpha when anything in
+it is transparent, and is RGB otherwise. `seed` is optional and the chosen seed is
 returned. Seeds range from 0 through 9007199254740991 (the interoperable 53-bit
 integer range); omitting one chooses a random seed in that range. Steps default to 40.
 Unknown fields, such as the removed width/height inputs, are ignored with a warning.
@@ -15,6 +15,16 @@ upstream's `calculate_dimensions` at that area, in multiples of 32 px; text-to-i
 `1:1` at 4 MP, the model's native 2048×2048. A ratio past the model's rotary range (a 32768 px
 side) or its tier's area is served at the nearest size it admits, reported as a `clamp`
 adjustment. Width and height are output fields only.
+
+## Transparent images
+
+Qwen-Image-2.1 generates RGBA natively when the prompt asks for it, in the wording its model card
+recommends:
+
+```sh
+cozy run fidika/qwen-image-2/generate_image seed=42 \
+  prompt='This is an RGBA image with transparency. A cute cartoon dragon sticker. The image has alpha channel and the background is transparent.'
+```
 
 ## Image editing and references
 
@@ -34,10 +44,10 @@ cozy run fidika/qwen-image-2/generate_image \
   seed=42
 ```
 
-References are ordered. Each accepts PNG, JPEG or WebP up to 32 MiB encoded; Runtime
-decodes it upright (EXIF orientation) and scales anything larger than 4 MP down to 4 MP. This package currently uses RGB input and output; transparent layer
-editing is not exposed. Each reference is resized to the upstream 1 MP conditioning
-area independently of the output's `megapixels` tier.
+References are ordered. Each is any image Runtime decodes, up to 32 MiB encoded, read upright
+(EXIF orientation) with its alpha and scaled down to 4 MP when larger. As upstream, the VAE reads
+the alpha and the vision encoder a copy composited over white. Each reference is resized to the
+upstream 1 MP conditioning area independently of the output's `megapixels` tier.
 
 With references, an omitted `aspect_ratio` takes the last reference's exact ratio (as upstream) and an omitted `megapixels` the tier nearest its pixel count.
 

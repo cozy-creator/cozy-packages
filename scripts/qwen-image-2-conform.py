@@ -6,11 +6,14 @@ from __future__ import annotations
 import math
 import secrets
 import sys
+import tempfile
 from pathlib import Path
 
 import msgspec
 import torch
-from cozy_runtime.author import canonical_json, describe
+from cozy_runtime.author import ImageAsset, canonical_json, describe
+from cozy_runtime.author.fakes import fake_attempt, fake_outputs, file_input
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "qwen-image-2"))
@@ -24,7 +27,7 @@ from qwen_image_2 import (  # noqa: E402
     Megapixels,
     app,
     output_size,
-    rgb_image,
+    decoded_image,
 )
 
 payload = msgspec.json.decode(b'{"prompt":"An explorer in a blue coat"}', type=GenerateInput)
@@ -65,10 +68,27 @@ for seed in (0, 9301, 9007199254740991):
     assert explicit.resolved_seed() == seed
 # Upstream encodes an empty prompt as a space; unknown fields are Runtime's to warn and drop.
 assert msgspec.json.decode(b'{"prompt":"","width":1024}', type=GenerateInput).prompt == ""
-pixels = torch.tensor([[[[1.0]], [[-1.0]], [[-1.0]], [[-1.0]]]])
-assert rgb_image(pixels).getpixel((0, 0)) == (255, 255, 255)
-pixels[0, 3, 0, 0] = 1
-assert rgb_image(pixels).getpixel((0, 0)) == (255, 0, 0)
+# The decoder's alpha survives into the PNG only when something is transparent. An RGB read of
+# that PNG (how H3 reads a reference) composites it over white; the RGBA read keeps it.
+spool = Path(tempfile.mkdtemp())
+out = fake_outputs(fake_attempt("qwen-png", spool=spool))
+opaque = torch.tensor([[[[1.0, 1.0]], [[-1.0, 1.0]], [[-1.0, 1.0]], [[1.0, 1.0]]]])
+transparent = opaque.clone()
+transparent[0, 3, 0, 0] = -1
+for decoded in (opaque, transparent):
+    out.save_image(decoded_image(decoded), format="png")
+pngs = sorted(spool.glob("image-*"))
+with Image.open(pngs[0]) as png:
+    assert (png.mode, png.getpixel((0, 0))) == ("RGB", (255, 0, 0))
+with Image.open(pngs[1]) as png:
+    assert (png.mode, png.getpixel((0, 0)), png.getpixel((1, 0))) == (
+        "RGBA",
+        (255, 0, 0, 0),
+        (255, 255, 255, 255),
+    )
+reference = file_input(ImageAsset, pngs[1], max_decoded_bytes=1 << 20)
+assert reference.read().getpixel((0, 0)) == (255, 255, 255)
+assert reference.read(mode="RGBA").getpixel((0, 0)) == (255, 0, 0, 0)
 surfaces = {surface.name: surface for surface in describe(app)}
 assert set(surfaces) == {"generate_image", "int8"}, sorted(surfaces)
 surface = surfaces["generate_image"]
@@ -78,4 +98,4 @@ quantizer = surfaces["int8"]
 assert [o.name for o in quantizer.weights_outputs] == ["int8"] and not quantizer.accelerator
 assert [(b.param, b.weights) for b in quantizer.model_bindings] == [("source", True)]
 assert quantizer.memoize is None
-print("qwen-image-2: any W:H inside the demand, seeds and PNG pixels passed")
+print("qwen-image-2: any W:H inside the demand, seeds, RGB and RGBA PNGs passed")
