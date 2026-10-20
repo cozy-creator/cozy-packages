@@ -703,9 +703,13 @@ class FusedMiniMaxH3TransformerBlock(MiniMaxH3TransformerBlock):  # type: ignore
             self.norm2.eps,
             fp8=self._fusion_ff_fp8,
         )
-        # `ff.net` is [SwiGLU, Dropout(0.0), Linear]; the identity dropout is skipped so
-        # the fused SwiGLU can hand the out projection its fp8 operand directly.
-        ff_output = self.ff.net[2](self.ff.net[0](normed))
+        # `ff.net` is [SwiGLU, Dropout(0.0), Linear]. An fp8 operand skips the identity dropout
+        # to reach the out projection directly; otherwise `ff` runs whole, so the memory's token
+        # cut of the FFN keeps only its output live, not the [tokens, 2 x ffn] intermediate.
+        if self.ff.net[0]._fusion_fp8:
+            ff_output = self.ff.net[2](self.ff.net[0](normed))
+        else:
+            ff_output = self.ff(normed)
         return gate_add(self._glue, hidden_states, gate_mlp, ff_output, adaln_indices)
 
 
