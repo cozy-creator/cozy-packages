@@ -31,7 +31,9 @@ from typing import Any, Literal, cast, get_type_hints
 import av
 import msgspec
 import numpy as np
+import tensorfs
 import torch
+from tensorfs.varena.torch import Declared, Memory, Source, blocks_of, regions_of
 from cozy_runtime.author import (
     App,
     Artifact,
@@ -3673,6 +3675,70 @@ def arm_turbo_call_source() -> None:
         raise AssertionError("a selected overlay without immutable provenance was admitted")
 
 
+def arm_turbo_factor_regions() -> None:
+    """Native row projection keeps each exact factor pair in an independent region."""
+    torch.manual_seed(4108)
+    overlay = tiny_overlay(TURBO_CONFIG)
+    with torch.no_grad():
+        for parameter in overlay.parameters():
+            parameter.normal_(0, 0.02)
+    reference = {}
+    with torch.no_grad():
+        for path, factors in overlay.lora_sites():
+            x = torch.arange(2 * factors.lora_down.shape[1], dtype=torch.bfloat16).reshape(
+                1, 2, -1
+            ) / 127
+            out = torch.zeros(1, 2, factors.lora_up.shape[0], dtype=torch.bfloat16)
+            factors.accumulate(x, out)
+            reference[path] = (x, out)
+    with tempfile.TemporaryDirectory(prefix="h3-factor-regions-") as directory:
+        with tensorfs.Writer(cache_dir=Path(directory)) as writer:
+            component = writer.component("ref2va_turbo", cls="", config={})
+            for key, tensor in overlay.state_dict().items():
+                value = tensor.detach().contiguous()
+                dtype = {torch.bfloat16: "BF16", torch.float32: "F32"}[value.dtype]
+                component.put(
+                    key, value.view(torch.uint8).numpy().tobytes(),
+                    dtype=dtype, shape=list(value.shape),
+                )
+            checkpoint = writer.commit()
+        memory = Memory.open(torch.device("cpu"))
+        try:
+            overlay._varena = Declared(Source(checkpoint, "ref2va_turbo", str(checkpoint.id)))
+            paths = dict(overlay.lora_sites())
+            check("every LoRA pair is a placement block", set(blocks_of(overlay)), set(paths))
+            regions = regions_of(overlay)
+            prefix = "ref2va_turbo/"
+            wanted = {prefix + key for key in checkpoint.components["ref2va_turbo"].tensors}
+            flattened = [key for region in regions for key in region]
+            check("region projection covers each original checkpoint row once", set(flattened), wanted)
+            check("region projection duplicates no row", len(flattened), len(wanted))
+            pair_keys = set()
+            for path in paths:
+                pair = {prefix + path + ".lora_down", prefix + path + ".lora_up"}
+                pair_keys.update(pair)
+                check(f"{path} down/up have one factor-local region", sum(set(r) == pair for r in regions), 1)
+            common = [set(region) for region in regions if not set(region) & pair_keys]
+            check("only heads and tables remain in common", common, [wanted - pair_keys])
+            overlay._no_split_modules = []
+            try:
+                legacy = regions_of(overlay)
+                check("old undeclared overlay projects one whole common region", len(legacy), 1)
+                check("old common region contains the same unchanged rows", set(legacy[0]), wanted)
+            finally:
+                del overlay._no_split_modules
+            memory.load(overlay, ck=checkpoint, component="ref2va_turbo", level="gpu")
+            with torch.no_grad():
+                for path, factors in overlay.lora_sites():
+                    x, expected = reference[path]
+                    actual = torch.zeros_like(expected)
+                    factors.accumulate(x, actual)
+                    check(f"{path} native CPU read preserves exact LoRA math", torch.equal(actual, expected), True)
+        finally:
+            memory.close()
+            checkpoint.close()
+
+
 def tiny_pruned_dit(config: Mapping[str, Any], task: str = "fl2va") -> Any:
     timesteps, block_keys = canonical_timestep_plan(cast(Any, task)).table_layout()
     return AdaLNPrunedMiniMaxH3Transformer.from_official_config(
@@ -4666,6 +4732,7 @@ def arm_producer() -> None:
 
 
 ARMS = {
+    "turbo-factor-regions": arm_turbo_factor_regions,
     "turbo-call-source": arm_turbo_call_source,
     "attention-scope": arm_attention_scope,
     "checkpoint-table-layout": arm_checkpoint_table_layout,

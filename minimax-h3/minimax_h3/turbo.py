@@ -210,6 +210,8 @@ class TurboOverlay(nn.Module):  # type: ignore[misc]
     """
 
     present = True
+    # A direct down/up read needs this site's pair, not every overlay tensor.
+    _no_split_modules = ["LoRAFactors"]
 
     def __init__(
         self,
