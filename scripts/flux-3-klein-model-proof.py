@@ -10,11 +10,13 @@ from __future__ import annotations
 import copy
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
 import torch
 from cozy_runtime.author import Config, ModelAssets
+from cozy_runtime.author.fakes import granted_input, invoke_with_fakes
 from diffusers.models.transformers.transformer_flux3 import (
     Flux3ModeTransformerBlock,
     Flux3SingleTransformerBlock,
@@ -27,7 +29,8 @@ from transformers import PreTrainedTokenizerFast
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "flux-3-klein"))
 
-from flux_3_klein import _DEMAND, Megapixels, output_size  # noqa: E402
+from flux_3_klein import _DEMAND, Megapixels, app, output_size  # noqa: E402
+from flux_3_klein.upsampler import Drafter, Upsampler  # noqa: E402
 from flux_3_klein.klein import (  # noqa: E402
     PATCH,
     TEXT_LAYERS,
@@ -159,8 +162,47 @@ def sizes() -> None:
     assert prepare_multi_reference(Image.new("RGB", (2000, 1000))).size == (1440, 720)
 
 
+def edits(root: Path) -> None:
+    """`edit` through the real kernel on real PNGs. Given no size, the output is BFL's: the first
+    prepared reference's own size, a lone one's padding cropped off. Explicit inputs win."""
+    # `prompt_upsampling=False` never calls the upsampler or its drafter: unloaded stand-ins.
+    models = {
+        "model": Klein.for_test(graph=graph(True), processor=build_processor(assets())),
+        "upsampler": Upsampler.for_test(),
+        "drafter": Drafter.for_test(),
+    }
+    rng = np.random.default_rng(5)
+    paths = []
+    for index, size in enumerate(((100, 60), (90, 50), (200, 200))):
+        path = root / f"reference-{index}.png"
+        Image.fromarray(rng.integers(0, 255, (size[1], size[0], 3), dtype=np.uint8)).save(path)
+        paths.append(path)
+    cases: list[tuple[list[Path], dict[str, object], tuple[int, int]]] = [
+        ([paths[0]], {}, (100, 60)),  # canvas 112x64, cropped back to the fit
+        ([paths[1], paths[2]], {}, (80, 48)),  # several: the first, cropped to the 16 px grid
+        ([paths[0]], {"aspect_ratio": "2:1", "megapixels": 1}, (1440, 736)),
+        ([paths[0]], {"megapixels": 1}, (1312, 800)),  # its 5:3 at the tier given
+    ]
+    for index, (references, given, expected) in enumerate(cases):
+        grants = {
+            f"reference_images.{n}": granted_input(path, input_id=f"reference_images.{n}", order=n)
+            for n, path in enumerate(references)
+        }
+        wire = {"prompt": "a fox", "steps": 1, "seed": 3, "prompt_upsampling": False, **given}
+        wire["reference_images"] = [grant.digest for grant in grants.values()]
+        spool = root / f"edit-{index}"
+        result = invoke_with_fakes(
+            app.get("edit"), wire, request_id=f"edit-{index}", spool=spool, models=models, assets=grants
+        )
+        assert (result.result.width, result.result.height) == expected, (given, result.result)
+        with Image.open(spool / "image-0001") as png:
+            assert png.size == expected, png.size
+
+
 if __name__ == "__main__":
     sizes()
+    with tempfile.TemporaryDirectory() as scratch:
+        edits(Path(scratch))
     rng = np.random.default_rng(3)
     pictures = [Image.fromarray(rng.integers(0, 255, (48, 64, 3), dtype=np.uint8)) for _ in range(2)]
     for flow_map in (True, False):
