@@ -36,8 +36,10 @@ import re
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import cast
 
 import av
 import numpy as np
@@ -134,12 +136,13 @@ def read_media(path: Path, keep: frozenset[int] | set[int] = frozenset()) -> Med
     stills: dict[int, Image.Image] = {}
     prev: np.ndarray | None = None
     with av.open(str(path)) as box:
-        stream = box.streams.video[0]
-        stream.codec_context.thread_count = 1
-        fps = float(stream.average_rate)
-        for n, frame in enumerate(box.decode(stream)):
-            planes = frame.to_ndarray(format="yuv420p")
-            h, w = frame.height, frame.width
+        video_stream = box.streams.video[0]
+        video_stream.codec_context.thread_count = 1
+        assert video_stream.average_rate is not None, "video has no average frame rate"
+        fps = float(video_stream.average_rate)
+        for n, video_frame in enumerate(box.decode(video_stream)):
+            planes = video_frame.to_ndarray(format="yuv420p")
+            h, w = video_frame.height, video_frame.width
             y = planes[:h].astype(np.float32)
             cb = planes[h : h + h // 4].reshape(h // 2, w // 2)
             cr = planes[h + h // 4 :].reshape(h // 2, w // 2)
@@ -147,20 +150,25 @@ def read_media(path: Path, keep: frozenset[int] | set[int] = frozenset()) -> Med
             small = y[: h // 4 * 4, : w // 4 * 4].reshape(h // 4, 4, w // 4, 4).mean((1, 3))
             motion = math.nan if prev is None else float(np.abs(small - prev).mean())
             prev = small
-            rows.append((y.mean(), cb.mean(), cr.mean(), y.std(), cb.std(), cr.std(), lap.var(), motion))
+            rows.append(tuple(float(v) for v in (y.mean(), cb.mean(), cr.mean(), y.std(), cb.std(), cr.std(), lap.var(), motion)))
             if n in keep:
-                stills[n] = frame.to_image().resize((w // 4, h // 4))
+                to_image = cast(Callable[[], Image.Image], video_frame.to_image)
+                stills[n] = to_image().resize((w // 4, h // 4))
     with av.open(str(path)) as box:
-        stream = box.streams.audio[0]
-        rate = stream.codec_context.sample_rate
+        audio_stream = box.streams.audio[0]
+        rate = audio_stream.codec_context.sample_rate
         chunks: list[np.ndarray] = []
         start: int | None = None
-        for frame in box.decode(stream):
-            pcm = frame.to_ndarray().astype(np.float32)
-            if not frame.format.is_planar:
-                pcm = pcm.reshape(-1, len(frame.layout.channels)).T
+        for audio_frame in box.decode(audio_stream):
+            pcm = audio_frame.to_ndarray().astype(np.float32)
+            if not audio_frame.format.is_planar:
+                pcm = pcm.reshape(-1, len(audio_frame.layout.channels)).T
             if start is None:
-                start = round(float(frame.pts * frame.time_base) * rate) if frame.pts is not None else 0
+                if audio_frame.pts is None:
+                    start = 0
+                else:
+                    assert audio_frame.time_base is not None, "audio PTS has no time base"
+                    start = round(float(audio_frame.pts * audio_frame.time_base) * rate)
             chunks.append(pcm)
         audio = np.concatenate(chunks, axis=1)
         if start and start > 0:
@@ -518,7 +526,9 @@ def main() -> None:
     if args.video is None:
         parser.error("video is required")
     with av.open(str(args.video)) as box:
-        fps = float(box.streams.video[0].average_rate)
+        average_rate = box.streams.video[0].average_rate
+        assert average_rate is not None, "video has no average frame rate"
+        fps = float(average_rate)
     if args.joins:
         joins = sorted(int(x) for x in args.joins.split(","))
     else:

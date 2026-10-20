@@ -642,7 +642,8 @@ def definition_lines(text: str) -> list[str]:
 async def videos() -> None:
     """Videos are named references: attached only where the text names them, by name first,
     else as the global `<Video N>`, and renumbered per call in request order."""
-    clip = lambda digit: "sha256:" + digit * 64  # noqa: E731
+    def clip(digit: str) -> str:
+        return "sha256:" + digit * 64
     refs = [{"name": "Ann", "kind": "character", "description": "A woman in red."},
             {"name": "Ben", "kind": "character", "description": "A man in blue."},
             {"name": "Video 1", "kind": "video", "video": clip("1")},
