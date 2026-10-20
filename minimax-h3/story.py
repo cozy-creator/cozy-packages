@@ -192,7 +192,9 @@ def image_prompt(reference: StoryReference, style: str = "") -> str:
             "in sharp detail: eyes, eyebrows, nose, lips, skin, hairline and hairstyle. Show "
             "the entire character in both full-body views, in a natural neutral pose. Keep the "
             "character's face, appearance, proportions and clothing consistent across all "
-            "three panels."
+            "three panels. Single subject isolated against a seamless pure white studio "
+            "background. Show the whole subject clearly, with no scenery, text, labels or "
+            "other people."
         )
     else:
         parts.append(

@@ -47,8 +47,8 @@ target Hub before publishing H3 there.
 
 Creator captures the dependency's immutable implementation and generated caller
 interface. The source implementation takes injected execution arguments; its installed
-caller exposes the flat `prompt`, `aspect_ratio`, `megapixels`, `steps`, `seed` and
-`background` parameters used here.
+caller exposes the flat `prompt`, `aspect_ratio`, `megapixels`, `steps` and `seed`
+parameters used here.
 
 The `long_form` API uses this same mixed reference resolver and completed AV context,
 with no shot-count cap. See [LONG_FORM.md](../LONG_FORM.md) for JSON filenames,

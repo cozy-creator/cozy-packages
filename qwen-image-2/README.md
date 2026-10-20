@@ -4,11 +4,10 @@
 selected independently from the package. TensorFS owns model downloads and bytes;
 Runtime owns construction, memory residency and component execution.
 
-Use `background=white` for a character reference or `background=normal` for a scene.
-Native RGBA decoding is composited over white because the v1 API produces RGB PNGs;
+`prompt` reaches the model exactly as given. Native RGBA decoding is composited over white because the v1 API produces RGB PNGs;
 it does not promise transparent outputs. `seed` is optional and the chosen seed is
 returned. Seeds range from 0 through 9007199254740991 (the interoperable 53-bit
-integer range); omitting one chooses a random seed in that range. Select `aspect_ratio` and `megapixels` (1, 2 or 4); the default is `1:1` at 1 MP,
+integer range); omitting one chooses a random seed in that range. Select `aspect_ratio` and `megapixels` (1, 2 or 4); without references the default is `1:1` at 1 MP,
 exactly 1024×1024. Steps default to 40. Width and height are output fields only.
 Unknown ratios, tiers, and the removed width/height inputs are refused.
 
@@ -30,12 +29,12 @@ cozy run paul/qwen-image-2/generate_image \
   seed=42
 ```
 
-References are ordered. Each accepts PNG, JPEG or WebP up to 32 MiB encoded and
-20 MiB decoded RGB. Runtime verifies and decodes them through the ordinary input
-asset path. This package currently uses RGB input and output; transparent layer
+References are ordered. Each accepts PNG, JPEG or WebP up to 32 MiB encoded; Runtime
+decodes it upright (EXIF orientation) and scales anything larger than 4 MP down to 4 MP. This package currently uses RGB input and output; transparent layer
 editing is not exposed. Each reference is resized to the upstream 1 MP conditioning
-area independently of the output's `megapixels` tier. Output dimensions still come
-from `aspect_ratio` and `megapixels`.
+area independently of the output's `megapixels` tier.
+
+With references, an omitted `aspect_ratio` takes the last reference's exact ratio (as upstream, capped at 8:1) and an omitted `megapixels` the tier nearest its pixel count.
 
 Reference VAE encoding and multimodal prompt encoding each run once before
 denoising, in separate component residency leases. Denoising reuses their tensors

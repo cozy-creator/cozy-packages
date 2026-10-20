@@ -1730,7 +1730,6 @@ async def _create_references(
                 megapixels=ReferenceMegapixels.MP2 if sheet else ReferenceMegapixels.MP1,
                 steps=reference_steps,
                 seed=reference_seed(reference, ctx.request_id),
-                background="white" if sheet else "normal",
             )
         return result.image
 

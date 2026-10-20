@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 import secrets
 import sys
 from pathlib import Path
@@ -15,18 +16,18 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "qwen-image-2"))
 
 from qwen_image_2 import (  # noqa: E402
-    _TIER_DEMAND,
+    _DEMAND,
+    _MAX_RATIO,
     AspectRatio,
     GenerateInput,
     Megapixels,
     app,
-    reference_prompt,
     rgb_image,
 )
 
 payload = msgspec.json.decode(b'{"prompt":"An explorer in a blue coat"}', type=GenerateInput)
 assert payload.seed is None and payload.steps == 40
-assert payload.dimensions() == (1024, 1024) and payload.background == "normal"
+assert payload.dimensions() == (1024, 1024)
 assert len(AspectRatio) == 9 and {tier.value for tier in Megapixels} == {1, 2, 4}
 for aspect in AspectRatio:
     previous_area = 0
@@ -43,13 +44,25 @@ for aspect in AspectRatio:
         assert previous_area < width * height <= 5_000_000
         assert width * height * 3 <= 20 << 20
         assert abs(width / height / (ratio_w / ratio_h) - 1) < 0.04
-        assert width * height <= _TIER_DEMAND[tier][0] * _TIER_DEMAND[tier][1]
+        assert width * height <= _DEMAND[tier][0] * _DEMAND[tier][1]
         reverse = GenerateInput(
             "subject", aspect_ratio=AspectRatio(f"{ratio_h}:{ratio_w}"), megapixels=tier
         )
         assert reverse.dimensions() == (height, width)
         previous_area = width * height
 assert GenerateInput("subject", AspectRatio.ULTRAWIDE, Megapixels.MP4).dimensions() == (3136, 1344)
+# A shape derived from a reference stays inside the demand admission declared. Rounding moves
+# each side at most 16 px, so the capped ratio's worst case bounds every reference.
+assert _DEMAND[None] == _DEMAND[Megapixels.MP4] == (2400, 1792)
+for given in (*Megapixels, None):
+    edge, side = math.sqrt((given or Megapixels.MP4) * 1024 * 1024), math.sqrt(_MAX_RATIO)
+    worst = (edge * side + 16) * (edge / side + 16)
+    assert worst <= _DEMAND[given][0] * _DEMAND[given][1], (given, worst)
+    for step in range(-400, 401):
+        reference = (round(1000 * 10 ** (step / 200)), 1000)
+        width, height = GenerateInput("subject", megapixels=given).dimensions(reference)
+        assert width % 32 == height % 32 == 0 and min(width, height) >= 32
+        assert width * height <= _DEMAND[given][0] * _DEMAND[given][1], (reference, given)
 assert GenerateInput("subject", AspectRatio.WIDE, Megapixels.MP4).dimensions() == (2752, 1536)
 # Exercise the actual selector at maximal entropy, then cross the real Runtime
 # result serializer. This caught a default that inferred successfully but could
@@ -77,7 +90,6 @@ for document in (
     b'{"prompt":"subject","steps":0}',
     b'{"prompt":"subject","seed":-1}',
     b'{"prompt":"subject","seed":9007199254740992}',
-    b'{"prompt":"subject","background":"transparent"}',
 ):
     try:
         msgspec.json.decode(document, type=GenerateInput)
@@ -85,8 +97,6 @@ for document in (
         pass
     else:
         raise AssertionError(f"invalid request accepted: {document!r}")
-assert reference_prompt("a railway platform", "normal") == "a railway platform"
-assert "pure white studio background" in reference_prompt("a character", "white")
 pixels = torch.tensor([[[[1.0]], [[-1.0]], [[-1.0]], [[-1.0]]]])
 assert rgb_image(pixels).getpixel((0, 0)) == (255, 255, 255)
 pixels[0, 3, 0, 0] = 1
@@ -100,4 +110,4 @@ quantizer = surfaces["int8"]
 assert [o.name for o in quantizer.weights_outputs] == ["int8"] and not quantizer.accelerator
 assert [(b.param, b.weights) for b in quantizer.model_bindings] == [("source", True)]
 assert quantizer.memoize is None
-print("qwen-image-2: 27 buckets, defaults, seeds, hardcut refusals and PNG pixels passed")
+print("qwen-image-2: buckets, derived shapes in demand, seeds, refusals and PNG pixels passed")
