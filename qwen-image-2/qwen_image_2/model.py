@@ -35,6 +35,7 @@ from cozy_runtime import fusion
 from cozy_runtime.author import (
     Config,
     Loader,
+    MemoDistribution,
     Model,
     ModelAssets,
     uses_components,
@@ -197,8 +198,13 @@ class _StagedPipeline(QwenImage21Pipeline):
         return latents, image_latents
 
 
-#: Runtime code the encoders read beyond their own bodies: their memo key binds it.
-_ENCODER_CODE = (_StagedPipeline, build_processor)
+#: Code the encoders read beyond their own bodies: their memo key binds it.
+_ENCODER_CODE = (
+    _StagedPipeline,
+    build_processor,
+    MemoDistribution("diffusers"),
+    MemoDistribution("transformers"),
+)
 
 
 class QwenImage21Model(Model[QwenImage21Graph], encoded_leaves="accept"):
@@ -231,8 +237,6 @@ class QwenImage21Model(Model[QwenImage21Graph], encoded_leaves="accept"):
     @uses_components("vae", memoize=True, memo_dependencies=_ENCODER_CODE)
     def encode_reference_images(self, images: list[Any]) -> tuple[list[Any], torch.Tensor]:
         """Encode each reference once, using Diffusers' 1 MP conditioning size."""
-        if not 1 <= len(images) <= 10:
-            raise ValueError("Qwen Image requires between one and ten reference images")
         vae = self.graph.components["vae"]
         device = next(vae.parameters()).device
         pipeline = self._pipeline()
@@ -285,15 +289,9 @@ class QwenImage21Model(Model[QwenImage21Graph], encoded_leaves="accept"):
         transformer = self.graph.components["transformer"]
         device = next(transformer.parameters()).device
         pipeline = self._pipeline()
-        if reference_images is not None:
-            if not reference_images or reference_latents is None or image_pad_mask is None:
-                raise ValueError(
-                    "Qwen Image references require images, latents and vision token mask"
-                )
-            pipeline.reference_latents = reference_latents
+        pipeline.reference_latents = reference_latents
+        if image_pad_mask is not None:
             pipeline.reference_pad_mask = image_pad_mask.to(device=device)
-        elif reference_latents is not None or image_pad_mask is not None:
-            raise ValueError("Qwen Image reference tensors require their source images")
 
         def observed(_pipeline: Any, step: int, _timestep: Any, values: Any) -> Any:
             cancel()

@@ -276,6 +276,38 @@ def staged(tmp_path: Path) -> None:
     assert {x.dtype for x in graph.components["vae"].parameters()} == {torch.float32}
     assert {x.dtype for x in graph.components["transformer"].parameters()} == {torch.bfloat16}
     shapes(model, tmp_path)
+    # The editing path: separately leased reference, prompt and denoise stages equal one upstream
+    # call with the same reference. Upstream encodes references in the prompt's dtype, so both
+    # run in float32 here.
+    for module in (encoder, upstream_encoder, graph.components["transformer"]):
+        module.float()
+    reference = Image.linear_gradient("L").resize((96, 64)).convert("RGB")
+    conditioning, reference_latents = model.encode_reference_images([reference])
+    embeds, mask, pad_mask = model.encode_image_prompt("make it blue", conditioning)
+    latents = model.denoise(
+        embeds,
+        mask,
+        width=32,
+        height=32,
+        steps=2,
+        seed=45,
+        on_step=lambda i: None,
+        cancel=lambda: None,
+        reference_images=[reference],
+        reference_latents=reference_latents,
+        image_pad_mask=pad_mask,
+    )
+    edited = (model.decode(latents, width=32, height=32) / 2 + 0.5).clamp(0, 1)
+    expected = pipe(
+        prompt="make it blue",
+        image=[reference],
+        width=32,
+        height=32,
+        num_inference_steps=2,
+        generator=torch.Generator().manual_seed(45),
+        output_type="pt",
+    ).images
+    torch.testing.assert_close(edited, expected, rtol=0, atol=0)
 
 
 def progress() -> None:

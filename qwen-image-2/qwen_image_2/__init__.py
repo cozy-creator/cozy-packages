@@ -100,8 +100,8 @@ def _nearest_tier(pixels: int) -> Megapixels:
     return min(Megapixels, key=lambda tier: abs(tier * 1024 * 1024 - pixels))
 
 
-class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: Annotated[str, msgspec.Meta(min_length=1)]
+class GenerateInput(msgspec.Struct):
+    prompt: str
     # None: the last reference's exact ratio, else 1:1.
     aspect_ratio: AspectRatio | None = None
     # None: the tier nearest the last reference's pixel count, else 1 MP.
@@ -157,14 +157,13 @@ def rgb_image(decoded: Any) -> Image.Image:
         background = Image.new("RGB", image.size, "white")
         background.paste(image, mask=image.getchannel("A"))
         return background
-    if image.mode != "RGB":
-        raise ValueError(f"Qwen Image decoder produced unsupported {image.mode} pixels")
     return image
 
 
 @app.entrypoint(
     defaults={"model": "qwen-image-2.1@0.1.0"},
     memoize=Memoize(requires=["seed"]),
+    memo_dependencies=("qwen_image_2", "qwen_image_2.model"),
 )
 def generate_image(
     ctx: Context,
