@@ -11,7 +11,7 @@ from typing import Any
 import torch
 import transformers
 from cozy_runtime import lm
-from cozy_runtime.author import Config, Loader, Model, ModelAssets, uses_components
+from cozy_runtime.author import ConformanceError, Config, Loader, Model, ModelAssets, uses_components
 from PIL.Image import Image
 from tokenizers import Tokenizer
 from transformers import AutoConfig, AutoModelForImageTextToText, GenerationConfig, PreTrainedTokenizerFast
@@ -63,18 +63,26 @@ def _processor(assets: ModelAssets) -> Any:
 
 
 def _draft(model: torch.nn.Module, config: Config) -> Any:
-    """Qwen3.5's multi-token-prediction head where the checkpoint keeps it (`mtp.*`), as part of
-    the model's component: `lm.generate` drafts tokens with it and keeps those the model agrees
-    with. None for a checkpoint without it."""
+    """Qwen3.5's multi-token-prediction head where the checkpoint keeps every weight it needs
+    (`mtp.*`), as part of the model's component: `lm.generate` drafts tokens with it and keeps
+    those the model agrees with. None for a checkpoint without it, or one that stores it in
+    another layout (Qwen3.5-MoE keeps the head's experts one by one, not stacked)."""
     text = model.config.get_text_config(decoder=True)
-    if not getattr(text, "mtp_num_hidden_layers", 0) or not config.tensor_dtype(
-        f"{COMPONENT}.mtp.fc.weight", default=""
-    ):
+    if not getattr(text, "mtp_num_hidden_layers", 0) or not _stored(config, f"{COMPONENT}.mtp.fc.weight"):
         return None
     with no_init_weights():
         draft = lm.Draft(model.config, sys.modules[type(model).__module__])
+    if not all(_stored(config, f"{COMPONENT}.mtp.{name}") for name, _ in draft.mtp.named_parameters()):
+        return None
     model.mtp = draft.mtp.to(torch.bfloat16)
     return draft.eval()
+
+
+def _stored(config: Config, key: str) -> bool:
+    try:
+        return bool(config.tensor_dtype(key, default=""))
+    except ConformanceError:
+        return False
 
 
 class Pipeline:
