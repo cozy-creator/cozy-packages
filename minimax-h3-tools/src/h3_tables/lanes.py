@@ -50,7 +50,7 @@ Modulation = Literal["full", "adaln-pruned"]
 
 #: The five components of an H3 checkpoint. Every lane declares all five: the ones it does
 #: not treat are declared as plain inheriting targets, which is what carries their objects.
-COMPONENTS = ("fl2va_dit", "ref2va_dit", "text_encoder", "video_vae", "audio_vae")
+COMPONENTS = ("transformer", "transformer_ref", "text_encoder", "vae", "audio_vae")
 
 #: The component name the reviewed DiT quantization plan addresses its 313 keys under.
 DIT_PLAN_COMPONENT = "dit"
@@ -109,10 +109,10 @@ REFUSED_COMPONENTS: Mapping[str, str] = {
 #: which is a decorator-time fact and cannot be measured from a source nobody has granted
 #: yet. Each is comfortably above the component's whole plain size.
 COMPONENT_MAX_NEW_BYTES: Mapping[str, int] = {
-    "fl2va_dit": MAX_OUTPUT_BYTES,
-    "ref2va_dit": MAX_OUTPUT_BYTES,
+    "transformer": MAX_OUTPUT_BYTES,
+    "transformer_ref": MAX_OUTPUT_BYTES,
     "text_encoder": 56 << 30,
-    "video_vae": 12 << 30,
+    "vae": 12 << 30,
 }
 
 
@@ -258,7 +258,7 @@ CAST_SCOPES: Mapping[str, Callable[[str, Sequence[int]], bool]] = {
 #: Applied to EVERY lane, ahead of whatever that lane authors. A component named here may
 #: not also be authored by a lane row: one component, one treatment.
 NORMALISED_COMPONENTS: Mapping[str, Treatment] = {
-    "video_vae": Treatment(cast="f16", cast_scope="decode_operands"),
+    "vae": Treatment(cast="f16", cast_scope="decode_operands"),
 }
 
 
@@ -276,7 +276,7 @@ def lane_treatments(lane: Lane) -> Mapping[str, Treatment]:
 #: cosine on the served encoder and kept 15 s A/B renders equivalent (progress/h3-te-fp8-20261009).
 #: The video VAE's encoding is still open with its conversion lane (h3a-027), and would be
 #:
-#:     "video_vae": Treatment(cast="f16", encode="fp8-rowwise/1")
+#:     "vae": Treatment(cast="f16", encode="fp8-rowwise/1")
 LANES: Mapping[str, Lane] = {
     "bf16-full": Lane("full"),
     "bf16": Lane("adaln-pruned"),

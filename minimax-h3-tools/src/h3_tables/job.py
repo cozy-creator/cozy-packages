@@ -126,7 +126,7 @@ _check_table_budget(MAX_TABLE_BYTES)
 #: Every lane carries the producer-wide video VAE normalisation, so every ceiling below
 #: includes that component's own bound — including `bf16-full`, which authors nothing.
 #:
-#: Spelled as a literal, not as `COMPONENT_MAX_NEW_BYTES["video_vae"]`, because cr-114's
+#: Spelled as a literal, not as `COMPONENT_MAX_NEW_BYTES["vae"]`, because cr-114's
 #: static reader folds the decorator from SOURCE over a closed vocabulary and refuses a
 #: subscript: `describe` fails the whole package with `static_computed` rather than
 #: guessing. The catalogue is still the authority — the equality below is checked at
@@ -144,7 +144,7 @@ LaneName = Literal["bf16-full", "bf16", "fp8"]
 
 def _check_lane_outputs() -> None:
     for component, declared_bytes in (
-        ("video_vae", MAX_VIDEO_VAE_BYTES),
+        ("vae", MAX_VIDEO_VAE_BYTES),
         ("text_encoder", MAX_TEXT_ENCODER_BYTES),
     ):
         if COMPONENT_MAX_NEW_BYTES[component] != declared_bytes:

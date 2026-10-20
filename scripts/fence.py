@@ -763,7 +763,7 @@ ARM_GPU_CHOICES = (
 )
 ARM_GPU_DECLARATIONS = (
     "register(Producer('kitchen-sol-producer-fast-shared-qkv', 'kitchen-sol'))\n",
-    "class M(Model, attention_bits={'fl2va_dit': 4}): pass\n",
+    "class M(Model, attention_bits={'transformer': 4}): pass\n",
     "if device.type != 'cuda': pass\n",
 )
 

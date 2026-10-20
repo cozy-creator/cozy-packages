@@ -15,7 +15,7 @@ from tensorfs.derived import SourceInspection, Target
 from .kernel import H3Topology, removed_keys, table_shapes
 from .plans import TimestepPlan
 
-TARGET_COMPONENT = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
+TARGET_COMPONENT = {"fl2va": "transformer", "ref2va": "transformer_ref"}
 
 
 def inspection(ctx: Context, source: Weights[Any]) -> SourceInspection:
@@ -189,14 +189,14 @@ def validate_adaln_pruned_component(
 
 def full_targets() -> dict[str, Target]:
     return {
-        "fl2va_dit": Target(
+        "transformer": Target(
             source="dits",
-            source_component="fl2va_dit",
+            source_component="transformer",
             drop=source_only_keys(),
         ),
-        "ref2va_dit": Target(
+        "transformer_ref": Target(
             source="dits",
-            source_component="ref2va_dit",
+            source_component="transformer_ref",
             drop=source_only_keys(),
         ),
         "text_encoder": Target(
@@ -204,7 +204,7 @@ def full_targets() -> dict[str, Target]:
             source_component="text_encoder",
             drop=text_source_only_keys(),
         ),
-        "video_vae": Target(source="shared", source_component="video_vae"),
+        "vae": Target(source="shared", source_component="vae"),
         "audio_vae": Target(source="shared", source_component="audio_vae"),
     }
 

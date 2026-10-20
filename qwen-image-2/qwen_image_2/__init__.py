@@ -172,6 +172,8 @@ def generate_image(
     out: Outputs,
     tel: Telemetry,
 ) -> ImageOutput:
+    reference_steps = ("vae",) if payload.reference_images else ()
+    ctx.plan(*reference_steps, "text_encoder", "transformer", "vae")
     seed = payload.resolved_seed()
     ctx.raise_if_cancelled()
     reference_images, reference_latents, image_pad_mask = None, None, None

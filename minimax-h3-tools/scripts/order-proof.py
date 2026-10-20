@@ -58,7 +58,7 @@ def prove_retable(sections: dict[str, dict[str, object]]) -> None:
     """The retable declarations edit only table keys and refuse the wrong sources."""
     tables = _table_additions(sections)
     shared: list[tuple[str, str, str, tuple[int, ...]]] = [
-        (c, f"{c}.w", "f32", (1,)) for c in ("text_encoder", "video_vae", "audio_vae")
+        (c, f"{c}.w", "f32", (1,)) for c in ("text_encoder", "vae", "audio_vae")
     ]
     pruned_rows, full_rows = list(shared), list(shared)
     for task, section in (("fl2va", "transformer"), ("ref2va", "transformer_ref")):
@@ -74,7 +74,7 @@ def prove_retable(sections: dict[str, dict[str, object]]) -> None:
     bank, retabled = _retable_targets(
         structure(pruned_rows), structure(full_rows), sections, tables
     )
-    if set(bank) != {"fl2va_dit", "ref2va_dit"}:
+    if set(bank) != {"transformer", "transformer_ref"}:
         raise RuntimeError("the table bank must hold exactly both DiTs")
     for task in ("fl2va", "ref2va"):
         component = f"{task}_dit"
@@ -109,7 +109,7 @@ def prove_retable(sections: dict[str, dict[str, object]]) -> None:
 def _dit_structure(sections: dict[str, Any]) -> SourceInspection:
     """The two FULL DiT components from the package's own native geometry contract."""
     rows: list[tuple[str, str, str, tuple[int, ...]]] = []
-    for component, section in (("fl2va_dit", "transformer"), ("ref2va_dit", "transformer_ref")):
+    for component, section in (("transformer", "transformer"), ("transformer_ref", "transformer_ref")):
         specs = dict(official_full_specs(sections[section]))
         specs["rope.inv_freq"] = ("f32", (16,))
         rows.extend((component, key, dtype, tuple(shape)) for key, (dtype, shape) in specs.items())
@@ -148,7 +148,7 @@ def main() -> None:
     if len(text_source_only_keys()) != 156:
         raise RuntimeError("official 1,058-row text source does not trim exactly to 902 rows")
     full_targets = _full_targets()
-    for component in ("fl2va_dit", "ref2va_dit"):
+    for component in ("transformer", "transformer_ref"):
         target = full_targets[component]
         if (
             target.source != "dits"
@@ -175,8 +175,8 @@ def main() -> None:
 
     measured_bytes: dict[str, int] = {}
     for task, source, component in (
-        ("fl2va", "transformer", "fl2va_dit"),
-        ("ref2va", "transformer_ref", "ref2va_dit"),
+        ("fl2va", "transformer", "transformer"),
+        ("ref2va", "transformer_ref", "transformer_ref"),
     ):
         raw = (ASSETS / f"timestep-plan.{task}.json").read_bytes()
         plan = parse_declared_plan(raw)

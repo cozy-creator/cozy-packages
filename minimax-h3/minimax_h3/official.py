@@ -146,16 +146,15 @@ MAX_CONDITIONER_VISION_TOKENS = 32768
 REFERENCE_IMAGE_SHORT_EDGE = 2048
 _WEIGHTED_CONFIG_SECTIONS = {
     "audio_vae",
-    "fl2va_dit",
-    "ref2va_dit",
+    "transformer",
+    "transformer_ref",
     "text_encoder",
-    "video_vae",
+    "vae",
 }
 #: The independent turbo LoRA checkpoint always carries both overlay components.
 _OVERLAY_CONFIG_SECTIONS = {"fl2va_turbo", "ref2va_turbo"}
-_DIT_COMPONENT: dict[Trunk, str] = {"fl2va": "fl2va_dit", "ref2va": "ref2va_dit"}
+_DIT_COMPONENT: dict[Trunk, str] = {"fl2va": "transformer", "ref2va": "transformer_ref"}
 _OVERLAY_COMPONENT: dict[Trunk, str] = {"fl2va": "fl2va_turbo", "ref2va": "ref2va_turbo"}
-_DIFFUSERS_DIT: dict[Trunk, str] = {"fl2va": "transformer", "ref2va": "transformer_ref"}
 _DISTILLATION = "pdd"
 _ASSETS = Path(__file__).resolve().parent
 # NVIDIA's H3 sparse policy protects conditioning and the initial sensitive work.
@@ -825,7 +824,7 @@ class OfficialH3Pipeline:
         _validate_dual_topology(dits, _DIT_COMPONENT)
         text_encoder = build_text_conditioner(_section(mapping, "text_encoder"))
         video_vae = _apply_video_vae_dtype(
-            TileBatchedVideoVAE.from_config(_section(mapping, "video_vae")), config
+            TileBatchedVideoVAE.from_config(_section(mapping, "vae")), config
         )
         audio_vae = AutoencoderKLMiniMaxH3Audio.from_config(_section(mapping, "audio_vae")).eval()
         for trunk in _TRUNKS:
@@ -841,18 +840,18 @@ class OfficialH3Pipeline:
                 audio_vae=audio_vae,
                 scheduler=MiniMaxH3Scheduler(shift=12.0),
                 audio_scheduler=MiniMaxH3Scheduler(shift=3.0),
-                **{_DIFFUSERS_DIT[_TRUNK[task]]: dits[_TRUNK[task]]},
+                **{_DIT_COMPONENT[_TRUNK[task]]: dits[_TRUNK[task]]},
             )
 
         # Runtime reads this mapping and nothing under ``pipe`` when deriving/filling
-        # checkpoint destinations. Config-only processors and schedulers are deliberately
-        # absent; ``video_vae`` is the artifact name while official Diffusers calls it
-        # ``vae``. LoRA roots belong to their own separately bound construction.
+        # checkpoint destinations, under Diffusers' component names. Config-only processors
+        # and schedulers are deliberately absent. LoRA roots belong to their own separately
+        # bound construction.
         self.components: dict[str, Any] = {
-            "fl2va_dit": dits["fl2va"],
-            "ref2va_dit": dits["ref2va"],
+            "transformer": dits["fl2va"],
+            "transformer_ref": dits["ref2va"],
             "text_encoder": text_encoder,
-            "video_vae": video_vae,
+            "vae": video_vae,
             "audio_vae": audio_vae,
         }
         # The one release audio clock, read off the contract-checked artifact config
@@ -1163,7 +1162,7 @@ class OfficialH3Pipeline:
             with _audio_weight_norm_scope(self.components["audio_vae"]):
                 counts = self._encode_references(task, state, memo)
         else:
-            self._run(task, "vae_encoder", state, component="video_vae")
+            self._run(task, "vae_encoder", state, component="vae")
         context = state.get("continuation_context")
         if context is not None:
             if context.video is not None:
@@ -1196,7 +1195,7 @@ class OfficialH3Pipeline:
         """
         with torch.no_grad():
             workflow = self._workflow(task, state)
-            view = _ScopedPipeline(self._pipes[workflow], self.components["video_vae"])
+            view = _ScopedPipeline(self._pipes[workflow], self.components["vae"])
             device = view._execution_device
             vae, audio_vae = view.vae, view.audio_vae
             pixel_mean, pixel_std = tuple(view.pixel_mean), tuple(view.pixel_std)
@@ -1367,7 +1366,7 @@ class OfficialH3Pipeline:
             raise InvalidRequest(
                 "continuation requires streaming video decode", code="h3_continuation"
             )
-        self._run(task, "decode.video", state, component="video_vae")
+        self._run(task, "decode.video", state, component="vae")
         return state.videos
 
     def decode_video_chunks(self, task: Task, state: Any, on_chunk: Callable[[Any], None]) -> int:
@@ -1381,7 +1380,7 @@ class OfficialH3Pipeline:
         Valid pixels match the official block after clipping. Returns the frame count.
         """
         workflow = self._workflow(task, state)
-        components = _ScopedPipeline(self._pipes[workflow], self.components["video_vae"])
+        components = _ScopedPipeline(self._pipes[workflow], self.components["vae"])
         device = components._execution_device
         vae = components.vae
         latents_mean = torch.tensor(vae.config.latents_mean, device=device).view(1, -1, 1, 1, 1)
@@ -1605,13 +1604,13 @@ def _dit_specs(
         raise ConformanceError(
             "FL2VA and Ref2VA DiTs use different modulation structures",
             code="artifact_config",
-            fields=["fl2va_dit", "ref2va_dit"],
+            fields=["transformer", "transformer_ref"],
         )
     if specs["fl2va"][0] != specs["ref2va"][0]:
         raise ConformanceError(
             "FL2VA and Ref2VA DiTs do not carry the same upstream architecture config",
             code="artifact_config",
-            fields=["fl2va_dit", "ref2va_dit"],
+            fields=["transformer", "transformer_ref"],
         )
     return specs
 
@@ -1754,7 +1753,7 @@ def _apply_video_vae_dtype(vae: Any, config: Config | None = None) -> Any:
     weights.append(("post_quant_conv.weight", vae.post_quant_conv.weight))
     supported = {"f32": torch.float32, "f16": torch.float16}
     for name, parameter in weights:
-        key = f"video_vae.{name}"
+        key = f"vae.{name}"
         dtype = config.tensor_dtype(key, default="f32")
         if dtype not in supported:
             raise ConformanceError(
@@ -1799,7 +1798,7 @@ def _validate_model_contract(pipe: Any, transformer: Any, video_vae: Any, audio_
             },
         ),
         (
-            "video_vae",
+            "vae",
             video_vae.config,
             {
                 "in_channels": 3,
@@ -1847,7 +1846,7 @@ def _validate_model_contract(pipe: Any, transformer: Any, video_vae: Any, audio_
         raise ConformanceError(
             "official H3 video VAE derived geometry differs from 5-token/16-pixel release",
             code="artifact_config",
-            fields=["video_vae"],
+            fields=["vae"],
         )
     # These four are hard-coded properties of the installed library, so this can only fire
     # when the DEPENDENCY moves — never on artifact drift, which is why it is not an

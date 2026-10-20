@@ -29,7 +29,7 @@ from source_geometry import VIDEO_VAE_ROWS, conditioner_rows, plain
 from tensorfs.derived import Part, Source, SourceCapability, SourceInspection, Tensor
 
 GEOMETRY = {("text_encoder", key): spec for key, spec in conditioner_rows().items()} | {
-    ("video_vae", key): spec for key, spec in VIDEO_VAE_ROWS.items()
+    ("vae", key): spec for key, spec in VIDEO_VAE_ROWS.items()
 }
 
 
@@ -135,14 +135,14 @@ def main() -> None:
         conditioner = cleaned["text_encoder"]
         assert set(conditioner.drop) == set(conditioner.add)
         assert len(conditioner.add) == (350 if "text_encoder" in lane.components else 0)
-        assert set(cleaned["video_vae"].drop) == {
+        assert set(cleaned["vae"].drop) == {
             "decoder.proj_in.weight",
             "decoder.transformer_blocks.0.attn.to_q.weight",
             "post_quant_conv.weight",
         }
 
     # Unknown extras and missing required destinations are not converted to drops.
-    changed = Structures({source.checkpoint_ref: (*full_order[1:], ("fl2va_dit", "unexpected"))})
+    changed = Structures({source.checkpoint_ref: (*full_order[1:], ("transformer", "unexpected"))})
     changed_targets = module._select_full_targets(changed, sources)
     assert changed_targets == targets
     assert all("unexpected" not in target.drop for target in changed_targets.values())

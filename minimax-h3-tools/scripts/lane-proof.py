@@ -95,7 +95,7 @@ def full_source_structures() -> dict[str, SourceInspection]:
     """The exact FULL H3 source structure, rebuilt from facts already in this tree."""
     sections = parse_production_config(job._asset("model-config.json"))
     components: dict[str, dict[str, Tensor]] = {}
-    for component, section in (("fl2va_dit", "transformer"), ("ref2va_dit", "transformer_ref")):
+    for component, section in (("transformer", "transformer"), ("transformer_ref", "transformer_ref")):
         components[component] = {
             key: Tensor(dtype, tuple(shape), job.PLAIN_SPEC, {"value": Part(dtype, tuple(shape))})
             for key, (dtype, shape) in official_full_specs(sections[section]).items()
@@ -105,7 +105,7 @@ def full_source_structures() -> dict[str, SourceInspection]:
         )
     for component, pattern in (
         ("text_encoder", "text_encoder__model-*.safetensors"),
-        ("video_vae", "vae__diffusion_pytorch_model-*.safetensors"),
+        ("vae", "vae__diffusion_pytorch_model-*.safetensors"),
         ("audio_vae", "audio_vae__diffusion_pytorch_model.safetensors"),
     ):
         components[component] = {
@@ -118,10 +118,10 @@ def full_source_structures() -> dict[str, SourceInspection]:
             for key, row in _banked(pattern).items()
         }
     census = {
-        "fl2va_dit": 639,
-        "ref2va_dit": 639,
+        "transformer": 639,
+        "transformer_ref": 639,
         "text_encoder": 1058,
-        "video_vae": 703,
+        "vae": 703,
         "audio_vae": 1087,
     }
     observed = {component: len(rows) for component, rows in components.items()}
@@ -133,7 +133,7 @@ def full_source_structures() -> dict[str, SourceInspection]:
         for component, rows in components.items()
     }
     if banked["text_encoder"] != conditioner_rows() or VIDEO_VAE_ROWS.items() - banked[
-        "video_vae"
+        "vae"
     ].items():
         _fail("source_geometry.py is not the banked conditioner and video VAE geometry")
     # Header census only: this fixture grants no native source or payload access.
@@ -144,8 +144,8 @@ def full_source_structures() -> dict[str, SourceInspection]:
             {"model": b"{}"},
         )
         for alias, names in {
-            "dits": ("fl2va_dit", "ref2va_dit"),
-            "shared": ("text_encoder", "video_vae", "audio_vae"),
+            "dits": ("transformer", "transformer_ref"),
+            "shared": ("text_encoder", "vae", "audio_vae"),
         }.items()
     }
 
@@ -178,7 +178,7 @@ def arm_census() -> None:
     if set(table_rows.values()) != {51}:
         _fail(f"table additions are {table_rows}, expected 51 rows per task")
 
-    inherited_everywhere = {"video_vae", "audio_vae"}
+    inherited_everywhere = {"vae", "audio_vae"}
     for name, lane in lanes.LANES.items():
         targets = _targets(lane, granted)
         if set(targets) != set(lanes.COMPONENTS):
@@ -193,12 +193,12 @@ def arm_census() -> None:
         conditioner = len(targets["text_encoder"].add)
         if conditioner != (350 if lane.components else 0):
             _fail(f"{name} encodes {conditioner} conditioner rows, expected 350 or none")
-        dit = targets["fl2va_dit"]
+        dit = targets["transformer"]
         added = len(dit.add)
         replaced = len(dit.drop)
         print(
             f"  {name:<20} modulation={lane.modulation:<13} "
-            f"fl2va_dit +{added} -{replaced}  text_encoder +{len(targets['text_encoder'].add)}"
+            f"transformer +{added} -{replaced}  text_encoder +{len(targets['text_encoder'].add)}"
         )
         if lane.modulation == "full":
             if added or replaced != 1:
@@ -235,16 +235,16 @@ def _component_selection(granted: dict[str, SourceInspection]) -> None:
     # takes 217 — the 216 block linears PLUS decoder.proj_out.weight [3072, 2048]. It skips
     # decoder.proj_in.weight [2048, 24] on block alignment and every Conv3d on rank.
     video = lanes.select(
-        "video_vae",
+        "vae",
         lanes.Treatment(cast="f16", encode="fp8-rowwise/1"),
-        lanes.carried(source_full_targets()["video_vae"], shared),
+        lanes.carried(source_full_targets()["vae"], shared),
     )
     encoded = set(video.encoded)
     if len(encoded) != 217 or any(not key.startswith("decoder.") for key in encoded):
         _fail(f"video_vae selected {len(encoded)} keys, or reached outside the decoder")
     if "decoder.proj_out.weight" not in encoded or "decoder.proj_in.weight" in encoded:
         _fail("video_vae selection is not the exact 216 block linears + proj_out")
-    rows = shared.components["video_vae"]
+    rows = shared.components["vae"]
     if len(video.cast) != len(rows) - len(encoded):
         _fail(f"video_vae casts {len(video.cast)} of {len(rows)} rows, expected the remainder")
     print(
@@ -333,7 +333,7 @@ def _refusals(granted: dict[str, SourceInspection]) -> None:
         "a lane with an encoding no lane of the vocabulary stores",
         "",
         lambda: lanes.validate_catalogue(
-            {"int4": lanes.Lane("adaln-pruned", {"fl2va_dit": lanes.Treatment(encode="int4/1")})}  # type: ignore[arg-type]
+            {"int4": lanes.Lane("adaln-pruned", {"transformer": lanes.Treatment(encode="int4/1")})}  # type: ignore[arg-type]
         ),
     )
     _refuses(
@@ -347,14 +347,14 @@ def _refusals(granted: dict[str, SourceInspection]) -> None:
         "a FULL lane that treats a component",
         "",
         lambda: lanes.validate_catalogue(
-            {"full-cast": lanes.Lane("full", {"video_vae": lanes.Treatment(cast="f16")})}
+            {"full-cast": lanes.Lane("full", {"vae": lanes.Treatment(cast="f16")})}
         ),
     )
     _refuses(
         "a keep entry that excludes nothing",
         "h3_keep_unmatched",
         lambda: lanes.select(
-            "video_vae",
+            "vae",
             lanes.Treatment(encode="fp8-rowwise/1", keep=("decoder.no_such.weight",)),
             shared,
         ),
@@ -405,7 +405,7 @@ def _pruned_source(dit_spec: str | None) -> SourceInspection:
         for key, tensor in granted["shared"].components["text_encoder"].items()
         if key not in dropped
     }
-    for component in ("video_vae", "audio_vae"):
+    for component in ("vae", "audio_vae"):
         components[component] = dict(granted["shared"].components[component])
     return SourceInspection(Source("sha256:" + "00" * 32, 0), components, {"model": b"{}"})
 

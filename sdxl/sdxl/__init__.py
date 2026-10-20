@@ -510,6 +510,7 @@ def generate(
     tel: Telemetry,
 ) -> ImageOutput:
     """One text-to-image generation: tokenize, encode, denoise, decode, encode a PNG."""
+    ctx.plan({"text_encoder", "text_encoder_2"}, "unet", "vae")
     seed = payload.seed if payload.seed is not None else secrets.randbits(53)
     view = model.for_request(ctx, seed=seed)
     width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]

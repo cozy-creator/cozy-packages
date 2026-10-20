@@ -87,7 +87,7 @@ class Recorder:
             components["text_encoder"] = {
                 key: plain(*spec) for key, spec in conditioner_rows().items()
             }
-            components["video_vae"] = {key: plain(*spec) for key, spec in VIDEO_VAE_ROWS.items()}
+            components["vae"] = {key: plain(*spec) for key, spec in VIDEO_VAE_ROWS.items()}
             return SourceInspection(Source(source.checkpoint_ref, 1), components, {})
 
         return SourceCapability(source.checkpoint_ref, 1, inspect)
@@ -219,7 +219,7 @@ def main() -> None:
         assert encoded == {
             (slot, component)
             for slot in set(slots[2:]) - set(retained)
-            for component in ("fl2va_dit", "ref2va_dit", "text_encoder")
+            for component in ("transformer", "transformer_ref", "text_encoder")
         }, encoded
         assert not any(event == "commit:" + slot for slot in retained for event in recorder.events)
         for slot in retained:
