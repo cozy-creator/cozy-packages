@@ -26,16 +26,13 @@ from typing import Any, NoReturn
 from cozy_runtime.author import (
     UnsupportedInput,
 )
-from cozy_runtime.derive.quantization import (
-    prepare_quantization,
-)
 from h3_tables import job, lanes
 from h3_tables.model_config import parse_production_config
-from h3_tables.quantization import h3_quantization_plan
+from h3_tables.quantization import reviewed_plan
 from h3_tables.source import full_targets as source_full_targets
 from h3_tables.source import official_full_specs
 from source_geometry import VIDEO_VAE_ROWS, conditioner_rows
-from tensorfs.derived import Part, Source, SourceInspection, Target, Tensor
+from h3_tables.metadata import PartShape, TensorShape, SourceLayout, ComponentSelection
 
 PROJECT = Path(__file__).resolve().parents[1]
 
@@ -91,17 +88,17 @@ def _banked(pattern: str) -> dict[str, dict[str, Any]]:
     return rows
 
 
-def full_source_structures() -> dict[str, SourceInspection]:
+def full_source_structures() -> dict[str, SourceLayout]:
     """The exact FULL H3 source structure, rebuilt from facts already in this tree."""
     sections = parse_production_config(job._asset("model-config.json"))
-    components: dict[str, dict[str, Tensor]] = {}
+    components: dict[str, dict[str, TensorShape]] = {}
     for component, section in (("transformer", "transformer"), ("transformer_ref", "transformer_ref")):
         components[component] = {
-            key: Tensor(dtype, tuple(shape), job.PLAIN_SPEC, {"value": Part(dtype, tuple(shape))})
+            key: TensorShape(dtype, tuple(shape), job.PLAIN_SPEC, {"value": PartShape(dtype, tuple(shape))})
             for key, (dtype, shape) in official_full_specs(sections[section]).items()
         }
-        components[component]["rope.inv_freq"] = Tensor(
-            "f32", (16,), job.PLAIN_SPEC, {"value": Part("f32", (16,))}
+        components[component]["rope.inv_freq"] = TensorShape(
+            "f32", (16,), job.PLAIN_SPEC, {"value": PartShape("f32", (16,))}
         )
     for component, pattern in (
         ("text_encoder", "text_encoder__model-*.safetensors"),
@@ -109,11 +106,11 @@ def full_source_structures() -> dict[str, SourceInspection]:
         ("audio_vae", "audio_vae__diffusion_pytorch_model.safetensors"),
     ):
         components[component] = {
-            key: Tensor(
+            key: TensorShape(
                 LOGICAL[row["dtype"]],
                 tuple(row["shape"]),
                 job.PLAIN_SPEC,
-                {"value": Part(LOGICAL[row["dtype"]], tuple(row["shape"]))},
+                {"value": PartShape(LOGICAL[row["dtype"]], tuple(row["shape"]))},
             )
             for key, row in _banked(pattern).items()
         }
@@ -138,8 +135,8 @@ def full_source_structures() -> dict[str, SourceInspection]:
         _fail("source_geometry.py is not the banked conditioner and video VAE geometry")
     # Header census only: this fixture grants no native source or payload access.
     return {
-        alias: SourceInspection(
-            Source("sha256:" + "00" * 32, 0),
+        alias: SourceLayout(
+            None,
             {component: components[component] for component in names},
             {"model": b"{}"},
         )
@@ -150,10 +147,10 @@ def full_source_structures() -> dict[str, SourceInspection]:
     }
 
 
-def _targets(lane: lanes.Lane, granted: dict[str, SourceInspection]) -> dict[str, Target]:
+def _targets(lane: lanes.Lane, granted: dict[str, SourceLayout]) -> dict[str, ComponentSelection]:
     sections = parse_production_config(job._asset("model-config.json"))
     full_targets = source_full_targets()
-    plan = prepare_quantization(h3_quantization_plan())
+    plan = reviewed_plan()
     selections = {
         component: lanes.select(
             component,
@@ -163,7 +160,7 @@ def _targets(lane: lanes.Lane, granted: dict[str, SourceInspection]) -> dict[str
         )
         for component, treatment in lane.components.items()
     }
-    targets: dict[str, Target] = job._lane_targets(
+    targets: dict[str, ComponentSelection] = job._lane_targets(
         lane, sections, job._table_additions(sections), full_targets, selections
     )
     return targets
@@ -227,7 +224,7 @@ def arm_census() -> None:
     _refusals(granted)
 
 
-def _component_selection(granted: dict[str, SourceInspection]) -> None:
+def _component_selection(granted: dict[str, SourceLayout]) -> None:
     print("\n  per-component selection on the real components")
     shared = granted["shared"]
 
@@ -303,7 +300,7 @@ def _component_selection(granted: dict[str, SourceInspection]) -> None:
     )
 
 
-def _refusals(granted: dict[str, SourceInspection]) -> None:
+def _refusals(granted: dict[str, SourceLayout]) -> None:
     print("\n  red arms")
     shared = granted["shared"]
     audio = shared.components["audio_vae"]
@@ -376,14 +373,14 @@ def _refusals(granted: dict[str, SourceInspection]) -> None:
     )
 
 
-def _pruned_source(dit_spec: str | None) -> SourceInspection:
+def _pruned_source(dit_spec: str | None) -> SourceLayout:
     """One AdaLN-pruned lane's structure: DiT plan keys plain or carrying `dit_spec`."""
     granted = full_source_structures()
     sections = parse_production_config(job._asset("model-config.json"))
     tables = job._table_additions(sections)
-    plan = prepare_quantization(h3_quantization_plan())
+    plan = reviewed_plan()
     encoded = {tensor.key for tensor in plan.tensors}
-    components: dict[str, dict[str, Tensor]] = {}
+    components: dict[str, dict[str, TensorShape]] = {}
     for task, section in job.SOURCE_SECTION.items():
         component = job.TARGET_COMPONENT[task]
         removed = set(job.removed_keys(job.H3Topology.from_config(sections[section])))
@@ -395,8 +392,8 @@ def _pruned_source(dit_spec: str | None) -> SourceInspection:
         rows.update(tables[task])
         if dit_spec is not None:
             for key in encoded:
-                rows[key] = Tensor(
-                    "bf16", rows[key].shape, dit_spec, {"data": Part("u8", rows[key].shape)}
+                rows[key] = TensorShape(
+                    "bf16", rows[key].shape, dit_spec, {"data": PartShape("u8", rows[key].shape)}
                 )
         components[component] = rows
     dropped = set(source_full_targets()["text_encoder"].drop)
@@ -407,7 +404,7 @@ def _pruned_source(dit_spec: str | None) -> SourceInspection:
     }
     for component in ("vae", "audio_vae"):
         components[component] = dict(granted["shared"].components[component])
-    return SourceInspection(Source("sha256:" + "00" * 32, 0), components, {"model": b"{}"})
+    return SourceLayout(None, components, {"model": b"{}"})
 
 
 def arm_quantizer() -> None:
@@ -443,7 +440,7 @@ def arm_quantizer() -> None:
     source = _pruned_source(job.FP8_SPEC)
     te_rows = source.components["text_encoder"]
     for key in te.encoded:
-        te_rows[key] = Tensor("bf16", te_rows[key].shape, job.FP8_SPEC, {})
+        te_rows[key] = TensorShape("bf16", te_rows[key].shape, job.FP8_SPEC, {})
     _refuses(
         "a lane whose recipe is already fp8",
         "h3_quantize_nothing",

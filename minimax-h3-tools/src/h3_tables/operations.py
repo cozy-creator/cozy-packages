@@ -13,9 +13,6 @@ from cozy_runtime.author import (
 )
 from cozy_runtime.derive.operations import QuantizationPlan
 from cozy_runtime.derive.operations import quantize as runtime_quantize
-from cozy_runtime.derive.quantization import (
-    prepare_quantization,
-)
 
 from .adaln_operations import (
     Selection,
@@ -28,13 +25,13 @@ from .adaln_operations import (
 from .lanes import Encoding
 from .model_config import parse_production_config
 from .order import current_order, full_order
-from .quantization import h3_quantization_plan
+from .quantization import reviewed_plan
 from .source import TARGET_COMPONENT
 
 
 def quantization_plan() -> QuantizationPlan:
     """Bind reviewed H3 geometry and canonical order without loading a source model."""
-    reviewed = prepare_quantization(h3_quantization_plan())
+    reviewed = reviewed_plan()
     components = tuple(TARGET_COMPONENT.values())
     selected = [
         [
@@ -42,7 +39,6 @@ def quantization_plan() -> QuantizationPlan:
             tensor.key,
             tensor.logical_dtype,
             list(tensor.shape),
-            [[tensor.source_role, tensor.logical_dtype, list(tensor.shape)]],
         ]
         for component in components
         for tensor in reviewed.tensors
