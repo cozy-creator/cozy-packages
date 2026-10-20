@@ -6,8 +6,8 @@ dependencies = [
     "birefnet>=0.4.0",
     "character-describer>=0.9.0",
     "cozy-runtime[adapters,media]>=0.30.0",
-    # MiniMax-H3 and Qwen-Image-2.1 share one Diffusers: the release qwen-image-2 pins.
-    "diffusers==0.41.0",
+    # MiniMax-H3 and Qwen-Image-2.1 share one Diffusers: the release qwen-image-2 locks.
+    "diffusers>=0.41,<0.42",
     "hf-xet>=1.6.0",
     # The AdaLN table producer owns the row-label reader the pruned DiT is built from.
     "minimax-h3-tools>=2.15.0",

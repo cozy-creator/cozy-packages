@@ -33,6 +33,7 @@ from cozy_runtime.derive.quantization import (
     MAX_OUTPUT_BYTES,
     PLAIN_SPEC,
     ArtifactQuantizationPlan,
+    QuantizationTensor,
     prepare_source_quantization,
     quantization_additions,
 )
@@ -466,7 +467,7 @@ def select(
     return Selection(component, treatment, tuple(cast), plan, plan_component)
 
 
-def replace_plan(plan: ArtifactQuantizationPlan, tensors: list) -> ArtifactQuantizationPlan:
+def replace_plan(plan: ArtifactQuantizationPlan, tensors: list[QuantizationTensor]) -> ArtifactQuantizationPlan:
     return ArtifactQuantizationPlan(
         components=plan.components, configs=plan.configs, order=plan.order, tensors=tensors
     )

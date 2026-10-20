@@ -2729,7 +2729,7 @@ def arm_reference_media() -> None:
             ((72, motion_height, motion_width, 3), (), []),
         )
         with av.open(str(wide)) as container:
-            source = next(container.decode(video=0)).to_ndarray(format="rgb24")
+            source_frame = next(container.decode(video=0)).to_ndarray(format="rgb24")
         state = pipe.start_ref2va(
             prompt="A dancer spins.",
             references=[reference],
@@ -2739,9 +2739,14 @@ def arm_reference_media() -> None:
             reference_image_short_edges=[],
         )
         normalized = state.normalized_references[0].frames
-        guide = np.asarray(PILImage.fromarray(source).resize((motion_width, motion_height), PILImage.Resampling.LANCZOS))
+        guide = torch.nn.functional.interpolate(
+            torch.from_numpy(source_frame).permute(2, 0, 1)[None],
+            size=(motion_height, motion_width),
+            mode="bicubic",
+            antialias=True,
+        )[0].permute(1, 2, 0).numpy()
         check(
-            "2560x1080: one LANCZOS resize from the source straight to its motion size",
+            "2560x1080: one antialiased resize from the source straight to its motion size",
             (normalized.shape, int(np.abs(normalized[0].astype(int) - guide.astype(int)).max()) <= 2),
             ((72, motion_height, motion_width, 3), True),
         )
@@ -3327,12 +3332,12 @@ def arm_interface() -> None:
     check("default segments use eight evaluations", package.segment_sampling(unseeded), (True, 8))
     for job in (package.LongFormInput, package.LongFormCutsInput):
         for encoding in (msgspec.json, msgspec.yaml):
-            authored = {
+            authored_segments = {
                 "segments": [{"prompt": "x", "duration_s": 5, "turbo": value}
                              for value in (True, False)],
                 "references": [{"name": "Hero", "kind": "character"}],
             }
-            request = encoding.decode(encoding.encode(authored), type=job)
+            request = encoding.decode(encoding.encode(authored_segments), type=job)
             label = f"{job.__name__} {encoding.__name__}"
             check(f"{label} removed segment flags cannot override global turbo",
                   package.segment_sampling(request), (True, 8))
