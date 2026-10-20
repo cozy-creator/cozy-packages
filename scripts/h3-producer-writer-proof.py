@@ -10,14 +10,18 @@ from __future__ import annotations
 import math
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import tensorfs
-from cozy_runtime.author import CapabilityError, Context, ModelArtifact, canonical_json
+import torch
+from cozy_runtime.author import CapabilityError, Context, ModelArtifact, Weights, canonical_json
 from cozy_runtime.author.fakes import fake_telemetry
 from cozy_runtime.derive import Derivation, Output
 from cozy_runtime.derive.quantization import ArtifactQuantizationRequest
 from h3_tables import job, lanes
+from h3_tables.adaln_operations import _bank_config, _compute_into, _project
+from h3_tables.kernel import H3Topology, precompute_tables, removed_keys, source_shapes, table_shapes
 from h3_tables.metadata import (ComponentSelection, PartShape, TensorShape, PLAIN, SCHEMES,
                                 inspect_checkpoint, model_output, adopt_output)
 
@@ -30,7 +34,9 @@ def context(store: Path, name: str, bound: int) -> Context:
     def adopt(value: Output) -> ModelArtifact:
         return ModelArtifact(name, value.slot, value.commit().id, value.transaction)
 
-    return Context(name, math.inf, _tensorfs_output=output, _tensorfs_adopt=adopt)
+    return Context(name, math.inf, _tensorfs_output=output, _tensorfs_adopt=adopt,
+                   _tensorfs_source=lambda weights: tensorfs.open(
+                       weights.checkpoint_ref, cache_dir=store, local_files_only=True))
 
 
 def fixture(store: Path) -> tensorfs.Checkpoint:
@@ -144,6 +150,53 @@ def prove_encodings(store: Path, source: tensorfs.Checkpoint) -> None:
             assert np.isfinite(decoded).all() and relative < 0.1, (scheme, relative)
 
 
+def prove_projection_and_tables(store: Path) -> None:
+    """The unchanged calculation over small real native source/projection/bank payloads."""
+    topology = H3Topology(8, 2, 4, 8, 4)
+    plan = job._production_plan("fl2va")
+    generator = torch.Generator().manual_seed(718)
+    values = {
+        key: torch.randn(shape, generator=generator).to(dtype)
+        for key, (dtype, shape) in source_shapes(topology).items()
+    }
+    with tensorfs.Writer(cache_dir=store) as writer:
+        component = writer.component("transformer", cls="ToyH3", config={})
+        for key, value in values.items():
+            component.put(key, value.contiguous().view(torch.uint8).numpy().tobytes(),
+                          dtype="F32" if value.dtype == torch.float32 else "BF16",
+                          shape=tuple(value.shape))
+        component.put("unrelated", b"body", dtype="U8", shape=[4])
+        full = writer.commit()
+    ctx = context(store, "projection-proof", 1 << 20)
+    artifact = _project(ctx, Weights[Any](full.id), "fl2va", "projection", topology)
+    projection = tensorfs.open(artifact.checkpoint, cache_dir=store, local_files_only=True)
+    assert set(projection.components["transformer"].tensors) == set(removed_keys(topology))
+    shapes = table_shapes(topology, plan)
+    selected = ComponentSelection("projection", "transformer", drop=removed_keys(topology), add={
+        key: TensorShape("bf16", shape, PLAIN, {"value": PartShape("bf16", shape)})
+        for key, shape in shapes.items()
+    })
+    with model_output(ctx, "bank", sources={"projection": projection},
+                      components={"transformer": selected},
+                      configs={"adaln": _bank_config("fl2va", artifact.checkpoint)},
+                      order=tuple(("transformer", key) for key in shapes)) as out:
+        _compute_into(ctx, fake_telemetry(ctx=ctx), out, projection, "fl2va", plan, topology)
+        assert out.written == sum(math.prod(shape) * 2 for shape in shapes.values())
+        bank = adopt_output(ctx, out)
+    expected: dict[str, torch.Tensor] = {}
+    precompute_tables(plan=plan, topology=topology, read=lambda key, _dtype, _shape: values[key],
+                      write=lambda key, value: expected.__setitem__(key, value),
+                      progress=lambda _done, _total: None, device=torch.device("cpu"))
+    with tensorfs.open(bank.checkpoint, cache_dir=store, local_files_only=True) as got:
+        assert set(got.components["transformer"].tensors) == set(shapes)
+        for key, shape in shapes.items():
+            tensor = got.components["transformer"].tensors[key]
+            assert tensor.dtype == "BF16" and tuple(tensor.shape) == shape
+            value = got.components["transformer"].tensors.read(key)
+            assert isinstance(value, tensorfs.Array)
+            assert value.tobytes() == expected[key].contiguous().view(torch.uint8).numpy().tobytes()
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="h3-writer-proof-") as directory:
         store = Path(directory)
@@ -151,7 +204,9 @@ def main() -> None:
         prove_copy(store, source)
         prove_cast(store, source)
         prove_encodings(store, source)
-    print("H3 native Writer PASS metadata/copy/drop/rename/assets/bounds/BF16/fp8/int8/nvfp4/replay")
+        prove_projection_and_tables(store)
+    print("H3 native Writer PASS metadata/copy/drop/rename/assets/bounds/BF16/fp8/int8/nvfp4/"
+          "replay/projection/table-payloads")
 
 
 if __name__ == "__main__":

@@ -97,7 +97,7 @@ def model_output(
     declared = set(order)
     if len(declared) != len(order):
         raise ValueError("H3 construction order repeats a tensor")
-    selected = set()
+    selected: set[tuple[str, str]] = set()
     for name, selection in components.items():
         original = (sources[selection.source].components[selection.source_component]
                     if selection.source else None)
