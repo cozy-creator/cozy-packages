@@ -17,7 +17,7 @@ on:
         type: string
         default: https://tensorhub.com/v1/index/fidika/simple/
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
 jobs:
   # Syntax errors and undefined names in every Python file, research/ included.
