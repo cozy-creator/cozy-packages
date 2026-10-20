@@ -75,6 +75,15 @@ def prove_copy(store: Path, source: tensorfs.Checkpoint) -> None:
         for key, expected in (("keep", b"keep"), ("new", b"data")):
             value = got.components["renamed"].tensors.read(key)
             assert isinstance(value, tensorfs.Array) and value.tobytes() == expected
+    incomplete = context(store, "incomplete-proof", 11)
+    with model_output(incomplete, "model", sources={"source": source},
+                      components={"renamed": selected}, configs={}, order=order) as out:
+        try:
+            adopt_output(incomplete, out)
+        except ValueError as error:
+            assert "unfinished" in str(error) and out.done is None
+        else:
+            raise AssertionError("an output missing its new tensor was adopted")
     with context(store, "bound-proof", 3).output("model", Derivation(None)) as out:
         try:
             out.put("new", "w", "U8", [4], b"data")
