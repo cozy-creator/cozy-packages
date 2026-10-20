@@ -3150,7 +3150,7 @@ def arm_interface() -> None:
         )
         turbo = name.endswith("_turbo")
         models = child["models"]
-        trunk = name.removesuffix("_turbo")
+        trunk: official.Trunk = "fl2va" if name.startswith("fl2va") else "ref2va"
         if turbo:
             check(f"{name} has separately bound base and LoRA models", len(models), 2)
             base_slot, lora_slot = models

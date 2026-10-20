@@ -30,7 +30,7 @@ from h3_tables.order import full_order as _full_order
 from h3_tables.plans import parse_declared_plan, parse_plan
 from h3_tables.quantization import h3_quantization_plan
 from h3_tables.source import full_targets as _full_targets
-from h3_tables.source import official_full_specs, source_only_keys, text_source_only_keys
+from h3_tables.source import TARGET_COMPONENT, official_full_specs, source_only_keys, text_source_only_keys
 from tensorfs.derived import Part, Source, SourceInspection, Tensor
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -62,7 +62,7 @@ def prove_retable(sections: dict[str, dict[str, object]]) -> None:
     ]
     pruned_rows, full_rows = list(shared), list(shared)
     for task, section in (("fl2va", "transformer"), ("ref2va", "transformer_ref")):
-        component = f"{task}_dit"
+        component = TARGET_COMPONENT[task]
         topology = H3Topology.from_config(sections[section])
         pruned_rows += [(component, "proj_in.weight", "bf16", (2, 2))]
         pruned_rows += [(component, key, "bf16", (1, 6, 8)) for key in tables[task]]
@@ -77,7 +77,7 @@ def prove_retable(sections: dict[str, dict[str, object]]) -> None:
     if set(bank) != {"transformer", "transformer_ref"}:
         raise RuntimeError("the table bank must hold exactly both DiTs")
     for task in ("fl2va", "ref2va"):
-        component = f"{task}_dit"
+        component = TARGET_COMPONENT[task]
         target = retabled[component]
         if (
             target.source != "pruned"

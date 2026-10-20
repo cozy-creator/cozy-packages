@@ -36,7 +36,7 @@ from .adaln_operations import (
 )
 from .kernel import H3Topology, LowRankAdapter, adapter_shapes, precompute_tables, table_shapes
 from .plans import Task, TimestepPlan, parse_plan
-from .source import inspection
+from .source import TARGET_COMPONENT, inspection
 from .source import structures as _structures
 
 RANK = 64
@@ -229,17 +229,17 @@ def _produce(
     plans = {task: turbo_plan(task) for task in TASKS}
     for task, (name, component) in adapters.items():
         _adapter_component(
-            structures[name], component, configs[f"{task}_dit"], plans[task], topologies[task]
+            structures[name], component, configs[TARGET_COMPONENT[task]], plans[task], topologies[task]
         )
     targets: dict[str, Target] = {}
     output_order: list[tuple[str, str]] = []
     for task in TASKS:
         component = f"{task}_turbo"
-        specs = overlay_shapes(configs[f"{task}_dit"], plans[task])
+        specs = overlay_shapes(configs[TARGET_COMPONENT[task]], plans[task])
         targets[component] = Target(
             "full",
-            f"{task}_dit",
-            drop=tuple(structures["full"].components[f"{task}_dit"]),
+            TARGET_COMPONENT[task],
+            drop=tuple(structures["full"].components[TARGET_COMPONENT[task]]),
             add={
                 key: Tensor(
                     dtype,
@@ -264,7 +264,7 @@ def _produce(
     config = {}
     for task in TASKS:
         config[f"{task}_turbo"] = {
-            **configs[f"{task}_dit"],
+            **configs[TARGET_COMPONENT[task]],
             "cozy_h3": {
                 "task": task,
                 "modulation": "adaln-pruned",
@@ -311,7 +311,7 @@ def _produce(
             precompute_tables(
                 plan=plans[task],
                 topology=topologies[task],
-                read=partial(_read, transaction, "full", f"{task}_dit"),
+                read=partial(_read, transaction, "full", TARGET_COMPONENT[task]),
                 write=partial(_write, transaction, component),
                 progress=partial(_progress, ctx, tel, task),
                 device=torch.device(str(ctx.device)),
@@ -340,10 +340,10 @@ def _produce(
 def _topologies() -> tuple[dict[str, Any], dict[Task, H3Topology]]:
     sections = _sections()
     configs = {
-        f"{task}_dit": sections["transformer" if task == "fl2va" else "transformer_ref"]
+        TARGET_COMPONENT[task]: sections["transformer" if task == "fl2va" else "transformer_ref"]
         for task in TASKS
     }
-    return configs, {task: H3Topology.from_config(configs[f"{task}_dit"]) for task in TASKS}
+    return configs, {task: H3Topology.from_config(configs[TARGET_COMPONENT[task]]) for task in TASKS}
 
 
 def build_turbo_adapter(
