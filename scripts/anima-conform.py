@@ -36,6 +36,7 @@ sys.path.insert(0, str(ROOT / "anima"))
 
 from cozy_runtime.author.fakes import fake_attempt, fake_telemetry  # noqa: E402
 
+from anima import _DEMAND, Megapixels, output_size  # noqa: E402
 from anima import model as package  # noqa: E402
 from anima import optimization  # noqa: E402
 
@@ -386,6 +387,46 @@ def arm_direct_rope_matrix() -> None:
     check("and its rotation", torch.allclose(got, expected, atol=1e-6), True)
 
 
+def arm_any_ratio() -> None:
+    """Any W:H: the tier's area rounded to 32 px, inside the demand admission declared and a
+    size Anima's own rotary embedding accepts; held only past what the model admits."""
+    config = json.loads((ROOT / "anima/configs/transformer.json").read_text())
+    rope = CosmosRotaryPosEmbed(
+        hidden_size=config["attention_head_dim"],
+        max_size=tuple(config["max_size"]),
+        patch_size=tuple(config["patch_size"]),
+        rope_scale=tuple(config["rope_scale"]),
+    )
+    bad, held = [], []
+    for tier in Megapixels:
+        for step in range(-500, 501):
+            w, h = round(10**4 * 10 ** (step / 125)), 10**4
+            width, height, moved = output_size(tier, f"{w}:{h}")
+            if not (
+                width % 32 == height % 32 == 0
+                and 32 <= min(width, height) <= max(width, height) <= 2048
+                and width * height <= _DEMAND[tier][0] * _DEMAND[tier][1]
+                and output_size(tier, f"{h}:{w}")[:2] == (height, width)
+            ):
+                bad.append((tier, w, h, width, height))
+            if moved:
+                held.append(w / h)
+            if step % 50 == 0:
+                rope(torch.zeros(1, 1, 1, height // 8, width // 8))
+    check("every size is in bounds and symmetric", bad, [])
+    widest = output_size(Megapixels.MP2, "16:9")
+    check("16:9 at the 1536 class fills the rotary range", widest, (2048, 1152, False))
+    check("only ratios past the range are held", all(r > 1.7 or r < 1 / 1.7 for r in held), True)
+    held_size = output_size(Megapixels.MP2, "3:1")
+    check("past the range is the widest admitted size", held_size, (2048, 1152, True))
+    try:
+        rope(torch.zeros(1, 1, 1, 144, 258))
+    except RuntimeError:
+        check("one patch past 2048 px is refused by the rotary table", True, True)
+    else:
+        fail("rotary range", "a 2064 px side was accepted")
+
+
 def arm_block_forward() -> None:
     """The plan's block forward (one `addcmul` per gated residual) equals Diffusers' on a small
     random Cosmos block with Diffusers' own attention processors."""
@@ -443,6 +484,7 @@ ARMS = {
     "denoise": arm_denoise_loop_reports,
     "deepcopy": arm_deepcopy_trap,
     "order": arm_block_order,
+    "ratio": arm_any_ratio,
 }
 
 
