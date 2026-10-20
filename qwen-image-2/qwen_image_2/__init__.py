@@ -70,7 +70,8 @@ class GenerateInput(msgspec.Struct):
     aspect_ratio: Annotated[str, msgspec.Meta(pattern=r"^[1-9][0-9]*:[1-9][0-9]*$")] | None = None
     # None: the tier nearest the last reference's pixel count, else 4 MP, the model's native 2K.
     megapixels: Annotated[Megapixels | None, Shape(pixels=_DEMAND)] = None
-    steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 40
+    # None: the checkpoint's own schedule (Turbo's 8 steps), else 40.
+    steps: Annotated[int, msgspec.Meta(ge=1, le=100)] | None = None
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     reference_images: Annotated[
         list[ImageAsset],
@@ -121,12 +122,7 @@ def rgb_image(decoded: Any) -> Image.Image:
     return image
 
 
-@app.entrypoint(
-    defaults={"model": "qwen-image-2.1@0.1.0"},
-    memoize=Memoize(requires=["seed"]),
-    memo_dependencies=("qwen_image_2", "qwen_image_2.model"),
-)
-def generate_image(
+def _generate(
     ctx: Context,
     payload: GenerateInput,
     model: QwenImage21Model,
@@ -134,6 +130,11 @@ def generate_image(
     tel: Telemetry,
     adj: Adjustments,
 ) -> ImageOutput:
+    """Both functions' body: the checkpoint decides the schedule."""
+    sigmas = model.sample_sigmas
+    steps = len(sigmas) if sigmas else payload.steps or 40
+    if sigmas and payload.steps not in (None, steps):
+        adj.clamp("steps", payload.steps, steps, "the checkpoint's own schedule")
     seed = payload.resolved_seed()
     ctx.raise_if_cancelled()
     reference_images, reference_latents, image_pad_mask = None, None, None
@@ -159,11 +160,9 @@ def generate_image(
             mask,
             width=width,
             height=height,
-            steps=payload.steps,
+            steps=steps,
             seed=seed,
-            on_step=tel.step_callback(
-                payload.steps, stage="generating image", overall_range=(0.1, 0.9)
-            ),
+            on_step=tel.step_callback(steps, stage="generating image", overall_range=(0.1, 0.9)),
             cancel=ctx.raise_if_cancelled,
             reference_images=reference_images,
             reference_latents=reference_latents,
@@ -176,3 +175,40 @@ def generate_image(
     with tel.stage("saving image", overall_range=(0.98, 1.0)):
         asset = out.save_image(image, format="png")
     return ImageOutput(asset, width, height, seed)
+
+
+_MEMO = ("qwen_image_2", "qwen_image_2.model")
+
+
+@app.entrypoint(
+    defaults={"model": "qwen-image-2.1@0.1.0"},
+    memoize=Memoize(requires=["seed"]),
+    memo_dependencies=_MEMO,
+)
+def generate_image(
+    ctx: Context,
+    payload: GenerateInput,
+    model: QwenImage21Model,
+    out: Outputs,
+    tel: Telemetry,
+    adj: Adjustments,
+) -> ImageOutput:
+    """Qwen-Image-2.1, the 40-step base model."""
+    return _generate(ctx, payload, model, out, tel, adj)
+
+
+@app.entrypoint(
+    defaults={"model": "qwen-image-2.1-turbo@0.1.0"},
+    memoize=Memoize(requires=["seed"]),
+    memo_dependencies=_MEMO,
+)
+def generate_image_turbo(
+    ctx: Context,
+    payload: GenerateInput,
+    model: QwenImage21Model,
+    out: Outputs,
+    tel: Telemetry,
+    adj: Adjustments,
+) -> ImageOutput:
+    """Qwen-Image-2.1-Turbo: the same inputs, on its checkpoint's 8-step schedule."""
+    return _generate(ctx, payload, model, out, tel, adj)

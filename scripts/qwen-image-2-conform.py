@@ -28,7 +28,7 @@ from qwen_image_2 import (  # noqa: E402
 )
 
 payload = msgspec.json.decode(b'{"prompt":"An explorer in a blue coat"}', type=GenerateInput)
-assert payload.seed is None and payload.steps == 40
+assert payload.seed is None and payload.steps is None
 assert payload.shape() == (Megapixels.MP4, "1:1")
 assert output_size(Megapixels.MP4, "1:1") == (2048, 2048, False)
 assert payload.shape((1200, 800)) == (Megapixels.MP1, "1200:800")
@@ -70,10 +70,11 @@ assert rgb_image(pixels).getpixel((0, 0)) == (255, 255, 255)
 pixels[0, 3, 0, 0] = 1
 assert rgb_image(pixels).getpixel((0, 0)) == (255, 0, 0)
 surfaces = {surface.name: surface for surface in describe(app)}
-assert set(surfaces) == {"generate_image", "int8"}, sorted(surfaces)
-surface = surfaces["generate_image"]
-assert not surface.weights_outputs and surface.accelerator
-assert [(b.param, b.weights) for b in surface.model_bindings] == [("model", False)]
+assert set(surfaces) == {"generate_image", "generate_image_turbo", "int8"}, sorted(surfaces)
+for name in ("generate_image", "generate_image_turbo"):
+    surface = surfaces[name]
+    assert not surface.weights_outputs and surface.accelerator
+    assert [(b.param, b.weights) for b in surface.model_bindings] == [("model", False)]
 quantizer = surfaces["int8"]
 assert [o.name for o in quantizer.weights_outputs] == ["int8"] and not quantizer.accelerator
 assert [(b.param, b.weights) for b in quantizer.model_bindings] == [("source", True)]
