@@ -43,6 +43,7 @@ from cozy_runtime.author import (
     Cancelled,
     Config,
     ConformanceError,
+    ConstructionRecord,
     Context,
     DecodedAudio,
     DecodedAudioChunk,
@@ -51,6 +52,8 @@ from cozy_runtime.author import (
     ImageAsset,
     InvalidRequest,
     Invocation,
+    Model,
+    ModelRegistry,
     VideoAsset,
     attention_scope,
     canonical_json,
@@ -67,7 +70,7 @@ from cozy_runtime.author.fakes import (
     fake_telemetry,
     granted_input,
 )
-from cozy_runtime.internal.derive import derive
+from cozy_runtime.internal.derive import Observations, serving_substrate
 from diffusers import (
     AutoencoderKLMiniMaxH3,
     AutoencoderKLMiniMaxH3Audio,
@@ -585,6 +588,27 @@ def check(name: str, got: Any, want: Any) -> None:
         observe(name, repr(got))
     else:
         fail(name, f"got {got!r}, want {want!r}")
+
+
+def construction_record(cls: type[Model[Any]], artifact: Artifact) -> ConstructionRecord:
+    """Run the serving registry, model load and Loader census without filling weights."""
+    registry = ModelRegistry(
+        release="h3-conformance",
+        substrate=lambda: serving_substrate("cpu", Observations()),
+    )
+    try:
+        # This mode skips only the Loader fill; construction, census and component-use
+        # validation are the same path the serving registry executes.
+        registry.acquire("audit.models.model", cls, artifact, mode="derive")
+        generations = registry.generations()
+        check(f"{cls.__name__} constructs one generation", len(generations), 1)
+        record = generations[0].record
+        keys = [row.key for row in record.destinations]
+        check(f"{cls.__name__} census contains no duplicate keys", len(keys), len(set(keys)))
+        check(f"{cls.__name__} checkpoint parameters stay weightless", record.weightless[1:], (0, 0))
+        return record
+    finally:
+        registry.unload_all()
 
 
 def red(name: str, defective: Any, correct: Any) -> None:
@@ -1716,15 +1740,18 @@ def arm_text_conditioner() -> None:
     }
 
     def contract_document() -> dict[str, object]:
-        result = derive(
-            package.H3Model(),
+        record = construction_record(
+            package.H3Model,
             Artifact("se-018-audit", {}, Config(model_config)),
         )
         return {
             "schema": "cozy.runtime.model_construction_contract.v1",
             "destination_sets": [
-                {"component": row.component, "keys": list(row.keys)}
-                for row in result.destination_sets
+                {
+                    "component": component,
+                    "keys": [row.key for row in record.destinations if row.component == component],
+                }
+                for component in record.components
             ],
         }
 
@@ -4417,10 +4444,10 @@ def arm_turbo_artifact() -> None:
     check("ordinary model has exactly five real roots", set(base.components), set(base_only))
     check("turbo LoRA has exactly two overlay roots", set(lora.components), set(overlay_only))
     for cls, config in ((package.H3TurboBase, base_only), (package.H3TurboLoRA, overlay_only)):
-        derived = derive(cls(), Artifact("constructor-audit", {}, Config(config)))
+        record = construction_record(cls, Artifact("constructor-audit", {}, Config(config)))
         check(
             f"{cls.__name__} Runtime census matches its exact checkpoint",
-            {row.component for row in derived.destination_sets},
+            set(record.components),
             set(config),
         )
     for trunk in ("fl2va", "ref2va"):
