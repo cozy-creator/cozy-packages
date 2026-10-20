@@ -25,8 +25,10 @@ Fields: `prompt`, `seed` (random when omitted, returned), `steps`, and `prompt_u
 (`default_size`); the model card names no native size, and BFL's README says up to 4K. The size is
 the tier's area at that ratio, rounded to 32 px. Sides stay within BFL's 64–4096 px. A ratio past that
 is served at the nearest size it allows, reported as a `clamp` adjustment. Editing takes
-`reference_images` in order. Its output takes the first reference's aspect ratio at the `megapixels`
-area, unless `aspect_ratio` is given. The result returns the image, its size, the seed and `prompt`: the caption
+`reference_images` in order. As in BFL's code, with no size given the output is the first prepared
+reference's own size: a lone reference fitted to at most 4 MP, or the first of several at up to 1 MP on
+the 16 px grid. An `aspect_ratio` or `megapixels` sets the size instead; a missing one comes from the
+first reference (its ratio, or the tier nearest its pixel count). The result returns the image, its size, the seed and `prompt`: the caption
 the image was made from.
 
 ## Prompt upsampling
