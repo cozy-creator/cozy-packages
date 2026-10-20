@@ -61,7 +61,10 @@ def shapes(model: QwenImage21Model, tmp_path: Path) -> None:
         ([photo(tmp_path / "12mp.jpg", (4000, 3000))], {}, (2368, 1760)),
         ([tmp_path / "3x2.jpg"], {"megapixels": 2}, (1760, 1184)),
         ([tmp_path / "3x2.jpg"], {"aspect_ratio": "1:1", "megapixels": 2}, (1440, 1440)),
-        ([], {}, (1024, 1024)),
+        ([], {"aspect_ratio": "7:3", "megapixels": 1}, (1568, 672)),
+        # Past the rotary range: the nearest admitted size, reported as a clamp.
+        ([], {"aspect_ratio": "5000:1", "megapixels": 1}, (32768, 32)),
+        ([], {}, (2048, 2048)),
     ]
     for index, (paths, given, expected) in enumerate(cases):
         grants = {
@@ -82,6 +85,8 @@ def shapes(model: QwenImage21Model, tmp_path: Path) -> None:
         assert (image.width, image.height) == expected, (paths, given, image)
         with Image.open(tmp_path / f"shape-{index}" / "image-0001") as png:
             assert (png.format, png.size) == ("PNG", expected), (png.format, png.size)
+        clamps = [(row.kind, row.field, row.requested) for row in result.adjustments]
+        assert clamps == ([("clamp", "aspect_ratio", "5000:1")] if expected == (32768, 32) else [])
 
 
 def staged(tmp_path: Path) -> None:
