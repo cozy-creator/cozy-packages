@@ -15,7 +15,6 @@ from cozy_runtime.author import (
     canonical_json,
     invocable,
 )
-from tensorfs.derived import Config, Derivation, Target, Tensor, Part
 from .model import ARCHITECTURE, modules
 
 
@@ -27,6 +26,8 @@ async def normalize(
     vae: Weights[Any],
     conditioning: Annotated[Tree, AssetBound(max_bytes=2 << 20)],
 ) -> ModelArtifact:
+    from tensorfs.derived import Config, Derivation, Target, Tensor, Part
+
     sources = {"dit": ctx.tensorfs_source(dit), "vae": ctx.tensorfs_source(vae)}
     with torch.device("meta"):
         expected = modules()

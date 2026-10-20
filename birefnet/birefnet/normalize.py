@@ -6,7 +6,6 @@ from importlib.resources import files
 
 import torch
 from cozy_runtime.author import Context, ModelArtifact, Weights, canonical_json, invocable
-from tensorfs.derived import Config, Derivation, Target
 
 from .model import BackgroundRemovalModel
 from .upstream.BiRefNet_config import BiRefNetConfig
@@ -16,6 +15,8 @@ from .upstream.birefnet import BiRefNet
 @invocable
 async def normalize(ctx: Context, *, source: Weights[BackgroundRemovalModel]) -> ModelArtifact:
     """Add constructor configuration and order; retain original FP16 weights and buffers."""
+    from tensorfs.derived import Config, Derivation, Target
+
     capability = ctx.tensorfs_source(source)
     inspection = capability.inspect()
     with torch.device("meta"):
