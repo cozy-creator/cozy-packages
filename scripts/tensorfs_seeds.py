@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 import tensorfs
+import numpy as np
 from tensorfs import raw
 
 
@@ -45,11 +46,11 @@ def main() -> None:
             held = tensors.read(key)
             if not isinstance(held, tensorfs.Encoded):
                 raise RuntimeError(f"{key} did not retain its native stored parts")
-            into = bytearray(512)
+            into = np.empty((1, 256), dtype=np.float32)
             raw.decode_into(scheme, {name: (part.dtype, part.shape, part.tobytes())
                                     for name, part in held.parts.items()}, into,
-                            dtype="BF16", shape=[1, 256], params=encoding.params)
-            if any(into):
+                            dtype="F32", shape=[1, 256], params=encoding.params)
+            if bool(np.any(into)):
                 raise RuntimeError(f"native {scheme} zero-weight decode differs")
     print("TensorFS native schemes PASS plain=1 fp8.rowwise=1 int8.convrot=1 nvfp4=1")
 

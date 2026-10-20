@@ -31,6 +31,10 @@ class RecordedOutput:
         self.owner, self.slot = owner, slot
         self.done = owner.committed.get(slot)
         self.configured = False
+        self.order = ()
+
+    def has(self, _component: str, _key: str) -> bool:
+        return True  # Control-only recorder; actual native bytes are a separate proof.
 
     def __enter__(self) -> RecordedOutput:
         return self
@@ -60,9 +64,10 @@ class Recorder:
         components["vae"] = {key: plain(*spec) for key, spec in VIDEO_VAE_ROWS.items()}
         return SourceLayout(None, components, {})
 
-    def model_output(self, _ctx: Any, slot: str, *, configs: Any, **_: Any) -> RecordedOutput:
+    def model_output(self, _ctx: Any, slot: str, *, configs: Any, order: Any, **_: Any) -> RecordedOutput:
         output = RecordedOutput(self, slot)
         output.configured = bool(configs.get("model"))
+        output.order = order
         return output
 
     def adopt_model(self, output: RecordedOutput) -> ModelArtifact:

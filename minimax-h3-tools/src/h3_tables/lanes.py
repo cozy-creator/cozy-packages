@@ -424,12 +424,12 @@ def select(
                         code="h3_keep_unmatched",
                     )
                 plan = replace_plan(plan, [t for t in plan.tensors if t.key not in kept])
-            for tensor in plan.tensors:
-                actual = present.get(tensor.key)
-                if (actual is None or actual.logical_dtype != tensor.logical_dtype
-                        or actual.shape != tensor.shape or not _plain_value(actual)):
+            for selected_weight in plan.tensors:
+                actual = present.get(selected_weight.key)
+                if (actual is None or actual.logical_dtype != selected_weight.logical_dtype
+                        or actual.shape != selected_weight.shape or not _plain_value(actual)):
                     raise UnsupportedInput(
-                        f"{component}.{tensor.key} differs from the reviewed plain weight geometry",
+                        f"{component}.{selected_weight.key} differs from the reviewed plain weight geometry",
                         code="h3_quantization_geometry",
                     )
         else:

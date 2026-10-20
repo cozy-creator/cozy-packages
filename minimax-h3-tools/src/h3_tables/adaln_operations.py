@@ -23,7 +23,7 @@ from .model_config import dual_adaln_pruned_config, dual_full_config, parse_prod
 from .order import current_order, full_order
 from .plans import Task, TimestepPlan, parse_declared_plan
 from .metadata import (ComponentSelection, SourceLayout, TensorShape, PartShape,
-                       PLAIN, SCHEMES, NATIVE_DTYPES, model_output, configure)
+                       PLAIN, SCHEMES, NATIVE_DTYPES, model_output, adopt_output)
 from cozy_runtime.derive import Checkpoint, Output, read_into
 from .source import TARGET_COMPONENT, inspection
 from .table_layout import TableLayout
@@ -204,7 +204,7 @@ def _project(
         )},
         configs={_METADATA: config}, order=tuple((component, key) for key in selected),
     ) as transaction:
-        return ctx.adopt_model(transaction)
+        return adopt_output(ctx, transaction)
 
 
 @invocable(memo_dependencies=ADALN)
@@ -227,7 +227,7 @@ async def select_adaln_weights(ctx: Context, *, source: Weights[Any], task: Task
                         for component in structure.components},
             configs=structure.configs, order=current_order(_asset("whole-order.json")).rows,
         ) as transaction:
-            ready = ctx.adopt_model(transaction)
+            ready = adopt_output(ctx, transaction)
         return Selection(ready, True)
     return Selection(_project(ctx, source, task, "model"), False)
 
@@ -348,7 +348,7 @@ async def compute_adaln_tables(
     ) as transaction:
         if transaction.done is None:
             _compute_into(ctx, tel, transaction, structure.checkpoint, task, plan, topology)
-        return ctx.adopt_model(transaction)
+        return adopt_output(ctx, transaction)
 
 
 def _bank_projection(
@@ -466,7 +466,7 @@ def _apply_adaln(
                  **{name: inspection(ctx, bank).checkpoint for name, bank in banks.items()}},
         components=targets, configs=configs, order=current_order(_asset("whole-order.json")).rows,
     ) as transaction:
-        return ctx.adopt_model(transaction)
+        return adopt_output(ctx, transaction)
 
 
 @invocable(memo_dependencies=ADALN)

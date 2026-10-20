@@ -26,7 +26,7 @@ from .adaln_operations import (
 from .kernel import H3Topology, LowRankAdapter, adapter_shapes, precompute_tables, table_shapes
 from .plans import Task, TimestepPlan, parse_plan
 from .metadata import (ComponentSelection, SourceLayout, TensorShape, PartShape,
-                       PLAIN, model_output, configure)
+                       PLAIN, model_output, adopt_output)
 from cozy_runtime.derive import Checkpoint, Output, read_into
 from .source import TARGET_COMPONENT, inspection
 from .source import structures as _structures
@@ -236,7 +236,8 @@ def _produce(
                 key: TensorShape(
                     dtype,
                     shape,
-                                    {"value": PartShape(dtype, shape)},
+                    PLAIN,
+                    {"value": PartShape(dtype, shape)},
                     copy_from=((*adapters[task], key)
                                if key.endswith((".lora_down", ".lora_up")) else None),
                 )
@@ -265,7 +266,7 @@ def _produce(
         components=targets, configs={"model": raw}, order=tuple(output_order),
     ) as transaction:
         if transaction.done is not None:
-            return ctx.adopt_model(transaction)
+            return adopt_output(ctx, transaction)
         if ctx.device.type == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = False
         torch.set_float32_matmul_precision("highest")
@@ -310,7 +311,7 @@ def _produce(
                         _write(transaction, component, f"{prefix}.{suffix}", value)
         tel.metric("h3.turbo.reused_tensors", float(reused))
         tel.metric("h3.turbo.computed_tensors", float(computed))
-        return ctx.adopt_model(transaction)
+        return adopt_output(ctx, transaction)
 
 
 def _topologies() -> tuple[dict[str, Any], dict[Task, H3Topology]]:

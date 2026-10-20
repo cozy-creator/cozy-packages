@@ -9,9 +9,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import Iterator, Literal
 
-from cozy_runtime.author import Context, canonical_json
+from cozy_runtime.author import Context, ModelArtifact, canonical_json
 from cozy_runtime.derive import Checkpoint, Derivation, Output
 from tensorfs import raw
 
@@ -22,7 +22,8 @@ DTYPES = {
 }
 NATIVE_DTYPES = {value: key for key, value in DTYPES.items()}
 PLAIN = "plain"
-SCHEMES = {"fp8-rowwise/1": "fp8.rowwise", "int8-convrot256/1": "int8.convrot",
+SCHEMES: dict[Literal["fp8-rowwise/1", "int8-convrot256/1", "nvfp4-w4a4/1"], str] = {
+           "fp8-rowwise/1": "fp8.rowwise", "int8-convrot256/1": "int8.convrot",
            "nvfp4-w4a4/1": "nvfp4"}
 
 
@@ -91,8 +92,23 @@ def model_output(
     """Copy H3's selected source tensors by reference into one bounded modern output.
 
     The computation writes only the selections' additions with Output.put/put_encoded.
-    Native component ordering refuses an unfinished declared output at commit.
+    adopt_output checks that the ordered tensors are complete before adoption.
     """
+    declared = set(order)
+    if len(declared) != len(order):
+        raise ValueError("H3 construction order repeats a tensor")
+    selected = set()
+    for name, selection in components.items():
+        original = (sources[selection.source].components[selection.source_component]
+                    if selection.source else None)
+        carried = set(original.tensors) - set(selection.drop) if original is not None else set()
+        if carried & selection.add.keys():
+            raise ValueError(f"{name} adds a tensor it still carries from its source")
+        selected.update((name, key) for key in carried | selection.add.keys())
+    if selected != declared:
+        raise ValueError(f"H3 source/selection differs from construction: "
+                         f"missing={sorted(declared - selected)[:5]}, "
+                         f"unexpected={sorted(selected - declared)[:5]}")
     with ctx.output(slot, Derivation(None, sources=tuple(sources.values()), order=order)) as output:
         if output.done is None:
             for name, selection in components.items():
@@ -102,7 +118,7 @@ def model_output(
                     name, cls=original.cls if original else "",
                     config=original.config if original else {},
                 )
-                if original is not None:
+                if source is not None and original is not None:
                     missing = set(selection.drop) - set(original.tensors)
                     if missing:
                         raise ValueError(f"{name} drops absent source rows: {sorted(missing)}")
@@ -119,3 +135,12 @@ def model_output(
             for name, data in configs.items():
                 configure(output, name, data)
         yield output
+
+
+def adopt_output(ctx: Context, output: Output) -> ModelArtifact:
+    """An H3 output must contain its entire declared construction before it is retained."""
+    missing = [(component, key) for component, key in output.order
+               if not output.has(component, key)]
+    if missing:
+        raise ValueError(f"H3 output {output.slot} is unfinished: {missing[:5]}")
+    return ctx.adopt_model(output)

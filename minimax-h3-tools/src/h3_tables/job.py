@@ -53,7 +53,7 @@ from .order import full_order as _full_order
 from .plans import TimestepPlan, parse_declared_plan
 from .quantization import reviewed_plan
 from .metadata import (ComponentSelection, SourceLayout, TensorShape, PartShape,
-                       PLAIN, SCHEMES, NATIVE_DTYPES, model_output, configure)
+                       PLAIN, SCHEMES, NATIVE_DTYPES, model_output, adopt_output)
 from cozy_runtime.derive import Checkpoint, Output, read_into
 from .source import TARGET_COMPONENT, inspection
 from .source import full_targets as _full_targets
@@ -560,7 +560,7 @@ def _produce_lanes(
             transaction = active.pop(name)
             with tel.stage(name, overall_range=(0.0, 0.0)):
                 treat(name, transaction)
-            receipts[name] = ctx.adopt_model(transaction)
+            receipts[name] = adopt_output(ctx, transaction)
 
         pruned = {
             name: transaction
@@ -596,11 +596,11 @@ def _produce_lanes(
             with tel.stage(name, overall_range=overall_range):
                 treat(name, transaction)
                 # Commit each lane before the next, preserving interrupted-work replay.
-                receipts[name] = ctx.adopt_model(transaction)
+                receipts[name] = adopt_output(ctx, transaction)
             tel.progress(1.0, stage=f"commit-{name}", overall_fraction=overall_range[1])
         for name, transaction in transactions.items():
             if name not in receipts:
-                receipts[name] = ctx.adopt_model(transaction)
+                receipts[name] = adopt_output(ctx, transaction)
 
     tel.metric("h3.source_bytes", float(source_bytes), unit="bytes")
     tel.metric("h3.new_bytes", float(new_bytes), unit="bytes")
@@ -751,7 +751,7 @@ def _quantize_lane(
         order=[(component, key) for component, rows in structure.components.items() for key in rows],
     ) as transaction:
         if transaction.done is not None:
-            return ctx.adopt_model(transaction)
+            return adopt_output(ctx, transaction)
         for selection in selections:
             with tel.stage(f"{lane}-{selection.component}"):
                 stats = _treat(transaction, ctx, tel, request, selection=selection, source=structure.checkpoint)
@@ -773,7 +773,7 @@ def _quantize_lane(
             encoded=",".join(selection.component for selection in selections),
             inherited=",".join(sorted(set(QUANTIZER_RECIPES[encoding]) - {s.component for s in selections})),
         )
-        return ctx.adopt_model(transaction)
+        return adopt_output(ctx, transaction)
 
 
 @invocable(memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
@@ -978,10 +978,10 @@ async def retable(
                 written += emitted
             # The retabled checkpoint commits first: its retention never strands the bank.
             for name, transaction in active.items():
-                receipts[name] = ctx.adopt_model(transaction)
+                receipts[name] = adopt_output(ctx, transaction)
         for name, transaction in transactions.items():
             if name not in receipts:
-                receipts[name] = ctx.adopt_model(transaction)
+                receipts[name] = adopt_output(ctx, transaction)
     tel.metric("h3.source_bytes", float(source_bytes), unit="bytes")
     tel.metric("h3.new_bytes", float(written), unit="bytes")
     return RetableResult(

@@ -13,12 +13,13 @@ from pathlib import Path
 
 import numpy as np
 import tensorfs
-from cozy_runtime.author import CapabilityError, Context, ModelArtifact, Telemetry, canonical_json
+from cozy_runtime.author import CapabilityError, Context, ModelArtifact, canonical_json
+from cozy_runtime.author.fakes import fake_telemetry
 from cozy_runtime.derive import Derivation, Output
 from cozy_runtime.derive.quantization import ArtifactQuantizationRequest
 from h3_tables import job, lanes
 from h3_tables.metadata import (ComponentSelection, PartShape, TensorShape, PLAIN, SCHEMES,
-                                inspect_checkpoint, model_output)
+                                inspect_checkpoint, model_output, adopt_output)
 
 
 def context(store: Path, name: str, bound: int) -> Context:
@@ -59,10 +60,11 @@ def prove_copy(store: Path, source: tensorfs.Checkpoint) -> None:
                 assert out.written == 11
             else:
                 assert attempt == 1 and out.written == 0
-            current = ctx.adopt_model(out)
+            current = adopt_output(ctx, out)
             if artifact is not None:
                 assert current == artifact
             artifact = current
+    assert artifact is not None
     with tensorfs.open(artifact.checkpoint, cache_dir=store, local_files_only=True) as got:
         assert set(got.components["renamed"].tensors) == {"keep", "new"}
         assert got.components["renamed"].cls == "Example"
@@ -89,11 +91,12 @@ def prove_cast(store: Path, source: tensorfs.Checkpoint) -> None:
     selected = lanes.apply(ComponentSelection("source", "toy"), selection)
     with model_output(ctx, "model", sources={"source": source}, components={"toy": selected},
                       configs={}, order=(("toy", "w.weight"), ("toy", "keep"))) as out:
-        stats = lanes.write_cast(out, ctx, Telemetry(), selection=selection, source=source,
+        stats = lanes.write_cast(out, ctx, fake_telemetry(ctx=ctx), selection=selection, source=source,
                                  source_component="toy", target_component="toy")
         assert stats.converted_keys == 1 and stats.source_bytes_read == 2048
         assert stats.new_bytes_written == 1024 and out.written == 1024
-        artifact = ctx.adopt_model(out)
+        artifact = adopt_output(ctx, out)
+    assert artifact is not None
     with tensorfs.open(artifact.checkpoint, cache_dir=store, local_files_only=True) as got:
         tensor = got.components["toy"].tensors["w.weight"]
         assert tensor.dtype == "BF16" and tensor.encoding is None
@@ -110,24 +113,25 @@ def prove_encodings(store: Path, source: tensorfs.Checkpoint) -> None:
         for attempt in range(2):
             with model_output(ctx, "model", sources={"source": source}, components={"toy": selected},
                               configs={}, order=(("toy", "w.weight"), ("toy", "keep"))) as out:
-                stats = job._treat(out, ctx, Telemetry(), ArtifactQuantizationRequest(),
+                stats = job._treat(out, ctx, fake_telemetry(ctx=ctx), ArtifactQuantizationRequest(),
                                    selection=selection, source=source)
                 assert stats.encoded_keys == 1 - attempt and stats.reused_keys == attempt
                 assert stats.source_bytes_read == 2048 * (1 - attempt)
                 expected = 292 if scheme == "nvfp4" else 520
                 assert stats.new_bytes_written == expected * (1 - attempt)
                 assert out.written == expected * (1 - attempt)
-                current = ctx.adopt_model(out)
+                current = adopt_output(ctx, out)
                 if artifact is not None:
                     assert artifact == current
                 artifact = current
+        assert artifact is not None
         with tensorfs.open(artifact.checkpoint, cache_dir=store, local_files_only=True) as got:
             tensor = got.components["toy"].tensors["w.weight"]
             assert tensor.encoding is not None and tensor.encoding.scheme == scheme
             decoded = np.empty((2, 256), dtype=np.float32)
             got.components["toy"].tensors.read_into("w.weight", decoded, decode=True)
-            expected = np.linspace(-1, 1, 512, dtype=np.float32).reshape(2, 256)
-            relative = float(np.linalg.norm(decoded - expected) / np.linalg.norm(expected))
+            expected_values = np.linspace(-1, 1, 512, dtype=np.float32).reshape(2, 256)
+            relative = float(np.linalg.norm(decoded - expected_values) / np.linalg.norm(expected_values))
             assert np.isfinite(decoded).all() and relative < 0.1, (scheme, relative)
 
 
