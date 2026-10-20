@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import secrets
-from enum import Enum, IntEnum
+from enum import IntEnum
 from typing import Annotated
 
 import cozy_runtime.derive as derive
@@ -12,6 +13,7 @@ from cozy_runtime.derive.operations import QuantizationPlan, quantize_into
 import msgspec
 import torch
 from cozy_runtime.author import (
+    Adjustments,
     App,
     AssetBound,
     Context,
@@ -35,52 +37,41 @@ from .model import _SAVE, AnimaModel, _Phases
 app = App()
 
 
-class AspectRatio(Enum):
-    SQUARE = "1:1"
-    LANDSCAPE = "4:3"
-    WIDE = "16:9"
-    PORTRAIT = "3:4"
-    TALL = "9:16"
-
-
 class Megapixels(IntEnum):
-    """Anima's native resolution classes, in nominal megapixels (se-024).
-
-    Tier 2 is the 1536-class (~2.3 MP) the model is meant to be run at and this
-    package's default; tier 1 trades resolution for speed. Denoise attention is full
-    (no windowing), so time and VRAM scale roughly linearly with area — tier 1 costs
-    about half of tier 2. Every bucket is a multiple of the pipeline's 16-px stride.
-    """
+    """Anima's native resolution classes (se-024): tier 1 is the ~1 MP training set (1024²),
+    tier 2 the 1536 class (~2.4 MP) the model is meant to run at and this package's default.
+    Denoise attention is full (no windowing), so time and VRAM scale roughly linearly with area."""
 
     MP1 = 1
     MP2 = 2
 
 
-#: (aspect, tier) -> (width, height): tier 1 is the ~1 MP training set, tier 2 scales it
-#: by exactly 1.5 to the 1536 class. A pair absent here does not round — it refuses at
-#: decode (today the grid is complete, so only an out-of-enum value can refuse).
-_BUCKETS: dict[tuple[AspectRatio, Megapixels], tuple[int, int]] = {
-    (AspectRatio.SQUARE, Megapixels.MP1): (1024, 1024),
-    (AspectRatio.LANDSCAPE, Megapixels.MP1): (1152, 896),
-    (AspectRatio.WIDE, Megapixels.MP1): (1344, 768),
-    (AspectRatio.PORTRAIT, Megapixels.MP1): (896, 1152),
-    (AspectRatio.TALL, Megapixels.MP1): (768, 1344),
-    (AspectRatio.SQUARE, Megapixels.MP2): (1536, 1536),
-    (AspectRatio.LANDSCAPE, Megapixels.MP2): (1728, 1344),
-    (AspectRatio.WIDE, Megapixels.MP2): (2016, 1152),
-    (AspectRatio.PORTRAIT, Megapixels.MP2): (1344, 1728),
-    (AspectRatio.TALL, Megapixels.MP2): (1152, 2016),
-}
+#: Each tier's square side; tier 2 scales tier 1 by exactly 1.5.
+_SIDE = {Megapixels.MP1: 1024, Megapixels.MP2: 1536}
+#: The Cosmos rotary table holds 128 patches of 16 px on an axis.
+_MAX_SIDE = 128 * 16
+#: Admission's bound per tier: its area plus 1/16 for rounding to 32 px.
+_DEMAND = {tier: (side * 17 // 16, side) for tier, side in _SIDE.items()}
 
-#: The demand table `Shape` reads: the runtime derives (width, height, pixels) from ONE
-#: field, so the tier carries its largest bucket as an upper bound over the tier.
-_TIER_DEMAND: dict[Megapixels, tuple[int, int]] = {
-    tier: max(
-        (size for (_, t), size in _BUCKETS.items() if t is tier),
-        key=lambda size: size[0] * size[1],
-    )
-    for tier in Megapixels
-}
+
+def _rounded(area: int, ratio: float) -> tuple[int, int]:
+    """Qwen-Image's `calculate_dimensions`: the area at that ratio, each side rounded to 32 px."""
+    width = math.sqrt(area * ratio)
+    return round(width / 32) * 32, round(width / ratio / 32) * 32
+
+
+def output_size(tier: Megapixels, ratio: str) -> tuple[int, int, bool]:
+    """The tier's area at `W:H`, held inside the rotary range, 32 px sides and the tier's
+    demand; True when that moved it off the rounded size."""
+    area, (w, h) = _SIDE[tier] ** 2, map(int, ratio.split(":"))
+    widest = min(_MAX_SIDE**2 / area, area / 32**2)
+    width, height = _rounded(area, min(max(w / h, 1 / widest), widest))
+    width, height = min(max(width, 32), _MAX_SIDE), min(max(height, 32), _MAX_SIDE)
+    while width * height > _DEMAND[tier][0] * _DEMAND[tier][1]:
+        width, height = (width - 32, height) if width >= height else (width, height - 32)
+    return width, height, (width, height) != _rounded(area, w / h)
+
+
 _WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
 
 
@@ -112,8 +103,8 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: str
     quality_prefix: str = CARD_QUALITY_PREFIX
     negative_prompt: str = CARD_NEGATIVE
-    aspect_ratio: AspectRatio = AspectRatio.SQUARE
-    megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP2
+    aspect_ratio: Annotated[str, msgspec.Meta(pattern=r"^[1-9][0-9]*:[1-9][0-9]*$")] = "1:1"
+    megapixels: Annotated[Megapixels, Shape(pixels=_DEMAND)] = Megapixels.MP2
     steps: Annotated[ModelDefault[int], msgspec.Meta(ge=8, le=50)] = 30
     guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=1.0, le=10.0)] = 4.5
     #: CFG interval (cr-086 arm 1, Kynkäänniemi et al., NeurIPS 2024): guidance helps only
@@ -165,9 +156,13 @@ def generate(
     model: AnimaModel,
     out: Outputs,
     tel: Telemetry,
+    adj: Adjustments,
 ) -> ImageOutput:
     """Generate one native-resolution Anima image."""
-    width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
+    width, height, held = output_size(payload.megapixels, payload.aspect_ratio)
+    if held:
+        size = f"{width}:{height}"
+        adj.clamp("aspect_ratio", payload.aspect_ratio, size, "nearest size the model admits")
     steps = payload.steps
     seed = payload.seed if payload.seed is not None else secrets.randbits(53)
     if payload.cfg_interval_start > payload.cfg_interval_stop:

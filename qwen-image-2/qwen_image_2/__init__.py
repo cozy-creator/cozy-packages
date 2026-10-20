@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import secrets
-from enum import Enum, IntEnum
+from enum import IntEnum
 from typing import Annotated, Any
 
 import msgspec
 import numpy as np
 from cozy_runtime.author import (
+    Adjustments,
     App,
     AssetBound,
     Context,
@@ -30,83 +31,47 @@ app = App()
 app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=24 << 30),), accelerator=False)
 
 
-class AspectRatio(Enum):
-    """Explicit output buckets; unknown ratios are refused, never rounded."""
-
-    SQUARE = "1:1"
-    LANDSCAPE = "4:3"
-    PORTRAIT = "3:4"
-    PHOTO = "3:2"
-    PORTRAIT_PHOTO = "2:3"
-    WIDE = "16:9"
-    TALL = "9:16"
-    ULTRAWIDE = "21:9"
-    ULTRATALL = "9:21"
-
-
 class Megapixels(IntEnum):
-    """Nominal image-area tiers; exact dimensions are listed in the package README."""
+    """Output area: 1024² pixels per megapixel, as upstream sizes it."""
 
     MP1 = 1
     MP2 = 2
     MP4 = 4
 
 
-# Tier 4 uses Qwen2.1 native recommendations; lower tiers scale and snap to 32px.
-# Ultrawide/tall extend the grid at the same area and latent patch stride.
-_BUCKETS: dict[tuple[AspectRatio, Megapixels], tuple[int, int]] = {
-    (AspectRatio.SQUARE, Megapixels.MP1): (1024, 1024),
-    (AspectRatio.LANDSCAPE, Megapixels.MP1): (1216, 896),
-    (AspectRatio.PORTRAIT, Megapixels.MP1): (896, 1216),
-    (AspectRatio.PHOTO, Megapixels.MP1): (1280, 864),
-    (AspectRatio.PORTRAIT_PHOTO, Megapixels.MP1): (864, 1280),
-    (AspectRatio.WIDE, Megapixels.MP1): (1376, 768),
-    (AspectRatio.TALL, Megapixels.MP1): (768, 1376),
-    (AspectRatio.ULTRAWIDE, Megapixels.MP1): (1568, 672),
-    (AspectRatio.ULTRATALL, Megapixels.MP1): (672, 1568),
-    (AspectRatio.SQUARE, Megapixels.MP2): (1440, 1440),
-    (AspectRatio.LANDSCAPE, Megapixels.MP2): (1696, 1280),
-    (AspectRatio.PORTRAIT, Megapixels.MP2): (1280, 1696),
-    (AspectRatio.PHOTO, Megapixels.MP2): (1792, 1216),
-    (AspectRatio.PORTRAIT_PHOTO, Megapixels.MP2): (1216, 1792),
-    (AspectRatio.WIDE, Megapixels.MP2): (1952, 1088),
-    (AspectRatio.TALL, Megapixels.MP2): (1088, 1952),
-    (AspectRatio.ULTRAWIDE, Megapixels.MP2): (2208, 960),
-    (AspectRatio.ULTRATALL, Megapixels.MP2): (960, 2208),
-    (AspectRatio.SQUARE, Megapixels.MP4): (2048, 2048),
-    (AspectRatio.LANDSCAPE, Megapixels.MP4): (2400, 1792),
-    (AspectRatio.PORTRAIT, Megapixels.MP4): (1792, 2400),
-    (AspectRatio.PHOTO, Megapixels.MP4): (2528, 1696),
-    (AspectRatio.PORTRAIT_PHOTO, Megapixels.MP4): (1696, 2528),
-    (AspectRatio.WIDE, Megapixels.MP4): (2752, 1536),
-    (AspectRatio.TALL, Megapixels.MP4): (1536, 2752),
-    (AspectRatio.ULTRAWIDE, Megapixels.MP4): (3136, 1344),
-    (AspectRatio.ULTRATALL, Megapixels.MP4): (1344, 3136),
-}
-
-# A derived tier (None) is known only once the references are read: admission sees 4 MP.
+#: Upstream's rotary table centres at most 2048 tokens of 16 px on an axis.
+_MAX_SIDE = 2048 * 16
+#: Admission's bound per tier: its area plus 1/16 for upstream's rounding to 32 px. An omitted
+#: tier is decided by the references after admission, so it is bounded at the largest.
 _DEMAND: dict[Megapixels | None, tuple[int, int]] = {
-    tier: max(
-        (size for (_, t), size in _BUCKETS.items() if t is (tier or Megapixels.MP4)),
-        key=lambda size: size[0] * size[1],
-    )
-    for tier in (*Megapixels, None)
+    tier: (1088 * (tier or Megapixels.MP4), 1024) for tier in (*Megapixels, None)
 }
-# Upstream's area is 1024² per megapixel. Ratios beyond 8:1 would round past the tier's demand.
-_MAX_RATIO = 8
 
 
 def _nearest_tier(pixels: int) -> Megapixels:
     return min(Megapixels, key=lambda tier: abs(tier * 1024 * 1024 - pixels))
 
 
+def output_size(tier: Megapixels, ratio: str) -> tuple[int, int, bool]:
+    """Upstream's `calculate_dimensions` at the tier's area, held inside the rotary range, 32 px
+    sides and the tier's demand; True when that moved it off upstream's size."""
+    area, (w, h) = tier * 1024 * 1024, map(int, ratio.split(":"))
+    widest = min(_MAX_SIDE**2 / area, area / 32**2)
+    width, height, _ = calculate_dimensions(area, min(max(w / h, 1 / widest), widest))
+    width, height = min(max(width, 32), _MAX_SIDE), min(max(height, 32), _MAX_SIDE)
+    while width * height > _DEMAND[tier][0] * _DEMAND[tier][1]:
+        width, height = (width - 32, height) if width >= height else (width, height - 32)
+    return width, height, (width, height) != calculate_dimensions(area, w / h)[:2]
+
+
 class GenerateInput(msgspec.Struct):
     prompt: str
-    # None: the last reference's exact ratio, else 1:1.
-    aspect_ratio: AspectRatio | None = None
-    # None: the tier nearest the last reference's pixel count, else 1 MP.
+    # Any W:H. None: the last reference's ratio, else 1:1.
+    aspect_ratio: Annotated[str, msgspec.Meta(pattern=r"^[1-9][0-9]*:[1-9][0-9]*$")] | None = None
+    # None: the tier nearest the last reference's pixel count, else 4 MP, the model's native 2K.
     megapixels: Annotated[Megapixels | None, Shape(pixels=_DEMAND)] = None
-    steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 40
+    # None: the checkpoint's own schedule (Turbo's 8 steps), else 40.
+    steps: Annotated[int, msgspec.Meta(ge=1, le=100)] | None = None
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     reference_images: Annotated[
         list[ImageAsset],
@@ -122,17 +87,14 @@ class GenerateInput(msgspec.Struct):
     def resolved_seed(self) -> int:
         return self.seed if self.seed is not None else secrets.randbits(53)
 
-    def dimensions(self, reference: tuple[int, int] | None = None) -> tuple[int, int]:
-        """Output size; `reference` is the last reference image's displayed (width, height)."""
+    def shape(self, reference: tuple[int, int] | None = None) -> tuple[Megapixels, str]:
+        """The tier and W:H asked for; `reference` is the last reference's displayed size."""
         if self.megapixels is not None:
             tier = self.megapixels
         else:
-            tier = _nearest_tier(reference[0] * reference[1]) if reference else Megapixels.MP1
-        if self.aspect_ratio is not None or reference is None:
-            return _BUCKETS[(self.aspect_ratio or AspectRatio.SQUARE, tier)]
-        ratio = min(max(reference[0] / reference[1], 1 / _MAX_RATIO), _MAX_RATIO)
-        width, height, _ = calculate_dimensions(tier * 1024 * 1024, ratio)
-        return width, height
+            tier = _nearest_tier(reference[0] * reference[1]) if reference else Megapixels.MP4
+        ratio = f"{reference[0]}:{reference[1]}" if reference else "1:1"
+        return tier, self.aspect_ratio or ratio
 
 
 class ImageOutput(msgspec.Struct):
@@ -160,20 +122,21 @@ def rgb_image(decoded: Any) -> Image.Image:
     return image
 
 
-@app.entrypoint(
-    defaults={"model": "qwen-image-2.1@0.1.0"},
-    memoize=Memoize(requires=["seed"]),
-    memo_dependencies=("qwen_image_2", "qwen_image_2.model"),
-)
-def generate_image(
+def _generate(
     ctx: Context,
     payload: GenerateInput,
     model: QwenImage21Model,
     out: Outputs,
     tel: Telemetry,
+    adj: Adjustments,
 ) -> ImageOutput:
+    """Both functions' body: the checkpoint decides the schedule."""
     reference_steps = ("vae",) if payload.reference_images else ()
     ctx.plan(*reference_steps, "text_encoder", "transformer", "vae")
+    sigmas = model.sample_sigmas
+    steps = len(sigmas) if sigmas else payload.steps or 40
+    if sigmas and payload.steps not in (None, steps):
+        adj.clamp("steps", payload.steps, steps, "the checkpoint's own schedule")
     seed = payload.resolved_seed()
     ctx.raise_if_cancelled()
     reference_images, reference_latents, image_pad_mask = None, None, None
@@ -182,7 +145,10 @@ def generate_image(
             reference_images = [asset.read() for asset in payload.reference_images]
             conditioning_images, reference_latents = model.encode_reference_images(reference_images)
         ctx.raise_if_cancelled()
-    width, height = payload.dimensions(reference_images[-1].size if reference_images else None)
+    tier, ratio = payload.shape(reference_images[-1].size if reference_images else None)
+    width, height, held = output_size(tier, ratio)
+    if held:
+        adj.clamp("aspect_ratio", ratio, f"{width}:{height}", "nearest size the model admits")
     with tel.stage("encoding prompt", overall_range=(0.08 if reference_images else 0.0, 0.1)):
         if reference_images is None:
             embeds, mask = model.encode(payload.prompt)
@@ -196,11 +162,9 @@ def generate_image(
             mask,
             width=width,
             height=height,
-            steps=payload.steps,
+            steps=steps,
             seed=seed,
-            on_step=tel.step_callback(
-                payload.steps, stage="generating image", overall_range=(0.1, 0.9)
-            ),
+            on_step=tel.step_callback(steps, stage="generating image", overall_range=(0.1, 0.9)),
             cancel=ctx.raise_if_cancelled,
             reference_images=reference_images,
             reference_latents=reference_latents,
@@ -213,3 +177,40 @@ def generate_image(
     with tel.stage("saving image", overall_range=(0.98, 1.0)):
         asset = out.save_image(image, format="png")
     return ImageOutput(asset, width, height, seed)
+
+
+_MEMO = ("qwen_image_2", "qwen_image_2.model")
+
+
+@app.entrypoint(
+    defaults={"model": "qwen-image-2.1@0.1.0"},
+    memoize=Memoize(requires=["seed"]),
+    memo_dependencies=_MEMO,
+)
+def generate_image(
+    ctx: Context,
+    payload: GenerateInput,
+    model: QwenImage21Model,
+    out: Outputs,
+    tel: Telemetry,
+    adj: Adjustments,
+) -> ImageOutput:
+    """Qwen-Image-2.1, the 40-step base model."""
+    return _generate(ctx, payload, model, out, tel, adj)
+
+
+@app.entrypoint(
+    defaults={"model": "qwen-image-2.1-turbo@0.1.0"},
+    memoize=Memoize(requires=["seed"]),
+    memo_dependencies=_MEMO,
+)
+def generate_image_turbo(
+    ctx: Context,
+    payload: GenerateInput,
+    model: QwenImage21Model,
+    out: Outputs,
+    tel: Telemetry,
+    adj: Adjustments,
+) -> ImageOutput:
+    """Qwen-Image-2.1-Turbo: the same inputs, on its checkpoint's 8-step schedule."""
+    return _generate(ctx, payload, model, out, tel, adj)

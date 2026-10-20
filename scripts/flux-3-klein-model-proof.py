@@ -10,11 +10,13 @@ from __future__ import annotations
 import copy
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
 import torch
 from cozy_runtime.author import Config, ModelAssets
+from cozy_runtime.author.fakes import granted_input, invoke_with_fakes
 from diffusers.models.transformers.transformer_flux3 import (
     Flux3ModeTransformerBlock,
     Flux3SingleTransformerBlock,
@@ -27,7 +29,8 @@ from transformers import PreTrainedTokenizerFast
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "flux-3-klein"))
 
-from flux_3_klein import AspectRatio, Megapixels, output_size  # noqa: E402
+from flux_3_klein import _DEMAND, Megapixels, app, output_size  # noqa: E402
+from flux_3_klein.upsampler import Drafter, Upsampler  # noqa: E402
 from flux_3_klein.klein import (  # noqa: E402
     PATCH,
     TEXT_LAYERS,
@@ -137,13 +140,21 @@ def proof(flow_map: bool, references: list[Image.Image]) -> None:
 
 
 def sizes() -> None:
-    assert output_size(AspectRatio.SQUARE, Megapixels.MP1, None) == (1024, 1024)
-    for aspect in AspectRatio:
-        for tier in Megapixels:
-            w, h = output_size(aspect, tier, None)
-            assert w % PATCH == h % PATCH == 0
-    w, h = output_size(None, Megapixels.MP1, Image.new("RGB", (3000, 2000)))
-    assert (w, h) == (1248, 832) and w % PATCH == h % PATCH == 0, (w, h)
+    """Any W:H at the tier's area, rounded to 32 px, inside BFL's 64-4096 px sides and the demand
+    admission declared; held only past them."""
+    assert output_size(Megapixels.MP1, "1:1") == (1024, 1024, False)
+    assert output_size(Megapixels.MP1, "3000:2000") == (1248, 832, False)
+    assert output_size(Megapixels.MP4, "16:9") == (2720, 1536, False)
+    assert output_size(Megapixels.MP4, "8:1") == (4096, 1024, True)
+    for tier in Megapixels:
+        for step in range(-500, 501):
+            w, h = round(10**4 * 10 ** (step / 125)), 10**4
+            width, height, held = output_size(tier, f"{w}:{h}")
+            assert width % 32 == height % 32 == 0 and 64 <= min(width, height) <= max(width, height) <= 4096
+            assert width * height <= _DEMAND[tier][0] * _DEMAND[tier][1], (tier, w, h)
+            assert output_size(tier, f"{h}:{w}")[:2] == (height, width)
+            if max(w / h, h / w) <= min(4096**2 / (tier << 20), 13):
+                assert not held, (tier, w, h)
     fit, canvas = reference_canvas(3000, 2000)
     assert canvas[0] * canvas[1] <= 4 * 1024 * 1024 and canvas[0] % 16 == canvas[1] % 16 == 0
     padded, box = prepare_reference(Image.new("RGB", (1000, 1001)))
@@ -151,8 +162,47 @@ def sizes() -> None:
     assert prepare_multi_reference(Image.new("RGB", (2000, 1000))).size == (1440, 720)
 
 
+def edits(root: Path) -> None:
+    """`edit` through the real kernel on real PNGs. Given no size, the output is BFL's: the first
+    prepared reference's own size, a lone one's padding cropped off. Explicit inputs win."""
+    # `prompt_upsampling=False` never calls the upsampler or its drafter: unloaded stand-ins.
+    models = {
+        "model": Klein.for_test(graph=graph(True), processor=build_processor(assets())),
+        "upsampler": Upsampler.for_test(),
+        "drafter": Drafter.for_test(),
+    }
+    rng = np.random.default_rng(5)
+    paths = []
+    for index, size in enumerate(((100, 60), (90, 50), (200, 200))):
+        path = root / f"reference-{index}.png"
+        Image.fromarray(rng.integers(0, 255, (size[1], size[0], 3), dtype=np.uint8)).save(path)
+        paths.append(path)
+    cases: list[tuple[list[Path], dict[str, object], tuple[int, int]]] = [
+        ([paths[0]], {}, (100, 60)),  # canvas 112x64, cropped back to the fit
+        ([paths[1], paths[2]], {}, (80, 48)),  # several: the first, cropped to the 16 px grid
+        ([paths[0]], {"aspect_ratio": "2:1", "megapixels": 1}, (1440, 736)),
+        ([paths[0]], {"megapixels": 1}, (1312, 800)),  # its 5:3 at the tier given
+    ]
+    for index, (references, given, expected) in enumerate(cases):
+        grants = {
+            f"reference_images.{n}": granted_input(path, input_id=f"reference_images.{n}", order=n)
+            for n, path in enumerate(references)
+        }
+        wire = {"prompt": "a fox", "steps": 1, "seed": 3, "prompt_upsampling": False, **given}
+        wire["reference_images"] = [grant.digest for grant in grants.values()]
+        spool = root / f"edit-{index}"
+        result = invoke_with_fakes(
+            app.get("edit"), wire, request_id=f"edit-{index}", spool=spool, models=models, assets=grants
+        )
+        assert (result.result.width, result.result.height) == expected, (given, result.result)
+        with Image.open(spool / "image-0001") as png:
+            assert png.size == expected, png.size
+
+
 if __name__ == "__main__":
     sizes()
+    with tempfile.TemporaryDirectory() as scratch:
+        edits(Path(scratch))
     rng = np.random.default_rng(3)
     pictures = [Image.fromarray(rng.integers(0, 255, (48, 64, 3), dtype=np.uint8)) for _ in range(2)]
     for flow_map in (True, False):

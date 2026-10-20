@@ -94,7 +94,6 @@ from minimax_h3.official import (
     turbo_steps,
     validate_reference_policy,
 )
-from qwen_image_2 import AspectRatio as ReferenceAspectRatio
 from qwen_image_2 import ImageOutput as ReferenceImageOutput
 from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate_image as generate_reference
@@ -1731,7 +1730,7 @@ async def _create_references(
         with tel.scope(f"Creating reference {reference.name}"):
             result = await reference_generator(
                 prompt=image_prompt(reference, style),
-                aspect_ratio=ReferenceAspectRatio.WIDE if sheet else ReferenceAspectRatio.SQUARE,
+                aspect_ratio="16:9" if sheet else "1:1",
                 megapixels=ReferenceMegapixels.MP2 if sheet else ReferenceMegapixels.MP1,
                 steps=reference_steps,
                 seed=reference_seed(reference, ctx.request_id),

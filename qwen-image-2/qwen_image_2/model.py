@@ -132,6 +132,9 @@ class QwenImage21Graph:
         # built; Runtime skips its stored weight.
         self.components["text_encoder"].lm_head = torch.nn.Identity()
         self.scheduler_config = _section(mapping["scheduler"], "scheduler")
+        # A distilled checkpoint (Turbo) names its own schedule; its length is the step count.
+        sigmas = _section(mapping.get("model_index", {}), "model_index").get("sample_sigmas")
+        self.sample_sigmas = [float(sigma) for sigma in sigmas] if sigmas else None
 
 
 def build_qwen_image21(config: Config) -> QwenImage21Graph:
@@ -151,15 +154,24 @@ def build_processor(assets: ModelAssets) -> Any:
         "added_tokens_decoder",
         "tokenizer_class",
         "processor_class",
+        "backend",
+        "is_local",
     ):
         tokenizer_config.pop(key, None)
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer.from_str(read("tokenizer.json").decode()), **tokenizer_config
     )
+    # Transformers 5 saves one `processor_config.json` (Turbo); earlier releases, one file each.
+    if "processor/processor_config.json" in assets.names():
+        nested = json.loads(read("processor_config.json"))
+        image, video = nested["image_processor"], nested["video_processor"]
+    else:
+        image = json.loads(read("preprocessor_config.json"))
+        video = json.loads(read("video_preprocessor_config.json"))
     return Qwen3VLProcessor(
         tokenizer=tokenizer,
-        image_processor=Qwen2VLImageProcessor(**json.loads(read("preprocessor_config.json"))),
-        video_processor=Qwen3VLVideoProcessor(**json.loads(read("video_preprocessor_config.json"))),
+        image_processor=Qwen2VLImageProcessor(**image),
+        video_processor=Qwen3VLVideoProcessor(**video),
         chat_template=read("chat_template.jinja").decode(),
     )
 
@@ -218,11 +230,16 @@ class QwenImage21Model(Model[QwenImage21Graph], encoded_leaves="accept"):
     def execution_plan(self, plan: Plan) -> str:
         return fusion.install(plan, BLOCK, self.graph.components["transformer"])
 
+    @property
+    def sample_sigmas(self) -> list[float] | None:
+        return self.graph.sample_sigmas
+
     def _pipeline(self) -> _StagedPipeline:
         return _StagedPipeline(
             **self.graph.components,
             processor=self.processor,
             scheduler=FlowMatchEulerDiscreteScheduler.from_config(self.graph.scheduler_config),
+            sample_sigmas=self.graph.sample_sigmas,
         )
 
     @uses_components("text_encoder", memoize=True, memo_dependencies=_ENCODER_CODE)
