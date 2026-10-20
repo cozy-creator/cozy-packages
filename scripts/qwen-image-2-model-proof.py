@@ -212,12 +212,12 @@ def staged(tmp_path: Path) -> None:
         """A real native component keeps its semantic config out of its assets."""
         store = tmp_path / f"processor-{name}"
         with tensorfs.Writer(cache_dir=store) as writer:
-            component = writer.component(
+            writing = writer.component(
                 "processor", cls="Qwen3VLProcessor", config=configuration,
                 config_file=config_file,
             )
             for filename, raw in files.items():
-                component.asset(filename, raw)
+                writing.asset(filename, raw)
             checkpoint = writer.commit()
         with tensorfs.open(checkpoint.id, cache_dir=store, local_files_only=True) as opened:
             component = opened.components["processor"]
