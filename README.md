@@ -121,7 +121,7 @@ The `fl2va_turbo` and `ref2va_turbo` functions take two independent model slots:
 `base_model: H3TurboBase` holds an AdaLN-pruned five-root checkpoint, and
 `turbo_lora: H3TurboLoRA` holds only `fl2va_turbo` and `ref2va_turbo`. Both
 checkpoints must have matching DiT configurations. They default to `minimax-h3@1.0.0-rc.3` and
-`minimax-h3-turbo-lora@1.0.0-audit.1`; callers can select other compatible releases explicitly.
+`minimax-h3-turbo-lora@1.0.0`; callers can select other compatible releases explicitly.
 Each sampling scope holds its base DiT and separate overlay together. LoRA hooks
 are installed during construction, before Runtime chooses fusion or Ulysses
 execution. All three model classes declare degrees 2 and 4.
