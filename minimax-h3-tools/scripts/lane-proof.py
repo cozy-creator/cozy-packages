@@ -13,22 +13,16 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
 import tensorfs
 from cozy_runtime.author import UnsupportedInput
 from h3_tables import adaln_operations, job, lanes
 from h3_tables.model_config import COMPONENTS, DIT_COMPONENT, parse_production_config
 from h3_tables.order import current_order, full_order
+from h3_tables.source import rows
 
 ROOT = Path(__file__).resolve().parents[2]
 VECTORS = ROOT / "scripts" / "lane-headers"
-
-
-def source(path: Path) -> Any:
-    """A granted checkpoint as the producer reads it: its parsed header."""
-    return SimpleNamespace(checkpoint=tensorfs.open(path, local_files_only=True), manifest="")
 
 
 def refuses(code: str, call: Callable[[], object]) -> None:
@@ -44,7 +38,7 @@ def counts(selections: list[lanes.Selection]) -> dict[str, tuple[str | None, int
     return {s.component: (s.treatment.encode, len(s.encoded)) for s in selections}
 
 
-def recipes(pruned: Any) -> None:
+def recipes(pruned: tensorfs.Checkpoint) -> None:
     dits = {"transformer", "transformer_ref"}
     for encoding, dit_scheme, dit_rows, te_scheme in (
         ("fp8.rowwise", "fp8.rowwise", 313, "fp8.rowwise"),
@@ -55,7 +49,7 @@ def recipes(pruned: Any) -> None:
         want = {dit: (dit_scheme, dit_rows) for dit in dits} | {"text_encoder": (te_scheme, 350)}
         assert got == want, f"{encoding}: {got}"
         print(f"PASS --{encoding}: {got}")
-    present = pruned.checkpoint.tensors
+    present = rows(pruned)
     refuses("h3_component_refused", lambda: lanes.select(
         "audio_vae", lanes.Treatment(encode="fp8.rowwise"), pruned, present["audio_vae"]))
     refuses("h3_keep_unmatched", lambda: lanes.select(
@@ -65,8 +59,8 @@ def recipes(pruned: Any) -> None:
     print("PASS refusals: audio_vae, an unmatched keep, a pruned source for a lane")
 
 
-def lanes_from_full(full: Any) -> None:
-    present = full.checkpoint.tensors
+def lanes_from_full(full: tensorfs.Checkpoint) -> None:
+    present = rows(full)
     sections = parse_production_config(job._asset("model-config.json"))
     current = current_order(job._asset("whole-order.json")).rows
     for name, order_want, computed_want in (
@@ -94,11 +88,11 @@ def lanes_from_full(full: Any) -> None:
     print("PASS a full source is refused by the quantize recipes")
 
 
-def adaln(pruned: Any, full: Any) -> None:
-    tables = job.retable_rows(pruned.checkpoint.tensors, full.checkpoint.tensors)
+def adaln(pruned: tensorfs.Checkpoint, full: tensorfs.Checkpoint) -> None:
+    tables = job.retable_rows(rows(pruned), rows(full))
     assert {c: len(keys) for c, keys in tables.items()} == {c: 51 for c in DIT_COMPONENT.values()}
-    assert adaln_operations._body_kind(pruned.checkpoint.tensors) is True
-    assert adaln_operations._body_kind(full.checkpoint.tensors) is False
+    assert adaln_operations._body_kind(rows(pruned)) is True
+    assert adaln_operations._body_kind(rows(full)) is False
     print("PASS retable reads 51 tables per DiT; the AdaLN operations tell full from pruned")
 
 
@@ -107,7 +101,7 @@ def main() -> None:
     parser.add_argument("--pruned", type=Path, default=VECTORS / "minimax-h3.cozytensors")
     parser.add_argument("--full", type=Path, default=VECTORS / "minimax-h3-full.cozytensors")
     args = parser.parse_args()
-    pruned, full = source(args.pruned), source(args.full)
+    pruned, full = (tensorfs.open(path, local_files_only=True) for path in (args.pruned, args.full))
     recipes(pruned)
     lanes_from_full(full)
     adaln(pruned, full)

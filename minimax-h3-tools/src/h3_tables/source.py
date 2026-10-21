@@ -1,18 +1,17 @@
-"""The producer's channels: a granted H3 checkpoint's rows, configs and bytes; tensors written."""
+"""A granted H3 checkpoint's rows, configs and bytes; tensors written to an output."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from importlib.resources import files
-from typing import Any, Protocol
+from typing import Any
 
 import msgspec
 import torch
 from cozy_runtime.author import Context, Weights, canonical_json
-from cozy_runtime.tensord_channels import HEADER, Output, Source
+from cozy_runtime.weights_store import Checkpoint, Output, TensorMetadata
 
 from .kernel import H3Topology, LowRankAdapter, precompute_tables, table_shapes
-from .model_config import read_config
 from .plans import TimestepPlan
 
 _FULL_SPECS_DIGEST = "sha256:3af7354b5080f4c117922157971261fd079f12790f9584615e87b4fdd95ae3e2"
@@ -30,24 +29,12 @@ _TEXT_LAYER_SUFFIXES = (
     "self_attn.q_proj.weight",
     "self_attn.v_proj.weight",
 )
-READ_CHUNK = 32 << 20
 DTYPE = {"bf16": torch.bfloat16, "f16": torch.float16, "f32": torch.float32}
 _NAMES = {torch.bfloat16: "BF16", torch.float16: "F16", torch.float32: "F32"}
 
 
-class Row(Protocol):
-    """A header tensor (`tensorfs.Info`): TensorFS dtype, shape, encoding (None when plain)."""
-
-    @property
-    def dtype(self) -> str: ...
-
-    @property
-    def shape(self) -> tuple[int, ...]: ...
-
-    @property
-    def encoding(self) -> Any: ...
-
-
+#: A header tensor: TensorFS dtype, shape and encoding (None when plain).
+Row = TensorMetadata
 Rows = Mapping[str, Mapping[str, Row]]
 
 
@@ -60,26 +47,30 @@ def plain(row: Row, expected: str, shape: tuple[int, ...]) -> bool:
     return row.encoding is None and dtype(row) == expected and tuple(row.shape) == shape
 
 
-def open_source(ctx: Context, weights: Weights[Any]) -> Source:
+def open_source(ctx: Context, weights: Weights[Any]) -> Checkpoint:
     return ctx.tensorfs_source(weights)
 
 
-def rows(source: Source) -> Rows:
+def rows(source: Checkpoint) -> Rows:
     """`[component][key]` in header (construction) order."""
-    return source.checkpoint.tensors
+    return {name: component.tensors for name, component in source.components.items()}
 
 
-def config(source: Source) -> bytes:
+def config(source: Checkpoint) -> bytes:
     """The checkpoint's `{component: config}` document."""
-    return read_config({path: source.file(path) for path in source.files if path != HEADER})
+    return canonical_json.encode({name: c.config for name, c in source.components.items()})
 
 
-def read(source: Source, component: str, key: str, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
+def write_config(out: Output, document: bytes) -> None:
+    """Each component's config of a `{component: config}` document, before its tensors."""
+    for component, section in canonical_json.decode(document).items():
+        out.config(component, section)
+
+
+def read(source: Checkpoint, component: str, key: str, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
     """One plain tensor's stored bytes on the CPU."""
     value = torch.empty(shape, dtype=dtype)
-    view = memoryview(value.view(torch.uint8).numpy()).cast("B")
-    for offset in range(0, len(view), READ_CHUNK):
-        source.read_into(component, key, "value", offset, view[offset : offset + READ_CHUNK])
+    source.components[component].tensors.read_into(key, memoryview(value.view(torch.uint8).numpy()))
     return value
 
 
@@ -96,7 +87,7 @@ def write_tables(
     *,
     plan: TimestepPlan,
     topology: H3Topology,
-    source: Source,
+    source: Checkpoint,
     component: str,
     outputs: Sequence[Output],
     progress: Callable[[int, int], None],

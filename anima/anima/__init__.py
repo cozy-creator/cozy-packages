@@ -203,7 +203,7 @@ _QUANTIZER = (  # the Runtime code and native libraries that decide a lane's byt
     "cozy_runtime.derive.quantization",
     "cozy_runtime.derive.microscale",
     "cozy_runtime.derive.safetensors_io",
-    "cozy_runtime.tensord_channels",
+    "cozy_runtime.weights_store",
     MemoDistribution("tensorfs"),
     MemoDistribution("numpy"),
 )

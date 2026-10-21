@@ -23,7 +23,7 @@ from cozy_runtime.derive.quantization import (
     QuantizationTensor,
     prepare_source_quantization,
 )
-from cozy_runtime.tensord_channels import Output, Source
+from cozy_runtime.weights_store import Checkpoint, Output
 
 from .model_config import DIT_COMPONENT
 from .source import Row, dtype, plain
@@ -276,7 +276,7 @@ class Selection:
 def select(
     component: str,
     treatment: Treatment,
-    source: Source,
+    source: Checkpoint,
     carried: Mapping[str, Row],
     *,
     dit_plan: Sequence[tuple[str, tuple[int, int]]] = (),
@@ -364,12 +364,11 @@ class CastStats:
 #: Half-ulp of each carrier's significand as a multiple of the tensor's amax. Overflow is not a
 #: rounding error: an fp16 cast of a large outlier produces inf, and that refuses.
 CAST_ROUND_TRIP_BOUND: Mapping[str, float] = {"bf16": BF16_ROUND_TRIP_BOUND, "f16": 2.0**-11}
-CAST_READ_CHUNK = 32 << 20
 MAX_CAST_TENSOR_BYTES = 1 << 30
 
 
 def write_cast(
-    source: Source, out: Output, ctx: Context, tel: Telemetry, *, selection: Selection
+    source: Checkpoint, out: Output, ctx: Context, tel: Telemetry, *, selection: Selection
 ) -> CastStats:
     """Stream one component's float32 cut through RNE into the declared carrier, each tensor's
     round trip held to the carrier's bound and its relative Frobenius recorded."""
@@ -418,7 +417,7 @@ def write_cast(
 
 
 def _read_f32(
-    source: Source, component: str, key: str, shape: tuple[int, ...]
+    source: Checkpoint, component: str, key: str, shape: tuple[int, ...]
 ) -> tuple[np.ndarray, int]:
     length = math.prod(shape) * 4
     if length > MAX_CAST_TENSOR_BYTES:
@@ -428,11 +427,7 @@ def _read_f32(
             code="h3_cast_tensor_bound",
         )
     raw = bytearray(length)
-    view = memoryview(raw)
-    for offset in range(0, length, CAST_READ_CHUNK):
-        source.read_into(
-            component, key, "value", offset, view[offset : min(offset + CAST_READ_CHUNK, length)]
-        )
+    source.components[component].tensors.read_into(key, raw)
     values = st.to_f32(raw, "F32", list(shape))
     if not bool(np.isfinite(values).all()):
         raise UnsupportedInput(

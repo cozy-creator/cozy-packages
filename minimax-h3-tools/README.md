@@ -88,8 +88,8 @@ the component, it silently quantizes the audio conditioning path and leaves the 
 decoder untouched.
 
 Each lane holds the components `transformer` (FL2VA), `transformer_ref` (Ref2VA),
-`text_encoder`, `vae` and `audio_vae` (Diffusers' names), each with its own
-`<component>/config.json`; the DiTs are the exact 638-row Diffusers DiTs (import drops the
+`text_encoder`, `vae` and `audio_vae` (Diffusers' names), each with its own config;
+the DiTs are the exact 638-row Diffusers DiTs (import drops the
 native-only `rope.inv_freq`). Full assembly drops the official text model's layers 50–63,
 final norm and language-model head (156 rows) to produce the reviewed 902-row, 50-layer
 pre-norm conditioner without rewriting any retained payload. Each pruned task then

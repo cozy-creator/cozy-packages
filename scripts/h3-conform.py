@@ -34,7 +34,6 @@ import numpy as np
 import torch
 from cozy_runtime.author import (
     App,
-    Artifact,
     Assets,
     AttentionLayout,
     AudioAsset,
@@ -43,7 +42,6 @@ from cozy_runtime.author import (
     Context,
     DecodedAudio,
     DecodedAudioChunk,
-    DecodedVideo,
     DecodedVideoFrame,
     ImageAsset,
     InvalidRequest,
@@ -64,7 +62,6 @@ from cozy_runtime.author.fakes import (
     fake_telemetry,
     granted_input,
 )
-from cozy_runtime.internal.derive import derive
 from diffusers import (
     AutoencoderKLMiniMaxH3,
     AutoencoderKLMiniMaxH3Audio,
@@ -144,6 +141,7 @@ from minimax_h3.official import (  # noqa: E402
     supported_durations,
     supported_steps,
     timestep_plan_digest,
+    Trunk,
     validate_reference_policy,
 )
 from minimax_h3 import turbo as turbo_module  # noqa: E402
@@ -578,6 +576,15 @@ def check(name: str, got: Any, want: Any) -> None:
         observe(name, repr(got))
     else:
         fail(name, f"got {got!r}, want {want!r}")
+
+
+def census(pipe: Any) -> list[tuple[str, list[str]]]:
+    """Each module component's keys in its `state_dict()` order: what Runtime's loader walks."""
+    return [
+        (name, list(module.state_dict()))
+        for name, module in pipe.components.items()
+        if isinstance(module, torch.nn.Module)
+    ]
 
 
 def red(name: str, defective: Any, correct: Any) -> None:
@@ -1709,16 +1716,11 @@ def arm_text_conditioner() -> None:
     }
 
     def contract_document() -> dict[str, object]:
-        result = derive(
-            package.H3Model(),
-            Artifact("se-018-audit", {}, Config(model_config)),
-        )
+        with torch.device("meta"):
+            built = census(official.build_h3_pipeline(Config(model_config)))
         return {
             "schema": "cozy.runtime.model_construction_contract.v1",
-            "destination_sets": [
-                {"component": row.component, "keys": list(row.keys)}
-                for row in result.destination_sets
-            ],
+            "destination_sets": [{"component": name, "keys": keys} for name, keys in built],
         }
 
     first_contract = contract_document()
@@ -3154,7 +3156,7 @@ def arm_interface() -> None:
         )
         turbo = name.endswith("_turbo")
         models = child["models"]
-        trunk = name.removesuffix("_turbo")
+        trunk = cast(Trunk, name.removesuffix("_turbo"))
         if turbo:
             check(f"{name} has separately bound base and LoRA models", len(models), 2)
             base_slot, lora_slot = models
@@ -4314,11 +4316,10 @@ def arm_turbo_artifact() -> None:
         lora = official.OfficialH3TurboLoRA(Config(overlay_only))
     check("ordinary model has exactly five real roots", set(base.components), set(base_only))
     check("turbo LoRA has exactly two overlay roots", set(lora.components), set(overlay_only))
-    for cls, config in ((package.H3TurboBase, base_only), (package.H3TurboLoRA, overlay_only)):
-        derived = derive(cls(), Artifact("constructor-audit", {}, Config(config)))
+    for label, built, config in (("H3TurboBase", base, base_only), ("H3TurboLoRA", lora, overlay_only)):
         check(
-            f"{cls.__name__} Runtime census matches its exact checkpoint",
-            {row.component for row in derived.destination_sets},
+            f"{label} census matches its exact checkpoint",
+            {name for name, keys in census(built) if keys},
             set(config),
         )
     for trunk in ("fl2va", "ref2va"):
