@@ -19,10 +19,10 @@ def main() -> None:
             component.put("plain", b"data", dtype="U8", shape=[4])
             for name, scheme, dtype, weight_bytes, params, scales in (
                 ("fp8", "fp8.rowwise", "F8_E4M3", 256,
-                 {"axis": 0, "scale_dtype": "F32"},
+                 {"axis": 0},
                  {"scale": ("F32", [1], struct.pack("<f", 1))}),
                 ("int8", "int8.convrot", "I8", 256,
-                 {"rotation": "kron_regular_h4", "rotation_size": 256, "scale_dtype": "F32"},
+                 {"rotation": "kron_regular_h4", "rotation_size": 256},
                  {"scale": ("F32", [1], struct.pack("<f", 1))}),
                 ("nvfp4", "nvfp4", "F4", 128,
                  {"block_size": 16, "global_scale": "multiply", "nibble_order": "low_first",
@@ -46,6 +46,8 @@ def main() -> None:
             held = tensors.read(key)
             if not isinstance(held, tensorfs.Encoded):
                 raise RuntimeError(f"{key} did not retain its native stored parts")
+            if key in ("fp8", "int8") and held.parts["scale"].dtype != "F32":
+                raise RuntimeError(f"native {scheme} did not retain its scale part dtype")
             into = np.empty((1, 256), dtype=np.float32)
             raw.decode_into(scheme, {name: (part.dtype, part.shape, part.tobytes())
                                     for name, part in held.parts.items()}, into,
