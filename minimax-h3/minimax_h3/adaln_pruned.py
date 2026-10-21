@@ -19,6 +19,12 @@ from typing import Any, ClassVar, cast
 
 import torch
 from diffusers import MiniMaxH3Transformer3DModel
+from diffusers.models.modeling_utils import get_parameter_dtype
+from diffusers.models.transformers.transformer_minimax_h3 import (
+    MINIMAX_H3_MODALITY_NUM,
+    MiniMaxH3TransformerOutput,
+)
+from diffusers.utils import apply_lora_scale
 from torch import nn
 from torch.nn import functional as F
 
@@ -201,6 +207,63 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
         self._lora_hooks_installed = False
         self.register_forward_pre_hook(self._arm, with_kwargs=True)
         self.register_forward_hook(self._disarm, always_call=True)
+
+    @apply_lora_scale("attention_kwargs")  # type: ignore[untyped-decorator]
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        audio_hidden_states: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        timestep: torch.Tensor,
+        timestep_indices: torch.Tensor,
+        token_tags: torch.Tensor,
+        position_ids: torch.Tensor,
+        video_indices: torch.Tensor,
+        audio_indices: torch.Tensor,
+        text_indices: torch.Tensor,
+        attention_kwargs: dict[str, Any] | None = None,
+        return_dict: bool = True,
+    ) -> MiniMaxH3TransformerOutput | tuple[torch.Tensor, torch.Tensor]:
+        """Diffusers 0.41's forward, the projected rows scoped to the packing: Diffusers keeps
+        them to its end, the video's float32 rows (2.25 GB a GPU at H3 15 s, degree 2) through
+        every block."""
+        del attention_kwargs  # `apply_lora_scale` consumed it
+        sequence_length = position_ids.shape[0]
+        if position_ids.ndim != 2 or position_ids.shape[-1] != 3:
+            raise ValueError(f"`position_ids` must be a `(seq_len, 3)` tensor, got {list(position_ids.shape)}.")
+        if token_tags.shape != (sequence_length,) or timestep_indices.shape != (sequence_length,):
+            raise ValueError(
+                "`token_tags` and `timestep_indices` must both be `(seq_len,)` tensors matching "
+                f"`position_ids`, got {list(token_tags.shape)} and {list(timestep_indices.shape)} "
+                f"for seq_len={sequence_length}."
+            )
+        rotary_emb = self.rope(position_ids)
+        text = self.token_refiner(
+            self.context_embedder(encoder_hidden_states.to(get_parameter_dtype(self.context_embedder)))
+        )
+        rows = text.new_zeros((text.shape[0], sequence_length, text.shape[-1]))
+        rows = rows.index_copy(1, text_indices, text)
+        del text
+        video = self.proj_in(hidden_states.to(get_parameter_dtype(self.proj_in)))
+        rows = rows.index_copy(1, video_indices, video.to(rows.dtype))
+        del video
+        audio = self.audio_proj_in(audio_hidden_states.to(get_parameter_dtype(self.audio_proj_in)))
+        rows = rows.index_copy(1, audio_indices, audio.to(rows.dtype))
+        del audio
+        temb = self.time_proj(timestep)
+        temb = self.time_embedder(temb.to(get_parameter_dtype(self.time_embedder)))
+        adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + token_tags
+        for block in self.transformer_blocks:
+            if torch.is_grad_enabled() and self.gradient_checkpointing:
+                rows = self._gradient_checkpointing_func(block, rows, temb, adaln_indices, rotary_emb)
+            else:
+                rows = block(rows, temb, adaln_indices, rotary_emb)
+        rows = self.norm_out(rows, temb, timestep_indices).to(get_parameter_dtype(self.proj_out))
+        video_output = self.proj_out(rows).index_select(1, video_indices)
+        audio_output = self.audio_proj_out(rows).index_select(1, audio_indices)
+        if not return_dict:
+            return (video_output, audio_output)
+        return MiniMaxH3TransformerOutput(sample=video_output, audio_sample=audio_output)
 
     def install_lora_consumers(self) -> None:
         """Install once during turbo-capable construction, before Runtime fill/fusion."""
