@@ -204,9 +204,12 @@ def staged(tmp_path: Path) -> None:
         named = {f"processor/{name}": raw for name, raw in files.items()}
         return ModelAssets(named, lambda _operation: None)
 
-    rebuilt = build_processor(assets(files))
+    rebuilt = build_processor(assets(files), {})
     assert rebuilt.tokenizer.encode("blue jacket") == processor.tokenizer.encode("blue jacket")
     assert rebuilt.chat_template == chat
+    # A TensorFS checkpoint keeps the folder's preprocessor_config.json as the processor's config.
+    configured = {k: v for k, v in files.items() if k != "preprocessor_config.json"}
+    assert build_processor(assets(configured), geometry).to_dict() == rebuilt.to_dict()
     # Turbo's Transformers 5 layout: one processor_config.json and the new tokenizer_config keys.
     turbo_files = {
         "tokenizer.json": files["tokenizer.json"],
@@ -223,11 +226,13 @@ def staged(tmp_path: Path) -> None:
         ).encode(),
         "chat_template.jinja": chat.encode(),
     }
-    turbo = build_processor(assets(turbo_files))
+    turbo = build_processor(assets(turbo_files), {})
     assert turbo.tokenizer.encode("blue jacket") == processor.tokenizer.encode("blue jacket")
     assert turbo.to_dict() == rebuilt.to_dict()
+    nested = json.loads(turbo_files.pop("processor_config.json"))
+    assert build_processor(assets(turbo_files), nested).to_dict() == rebuilt.to_dict()
     try:
-        build_processor(assets({k: v for k, v in files.items() if k != "chat_template.jinja"}))
+        build_processor(assets({k: v for k, v in files.items() if k != "chat_template.jinja"}), {})
     except Exception as missing:
         assert "chat_template.jinja" in str(missing), missing
     else:

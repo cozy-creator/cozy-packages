@@ -132,6 +132,8 @@ class QwenImage21Graph:
         # built; Runtime skips its stored weight.
         self.components["text_encoder"].lm_head = torch.nn.Identity()
         self.scheduler_config = _section(mapping["scheduler"], "scheduler")
+        # The processor folder's config file, which TensorFS keeps as its component's config.
+        self.processor_config = _section(mapping.get("processor", {}), "processor")
         # A distilled checkpoint (Turbo) names its own schedule; its length is the step count.
         sigmas = _section(mapping.get("model_index", {}), "model_index").get("sample_sigmas")
         self.sample_sigmas = [float(sigma) for sigma in sigmas] if sigmas else None
@@ -141,11 +143,17 @@ def build_qwen_image21(config: Config) -> QwenImage21Graph:
     return QwenImage21Graph(config)
 
 
-def build_processor(assets: ModelAssets) -> Any:
-    """Qwen3-VL's processor from the checkpoint's upstream `processor/` files, parsed in memory."""
+def build_processor(assets: ModelAssets, config: Mapping[str, Any]) -> Any:
+    """Qwen3-VL's processor from the checkpoint's upstream `processor/` files, parsed in memory.
+    TensorFS keeps the folder's config file (`preprocessor_config.json`, or Transformers 5's one
+    `processor_config.json`) as the processor component's `config`, not among its files."""
+    names = set(assets.names())
 
     def read(name: str) -> bytes:
         return assets.read(f"processor/{name}")
+
+    def held(name: str) -> dict[str, Any] | None:
+        return json.loads(read(name)) if f"processor/{name}" in names else None
 
     tokenizer_config = json.loads(read("tokenizer_config.json"))
     for key in (
@@ -162,11 +170,11 @@ def build_processor(assets: ModelAssets) -> Any:
         tokenizer_object=Tokenizer.from_str(read("tokenizer.json").decode()), **tokenizer_config
     )
     # Transformers 5 saves one `processor_config.json` (Turbo); earlier releases, one file each.
-    if "processor/processor_config.json" in assets.names():
-        nested = json.loads(read("processor_config.json"))
+    nested = held("processor_config.json") or (dict(config) if "image_processor" in config else None)
+    if nested is not None:
         image, video = nested["image_processor"], nested["video_processor"]
     else:
-        image = json.loads(read("preprocessor_config.json"))
+        image = held("preprocessor_config.json") or dict(config) or json.loads(read("preprocessor_config.json"))
         video = json.loads(read("video_preprocessor_config.json"))
     return Qwen3VLProcessor(
         tokenizer=tokenizer,
@@ -225,7 +233,7 @@ class QwenImage21Model(Model[QwenImage21Graph], encoded_leaves="accept"):
 
     def load(self, loader: Loader) -> None:
         self.graph = loader.construct(QwenImage21Graph, factory=build_qwen_image21)
-        self.processor = build_processor(loader.assets)
+        self.processor = build_processor(loader.assets, self.graph.processor_config)
 
     def execution_plan(self, plan: Plan) -> str:
         return fusion.install(plan, BLOCK, self.graph.components["transformer"])
