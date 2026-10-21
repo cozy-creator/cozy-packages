@@ -4,7 +4,8 @@ version = "0.6.1"
 description = "SeedVR2 7B temporally consistent video restoration"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media]>=0.27.0",
+    "av>=19.0.1",
+    "cozy-runtime>=0.30.0",
     "diffusers>=0.40",
     "einops>=0.8",
     "msgspec>=0.19",
@@ -12,7 +13,7 @@ dependencies = [
     "omegaconf>=2.3",
     "pillow>=12",
     "rotary-embedding-torch>=0.5.3",
-    "tensorfs>=0.10",
+    "tensorfs>=0.13,<0.14",
     "torch>=2.14",
     "torchvision>=0.29",
 ]
@@ -28,4 +29,5 @@ build-backend = "hatchling.build"
 packages = ["seedvr2"]
 
 [tool.uv]
-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'", "sys_platform == 'linux' and platform_machine == 'aarch64'"]
+override-dependencies = ["cozy-runtime @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl", "tensorfs @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/tensorfs-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl"]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]

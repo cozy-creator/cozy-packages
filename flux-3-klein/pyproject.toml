@@ -4,7 +4,8 @@ version = "0.9.0"
 description = "Cozy text-to-image and reference editing with FLUX.3 Image Klein, distilled and base"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media]>=0.27.0",
+    "av>=19.0.1",
+    "cozy-runtime>=0.27.0",
     # Flux3 is in Diffusers main only (merged 2026-10-15, #15046).
     "diffusers @ git+https://github.com/huggingface/diffusers@7ecb1e1b4fe500be7fb7381a7bb79a24d7fa3941",
     "msgspec>=0.19",
@@ -31,4 +32,5 @@ allow-direct-references = true
 packages = ["flux_3_klein"]
 
 [tool.uv]
-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'", "sys_platform == 'linux' and platform_machine == 'aarch64'"]
+override-dependencies = ["cozy-runtime @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl", "tensorfs @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/tensorfs-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl"]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]

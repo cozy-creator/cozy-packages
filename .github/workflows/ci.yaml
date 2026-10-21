@@ -16,6 +16,17 @@ on:
         description: Account index the committed locks are bound to (`cozy package lock`)
         type: string
         default: https://tensorhub.com/v1/index/fidika/simple/
+      runtime_run:
+        description: Optional exact cozy-runtime dev-build run ID; requires tensorfs_run
+        type: string
+        default: ''
+      tensorfs_run:
+        description: Optional exact TensorFS dev-build run ID; requires runtime_run and artifact read access
+        type: string
+        default: ''
+permissions:
+  contents: read
+  actions: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
@@ -39,6 +50,14 @@ jobs:
           version: "0.12.7"
           save-cache: ${{ github.ref == 'refs/heads/master' }}
       - run: uv python install 3.12
+      - if: inputs.runtime_run != '' || inputs.tensorfs_run != ''
+        uses: ./.github/actions/candidate-dependencies
+        with:
+          runtime_run: ${{ inputs.runtime_run }}
+          tensorfs_run: ${{ inputs.tensorfs_run }}
+          projects: anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 flux-3-klein
+          account_index: ${{ inputs.account_index }}
+          token: ${{ secrets.CANDIDATE_ACTIONS_TOKEN || github.token }}
 
       # Check the same Runtime contract required by the H3 serving and producer packages.
       # The light checks need no model libraries. Locked environments below also
@@ -46,7 +65,13 @@ jobs:
       - name: Environment
         run: |
           uv venv --python 3.12
-          uv pip install --refresh-package cozy-runtime \
+          overrides=()
+          if [ -f scripts/varena-slim-candidate-requirements.txt ]; then
+            overrides=(--overrides scripts/varena-slim-candidate-requirements.txt)
+          elif [ -f .candidate-dependencies/requirements.txt ]; then
+            overrides=(--overrides .candidate-dependencies/requirements.txt)
+          fi
+          uv pip install "${overrides[@]}" --refresh-package cozy-runtime \
             "cozy-runtime>=0.27.0,<1" \
             "av==18.1.0" "mypy==2.3.1" "ruff==0.16.4" "numpy>=1.26"
 
@@ -99,6 +124,12 @@ jobs:
       # are supported and must not be rejected by a global equality rule.
       - name: Native cohort validation accepts independent package environments
         run: uv run --no-project python scripts/torch_family.py --self-check
+      - if: always() && (inputs.runtime_run != '' || inputs.tensorfs_run != '')
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-locks-checks
+          path: .candidate-dependencies/
+          include-hidden-files: true
 
   conform:
     name: Package conformance
@@ -124,4 +155,18 @@ jobs:
         with:
           version: 3.45.5
       - run: uv python install 3.12
+      - if: inputs.runtime_run != '' || inputs.tensorfs_run != ''
+        uses: ./.github/actions/candidate-dependencies
+        with:
+          runtime_run: ${{ inputs.runtime_run }}
+          tensorfs_run: ${{ inputs.tensorfs_run }}
+          projects: ${{ matrix.package }}
+          account_index: ${{ inputs.account_index }}
+          token: ${{ secrets.CANDIDATE_ACTIONS_TOKEN || github.token }}
       - run: task conform -- ${{ matrix.package }}
+      - if: always() && (inputs.runtime_run != '' || inputs.tensorfs_run != '')
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-locks-${{ matrix.package }}
+          path: .candidate-dependencies/
+          include-hidden-files: true

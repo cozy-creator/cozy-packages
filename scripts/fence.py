@@ -259,7 +259,13 @@ def surface_violations(label: str, source: str, *, driver: bool) -> list[str]:
                 f"`cozy_runtime.author` surface and nothing else from the runtime; a "
                 f"private module is a coupling that breaks silently.{how}"
             )
-        if not driver and top in STORE_AND_NETWORK and module != "tensorfs.derived":
+        # The producer reads physical part shapes from an already granted Checkpoint.
+        # Storage mutation stays in Runtime's bounded Output, not an opened store/client.
+        native_metadata = (
+            label == "minimax-h3-tools/src/h3_tables/metadata.py"
+            and module in {"tensorfs", "tensorfs.raw"}
+        )
+        if not driver and top in STORE_AND_NETWORK and not native_metadata:
             bad.append(
                 f"{label}:{line}: {module!r} — package code speaks to no store, "
                 "no hub and no network; every byte it sees arrives as a typed input"
@@ -766,7 +772,7 @@ ARM_GPU_CHOICES = (
 )
 ARM_GPU_DECLARATIONS = (
     "register(Producer('kitchen-sol-producer-fast-shared-qkv', 'kitchen-sol'))\n",
-    "class M(Model, attention_bits={'fl2va_dit': 4}): pass\n",
+    "class M(Model, attention_bits={'transformer': 4}): pass\n",
     "if device.type != 'cuda': pass\n",
 )
 

@@ -36,7 +36,7 @@ def rank(rank: int, degree: int, rendezvous: str) -> None:
     dit.install_lora_consumers()
     dit.set_attention_backend("native")
     pipe = object.__new__(fixture["official"].OfficialH3Pipeline)
-    pipe.components = {"fl2va_dit": dit, "fl2va_turbo": overlay}
+    pipe.components = {"transformer": dit, "fl2va_turbo": overlay}
     model = fixture["package"].H3TurboBase.for_test(pipe=pipe)
     schedule = overlay.schedule
     inputs = fixture["turbo_forward"](0, schedule)
@@ -57,7 +57,7 @@ def rank(rank: int, degree: int, rendezvous: str) -> None:
         )
         with (
             torch.no_grad(),
-            model._cozy_scope("sample_fl2va_turbo", ("fl2va_dit",)),
+            model._cozy_scope("sample_fl2va_turbo", ("transformer",)),
             cp.gated_call(),
         ):
             actual = dit(**inputs)

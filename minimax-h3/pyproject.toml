@@ -4,14 +4,16 @@ version = "1.43.3"
 description = "MiniMax H3 video with sound: from keyframes, references, or several segments"
 requires-python = ">=3.12"
 dependencies = [
+    "av>=19.0.1",
     "birefnet>=0.4.0",
     "character-describer>=0.9.0",
-    "cozy-runtime[adapters,media]>=0.27.0",
+    "cozy-runtime>=0.30.0",
     # MiniMax-H3 and Qwen-Image-2.1 share one Diffusers: the release qwen-image-2 locks.
     "diffusers>=0.41,<0.42",
     "hf-xet>=1.6.0",
     # The AdaLN table producer owns the row-label reader the pruned DiT is built from.
     "minimax-h3-tools>=2.15.0",
+    "peft>=0.20,<0.21",
     "msgspec>=0.19",
     "numpy>=1.26",
     "pydantic-core>=2.46.4",
@@ -21,7 +23,7 @@ dependencies = [
     "safetensors>=0.8.0",
     "seedvr2>=0.6.0",
     "shellingham>=1.5.4",
-    "tensorfs>=0.10",
+    "tensorfs>=0.13",
     "tokenizers>=0.23.1",
     "torch>=2.14",
     "torchvision>=0.29",
@@ -50,13 +52,14 @@ only-include = [
 ]
 
 [tool.uv]
-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'", "sys_platform == 'linux' and platform_machine == 'aarch64'"]
+override-dependencies = ["cozy-runtime @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl", "tensorfs @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/tensorfs-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl"]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 
-# qwen-image-2 is this account's own package on the target Tensorhub, never PyPI. Creator
-# writes the `tensorhub` index for the command's Hub and account; lock with `cozy package lock`.
+# This isolated candidate carries each in-repo callee from the same checkout. Creator's
+# local package source carries these sibling directories and identifies them as local/<name>.
 [tool.uv.sources]
-qwen-image-2 = { index = "tensorhub" }
-birefnet = { index = "tensorhub" }
-character-describer = { index = "tensorhub" }
-seedvr2 = { index = "tensorhub" }
-minimax-h3-tools = { index = "tensorhub" }
+qwen-image-2 = { path = "../qwen-image-2" }
+birefnet = { path = "../birefnet" }
+character-describer = { path = "../character-describer" }
+seedvr2 = { path = "../seedvr2" }
+minimax-h3-tools = { path = "../minimax-h3-tools" }

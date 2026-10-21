@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import math
-import os
-import threading
 from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import replace
 from importlib.resources import files
@@ -25,20 +22,9 @@ from cozy_runtime.author import (
     invocable,
 )
 from cozy_runtime.derive.quantization import (
-    MAX_OUTPUT_BYTES,
     ArtifactQuantizationRequest,
     QuantizationStats,
-    prepare_quantization,
     quantize_component_into,
-)
-from tensorfs.derived import (
-    Config,
-    Derivation,
-    DerivedTransaction,
-    Part,
-    SourceInspection,
-    Target,
-    Tensor,
 )
 
 from . import adaln_operations as _adaln_operations
@@ -48,6 +34,7 @@ from .kernel import H3Topology, removed_keys, source_shapes, table_bytes, table_
 from .kernel import precompute_tables as compute_tables
 from .lanes import (
     COMPONENT_MAX_NEW_BYTES,
+    MAX_DIT_NEW_BYTES,
     LANES,
     NORMALISED_COMPONENTS,
     Lane,
@@ -64,7 +51,10 @@ from .model_config import (
 from .order import current_order
 from .order import full_order as _full_order
 from .plans import TimestepPlan, parse_declared_plan
-from .quantization import h3_quantization_plan
+from .quantization import reviewed_plan
+from .metadata import (ComponentSelection, SourceLayout, TensorShape, PartShape,
+                       PLAIN, SCHEMES, NATIVE_DTYPES, model_output, adopt_output)
+from cozy_runtime.derive import Checkpoint, Output, read_into
 from .source import TARGET_COMPONENT, inspection
 from .source import full_targets as _full_targets
 from .source import select_full_targets as _select_full_targets
@@ -72,10 +62,10 @@ from .source import structures as _structures
 
 app = App()
 
-PLAIN_SPEC = "sha256:1fb882a7e46d0aff520f9d8a28cefd643954c19371737443101ba3c5fcc3613f"
-FP8_SPEC = "sha256:c4be0120fb4548306b134f6ee07eb2545a363bc140a005af1ef6543c790cf890"
-INT8_SPEC = "sha256:ac25d323baebfdf1fd0ce3fdfd9f26400ce57914fdc442d0ade8cb187aef183f"
-NVFP4_SPEC = "sha256:f2e718c521634876830f9c2647bddfbbccafc744decc88adb345d33d73bf5b1a"
+PLAIN_SPEC = PLAIN
+FP8_SPEC = "fp8.rowwise"
+INT8_SPEC = "int8.convrot"
+NVFP4_SPEC = "nvfp4"
 
 SOURCE_READ_CHUNK = 32 << 20
 SOURCE_SECTION = {"fl2va": "transformer", "ref2va": "transformer_ref"}
@@ -112,7 +102,7 @@ def _check_table_budget(declared: int) -> None:
 MAX_TABLE_BYTES = 1 << 30
 MAX_FULL_BYTES = 64 << 10
 MAX_PRUNED_BYTES = 2 * MAX_TABLE_BYTES + (128 << 10)
-MAX_QUANTIZED_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_PRUNED_BYTES
+MAX_QUANTIZED_BYTES = 2 * MAX_DIT_NEW_BYTES + MAX_PRUNED_BYTES
 
 _check_table_budget(MAX_TABLE_BYTES)
 
@@ -126,7 +116,7 @@ _check_table_budget(MAX_TABLE_BYTES)
 #: Every lane carries the producer-wide video VAE normalisation, so every ceiling below
 #: includes that component's own bound — including `bf16-full`, which authors nothing.
 #:
-#: Spelled as a literal, not as `COMPONENT_MAX_NEW_BYTES["video_vae"]`, because cr-114's
+#: Spelled as a literal, not as `COMPONENT_MAX_NEW_BYTES["vae"]`, because cr-114's
 #: static reader folds the decorator from SOURCE over a closed vocabulary and refuses a
 #: subscript: `describe` fails the whole package with `static_computed` rather than
 #: guessing. The catalogue is still the authority — the equality below is checked at
@@ -144,7 +134,7 @@ LaneName = Literal["bf16-full", "bf16", "fp8"]
 
 def _check_lane_outputs() -> None:
     for component, declared_bytes in (
-        ("video_vae", MAX_VIDEO_VAE_BYTES),
+        ("vae", MAX_VIDEO_VAE_BYTES),
         ("text_encoder", MAX_TEXT_ENCODER_BYTES),
     ):
         if COMPONENT_MAX_NEW_BYTES[component] != declared_bytes:
@@ -194,8 +184,7 @@ class RetableResult(msgspec.Struct, frozen=True):
 
 
 def _read_source(
-    transaction: DerivedTransaction,
-    source: str,
+    source: Checkpoint,
     component: str,
     name: str,
     dtype: torch.dtype,
@@ -205,11 +194,11 @@ def _read_source(
     raw = bytearray(length)
     view = memoryview(raw)
     for offset in range(0, length, SOURCE_READ_CHUNK):
-        transaction.source_read_into(
+        read_into(
             source,
             component,
             name,
-            "value",
+            "",
             offset,
             view[offset : min(offset + SOURCE_READ_CHUNK, length)],
         )
@@ -221,8 +210,7 @@ def _compute_table_parts(
     plan: TimestepPlan,
     topology: H3Topology,
     ctx: Context,
-    transaction: DerivedTransaction,
-    source: str,
+    source: Checkpoint,
     source_component: str,
     write_part: Callable[[str, bytes], None],
     tel: Telemetry,
@@ -234,7 +222,7 @@ def _compute_table_parts(
 
     def read(name: str, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:
         nonlocal source_bytes
-        value, length = _read_source(transaction, source, source_component, name, dtype, shape)
+        value, length = _read_source(source, source_component, name, dtype, shape)
         source_bytes += length
         return value
 
@@ -282,17 +270,17 @@ def _compute_table_parts(
 
 def _table_additions(
     sections: dict[str, dict[str, Any]],
-) -> dict[str, dict[str, Tensor]]:
-    additions: dict[str, dict[str, Tensor]] = {}
+) -> dict[str, dict[str, TensorShape]]:
+    additions: dict[str, dict[str, TensorShape]] = {}
     for task, section in SOURCE_SECTION.items():
         plan = _production_plan(task)
         topology = H3Topology.from_config(sections[section])
         additions[task] = {
-            key: Tensor(
+            key: TensorShape(
                 logical_dtype="bf16",
                 shape=shape,
                 encoding=PLAIN_SPEC,
-                parts={"value": Part("bf16", shape)},
+                parts={"value": PartShape("bf16", shape)},
             )
             for key, shape in sorted(table_shapes(topology, plan).items())
         }
@@ -302,10 +290,10 @@ def _table_additions(
 def _lane_targets(
     lane: Lane,
     sections: dict[str, dict[str, Any]],
-    tables: Mapping[str, Mapping[str, Tensor]],
-    full_targets: Mapping[str, Target],
+    tables: Mapping[str, Mapping[str, TensorShape]],
+    full_targets: Mapping[str, ComponentSelection],
     selections: Mapping[str, Selection],
-) -> dict[str, Target]:
+) -> dict[str, ComponentSelection]:
     """The five component targets of one lane.
 
     Every component starts as the FULL inheriting target: TensorFS copies its tensor
@@ -332,11 +320,10 @@ def _lane_targets(
 def _write_tables(
     task: str,
     ctx: Context,
-    source_transaction: DerivedTransaction,
-    transactions: Mapping[str, DerivedTransaction],
+    source_checkpoint: Checkpoint,
+    transactions: Mapping[str, Output],
     tel: Telemetry,
     overall_range: tuple[float, float],
-    source: str = "dits",
 ) -> tuple[int, int, int]:
     """Compute one task's tables into every transaction; (read, written, reused) counts."""
     sections = parse_production_config(_asset("model-config.json"))
@@ -345,9 +332,8 @@ def _write_tables(
     component = TARGET_COMPONENT[task]
     completed = {
         name: {
-            key
-            for owner, key, role in transaction.completed_parts()
-            if owner == component and role == "value"
+            key for key in table_shapes(topology, plan)
+            if transaction.has(component, key)
         }
         for name, transaction in transactions.items()
     }
@@ -360,16 +346,14 @@ def _write_tables(
     def write_part(name: str, raw: bytes) -> None:
         for output, transaction in transactions.items():
             if name not in completed[output]:
-                transaction.add_part(component, name, "value", raw)
-                transaction.checkpoint()
+                transaction.put(component, name, "BF16", table_shapes(topology, plan)[name], raw)
 
     read, written = _compute_table_parts(
         task,
         plan,
         topology,
         ctx,
-        source_transaction,
-        source,
+        source_checkpoint,
         component,
         write_part,
         tel,
@@ -410,13 +394,13 @@ def _bands(count: int, start: float, stop: float) -> list[tuple[float, float]]:
 
 
 def _treat(
-    transaction: DerivedTransaction,
+    transaction: Output,
     ctx: Context,
     tel: Telemetry,
     request: ArtifactQuantizationRequest,
     *,
     selection: Selection,
-    source: str,
+    source: Checkpoint,
 ) -> TreatmentStats:
     """Run one component's resolved treatment inside an already-open lane transaction.
 
@@ -443,56 +427,24 @@ def _treat(
     )
     if selection.plan is None or selection.treatment.encode is None:
         return stats
-    plan, encoding = selection.plan, selection.treatment.encode
-    tensors = [tensor for tensor in plan.tensors if tensor.component == selection.plan_component]
-    count = max(1, min(len(tensors), len(os.sched_getaffinity(0))))
-    shared = cast(Telemetry, _SharedTelemetry(tel, len(tensors)))
-
-    def encode(shard: list[Any]) -> QuantizationStats:
-        return quantize_component_into(
-            transaction,
-            ctx,
-            request,
-            shared,
-            encoding=encoding,
-            plan=msgspec.structs.replace(plan, tensors=shard),
-            component=selection.plan_component,
-            source=source,
-            source_component=component,
-            target_component=component,
-        )
-
-    # Tensors encode independently: numpy releases the GIL, the handle serializes reads and
-    # writes, and the declared order fixes the output, so shards only change the wall time.
-    with ThreadPoolExecutor(count) as pool:
-        shards = list(pool.map(encode, [tensors[index::count] for index in range(count)]))
-    worsts = [shard.worst_relative_frobenius for shard in shards]
+    plan, encoding = selection.plan, SCHEMES[selection.treatment.encode]
+    # The public encoder already parallelizes encoding and serializes bounded writes.
+    # An outer shard pool would race Output's byte budget and component metadata.
+    encoded = quantize_component_into(
+        source, transaction, ctx, request, tel, encoding=encoding, plan=plan,
+        component=component,
+        logical_dtype=lambda tensor: selection.treatment.cast or tensor.logical_dtype,
+    )
     return msgspec.structs.replace(
         stats,
-        encoded_keys=sum(shard.encoded_keys for shard in shards),
-        saturated_elements=sum(shard.saturated_elements for shard in shards),
-        worst_relative_frobenius=None if None in worsts else max(cast(list[float], worsts)),
-        reused_keys=stats.reused_keys + sum(shard.reused_keys for shard in shards),
-        source_bytes_read=stats.source_bytes_read + sum(s.source_bytes_read for s in shards),
-        new_bytes_written=stats.new_bytes_written + sum(s.new_bytes_written for s in shards),
+        encoded_keys=encoded.encoded_keys,
+        saturated_elements=encoded.saturated_elements,
+        worst_relative_frobenius=encoded.worst_relative_frobenius,
+        reused_keys=stats.reused_keys + encoded.reused_keys,
+        source_bytes_read=stats.source_bytes_read + encoded.source_bytes_read,
+        new_bytes_written=stats.new_bytes_written + encoded.new_bytes_written,
     )
 
-
-class _SharedTelemetry:
-    """Shard threads report through one lock as a single monotone per-stage tensor count."""
-
-    def __init__(self, tel: Telemetry, total: int) -> None:
-        self._tel, self._total, self._done = tel, total, 0
-        self._lock = threading.Lock()
-
-    def progress(self, _fraction: float, *, stage: str, **_: Any) -> None:
-        with self._lock:
-            self._done += 1
-            self._tel.progress(self._done / self._total, stage=stage)
-
-    def log(self, message: str, **fields: Any) -> None:
-        with self._lock:
-            self._tel.log(message, **fields)
 
 
 def _produce_lanes(
@@ -518,7 +470,7 @@ def _produce_lanes(
     sections = parse_production_config(_asset("model-config.json"))
     current = current_order(_asset("whole-order.json"))
     tables = _table_additions(sections)
-    dit_plan = prepare_quantization(h3_quantization_plan())
+    dit_plan = reviewed_plan()
 
     # Resolve every treatment against the granted structure BEFORE opening anything: a
     # refused component, an unmatched keep entry or an inert treatment must cost no
@@ -551,11 +503,11 @@ def _produce_lanes(
         "full": _full_order(sections, current.rows),
         "adaln-pruned": current.rows,
     }
-    receipts: dict[str, Mapping[str, object]] = {}
+    receipts: dict[str, ModelArtifact] = {}
     source_bytes = new_bytes = reused = computed = 0
     quant_request = ArtifactQuantizationRequest(max_relative_frobenius=max_relative_frobenius)
 
-    def treat(name: str, transaction: DerivedTransaction) -> None:
+    def treat(name: str, transaction: Output) -> None:
         nonlocal source_bytes, new_bytes, reused, computed
         for component, selection in selections[name].items():
             stats = _treat(
@@ -564,7 +516,7 @@ def _produce_lanes(
                 tel,
                 quant_request,
                 selection=selection,
-                source=full_targets[component].source,
+                source=granted[full_targets[component].source].checkpoint,
             )
             source_bytes += stats.source_bytes_read
             new_bytes += stats.new_bytes_written
@@ -585,15 +537,14 @@ def _produce_lanes(
     with ExitStack() as stack:
         transactions = {
             name: stack.enter_context(
-                ctx.output(name).open(
-                    Derivation(
-                        sources={alias: info.source for alias, info in granted.items()},
-                        targets=_lane_targets(
-                            LANES[name], sections, tables, full_targets, selections[name]
-                        ),
-                        configs={"model": Config("add")},
-                        order=orders[LANES[name].modulation],
-                    )
+                model_output(
+                    ctx, name,
+                    sources={alias: info.checkpoint for alias, info in granted.items()},
+                    components=_lane_targets(
+                        LANES[name], sections, tables, full_targets, selections[name]
+                    ),
+                    configs={"model": configs[LANES[name].modulation]},
+                    order=orders[LANES[name].modulation],
                 )
             )
             for name in requested
@@ -601,7 +552,7 @@ def _produce_lanes(
         active = {
             name: transaction
             for name, transaction in transactions.items()
-            if transaction.receipt is None
+            if transaction.done is None
         }
         # A lane needing neither a table pass nor an encoding settles first, so its
         # retention never depends on a later lane's.
@@ -609,8 +560,7 @@ def _produce_lanes(
             transaction = active.pop(name)
             with tel.stage(name, overall_range=(0.0, 0.0)):
                 treat(name, transaction)
-            transaction.add_config("model", configs[LANES[name].modulation])
-            receipts[name] = transaction.commit()
+            receipts[name] = adopt_output(ctx, transaction)
 
         pruned = {
             name: transaction
@@ -626,13 +576,13 @@ def _produce_lanes(
                 )
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.set_float32_matmul_precision("highest")
-            source_transaction = next(iter(pruned.values()))
+            source_checkpoint = granted["dits"].checkpoint
             for task, overall_range in zip(
                 SOURCE_SECTION, _bands(len(SOURCE_SECTION), 0.0, table_share), strict=True
             ):
                 with tel.stage(f"timestep-table-{task}", overall_range=overall_range):
                     read, written, kept = _write_tables(
-                        task, ctx, source_transaction, pruned, tel, overall_range
+                        task, ctx, source_checkpoint, pruned, tel, overall_range
                     )
                     source_bytes += read
                     new_bytes += written
@@ -645,19 +595,18 @@ def _produce_lanes(
             transaction = active[name]
             with tel.stage(name, overall_range=overall_range):
                 treat(name, transaction)
-                # Keep a finished checkpoint replayable if a later lane fails.
-                transaction.add_config("model", configs[LANES[name].modulation])
-                receipts[name] = transaction.commit()
+                # Commit each lane before the next, preserving interrupted-work replay.
+                receipts[name] = adopt_output(ctx, transaction)
             tel.progress(1.0, stage=f"commit-{name}", overall_fraction=overall_range[1])
         for name, transaction in transactions.items():
             if name not in receipts:
-                receipts[name] = transaction.commit()
+                receipts[name] = adopt_output(ctx, transaction)
 
     tel.metric("h3.source_bytes", float(source_bytes), unit="bytes")
     tel.metric("h3.new_bytes", float(new_bytes), unit="bytes")
     tel.metric("h3.reused_tensors", float(reused))
     tel.metric("h3.computed_tensors", float(computed))
-    return {name: ctx.adopt_model(receipts[name]) for name in requested}
+    return {name: receipts[name] for name in requested}
 
 
 # One function per lane: Runtime requires a receipt for EVERY declared weights output, so a
@@ -733,11 +682,11 @@ QUANTIZER_SPECS = {
     "nvfp4-w4a4/1": NVFP4_SPEC,
 }
 #: Both DiTs and the conditioner at most; the transaction's own accounting is exact.
-MAX_QUANTIZER_BYTES = 2 * MAX_OUTPUT_BYTES + MAX_TEXT_ENCODER_BYTES
+MAX_QUANTIZER_BYTES = 2 * MAX_DIT_NEW_BYTES + MAX_TEXT_ENCODER_BYTES
 
 
 def _quantizer_selections(
-    structure: SourceInspection, encoding: _lanes.Encoding
+    structure: SourceLayout, encoding: _lanes.Encoding
 ) -> list[Selection]:
     """The recipe's components this source still holds plain, resolved for `encoding`."""
     sections = parse_production_config(_asset("model-config.json"))
@@ -751,7 +700,7 @@ def _quantizer_selections(
                 "lane (bf16 or fp8)",
                 code="h3_quantize_unpruned",
             )
-    dit_plan = prepare_quantization(h3_quantization_plan())
+    dit_plan = reviewed_plan()
     selections = []
     for component, treatment in QUANTIZER_RECIPES[encoding].items():
         assert treatment.encode is not None
@@ -790,27 +739,22 @@ def _quantize_lane(
         )
     selections = _quantizer_selections(structure, encoding)
     targets = {
-        component: Target(source="source", source_component=component)
+        component: ComponentSelection(source="source", source_component=component)
         for component in structure.components
     }
     for selection in selections:
         targets[selection.component] = _lanes.apply(targets[selection.component], selection)
-    declaration = Derivation(
-        sources={"source": structure.source},
-        targets=targets,
-        configs={
-            name: Config("copy", source="source", source_config=name)
-            for name in structure.configs
-        },
-        order=[(component, key) for component, rows in structure.components.items() for key in rows],
-    )
     request = ArtifactQuantizationRequest(max_relative_frobenius=max_relative_frobenius)
-    with ctx.output(lane).open(declaration) as transaction:
-        if transaction.receipt is not None:
-            return ctx.adopt_model(transaction.receipt)
+    with model_output(
+        ctx, lane, sources={"source": structure.checkpoint}, components=targets,
+        configs=structure.configs,
+        order=[(component, key) for component, rows in structure.components.items() for key in rows],
+    ) as transaction:
+        if transaction.done is not None:
+            return adopt_output(ctx, transaction)
         for selection in selections:
             with tel.stage(f"{lane}-{selection.component}"):
-                stats = _treat(transaction, ctx, tel, request, selection=selection, source="source")
+                stats = _treat(transaction, ctx, tel, request, selection=selection, source=structure.checkpoint)
             tel.log(
                 "weight fidelity",
                 level="info",
@@ -829,7 +773,7 @@ def _quantize_lane(
             encoded=",".join(selection.component for selection in selections),
             inherited=",".join(sorted(set(QUANTIZER_RECIPES[encoding]) - {s.component for s in selections})),
         )
-        return ctx.adopt_model(transaction.commit())
+        return adopt_output(ctx, transaction)
 
 
 @invocable(memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
@@ -905,11 +849,11 @@ _check_lane_functions()
 
 
 def _retable_targets(
-    pruned: SourceInspection,
-    full: SourceInspection,
+    pruned: SourceLayout,
+    full: SourceLayout,
     sections: dict[str, dict[str, Any]],
-    tables: Mapping[str, Mapping[str, Tensor]],
-) -> tuple[dict[str, Target], dict[str, Target]]:
+    tables: Mapping[str, Mapping[str, TensorShape]],
+) -> tuple[dict[str, ComponentSelection], dict[str, ComponentSelection]]:
     """Declare the table bank derived from `full` and the retabled checkpoint from `pruned`.
 
     A transaction may read only the source components its targets derive from, so the
@@ -932,9 +876,9 @@ def _retable_targets(
     components = set(pruned.components)
     if components != set(_full_targets()):
         raise ValueError(f"retable source components are {sorted(components)}")
-    bank: dict[str, Target] = {}
+    bank: dict[str, ComponentSelection] = {}
     retabled = {
-        component: Target(source="pruned", source_component=component)
+        component: ComponentSelection(source="pruned", source_component=component)
         for component in components - set(TARGET_COMPONENT.values())
     }
     for task, section in SOURCE_SECTION.items():
@@ -951,13 +895,13 @@ def _retable_targets(
                 or TORCH_DTYPE.get(tensor.logical_dtype) != dtype
             ):
                 raise ValueError(f"full source lacks modulation weight {component}/{key}")
-        bank[component] = Target(
+        bank[component] = ComponentSelection(
             source="full",
             source_component=component,
             drop=tuple(sorted(key for owner, key in full_present if owner == component)),
             add=tables[task],
         )
-        retabled[component] = Target(
+        retabled[component] = ComponentSelection(
             source="pruned",
             source_component=component,
             drop=tuple(sorted(tables[task])),
@@ -984,7 +928,7 @@ async def retable(
     sections = parse_production_config(_asset("model-config.json"))
     plans = {task: _production_plan(task) for task in SOURCE_SECTION}
     pruned_config = dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
-    config = {"model": Config("add")}
+    config = {"model": pruned_config}
     tables = _table_additions(sections)
     bank_targets, targets = _retable_targets(
         inspection(ctx, pruned), inspection(ctx, full), sections, tables
@@ -994,37 +938,26 @@ async def retable(
         row for row in order.rows if row[0] in bank_targets and row[1] in bank_targets[row[0]].add
     )
     source_bytes = written = 0
-    receipts: dict[str, Mapping[str, object]] = {}
+    receipts: dict[str, ModelArtifact] = {}
     with ExitStack() as stack:
         bank = stack.enter_context(
-            ctx.output("tables").open(
-                Derivation(
-                    sources={
-                        name: info.source for name, info in _structures(ctx, {"full": full}).items()
-                    },
-                    targets=bank_targets,
-                    configs=config,
-                    order=bank_order,
-                )
+            model_output(
+                ctx, "tables",
+                sources={name: info.checkpoint for name, info in _structures(ctx, {"full": full}).items()},
+                components=bank_targets, configs=config, order=bank_order,
             )
         )
         retabled = stack.enter_context(
-            ctx.output("adaln-pruned").open(
-                Derivation(
-                    sources={
-                        name: info.source
-                        for name, info in _structures(ctx, {"pruned": pruned}).items()
-                    },
-                    targets=targets,
-                    configs=config,
-                    order=order.rows,
-                )
+            model_output(
+                ctx, "adaln-pruned",
+                sources={name: info.checkpoint for name, info in _structures(ctx, {"pruned": pruned}).items()},
+                components=targets, configs=config, order=order.rows,
             )
         )
         transactions = {"adaln-pruned": retabled, "tables": bank}
-        active = {name: t for name, t in transactions.items() if t.receipt is None}
+        active = {name: t for name, t in transactions.items() if t.done is None}
         if active:
-            if bank.receipt is not None:
+            if bank.done is not None:
                 raise ValueError(
                     "the table bank was retained without its retabled checkpoint; "
                     "rerun under a new request identity"
@@ -1039,23 +972,22 @@ async def retable(
             for task, overall_range in (("fl2va", (0.0, 0.5)), ("ref2va", (0.5, 1.0))):
                 with tel.stage(f"timestep-table-{task}", overall_range=overall_range):
                     read, emitted, _ = _write_tables(
-                        task, ctx, bank, active, tel, overall_range, source="full"
+                        task, ctx, inspection(ctx, full).checkpoint, active, tel, overall_range
                     )
                 source_bytes += read
                 written += emitted
             # The retabled checkpoint commits first: its retention never strands the bank.
             for name, transaction in active.items():
-                transaction.add_config("model", pruned_config)
-                receipts[name] = transaction.commit()
+                receipts[name] = adopt_output(ctx, transaction)
         for name, transaction in transactions.items():
             if name not in receipts:
-                receipts[name] = transaction.commit()
+                receipts[name] = adopt_output(ctx, transaction)
     tel.metric("h3.source_bytes", float(source_bytes), unit="bytes")
     tel.metric("h3.new_bytes", float(written), unit="bytes")
     return RetableResult(
         list(plans["fl2va"].steps),
-        ctx.adopt_model(receipts["adaln-pruned"]),
-        ctx.adopt_model(receipts["tables"]),
+        receipts["adaln-pruned"],
+        receipts["tables"],
     )
 
 

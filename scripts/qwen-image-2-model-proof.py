@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import tensorfs
 from cozy_runtime.author import Config, ModelAssets
 from cozy_runtime.author._activity import event_loop, observing
 from cozy_runtime.author.fakes import granted_input, invoke_with_fakes
@@ -90,7 +91,10 @@ def shapes(model: QwenImage21Model, tmp_path: Path) -> None:
 
 
 def staged(tmp_path: Path) -> None:
+    geometry = {"patch_size": 16, "merge_size": 2, "temporal_patch_size": 2}
+    image_config = {**geometry, "image_processor_type": "Qwen2VLImageProcessorFast"}
     config = {
+        "processor": image_config,
         "transformer": dict(
             patch_size=1,
             in_channels=8,
@@ -191,11 +195,9 @@ def staged(tmp_path: Path) -> None:
         chat_template=chat,
     )
     tokenizer_config = {"unk_token": "[UNK]", "pad_token": "[PAD]", "tokenizer_class": "X"}
-    geometry = {"patch_size": 16, "merge_size": 2, "temporal_patch_size": 2}
     files = {
         "tokenizer.json": tok.backend_tokenizer.to_str().encode(),
         "tokenizer_config.json": json.dumps(tokenizer_config).encode(),
-        "preprocessor_config.json": json.dumps(geometry).encode(),
         "video_preprocessor_config.json": json.dumps(geometry).encode(),
         "chat_template.jinja": chat.encode(),
     }
@@ -204,7 +206,30 @@ def staged(tmp_path: Path) -> None:
         named = {f"processor/{name}": raw for name, raw in files.items()}
         return ModelAssets(named, lambda _operation: None)
 
-    rebuilt = build_processor(assets(files))
+    def native_processor(
+        name: str, configuration: dict[str, Any], config_file: str, files: dict[str, bytes]
+    ) -> Any:
+        """A real native component keeps its semantic config out of its assets."""
+        store = tmp_path / f"processor-{name}"
+        with tensorfs.Writer(cache_dir=store) as writer:
+            writing = writer.component(
+                "processor", cls="Qwen3VLProcessor", config=configuration,
+                config_file=config_file,
+            )
+            for filename, raw in files.items():
+                writing.asset(filename, raw)
+            checkpoint = writer.commit()
+        with tensorfs.open(checkpoint.id, cache_dir=store, local_files_only=True) as opened:
+            component = opened.components["processor"]
+            assert component.config_file == config_file
+            assert dict(component.config) == configuration
+            assert config_file not in component.assets
+            supporting = {filename: component.asset(filename) for filename in component.assets}
+            constructor = Config({"processor": dict(component.config)})
+            return build_processor(constructor.section("processor").mapping(), assets(supporting))
+
+    assert graph.processor_config == image_config
+    rebuilt = native_processor("flat", graph.processor_config, "preprocessor_config.json", files)
     assert rebuilt.tokenizer.encode("blue jacket") == processor.tokenizer.encode("blue jacket")
     assert rebuilt.chat_template == chat
     # Turbo's Transformers 5 layout: one processor_config.json and the new tokenizer_config keys.
@@ -218,16 +243,19 @@ def staged(tmp_path: Path) -> None:
                 "extra_special_tokens": [],
             }
         ).encode(),
-        "processor_config.json": json.dumps(
-            {"image_processor": geometry, "video_processor": geometry, "processor_class": "X"}
-        ).encode(),
         "chat_template.jinja": chat.encode(),
     }
-    turbo = build_processor(assets(turbo_files))
+    nested_config = {
+        "image_processor": image_config, "video_processor": geometry, "processor_class": "X"
+    }
+    turbo = native_processor("nested", nested_config, "processor_config.json", turbo_files)
     assert turbo.tokenizer.encode("blue jacket") == processor.tokenizer.encode("blue jacket")
     assert turbo.to_dict() == rebuilt.to_dict()
     try:
-        build_processor(assets({k: v for k, v in files.items() if k != "chat_template.jinja"}))
+        build_processor(
+            graph.processor_config,
+            assets({k: v for k, v in files.items() if k != "chat_template.jinja"}),
+        )
     except Exception as missing:
         assert "chat_template.jinja" in str(missing), missing
     else:
@@ -299,7 +327,10 @@ def staged(tmp_path: Path) -> None:
     # A checkpoint naming its own schedule (Turbo's `model_index.sample_sigmas`, the first value
     # stored as an integer) runs that schedule, as upstream's pipeline configured with it does.
     schedule = [1, 0.8, 0.5]
-    turbo_graph = build_qwen_image21(Config({**config, "model_index": {"sample_sigmas": schedule}}))
+    turbo_graph = build_qwen_image21(Config({
+        **config, "processor": nested_config, "model_index": {"sample_sigmas": schedule}
+    }))
+    assert turbo_graph.processor_config == nested_config
     turbo_graph.components = graph.components
     turbo_model = QwenImage21Model.for_test(graph=turbo_graph, processor=processor)
     assert turbo_model.sample_sigmas == [1.0, 0.8, 0.5] and model.sample_sigmas is None

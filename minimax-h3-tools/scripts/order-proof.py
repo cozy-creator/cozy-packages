@@ -9,10 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from cozy_runtime.author import canonical_json
-from cozy_runtime.derive.quantization import (
-    prepare_quantization,
-    quantization_additions,
-)
 from h3_tables import lanes as lane_recipes
 from h3_tables.job import (
     FP8_SPEC,
@@ -28,10 +24,10 @@ from h3_tables.model_config import parse_production_config
 from h3_tables.order import current_order
 from h3_tables.order import full_order as _full_order
 from h3_tables.plans import parse_declared_plan, parse_plan
-from h3_tables.quantization import h3_quantization_plan
+from h3_tables.quantization import reviewed_plan
 from h3_tables.source import full_targets as _full_targets
-from h3_tables.source import official_full_specs, source_only_keys, text_source_only_keys
-from tensorfs.derived import Part, Source, SourceInspection, Tensor
+from h3_tables.source import TARGET_COMPONENT, official_full_specs, source_only_keys, text_source_only_keys
+from h3_tables.metadata import PartShape, TensorShape, SourceLayout, ComponentSelection
 
 PROJECT = Path(__file__).resolve().parents[1]
 ASSETS = PROJECT / "src/h3_tables/assets"
@@ -45,24 +41,24 @@ def refuse(raw: bytes, task: str) -> None:
     raise RuntimeError(f"changed {task} TimestepPlan did not refuse")
 
 
-def structure(rows: list[tuple[str, str, str, tuple[int, ...]]]) -> SourceInspection:
-    components: dict[str, dict[str, Tensor]] = {}
+def structure(rows: list[tuple[str, str, str, tuple[int, ...]]]) -> SourceLayout:
+    components: dict[str, dict[str, TensorShape]] = {}
     for component, key, dtype, shape in rows:
-        components.setdefault(component, {})[key] = Tensor(
-            dtype, shape, PLAIN_SPEC, {"value": Part(dtype, shape)}
+        components.setdefault(component, {})[key] = TensorShape(
+            dtype, shape, PLAIN_SPEC, {"value": PartShape(dtype, shape)}
         )
-    return SourceInspection(Source("sha256:" + "01" * 32, 1), components, {"model": b"{}"})
+    return SourceLayout(None, components, {"model": b"{}"})
 
 
 def prove_retable(sections: dict[str, dict[str, object]]) -> None:
     """The retable declarations edit only table keys and refuse the wrong sources."""
     tables = _table_additions(sections)
     shared: list[tuple[str, str, str, tuple[int, ...]]] = [
-        (c, f"{c}.w", "f32", (1,)) for c in ("text_encoder", "video_vae", "audio_vae")
+        (c, f"{c}.w", "f32", (1,)) for c in ("text_encoder", "vae", "audio_vae")
     ]
     pruned_rows, full_rows = list(shared), list(shared)
     for task, section in (("fl2va", "transformer"), ("ref2va", "transformer_ref")):
-        component = f"{task}_dit"
+        component = TARGET_COMPONENT[task]
         topology = H3Topology.from_config(sections[section])
         pruned_rows += [(component, "proj_in.weight", "bf16", (2, 2))]
         pruned_rows += [(component, key, "bf16", (1, 6, 8)) for key in tables[task]]
@@ -74,10 +70,10 @@ def prove_retable(sections: dict[str, dict[str, object]]) -> None:
     bank, retabled = _retable_targets(
         structure(pruned_rows), structure(full_rows), sections, tables
     )
-    if set(bank) != {"fl2va_dit", "ref2va_dit"}:
+    if set(bank) != {"transformer", "transformer_ref"}:
         raise RuntimeError("the table bank must hold exactly both DiTs")
     for task in ("fl2va", "ref2va"):
-        component = f"{task}_dit"
+        component = TARGET_COMPONENT[task]
         target = retabled[component]
         if (
             target.source != "pruned"
@@ -106,10 +102,10 @@ def prove_retable(sections: dict[str, dict[str, object]]) -> None:
         raise RuntimeError(f"retable accepted a source with {name}")
 
 
-def _dit_structure(sections: dict[str, Any]) -> SourceInspection:
+def _dit_structure(sections: dict[str, Any]) -> SourceLayout:
     """The two FULL DiT components from the package's own native geometry contract."""
     rows: list[tuple[str, str, str, tuple[int, ...]]] = []
-    for component, section in (("fl2va_dit", "transformer"), ("ref2va_dit", "transformer_ref")):
+    for component, section in (("transformer", "transformer"), ("transformer_ref", "transformer_ref")):
         specs = dict(official_full_specs(sections[section]))
         specs["rope.inv_freq"] = ("f32", (16,))
         rows.extend((component, key, dtype, tuple(shape)) for key, (dtype, shape) in specs.items())
@@ -121,7 +117,7 @@ def _targets_of(
     sections: dict[str, Any],
     tables: Any,
     full_targets: Any,
-    dits: SourceInspection,
+    dits: SourceLayout,
     quantization: Any,
 ) -> dict[str, Any]:
     lane = lane_recipes.LANES[name]
@@ -148,7 +144,7 @@ def main() -> None:
     if len(text_source_only_keys()) != 156:
         raise RuntimeError("official 1,058-row text source does not trim exactly to 902 rows")
     full_targets = _full_targets()
-    for component in ("fl2va_dit", "ref2va_dit"):
+    for component in ("transformer", "transformer_ref"):
         target = full_targets[component]
         if (
             target.source != "dits"
@@ -159,7 +155,7 @@ def main() -> None:
 
     tables = _table_additions(sections)
     prove_retable(sections)
-    quantization = prepare_quantization(h3_quantization_plan())
+    quantization = reviewed_plan()
     if (
         quantization.components != ["dit"]
         or len(quantization.order) != 584
@@ -175,8 +171,8 @@ def main() -> None:
 
     measured_bytes: dict[str, int] = {}
     for task, source, component in (
-        ("fl2va", "transformer", "fl2va_dit"),
-        ("ref2va", "transformer_ref", "ref2va_dit"),
+        ("fl2va", "transformer", "transformer"),
+        ("ref2va", "transformer_ref", "transformer_ref"),
     ):
         raw = (ASSETS / f"timestep-plan.{task}.json").read_bytes()
         plan = parse_declared_plan(raw)
@@ -206,12 +202,17 @@ def main() -> None:
                 declared.logical_dtype != "bf16"
                 or declared.shape != shape
                 or declared.encoding != PLAIN_SPEC
-                or dict(declared.parts) != {"value": Part("bf16", shape)}
+                or dict(declared.parts) != {"value": PartShape("bf16", shape)}
             ):
                 raise RuntimeError(f"{component}/{key} changed its exact BF16 table bytes")
         selected = {tensor.key for tensor in quantization.tensors}
         for name, target, spec in (("fp8", fp8[component], FP8_SPEC),):
-            expected = quantization_additions("fp8-rowwise/1", quantization, "dit")
+            expected = {
+                row.key: TensorShape("bf16", row.shape, "fp8.rowwise", {
+                    "weight": PartShape("f8_e4m3fn", row.shape),
+                    "scale": PartShape("f32", (row.shape[0],)),
+                }) for row in quantization.tensors
+            }
             if (
                 set(target.drop) != dynamic | set(source_only_keys()) | selected
                 or set(target.add) != set(shapes) | selected

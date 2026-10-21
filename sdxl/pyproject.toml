@@ -9,17 +9,19 @@ version = "2.11.2"
 description = "Stable Diffusion XL text-to-image"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[adapters,media]>=0.27.0",
-    "diffusers>=0.40.0",
+    "av>=19.0.1",
+    "cozy-runtime>=0.30.0",
+    "diffusers>=0.40,<0.41",
     "hf-xet>=1.6.0",
     "hidiffusion>=0.1.10",
+    "peft>=0.20,<0.21",
     "msgspec>=0.19",
     "numpy>=2.0",
     "pyyaml>=6.0.3",
     "regex>=2026.7.19",
     "safetensors>=0.8.0",
     "shellingham>=1.5.4",
-    "tensorfs>=0.10",
+    "tensorfs>=0.13",
     "tokenizers>=0.23.1",
     "torch>=2.14",
     "transformers>=5.16.1",
@@ -36,7 +38,8 @@ build-backend = "hatchling.build"
 packages = ["sdxl"]
 
 [tool.uv]
-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'", "sys_platform == 'linux' and platform_machine == 'aarch64'"]
+override-dependencies = ["cozy-runtime @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl", "tensorfs @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/tensorfs-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl"]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 
 [dependency-groups]
 dev = ["mypy>=2.3.1", "ruff>=0.16.4"]

@@ -72,6 +72,7 @@ class _Capture:
 def encode_text(
     ctx: Context, payload: EncodeTextInput, model: H3Model, out: Outputs, tel: Telemetry
 ) -> EncodeTextOutput:
+    ctx.plan("text_encoder")
     conditioner = model.pipe.components["text_encoder"]
     wanted = sorted(set(payload.hidden_states)) or [FINAL]
     tensors: dict[str, torch.Tensor] = {}

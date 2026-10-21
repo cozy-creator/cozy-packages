@@ -33,7 +33,7 @@ from .official import (
     build_h3_turbo_base,
     build_h3_turbo_lora,
 )
-from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK
+from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, OVERLAY_SOURCE_KWARG, TURBO_BANK
 
 #: Reference latents one generation keeps (`ReferenceMemo`), least recently used first out; the
 #: Runtime sheds them sooner when memory is short.
@@ -67,7 +67,7 @@ class H3Model(
     encoded_leaves="accept",
     # The DiTs' attention holds at 4 bits (fp4 where the GPU has it); the VAEs and the text
     # encoder keep exact attention.
-    attention_bits={"fl2va_dit": 4, "ref2va_dit": 4},
+    attention_bits={"transformer": 4, "transformer_ref": 4},
 ):
     """H3 is head-shardable at every divisor of its 56 attention heads up to eight GPUs.
 
@@ -87,7 +87,7 @@ class H3Model(
     """
 
     __adapter_compatibility__ = (
-        AdapterCompatibility("lora", "", ("fl2va_dit", "ref2va_dit"), -math.inf, math.inf),
+        AdapterCompatibility("lora", "", ("transformer", "transformer_ref"), -math.inf, math.inf),
     )
 
     pipe: OfficialH3Pipeline
@@ -108,7 +108,7 @@ class H3Model(
         producer's rotary hook."""
         for component in self.pipe.components.values():
             producer.retain_rotary(component)
-        plans = (glue.install(self, self.pipe, plan), vae_glue.install(self.pipe.components["video_vae"], plan))
+        plans = (glue.install(self, self.pipe, plan), vae_glue.install(self.pipe.components["vae"], plan))
         return "+".join(identity for identity in plans if identity)
 
     @uses_components("text_encoder")
@@ -119,7 +119,7 @@ class H3Model(
     def decode_audio(self, task: Task, state: Any) -> tuple[Any, int]:
         return self.pipe.decode_audio(task, state), int(state.sampling_rate)
 
-    @uses_components("video_vae")
+    @uses_components("vae")
     def decode_video(
         self,
         task: Task,
@@ -131,22 +131,22 @@ class H3Model(
         a generator would run its body after the scope had closed."""
         return self.pipe.decode_video_chunks(task, state, on_chunk)
 
-    @uses_components("video_vae")
+    @uses_components("vae")
     def condition_fl2va_media(self, task: Task, state: Any) -> None:
         self.pipe.condition_media(task, state)
 
-    @uses_components("video_vae", "audio_vae")
+    @uses_components("vae", "audio_vae")
     def condition_ref2va_media(self, task: Task, state: Any, *, tel: Telemetry) -> None:
         cache: DerivedCache | None = getattr(self, "reference_latents", None)
         memo = None if cache is None else ReferenceMemo(cache, self.checkpoint_ref)
         reused, encoded = self.pipe.condition_media(task, state, memo=memo)
         tel.log("h3 reference latents", reused=reused, encoded=encoded)
 
-    @uses_components("fl2va_dit")
+    @uses_components("transformer")
     def sample_fl2va(self, state: Any, *, on_step: Any, cancel: Any) -> ScheduleFacts:
         return self.pipe.denoise("fl2va", state, on_step=on_step, cancel=cancel)
 
-    @uses_components("ref2va_dit")
+    @uses_components("transformer_ref")
     def sample_ref2va(self, state: Any, *, on_step: Any, cancel: Any) -> ScheduleFacts:
         return self.pipe.denoise("ref2va", state, on_step=on_step, cancel=cancel)
 
@@ -165,7 +165,7 @@ class H3TurboBase(H3Model, encoded_leaves="accept"):
         self.pipe = loader.construct(OfficialH3Pipeline, factory=build_h3_turbo_base)
         self._declare_caches(loader)
 
-    @uses_components("fl2va_dit")
+    @uses_components("transformer")
     def sample_fl2va_turbo(
         self,
         state: Any,
@@ -183,7 +183,7 @@ class H3TurboBase(H3Model, encoded_leaves="accept"):
             sol_dense_steps=sol_dense_steps,
         )
 
-    @uses_components("ref2va_dit")
+    @uses_components("transformer_ref")
     def sample_ref2va_turbo(
         self,
         state: Any,
@@ -272,6 +272,7 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
                 **(original or {}),
                 ATTENTION_KWARG: TURBO_BANK,
                 OVERLAY_KWARG: overlay,
+                OVERLAY_SOURCE_KWARG: (self.checkpoint_ref, f"{trunk}_turbo"),
             },
         )
         try:

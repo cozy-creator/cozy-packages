@@ -19,7 +19,6 @@ from cozy_runtime.author import (
     Context,
     Invocation,
     ModelArtifact,
-    ObjectRef,
     attempt,
     canonical_json,
     describe,
@@ -54,7 +53,7 @@ async def prepare(ctx: Context, payload: Request) -> ModelArtifact:
 
 def artifact(name: str, digit: str) -> ModelArtifact:
     return ModelArtifact(
-        name, "model", ObjectRef("sha256:" + digit * 64, 100), "sha256:" + digit * 64
+        name, "model", "sha256:" + digit * 64, "sha256:" + digit * 64
     )
 
 

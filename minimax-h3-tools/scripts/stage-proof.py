@@ -12,97 +12,74 @@ from contextlib import nullcontext
 from typing import Any
 
 import torch
-from cozy_runtime.author import Weights
-from cozy_runtime.derive.quantization import (
-    QuantizationStats,
-    prepare_quantization,
-)
+from cozy_runtime.author import ModelArtifact, Weights, canonical_json
+import h3_tables.source as source_api
+from cozy_runtime.derive.quantization import QuantizationStats
 from h3_tables import job, lanes
-from h3_tables.quantization import h3_quantization_plan
+from h3_tables.quantization import reviewed_plan
 from h3_tables.source import TARGET_COMPONENT, full_targets
 from source_geometry import VIDEO_VAE_ROWS, conditioner_rows, plain
-from tensorfs.derived import Source, SourceCapability, SourceInspection
+from h3_tables.metadata import PartShape, TensorShape, SourceLayout, ComponentSelection
 
 
 class Interrupted(RuntimeError):
     pass
 
 
-class Transaction:
+class RecordedOutput:
     def __init__(self, owner: Recorder, slot: str) -> None:
         self.owner, self.slot = owner, slot
-        self.replayed = slot in owner.committed
-        prior = owner.committed.get(slot)
-        self.receipt = dict(prior) if prior else None
+        self.done = owner.committed.get(slot)
         self.configured = False
+        self.order = ()
 
-    def __enter__(self) -> Transaction:
+    def has(self, _component: str, _key: str) -> bool:
+        return True  # Control-only recorder; actual native bytes are a separate proof.
+
+    def __enter__(self) -> RecordedOutput:
         return self
 
     def __exit__(self, *_: Any) -> None:
         pass
 
-    def add_config(self, name: str, raw: bytes) -> None:
-        assert not self.replayed and name == "model" and raw
-        self.configured = True
-
-    def commit(self) -> dict[str, Any]:
-        if self.receipt is not None:
-            return self.receipt
-        assert not self.replayed and self.configured
-        assert self.slot not in self.owner.committed
-        receipt = {"transaction_id": self.slot, "manifest": {"sha256": "11" * 32, "length": 1}}
-        self.owner.committed[self.slot] = receipt
-        self.owner.events.append("commit:" + self.slot)
-        return receipt
-
 
 class Recorder:
     def __init__(self) -> None:
-        self.committed: dict[str, dict[str, Any]] = {}
+        self.committed: dict[str, ModelArtifact] = {}
         self.events: list[str] = []
         self.fail_at = ""
 
-    def tensorfs_source(self, source: Any) -> SourceCapability:
-        """Native geometry values only; this stage test makes no byte custody claim.
+    def inspect(self, source: Any) -> SourceLayout:
+        """Geometry-only fixture; no native source or stored payload is claimed here."""
+        plan = reviewed_plan()
+        components = {
+            component: {key: plain("f32", (1,)) for key in target.drop}
+            for component, target in full_targets().items()
+        }
+        for component in TARGET_COMPONENT.values():
+            components[component].update({
+                tensor.key: plain(tensor.logical_dtype, tensor.shape) for tensor in plan.tensors
+            })
+        components["text_encoder"] = {key: plain(*spec) for key, spec in conditioner_rows().items()}
+        components["vae"] = {key: plain(*spec) for key, spec in VIDEO_VAE_ROWS.items()}
+        return SourceLayout(None, components, {})
 
-        Every treated component carries the rows its treatment selects: the reviewed DiT
-        plan, the whole real conditioner (its source-only rows included) and real video VAE
-        decode operands.
-        """
+    def model_output(self, _ctx: Any, slot: str, *, configs: Any, order: Any, **_: Any) -> RecordedOutput:
+        output = RecordedOutput(self, slot)
+        output.configured = bool(configs.get("model"))
+        output.order = order
+        return output
 
-        def inspect(_components: Any, _configs: Any) -> SourceInspection:
-            plan = prepare_quantization(h3_quantization_plan())
-            components = {
-                component: {key: plain("f32", (1,)) for key in target.drop}
-                for component, target in full_targets().items()
-            }
-            for component in TARGET_COMPONENT.values():
-                components[component].update(
-                    {
-                        tensor.key: plain(tensor.logical_dtype, tensor.shape)
-                        for tensor in plan.tensors
-                    }
-                )
-            components["text_encoder"] = {
-                key: plain(*spec) for key, spec in conditioner_rows().items()
-            }
-            components["video_vae"] = {key: plain(*spec) for key, spec in VIDEO_VAE_ROWS.items()}
-            return SourceInspection(Source(source.checkpoint_ref, 1), components, {})
-
-        return SourceCapability(source.checkpoint_ref, 1, inspect)
-
-    def output(self, slot: str) -> Any:
-        owner = self
-
-        class Output:
-            def open(self, _definition: Any) -> Transaction:
-                return Transaction(owner, slot)
-
-        return Output()
-
-    def adopt_model(self, receipt: dict[str, Any]) -> None:
-        assert receipt in self.committed.values()
+    def adopt_model(self, output: RecordedOutput) -> ModelArtifact:
+        if output.done is not None:
+            return output.done
+        assert output.configured and output.slot not in self.committed
+        artifact = ModelArtifact("stage-proof", output.slot, "sha256:" + "11" * 32,
+                                 canonical_json.digest(output.slot))
+        self.committed[output.slot] = artifact
+        self.events.append("commit:" + output.slot)
+        output.done = artifact
+        return artifact
 
     def tables(
         self, task: str, _ctx: Any, _source: Any, active: dict[str, Any], _tel: Any, _range: Any
@@ -114,9 +91,9 @@ class Recorder:
             raise Interrupted(event)
         return 1, 1, 0
 
-    def quantize(self, transaction: Transaction, *_: Any, **kwargs: Any) -> QuantizationStats:
+    def quantize(self, _source: Any, transaction: RecordedOutput, *_: Any, **kwargs: Any) -> QuantizationStats:
         event = "quantize:" + transaction.slot
-        self.events.append(event + ":" + kwargs["target_component"])
+        self.events.append(event + ":" + kwargs["component"])
         if self.fail_at == event:
             raise Interrupted(event)
         return QuantizationStats(
@@ -128,7 +105,7 @@ class Recorder:
             worst_relative_frobenius=0.03125,
         )
 
-    def cast(self, transaction: Transaction, *_: Any, **kwargs: Any) -> Any:
+    def cast(self, transaction: RecordedOutput, *_: Any, **kwargs: Any) -> Any:
         """The video VAE cast, recorded rather than run.
 
         Same seam as `tables` and `quantize`: this proof sequences lanes and never claims a
@@ -164,6 +141,8 @@ class Telemetry:
 def invoke(recorder: Recorder, fail_at: str = "") -> Any:
     recorder.fail_at = fail_at
     module: Any = job
+    original_inspection = source_api.inspection
+    original_model_output = job.model_output
     original_tables = job._write_tables
     original_quantize = module.quantize_component_into
     original_cast = module.write_cast
@@ -172,6 +151,8 @@ def invoke(recorder: Recorder, fail_at: str = "") -> Any:
     original_precision = torch.get_float32_matmul_precision()
     try:
         # Explicit computation seams only; all stage control stays in the lanes function.
+        source_api.inspection = lambda ctx, source: ctx.inspect(source)
+        module.model_output = recorder.model_output
         module._write_tables = recorder.tables
         module.quantize_component_into = recorder.quantize
         module.write_cast = recorder.cast
@@ -179,6 +160,8 @@ def invoke(recorder: Recorder, fail_at: str = "") -> Any:
         source = Weights[Any]("sha256:" + "0" * 64)
         return job._produce_lanes(recorder, Telemetry(), source, tuple(lanes.LANES))
     finally:
+        source_api.inspection = original_inspection
+        job.model_output = original_model_output
         job._write_tables = original_tables
         module.quantize_component_into = original_quantize
         module.write_cast = original_cast
@@ -219,7 +202,7 @@ def main() -> None:
         assert encoded == {
             (slot, component)
             for slot in set(slots[2:]) - set(retained)
-            for component in ("fl2va_dit", "ref2va_dit", "text_encoder")
+            for component in ("transformer", "transformer_ref", "text_encoder")
         }, encoded
         assert not any(event == "commit:" + slot for slot in retained for event in recorder.events)
         for slot in retained:
