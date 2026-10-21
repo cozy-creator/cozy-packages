@@ -109,6 +109,7 @@ sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
 
 import minimax_h3.official as official_module  # noqa: E402
 from minimax_h3 import official  # noqa: E402
+from minimax_h3.official import Task  # noqa: E402
 from minimax_h3.adaln_pruned import (  # noqa: E402
     AdaLNPrunedMiniMaxH3Transformer,
     _AdaLNPrunedBlockTable,
@@ -4621,7 +4622,8 @@ def arm_memory_plan() -> None:
     adapter = object.__new__(package.H3TurboLoRA)
     payload = package.ReferenceClipInput(prompt="plan", seed=62, duration_s=5, video_audio=())
     assets: Assets[ImageAsset | VideoAsset | AudioAsset] = Assets([])
-    out, tel = fake_outputs(), fake_telemetry()
+    attempt = fake_attempt("h3-plan-scope")
+    out, tel = fake_outputs(attempt), fake_telemetry(attempt)
     image = PILImage.new("RGB", (1, 1))
     for turbo, evaluations in ((True, package.TURBO_STEPS), (False, 30), (False, 40)):
         lora = adapter if turbo else None
