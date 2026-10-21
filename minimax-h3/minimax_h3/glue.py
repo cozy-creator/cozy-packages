@@ -64,6 +64,8 @@ from cozy_runtime.author.kernels import (
     TritonKernels,
 )
 
+from .adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
+
 CONTRACT = "h3-glue-call-and-topology/2"
 #: The widths compiled: a transformer with others is not installable.
 HIDDEN, FFN, HEAD_DIM, ROTARY = 5376, 14336, 128, 96
@@ -82,6 +84,7 @@ NOT_INSTALLABLE = frozenset(
         "fusion_device_incapable",
     }
 )
+
 
 
 class GlueRefusal(CapabilityError):
@@ -850,9 +853,9 @@ def _widths(transformer: Any, root: str) -> None:
 
 
 def _validate_transformer(transformer: Any, root: str) -> None:
+    forwards = (MiniMaxH3Transformer3DModel.forward, AdaLNPrunedMiniMaxH3Transformer.forward)
     _shape(
-        type(transformer).forward is MiniMaxH3Transformer3DModel.forward
-        and _plain(transformer),
+        type(transformer).forward in forwards and _plain(transformer),
         f"{root}: {_type_name(transformer)} overrides the Diffusers MiniMax-H3 forward",
     )
     for index, block in enumerate(transformer.transformer_blocks):

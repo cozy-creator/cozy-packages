@@ -11,6 +11,7 @@ survive; each dropped set must be exactly the clips' frames. Then a clip shrinks
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -87,7 +88,7 @@ def check(state: SimpleNamespace, full: SimpleNamespace, dropped: set[int]) -> N
     assert all(torch.equal(getattr(state, k), v) for k, v in state.denoiser_input_fields.items())
 
 
-def clip_rows(dropped_frame: object) -> set[int]:
+def clip_rows(dropped_frame: Callable[[int], bool]) -> set[int]:
     vi = packed().video_indices
     spans = ((12, 7, 8), (12 + 7 * 8, 12, 2))  # (first row, latent frames, rows per frame)
     return {

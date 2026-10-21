@@ -1785,11 +1785,6 @@ def arm_adaln_pruned() -> None:
         lambda: _validate_dual_dit_topology({"fl2va": pruned, "ref2va": pruned}),
         "artifact_config",
     )
-    check(
-        "AdaLN-pruned DiT inherits the official forward",
-        "forward" in AdaLNPrunedMiniMaxH3Transformer.__dict__,
-        False,
-    )
 
     pruned_state = pruned.state_dict()
     full_state = full.state_dict()
@@ -1900,7 +1895,19 @@ def arm_adaln_pruned() -> None:
     full_output = full(**forward)
     pruned_output = pruned(**forward)
     check(
-        "the inherited forward changes only the AdaLN-pruned modulation source",
+        "the pruned forward is the official forward, byte for byte, its rows scoped",
+        all(
+            torch.equal(left, right)
+            for left, right in zip(
+                pruned.forward(**forward),
+                MiniMaxH3Transformer3DModel.forward(pruned, **forward),
+                strict=True,
+            )
+        ),
+        True,
+    )
+    check(
+        "the pruned forward changes only the AdaLN-pruned modulation source",
         all(
             torch.allclose(left, right, rtol=2e-5, atol=2e-6)
             for left, right in zip(full_output, pruned_output, strict=True)
@@ -2726,7 +2733,7 @@ def arm_reference_media() -> None:
             ((72, motion_height, motion_width, 3), (), []),
         )
         with av.open(str(wide)) as container:
-            source = next(container.decode(video=0)).to_ndarray(format="rgb24")
+            source_frame = next(container.decode(video=0)).to_ndarray(format="rgb24")
         state = pipe.start_ref2va(
             prompt="A dancer spins.",
             references=[reference],
@@ -2736,9 +2743,14 @@ def arm_reference_media() -> None:
             reference_image_short_edges=[],
         )
         normalized = state.normalized_references[0].frames
-        guide = np.asarray(PILImage.fromarray(source).resize((motion_width, motion_height), PILImage.Resampling.LANCZOS))
+        guide = torch.nn.functional.interpolate(
+            torch.from_numpy(source_frame).permute(2, 0, 1)[None],
+            size=(motion_height, motion_width),
+            mode="bicubic",
+            antialias=True,
+        )[0].permute(1, 2, 0).numpy()
         check(
-            "2560x1080: one LANCZOS resize from the source straight to its motion size",
+            "2560x1080: one antialiased resize from the source straight to its motion size",
             (normalized.shape, int(np.abs(normalized[0].astype(int) - guide.astype(int)).max()) <= 2),
             ((72, motion_height, motion_width, 3), True),
         )
@@ -3324,12 +3336,12 @@ def arm_interface() -> None:
     check("default segments use eight evaluations", package.segment_sampling(unseeded), (True, 8))
     for job in (package.LongFormInput, package.LongFormCutsInput):
         for encoding in (msgspec.json, msgspec.yaml):
-            authored = {
+            authored_segments = {
                 "segments": [{"prompt": "x", "duration_s": 5, "turbo": value}
                              for value in (True, False)],
                 "references": [{"name": "Hero", "kind": "character"}],
             }
-            request = encoding.decode(encoding.encode(authored), type=job)
+            request = encoding.decode(encoding.encode(authored_segments), type=job)
             label = f"{job.__name__} {encoding.__name__}"
             check(f"{label} removed segment flags cannot override global turbo",
                   package.segment_sampling(request), (True, 8))

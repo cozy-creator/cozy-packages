@@ -1,13 +1,14 @@
 [project]
 name = "minimax-h3"
 version = "1.44.0"
+description = "MiniMax H3 video with sound: from keyframes, references, or several segments"
 requires-python = ">=3.12"
 dependencies = [
     "birefnet>=0.5.0",
     "character-describer>=0.10.0",
     "cozy-runtime[adapters,media]>=0.30.0",
-    # MiniMax-H3 and Qwen-Image-2.1 share one Diffusers: the release qwen-image-2 pins.
-    "diffusers==0.41.0",
+    # MiniMax-H3 and Qwen-Image-2.1 share one Diffusers: the release qwen-image-2 locks.
+    "diffusers>=0.41,<0.42",
     "hf-xet>=1.6.0",
     # The AdaLN table producer owns the row-label reader the pruned DiT is built from.
     "minimax-h3-tools>=2.23.0",

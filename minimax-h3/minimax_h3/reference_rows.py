@@ -42,9 +42,10 @@ _LAYOUT_FIELDS = {
 
 def motion_size(height: int, width: int) -> tuple[int, int]:
     """A clip's (height, width) once its canvas-sized frames shrink to guide motion."""
-    return tuple(
+    small_height, small_width = (
         max(_GRID, round(edge / CANVAS_DIVISOR / _GRID) * _GRID) for edge in (height, width)
     )
+    return small_height, small_width
 
 
 def public_video(reference: Any) -> bool:

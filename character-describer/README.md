@@ -20,8 +20,12 @@ declares `min_bits=4, phase="decode"`: it serves the release's `nvfp4` lane wher
 people left out. `describe_clip` watches a motion clip as video, the way Qwen-VL reads one:
 about 2 frames a second, at least 16 and at most 32, at most 448 px long, each block stamped with
 its `<t seconds>`. It answers in four parts, `PEOPLE`, `BEATS` (who does what to whom, which way,
-facing the camera how, with times), `CAMERA` and `CUTS`, naming people only as P1, P2. A 15 s
-clip is 30 frames and about 5 s to describe on an RTX A5000. `write_texts` answers text prompts,
+facing the camera how, with times), `CAMERA` and `CUTS`, naming people only as P1, P2. ffmpeg's
+scene score finds the cuts first (a frame scoring 0.2 or more starts a shot; on 15 test clips that
+found all 10 cuts and no false one). They fill `CUTS`, and the model watches the whole clip once,
+told where the shot changes and that people may differ across shots. Without ffmpeg
+(`cozy tools install ffmpeg`; worker images bake it) the run warns and the model judges the cuts
+itself. A 15 s clip is 30 frames and about 5 s to describe on an RTX A5000. `write_texts` answers text prompts,
 all in one pass. Every entrypoint is memoized: the same file and instruction return the stored
 answer without running the model.
 

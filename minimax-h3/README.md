@@ -1,0 +1,47 @@
+# MiniMax H3
+
+Video with sound from MiniMax H3: 5 to 15 seconds at 768p, optionally upscaled by SeedVR2 to
+1080p, 1440p or 2160p.
+
+| Function | Makes a video from |
+|---|---|
+| `fl2va` | a prompt and up to two keyframes: the first and the last frame |
+| `ref2va` | a prompt and references: characters, backgrounds, audio, action videos |
+| `long_form` | several segments sharing their references, joined into one video ([LONG_FORM.md](LONG_FORM.md)) |
+
+`fl2va_turbo` and `ref2va_turbo` take eight steps instead of `steps` (30, 40 or 50).
+
+```sh
+cozy run fidika/minimax-h3/fl2va_turbo prompt='The camera pulls back from a lighthouse as a storm rolls in.' \
+  duration_s=6 --asset first=./first.png --asset last=./last.png
+cozy run fidika/minimax-h3/ref2va_turbo --input scene.json
+cozy run fidika/minimax-h3/long_form --input story.json
+```
+
+`scene.json` names its references, by file path or description, and uses them in the prompt as
+`<Name>`; a long-form `story.json` adds `segments` ([example](examples/dialogue-garden.json)):
+
+```json
+{
+  "prompt": "<Rover> waves in a bright studio.",
+  "duration_s": 6,
+  "references": [
+    {"name": "Rover", "kind": "character", "image": "./rover.png"},
+    {"name": "Studio", "kind": "background", "description": "A bright studio."}
+  ]
+}
+```
+
+Supplied character images have their backgrounds removed (BiRefNet) and are described in one
+sentence (character-describer); `clean_references=false` and `describe_references=false` turn
+either off. Write prompts in MiniMax's
+[full-reference format](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md);
+`resolution` and `upscale` are in [UPSCALE.md](UPSCALE.md). The video is an MP4 in
+`~/.cozy/outputs`.
+
+GPU: one NVIDIA card with 80 GB or more (H100, RTX PRO 6000, H200); the 8-bit lane is 70 GiB,
+and `--on new` rents a card that holds it. Measured on one H100 at 30 steps: about 3 minutes
+for 5 s of video and 16 minutes for 14 s; turbo runs 8 steps. Most computers rent: add
+`--on new`.
+
+`encode_text`, `assemble_video` and `long_form_cuts` are the workflow's parts, callable alone.

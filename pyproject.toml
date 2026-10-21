@@ -22,7 +22,7 @@ exclude = ["^birefnet/birefnet/upstream/", "^seedvr2/seedvr2/upstream/"]
 module = [
     "torch.*", "torchvision.*", "transformers.*", "tokenizers.*", "numpy.*", "PIL.*",
     "safetensors.*", "diffusers.*", "tfsbench", "tensorfs", "tensorfs.*", "cozy_eval.*",
-    "av", "av.*", "omegaconf", "omegaconf.*",
+    "av", "av.*", "omegaconf", "omegaconf.*", "triton", "triton.*",
 ]
 ignore_missing_imports = true
 
@@ -46,6 +46,11 @@ warn_unused_ignores = false
 module = ["qwen_image_2.model", "flux_3_klein.klein", "seedvr2.model"]
 disallow_subclassing_any = false
 warn_unused_ignores = false
+
+# MotionVideo extends Diffusers' reference class, also absent from the light environment.
+[[tool.mypy.overrides]]
+module = ["minimax_h3.official"]
+disallow_subclassing_any = false
 
 # Attributed upstream architecture is exercised by its real constructor and model proof.
 [[tool.mypy.overrides]]
