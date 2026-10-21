@@ -4,6 +4,9 @@ sentence, a place's look, a motion clip's people, beats and camera; and plain te
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+import tempfile
 from typing import Annotated
 
 import msgspec
@@ -60,19 +63,26 @@ CLIP_FPS = 2
 CLIP_FRAMES = (16, 32)
 CLIP_EDGE = 448
 CLIP_SECONDS = 15
-CLIP_PROMPT = (
-    "This clip's motion will be performed again by other characters in another place. Describe "
-    "its structure, not its story, in exactly these four parts, each starting on its own line:\n"
+CLIP_PARTS = (
     "PEOPLE: one line per person, \"P1: <where in the frame at the start> - <build, hair, "
     "clothing>\".\n"
     "BEATS: one line per beat in time order, \"<start>-<end> s: <who does what to whom>; <which "
     "way each person turns, falls or moves>; <each person's facing relative to the camera>\".\n"
     "CAMERA: the framing and each camera move with its time.\n"
-    "CUTS: the time of each cut, or none.\n"
+)
+CLIP_CUTS = "CUTS: the time of each cut, or none.\n"
+CLIP_RULES = (
     "Name people only as P1, P2 and so on. Describe only what is visible; do not guess names, "
     "intentions or the place's story."
 )
 CLIP_TOKENS = 700
+#: A frame whose ffmpeg scene score (`select`, on frames 270 px high) reaches CUT_SCENE starts a
+#: new shot; detections within CUT_GAP seconds of a cut are that cut. On se-072's 15 clips the
+#: non-cuts peak at 0.16 and the 10 cuts start at 0.26: 0.2 finds all 10 and no false cut.
+CUT_SCENE = 0.2
+CUT_GAP = 0.25
+SECTION = re.compile(r"^\s*(PEOPLE|BEATS|CAMERA|CUTS)\s*:\s*", re.IGNORECASE | re.MULTILINE)
+PERSON = re.compile(r"\b(P\d+)\s*:\s*(.+?)(?=\s*\bP\d+\s*:|\Z)", re.DOTALL)
 
 
 class DescribeCharacterInput(msgspec.Struct):
@@ -218,7 +228,7 @@ def describe_places(
 @app.entrypoint(
     defaults={"model": "qwen3.5-9b@0.2.0"},
     memoize=True,
-    memo_version="clip-v1",
+    memo_version="clip-v2",
 )
 def describe_clip(
     ctx: Context,
@@ -226,13 +236,16 @@ def describe_clip(
     model: Describer,
     tel: Telemetry,
 ) -> DescribeClipOutput:
-    """A motion clip's people, beats, camera and cuts, watched as timestamped video."""
+    """A motion clip's people, beats, camera and cuts. ffmpeg finds the cuts; each shot is watched
+    as timestamped video, its people kept under the labels earlier shots gave them."""
     ctx.raise_if_cancelled()
     with tel.stage("reading clip"):
         frames, seconds = clip_frames(payload.video)
+    with tel.stage("finding cuts"):
+        cuts = scene_cuts(payload.video, tel)
     with tel.stage("describing clip"):
-        text = model.describe_video(frames, seconds, CLIP_PROMPT, max_new_tokens=CLIP_TOKENS)
-    tel.log("clip described", frames=len(frames), description=text[:2000])
+        text, shots = describe_shots(ctx, model, frames, seconds, cuts, float(payload.video.probe().duration))
+    tel.log("clip described", frames=len(frames), shots=shots, description=text[:2000])
     if not text:
         raise UnsupportedInput("the clip description is empty", code="output_integrity")
     return DescribeClipOutput(text, seconds)
@@ -283,6 +296,105 @@ def clip_frames(video: VideoAsset) -> tuple[list[Image], list[float]]:
         raise UnsupportedInput("the clip has no frames", code="media_decode")
     frames += [frames[-1]] * (count - len(frames))
     return frames, seconds
+
+
+def scene_cuts(video: VideoAsset, tel: Telemetry) -> list[float] | None:
+    """The clip's cut times in seconds, from ffmpeg's scene score; None, with a warning, when
+    ffmpeg is missing or cannot read the clip: the model then judges the cuts itself."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        tel.log("no ffmpeg on this machine: the model judges cuts itself (cozy tools install ffmpeg)", level="warning")
+        return None
+    duration = float(video.probe().duration)
+    with tempfile.NamedTemporaryFile() as clip:
+        clip.write(video.read_bytes())
+        clip.flush()
+        found = subprocess.run(
+            [ffmpeg, "-v", "error", "-nostdin", "-t", f"{duration:.3f}", "-i", clip.name, "-an", "-vf",
+             f"setpts=PTS-STARTPTS,scale=-2:270,select='gte(scene,{CUT_SCENE})',metadata=print:file=-",
+             "-f", "null", "-"],
+            capture_output=True, text=True, check=False,
+        )
+    if found.returncode:
+        tel.log("ffmpeg cannot read the clip: the model judges cuts itself", level="warning", error=found.stderr[-400:])
+        return None
+    cuts: list[float] = []
+    for t in map(float, re.findall(r"pts_time:([\d.]+)", found.stdout)):
+        if 0 < t < duration and (not cuts or t - cuts[-1] >= CUT_GAP):
+            cuts.append(t)
+    return cuts
+
+
+def clip_shots(seconds: list[float], cuts: list[float], duration: float) -> list[tuple[float, float, list[int]]]:
+    """Each shot's span and the watched frames inside it. A shot holding fewer than two of them is
+    described with its neighbour (the one before it, or for the first shot the one after)."""
+    bounds = [0.0, *cuts, duration]
+    shots: list[tuple[float, float, list[int]]] = []
+    for start, end in zip(bounds, bounds[1:], strict=False):
+        held = [i for i, t in enumerate(seconds) if start <= t < end]
+        if shots and (len(held) < 2 or len(shots[-1][2]) < 2):
+            before, _, earlier = shots.pop()
+            shots.append((before, end, earlier + held))
+        else:
+            shots.append((start, end, held))
+    return shots
+
+
+def clip_prompt(span: tuple[float, float] | None, people: list[str]) -> str:
+    """The instruction for one shot (its span in the clip's seconds), naming the people earlier
+    shots labelled; with no span the whole clip in one pass, cuts included."""
+    shot = f"This is one shot of it, from {span[0]:.1f} s to {span[1]:.1f} s; give times in the clip's seconds. " if span else ""
+    parts = CLIP_PARTS if span else CLIP_PARTS + CLIP_CUTS
+    known = (
+        "People labelled in earlier shots:\n" + "\n".join(people)
+        + "\nKeep these labels for anyone who appears again; give anyone new the next free label.\n"
+        if people else ""
+    )
+    return (
+        "This clip's motion will be performed again by other characters in another place. "
+        f"{shot}Describe its structure, not its story, in exactly these {'three' if span else 'four'} parts, "
+        f"each starting on its own line:\n{parts}{known}{CLIP_RULES}"
+    )
+
+
+def describe_shots(
+    ctx: Context, model: Describer, frames: list[Image], seconds: list[float], cuts: list[float] | None, duration: float
+) -> tuple[str, int]:
+    """One PEOPLE / BEATS / CAMERA / CUTS answer on the clip's timeline, and how many shots it
+    took. A clip without cuts is one shot; with `cuts` None the model judges them in one pass."""
+    shots = clip_shots(seconds, cuts or [], duration)
+    people: dict[str, str] = {}
+    beats: list[str] = []
+    camera: list[str] = []
+    judged = "none"
+    for start, end, held in shots:
+        ctx.raise_if_cancelled()
+        held = held + held[-1:] * (len(held) % 2)
+        reply = model.describe_video(
+            [frames[i] for i in held], [seconds[i] for i in held],
+            clip_prompt(None if cuts is None else (start, end), [f"{k}: {v}" for k, v in people.items()]),
+            max_new_tokens=CLIP_TOKENS,
+        )
+        pieces = SECTION.split(reply)
+        parts: dict[str, str] = {}
+        for name, body in zip(pieces[1::2], pieces[2::2], strict=True):
+            parts.setdefault(name.upper(), body.strip())
+        listed = parts.get("PEOPLE", "")
+        unlabelled = [(f"{start:.1f}-{end:.1f} s", listed)] if listed.strip(" .").lower() not in ("", "none") else []
+        for label, text in PERSON.findall(listed) or unlabelled:
+            people.setdefault(label, " ".join(text.split()))
+        beats.append(parts.get("BEATS", "" if parts else reply.strip()))
+        view = parts.get("CAMERA", "")
+        camera.append(view if len(shots) == 1 or view[:1].isdigit() else f"{start:.1f}-{end:.1f} s: {view}")
+        judged = parts.get("CUTS", judged)
+    cut_text = judged if cuts is None else ", ".join(f"{t:.1f} s" for t in cuts) or "none"
+    answer = {
+        "PEOPLE": "\n".join(f"{k}: {v}" for k, v in people.items()),
+        "BEATS": "\n".join(b for b in beats if b),
+        "CAMERA": "\n".join(c for c in camera if c),
+        "CUTS": cut_text,
+    }
+    return "\n\n".join(f"{name}:\n{body}" for name, body in answer.items()), len(shots)
 
 
 def _describe(model: Describer, images: list[Image], tel: Telemetry) -> list[str]:
