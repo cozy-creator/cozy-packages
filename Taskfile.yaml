@@ -13,7 +13,7 @@ tasks:
       - |
         set -euo pipefail; p="{{.CLI_ARGS}}"; test -f "$p/package.toml" || { echo "usage: task conform -- <package>" >&2; exit 2; }
         work=$(mktemp -d); trap 'rm -rf "$work"' EXIT; git ls-files -z | tar --null -T - -c | tar -x -C "$work"; cd "$work"
-        scripts/bind-account-index.sh "$(grep -om1 'https://[^"]*/v1/index/[^/]*/simple/' "$p/uv.lock" || true)" "$p"
+        scripts/bind-account-index.sh "$(grep -om1 'https\?://[^"]*/v1/index/[^/]*/simple/' "$p/uv.lock" || true)" "$p"
         uv sync -q --locked --no-install-project --python 3.12 --project "$p"; py=$PWD/$p/.venv/bin/python; export CUDA_VISIBLE_DEVICES=
         $py scripts/torch_family.py; $py scripts/direct_requirements.py; $py scripts/package_import.py "$p"
         "$p/.venv/bin/cozy-runtime" --json --dir "$p" describe | $py scripts/interface_current.py "$p/metadata/package-interface.json"
@@ -52,7 +52,7 @@ tasks:
         raised() { for q in $up; do for d in cozy-runtime tensorfs; do f=$(floor "$q" "$d"); l=$(locked "$1" "$d")
           [ -n "$f" ] && [ -n "$l" ] && [ "$(printf '%s\n' "$f" "$l" | sort -V | head -1)" != "$f" ] && echo "$d"; done; done | sort -u; }
         published() {
-          i=$(grep -om1 'https://[^"]*/v1/index/[^/]*/simple/' "$1/uv.lock"); a=${i%/simple/}
+          i=$(grep -om1 'https\?://[^"]*/v1/index/[^/]*/simple/' "$1/uv.lock"); a=${i%/simple/}
           cozy package info "${a##*/}/$1" --tensorhub "${i%%/v1/*}" --json | jq -e --arg v "$(ver "$1")" 'any(.releases[]; .release == $v)' >/dev/null
         }
         ship() { for h in {{.HUBS}}; do rm -rf "${work:?}/$1"; git archive HEAD "$1" | tar -x -C "$work"; (cd "$work/$1" && cozy package publish --tensorhub "$h"); done; }
