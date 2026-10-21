@@ -814,10 +814,8 @@ ANIMA_CARD_NEGATIVE = (
     "artist name, blurry, jpeg artifacts, chromatic aberration"
 )
 
-#: The card quality prefix the package prepends when the caller does not override it. It
-#: carries no rating tag: se-026 proposed `safe` and the owner declined it (2026-09-03), so
-#: a tag appearing here would be a silent reversal of a recorded decision.
-ANIMA_CARD_QUALITY_PREFIX = "masterpiece, best quality, "
+#: Rating tags no package default may carry: se-026 proposed `safe` and the owner declined it
+#: (2026-09-03), so one appearing in a default would silently reverse a recorded decision.
 ANIMA_RATING_TAGS = ("safe", "sensitive", "nsfw", "explicit")
 #: Anima's render phases, spelled here independently of the package. `cozy run list` renders
 #: "<stage> <percent>" verbatim, so a stage name is product copy a person reads.
@@ -828,7 +826,6 @@ def fence_anima_defaults() -> Fence:
     """The request default negative is the card string that carries this model's quality."""
 
     bad = _anima_field_default("negative_prompt", ANIMA_CARD_NEGATIVE)
-    bad += _anima_field_default("quality_prefix", ANIMA_CARD_QUALITY_PREFIX)
     bad += _anima_no_rating_tag()
     bad += _anima_number_default("cfg_interval_start", "0.15")
     bad += _anima_number_default("cfg_interval_stop", "0.7")
@@ -917,7 +914,7 @@ def _anima_no_rating_tag() -> list[str]:
         if not (
             isinstance(item, ast.AnnAssign)
             and isinstance(item.target, ast.Name)
-            and item.target.id in ("prompt", "quality_prefix")
+            and item.target.id in ("prompt", "negative_prompt")
         ):
             continue
         value = _anima_literal(tree, item.value) or ""
