@@ -17,8 +17,8 @@ master version is unpublished stops it too: its merged changes are not released 
 Republishing a release is a no-op, so rerun the same command after a fix.
 
 Complete the [dependency qualification checklist](DEPENDENCIES.md) first. Worker images
-are OS/CUDA/PyTorch bases named by tag; the CLI updates the machine, Runtime and TensorFS
-at runtime, so a package never waits on an image.
+bake OS, CUDA, PyTorch, the machine, Runtime, TensorFS and their dependencies, named by
+tag, so serving needs no boot download. A CLI update is an optional upgrade.
 
 ## One source, every Hub and account
 

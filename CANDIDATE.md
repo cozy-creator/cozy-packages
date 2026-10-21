@@ -1,6 +1,6 @@
-# Varena slim candidate checkout
+# Frozen Varena slim candidate checkout
 
-This branch is an isolated linux x86_64 proof checkout, not a package release. Production locks, package versions and PR518 remain unchanged. Every package lock here uses the real Runtime0.30.0 and TensorFS0.13.0 prerelease wheels listed in `scripts/varena-slim-candidate-requirements.txt`. PyAV and the H3/SDXL PEFT dependency are explicit because these Runtime wheels do not provide the former media/adapter extras.
+These instructions describe frozen commit `99aac2636570463cf8ab925f7a560a11f0e8783e`, an isolated linux x86_64 proof checkout, not a package release. Its locks use the real Runtime0.30.0 and TensorFS0.13.0 prerelease wheels listed in that commit's `scripts/varena-slim-candidate-requirements.txt`. Release preparation restores published SDK resolution, account-index bindings and Linux aarch64 support separately. PyAV and the H3/SDXL PEFT dependency remain explicit because Runtime no longer provides those media/adapter extras.
 
 Use this checkout with the matching candidate `cozy` client and candidate worker. From its root:
 
