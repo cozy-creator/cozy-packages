@@ -68,13 +68,15 @@ for seed in (0, 9301, 9007199254740991):
     assert explicit.resolved_seed() == seed
 # Upstream encodes an empty prompt as a space; unknown fields are Runtime's to warn and drop.
 assert msgspec.json.decode(b'{"prompt":"","width":1024}', type=GenerateInput).prompt == ""
-# The decoder's alpha survives into the PNG only when something is transparent. An RGB read of
-# that PNG (how H3 reads a reference) composites it over white; the RGBA read keeps it.
+# The decoder's alpha survives into the PNG only when something is transparent. Its noise bands
+# snap: an opaque decode (alpha 252) saves RGB, and a background at alpha 3 is exactly 0. An RGB
+# read of that PNG (how H3 reads a reference) composites it over white; the RGBA read keeps it,
+# partial alpha included.
 spool = Path(tempfile.mkdtemp())
 out = fake_outputs(fake_attempt("qwen-png", spool=spool))
-opaque = torch.tensor([[[[1.0, 1.0]], [[-1.0, 1.0]], [[-1.0, 1.0]], [[1.0, 1.0]]]])
+opaque = torch.tensor([[[[1.0, 1.0]], [[-1.0, 1.0]], [[-1.0, 1.0]], [[1.0, 252 / 127.5 - 1]]]])
 transparent = opaque.clone()
-transparent[0, 3, 0, 0] = -1
+transparent[0, 3, 0] = torch.tensor([3 / 127.5 - 1, 0.0])
 for decoded in (opaque, transparent):
     out.save_image(decoded_image(decoded), format="png")
 pngs = sorted(spool.glob("image-*"))
@@ -84,7 +86,7 @@ with Image.open(pngs[1]) as png:
     assert (png.mode, png.getpixel((0, 0)), png.getpixel((1, 0))) == (
         "RGBA",
         (255, 0, 0, 0),
-        (255, 255, 255, 255),
+        (255, 255, 255, 128),
     )
 reference = file_input(ImageAsset, pngs[1], max_decoded_bytes=1 << 20)
 assert reference.read().getpixel((0, 0)) == (255, 255, 255)

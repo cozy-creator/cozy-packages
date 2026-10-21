@@ -5,8 +5,9 @@ the same with Qwen-Image-2.1-Turbo. Both take the same inputs. The model checkpo
 independently from the package. TensorFS owns model downloads and bytes;
 Runtime owns construction, memory residency and component execution.
 
-`prompt` reaches the model exactly as given. The PNG keeps the decoder's alpha when anything in
-it is transparent, and is RGB otherwise. `seed` is optional and the chosen seed is
+`prompt` reaches the model exactly as given. The PNG keeps the decoder's alpha when anything in it is
+transparent, and is RGB otherwise; alpha within 4 levels of 0 or 255 (the decoder's noise) snaps
+to it. `seed` is optional and the chosen seed is
 returned. Seeds range from 0 through 9007199254740991 (the interoperable 53-bit
 integer range); omitting one chooses a random seed in that range. Steps default to 40; a checkpoint
 that names its own schedule (Turbo's `sample_sigmas`, 8 steps) runs it, and a different `steps` is
@@ -21,8 +22,8 @@ adjustment. Width and height are output fields only.
 
 ## Transparent images
 
-Qwen-Image-2.1 generates RGBA natively when the prompt asks for it, in the wording its model card
-recommends:
+Qwen-Image-2.1 generates RGBA natively when the prompt asks for it in the wording its model card
+recommends; "on a transparent background" alone draws a white one:
 
 ```sh
 cozy run fidika/qwen-image-2/generate_image seed=42 \
