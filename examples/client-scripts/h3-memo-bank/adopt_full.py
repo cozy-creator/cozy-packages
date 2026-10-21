@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime>=0.30.0,<1", "tensorfs>=0.12"]
+# dependencies = ["cozy-runtime>=0.30.0,<1", "tensorfs>=0.13"]
 # [tool.cozy]
 # accelerator = false
 # [tool.cozy.weights]
@@ -10,12 +10,12 @@
 from typing import Any
 
 from cozy_runtime.author import Context, ModelArtifact, Weights
-from cozy_runtime.tensord_channels import Derivation
+from cozy_runtime.weights_store import Derivation
 
 
 def main(ctx: Context, *, source: Weights[Any]) -> ModelArtifact:
     opened = ctx.tensorfs_source(source)
-    tensors = opened.checkpoint.tensors
+    tensors = {name: component.tensors for name, component in opened.components.items()}
     for component in ("transformer", "transformer_ref"):
         if "transformer_blocks.0.adaln_proj.linear.weight" not in tensors[component]:
             raise ValueError("positive bank qualification requires original generating weights")

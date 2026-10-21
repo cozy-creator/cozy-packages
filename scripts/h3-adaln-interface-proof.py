@@ -11,7 +11,7 @@ import json
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import msgspec
 from cozy_runtime.author import (
@@ -19,7 +19,6 @@ from cozy_runtime.author import (
     Context,
     Invocation,
     ModelArtifact,
-    ObjectRef,
     attempt,
     canonical_json,
     describe,
@@ -53,9 +52,7 @@ async def prepare(ctx: Context, payload: Request) -> ModelArtifact:
 
 
 def artifact(name: str, digit: str) -> ModelArtifact:
-    return ModelArtifact(
-        name, "model", ObjectRef("sha256:" + digit * 64, 100), "sha256:" + digit * 64
-    )
+    return ModelArtifact(name, "model", "sha256:" + digit * 64, "sha256:" + "e" * 63 + digit)
 
 
 def run(root: Path) -> None:

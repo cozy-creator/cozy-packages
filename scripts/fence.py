@@ -165,7 +165,8 @@ def runtime_imports(tree: ast.AST) -> Iterator[tuple[str, int]]:
 
 #: The runtime surface anything in this repo may import: `cozy_runtime.author`, the
 #: `derive` (derivation), `fusion` (fused DiT blocks) and `lm` (LM decode) planes Runtime's
-#: `checks/architecture.py` fences like it, and their PUBLIC submodules. An
+#: `checks/architecture.py` fences like it, `weights_store` (derived outputs), and their
+#: PUBLIC submodules. An
 #: underscored submodule — `author._assets`, `author._services` — is Runtime's own
 #: mechanism, and `cozy_runtime.internal` is the plane the author surface exists to hide.
 #: Both break the same way: the name stops existing on a later Runtime with nothing here
@@ -175,7 +176,7 @@ PUBLIC_RUNTIME_ROOTS = (
     ["cozy_runtime", "derive"],
     ["cozy_runtime", "fusion"],
     ["cozy_runtime", "lm"],
-    ["cozy_runtime", "tensord_channels"],
+    ["cozy_runtime", "weights_store"],
 )
 
 
@@ -218,14 +219,6 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
     ("scripts/tokenizer-assets-proof.py", "cozy_runtime.internal"): (
         "Construct package tokenizers under Runtime's real admission write fence; retire when "
         "the public fakes install that fence. "
-    ),
-    ("scripts/h3-conform.py", "cozy_runtime.internal.derive"): (
-        "the derive harness is Runtime's CONSTRUCTION plane and cannot become author surface: "
-        "`cozy_runtime.author` is torch-free by construction and Runtime's own "
-        "`checks/architecture.py` forbids it importing `cozy_runtime.internal`. The supported "
-        "spelling is `cozy-model-contract-proof`, which today derives only inside a receipt- "
-        "selected sandboxed build seat and has no in-process entry point for one synthetic "
-        "model. Retire this entry when it grows one. "
     ),
     ("scripts/seedvr2-model-proof.py", "cozy_runtime.internal"): (
         "Find SeedVR2's window-attention sites and install Runtime's kernel on them, as the "
@@ -323,7 +316,7 @@ def fence_driver_arm() -> Fence:
     for source in ARM_PUBLIC:
         if surface_violations("scripts/arm.py", source, driver=True):
             bad.append(f"a driver importing the public {source!r} fails the fence")
-    recorded = "from cozy_runtime.internal.derive import derive"
+    recorded = "from cozy_runtime.author._demand import normalize"
     if surface_violations("scripts/h3-conform.py", recorded, driver=True):
         bad.append("the recorded exception does not admit the driver it names")
     if not surface_violations("scripts/torch_family.py", recorded, driver=True):

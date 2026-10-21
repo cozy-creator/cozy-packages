@@ -15,14 +15,14 @@ from cozy_runtime.author import (
     canonical_json,
     invocable,
 )
-from cozy_runtime.tensord_channels import Derivation
+from cozy_runtime.weights_store import Derivation
 
 from ._memo import TURBO
 from .adaln_operations import _asset, _sections, _validate_generators
 from .kernel import H3Topology, LowRankAdapter, adapter_shapes, table_shapes
-from .model_config import DIT_COMPONENT, config_files
+from .model_config import DIT_COMPONENT
 from .plans import Task, TimestepPlan, parse_plan
-from .source import Rows, open_source, plain, put, read, rows, write_tables
+from .source import Rows, open_source, plain, put, read, rows, write_config, write_tables
 
 RANK = 64
 NUM_STEPS = 32
@@ -206,13 +206,14 @@ async def turbo_lora(
     torch.set_float32_matmul_precision("highest")
     reused = computed = 0
     with ctx.output("pdd8", Derivation(base=None, sources=(full, pair), order=order)) as out:
+        write_config(out, canonical_json.encode(config))
         for task in TASKS:
             ctx.raise_if_cancelled()
             component, adapter = f"{task}_turbo", names[task]
             specs = overlay_shapes(configs[task], plans[task])
             for key in specs:
                 if key.endswith((".lora_down", ".lora_up")) and not out.has(component, key):
-                    out.copy(component, key, pair.manifest, from_component=adapter, from_key=key)
+                    out.copy(component, key, pair, from_component=adapter, from_key=key)
 
             def reader(
                 key: str, dtype: torch.dtype, shape: tuple[int, ...], adapter: str = adapter
@@ -249,8 +250,6 @@ async def turbo_lora(
                     if not out.has(component, key):
                         put(out, component, key, value)
                 computed += 2
-        for path, raw in config_files(canonical_json.encode(config)).items():
-            out.file(path, raw)
         artifact = ctx.adopt_model(out)
     tel.metric("h3.turbo.reused_tensors", float(reused))
     tel.metric("h3.turbo.computed_tensors", float(computed))

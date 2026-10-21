@@ -1,9 +1,8 @@
-"""H3's construction config: one section per component (D4 names), stored as
-`<component>/config.json`; Runtime reassembles them into one `{component: config}` mapping."""
+"""H3's construction config: one section per component (D4 names), stored as each
+component's config; Runtime reassembles them into one `{component: config}` mapping."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any, cast
 
 from cozy_runtime.author import canonical_json
@@ -103,21 +102,3 @@ def dual_adaln_pruned_config(
         {**sections, **task_config(sections, fl2va), **task_config(sections, ref2va)}
     )
 
-
-def config_files(raw: bytes) -> dict[str, bytes]:
-    """A `{component: config}` document as the checkpoint's `<component>/config.json` files."""
-    value = canonical_json.decode(raw)
-    if not isinstance(value, dict):
-        raise ValueError("an H3 construction config is a mapping of component configs")
-    return {f"{name}/config.json": canonical_json.encode(section) for name, section in value.items()}
-
-
-def read_config(files: Mapping[str, bytes]) -> bytes:
-    """The `{component: config}` document of a checkpoint's `<component>/config.json` files."""
-    return canonical_json.encode(
-        {
-            path.removesuffix("/config.json"): canonical_json.decode(raw)
-            for path, raw in files.items()
-            if path.endswith("/config.json") and path.count("/") == 1
-        }
-    )

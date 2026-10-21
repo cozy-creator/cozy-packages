@@ -16,25 +16,24 @@ from cozy_runtime.author import (
     canonical_json,
     invocable,
 )
-from cozy_runtime.tensord_channels import HEADER, Derivation, Source
+from cozy_runtime.weights_store import Checkpoint, Derivation
 
 from ._memo import ADALN
 from .kernel import H3Topology, removed_keys, source_shapes, table_shapes
 from .model_config import (
     COMPONENTS,
     DIT_COMPONENT,
-    config_files,
     dual_adaln_pruned_config,
     dual_full_config,
     parse_production_config,
 )
 from .order import current_order, full_order
 from .plans import Task, TimestepPlan, parse_declared_plan
-from .source import Rows, config, open_source, plain, rows, write_tables
+from .source import Rows, config, open_source, plain, rows, write_config, write_tables
 from .table_layout import TableLayout
 
 _BINDING = "generating_projection_digest"
-#: A projection's or bank's own description, a file beside its tensors.
+#: A projection's or bank's own description, an asset of its DiT component.
 METADATA = "adaln.json"
 _NUMERICS = "h3-fp32-time-bf16-adaln/1"
 _TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
@@ -165,16 +164,22 @@ def _validate_generators(present: Rows, task: Task, topology: H3Topology | None 
             )
 
 
-def _project(ctx: Context, source: Source, task: Task, output: str) -> ModelArtifact:
+def _metadata(source: Checkpoint, task: Task) -> bytes | None:
+    held = source.components.get(DIT_COMPONENT[task])
+    return held.asset(METADATA) if held is not None and METADATA in held.assets else None
+
+
+def _project(ctx: Context, source: Checkpoint, task: Task, output: str) -> ModelArtifact:
     """One DiT's generating weights alone, copied with their objects."""
     _validate_generators(rows(source), task)
     component = DIT_COMPONENT[task]
     order = tuple((component, key) for key in removed_keys(_topology(task)))
     with ctx.output(output, Derivation(base=None, sources=(source,), order=order)) as out:
+        if out.done is None:
+            out.component(component).asset(METADATA, _projection_config(task))
         for row in order:
             if not out.has(*row):
-                out.copy(*row, source.manifest)
-        out.file(METADATA, _projection_config(task))
+                out.copy(*row, source)
         return ctx.adopt_model(out)
 
 
@@ -234,7 +239,7 @@ async def compute_adaln_tables(
     topology = _topology(task)
     if {(c, key) for c, keys in present.items() for key in keys} != {
         (component, key) for key in removed_keys(topology)
-    } or opened.file(METADATA) != _projection_config(task):
+    } or _metadata(opened, task) != _projection_config(task):
         raise UnsupportedInput(
             "AdaLN bank input must be one minimal generating-weight projection",
             code="adaln_projection",
@@ -244,12 +249,13 @@ async def compute_adaln_tables(
         torch.backends.cuda.matmul.allow_tf32 = False
     torch.set_float32_matmul_precision("highest")
     with ctx.output("model", Derivation(base=None, sources=(opened,), order=order)) as out:
+        if out.done is None:
+            out.component(component).asset(METADATA, _bank_config(task, source.checkpoint_ref))
         read, _, reused = write_tables(
             ctx, plan=plan, topology=topology, source=opened, component=component,
             outputs=(out,),
             progress=lambda done, total: tel.progress(done / total, stage=f"timestep-table-{task}"),
         )  # fmt: skip
-        out.file(METADATA, _bank_config(task, source.checkpoint_ref))
         artifact = ctx.adopt_model(out)
     tel.metric("h3.adaln.source_bytes", float(read), unit="bytes")
     tel.metric("h3.adaln.reused_tables", float(reused), unit="tables")
@@ -276,8 +282,9 @@ def _validate_table_rows(present: Rows, task: Task, *, bank: bool) -> None:
         )
 
 
-def _bank_projection(bank: Source, task: Task) -> str:
-    value = canonical_json.decode(bank.file(METADATA))
+def _bank_projection(bank: Checkpoint, task: Task) -> str:
+    metadata = _metadata(bank, task)
+    value = None if metadata is None else canonical_json.decode(metadata)
     if not isinstance(value, dict) or not isinstance(value.get("projection"), str):
         raise UnsupportedInput("AdaLN bank has no generating-weight binding", code="adaln_binding")
     projection = str(value["projection"])
@@ -309,9 +316,9 @@ def _apply_adaln(
     bindings: dict[Task, str] = (
         _bindings(document)
         if pruned
-        else {task: _project(ctx, opened, task, f"{task}-weights").manifest.digest for task in _TASKS}
+        else {task: _project(ctx, opened, task, f"{task}-weights").checkpoint for task in _TASKS}
     )
-    banks: dict[Task, Source] = {"fl2va": open_source(ctx, fl2va), "ref2va": open_source(ctx, ref2va)}
+    banks: dict[Task, Checkpoint] = {"fl2va": open_source(ctx, fl2va), "ref2va": open_source(ctx, ref2va)}
     bank_of = {DIT_COMPONENT[task]: bank for task, bank in banks.items()}
     tables: set[tuple[str, str]] = set()
     for task in _TASKS:
@@ -331,19 +338,16 @@ def _apply_adaln(
         order=order,
     )  # fmt: skip
     with ctx.output("model", derivation) as out:
+        write_config(out, canonical_json.encode(configured))
+        if not pruned:
+            out.inherit(opened)
         for row in order:
             if out.has(*row):
                 continue
             if row in tables:
-                out.copy(*row, bank_of[row[0]].manifest)
+                out.copy(*row, bank_of[row[0]])
             elif not pruned:
-                out.copy(*row, opened.manifest)
-        if not pruned:
-            for path in opened.files:
-                if path != HEADER and not path.endswith("/config.json"):
-                    out.file(path, opened.file(path))
-        for path, raw in config_files(canonical_json.encode(configured)).items():
-            out.file(path, raw)
+                out.copy(*row, opened)
         return ctx.adopt_model(out)
 
 

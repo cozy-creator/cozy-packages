@@ -16,13 +16,14 @@ from cozy_runtime.author import (
     UnsupportedInput,
     Weights,
     WeightsOutput,
+    canonical_json,
     invocable,
 )
 from cozy_runtime.derive.quantization import (
     ArtifactQuantizationRequest,
     quantize_component_into,
 )
-from cozy_runtime.tensord_channels import Derivation, Output, Source
+from cozy_runtime.weights_store import Checkpoint, Derivation, Output
 
 from . import adaln_operations as _adaln_operations
 from . import lanes as _lanes
@@ -41,7 +42,6 @@ from .lanes import (
 from .model_config import (
     COMPONENTS,
     DIT_COMPONENT,
-    config_files,
     dual_adaln_pruned_config,
     dual_full_config,
     parse_production_config,
@@ -56,6 +56,7 @@ from .source import (
     open_source,
     plain,
     rows,
+    write_config,
     write_tables,
 )
 
@@ -169,7 +170,7 @@ def _require_cuda() -> None:
 def _tables(
     ctx: Context,
     tel: Telemetry,
-    source: Source,
+    source: Checkpoint,
     outputs: tuple[Output, ...],
 ) -> tuple[int, int, int]:
     """Both DiTs' tables from `source`'s modulation weights into `outputs`."""
@@ -196,7 +197,7 @@ def _tables(
 
 
 def _treat(
-    source: Source,
+    source: Checkpoint,
     out: Output,
     ctx: Context,
     tel: Telemetry,
@@ -294,7 +295,7 @@ def _produce_lane(
 ) -> ModelArtifact:
     """One reviewed lane from a full-precision H3 checkpoint (the converted release or a
     `bf16-full` lane). Every row it does not rewrite is copied, keeping the source's objects;
-    an interrupted attempt resumes from what TensorD journaled, a committed one replays."""
+    an interrupted attempt resumes what it wrote, a committed one replays."""
     source = open_source(ctx, weights)
     order, carried, computed = lane_rows(name, rows(source))
     lane = LANES[name]
@@ -321,10 +322,11 @@ def _produce_lane(
     request = ArtifactQuantizationRequest(max_relative_frobenius=max_relative_frobenius)
     reused = written = read = 0
     with ctx.output(name, Derivation(base=None, sources=(source,), order=order)) as out:
+        write_config(out, config)
         with tel.stage(f"{name}-copy"):
             for done, row in enumerate(order, 1):
                 if row not in computed and row not in replaced and not out.has(*row):
-                    out.copy(*row, source.manifest)
+                    out.copy(*row, source)
                 tel.progress(done / len(order), stage=f"{name}-copy")
         if computed:
             read, written, reused = _tables(ctx, tel, source, (out,))
@@ -334,8 +336,6 @@ def _produce_lane(
             _log_treatment(tel, name, selection, stats)
             read, written = read + stats.source_bytes_read, written + stats.new_bytes_written
             reused += stats.reused_keys
-        for path, raw in config_files(config).items():
-            out.file(path, raw)
         artifact = ctx.adopt_model(out)
     tel.metric("h3.source_bytes", float(read), unit="bytes")
     tel.metric("h3.new_bytes", float(written), unit="bytes")
@@ -411,7 +411,7 @@ QUANTIZER_RECIPES: Mapping[str, Mapping[str, _lanes.Treatment]] = {
 MAX_QUANTIZER_BYTES = 2 * MAX_DIT_BYTES + MAX_TEXT_ENCODER_BYTES
 
 
-def quantizer_selections(source: Source, encoding: _lanes.Encoding) -> list[Selection]:
+def quantizer_selections(source: Checkpoint, encoding: _lanes.Encoding) -> list[Selection]:
     """The recipe's components this source still holds plain, resolved for `encoding`."""
     present = rows(source)
     if set(present) != set(COMPONENTS):
@@ -594,7 +594,10 @@ async def retable(
     tables = retable_rows(rows(pruned_source), rows(full_source))
     sections = parse_production_config(_asset("model-config.json"))
     plans = {task: _production_plan(task) for task in DIT_COMPONENT}
-    config = config_files(dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"]))
+    config = dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
+    bank_config = canonical_json.encode(
+        {c: section for c, section in canonical_json.decode(config).items() if c in tables}
+    )
     order = current_order(_asset("whole-order.json")).rows
     bank_order = tuple((c, k) for c, k in order if k in tables.get(c, ()))
     retabled_derivation = Derivation(base=pruned_source, order=order)
@@ -602,13 +605,11 @@ async def retable(
     with ctx.output("adaln-pruned", retabled_derivation) as retabled, ctx.output(
         "tables", bank_derivation
     ) as bank:
+        write_config(retabled, config)
+        write_config(bank, bank_config)
         if not all(retabled.has(*row) and bank.has(*row) for row in bank_order):
             _require_cuda()
         read, written, _ = _tables(ctx, tel, full_source, (retabled, bank))
-        for path, raw in config.items():
-            retabled.file(path, raw)
-            if path.split("/")[0] in tables:
-                bank.file(path, raw)
         result = RetableResult(
             list(plans["fl2va"].steps), ctx.adopt_model(retabled), ctx.adopt_model(bank)
         )
