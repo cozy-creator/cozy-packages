@@ -23,12 +23,14 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from cozy_runtime.author import ConformanceError
+from cozy_runtime.author import ConformanceError, canonical_json
 
 #: The forward-call selector: `attention_kwargs={ATTENTION_KWARG: TURBO_BANK}` names the bank
 #: one DiT forward serves. Absent, the forward is the base's, whatever overlay is attached.
 ATTENTION_KWARG = "cozy_h3_bank"
 OVERLAY_KWARG = "cozy_h3_overlay"
+#: The overlay's source, `(checkpoint ref, task)`: what names its factors in every process.
+OVERLAY_SOURCE_KWARG = "cozy_h3_overlay_source"
 TURBO_BANK = "turbo"
 #: The families applied at inference, as the checkpoint names them under a block.
 LORA_FAMILIES = ("to_q", "to_k", "to_v", "to_out.0", "ff.net.0.proj", "ff.net.2")
@@ -97,13 +99,16 @@ class _LoRAHook:
         if armed is not None and not self._cozy_baked:
             armed.overlay.get_submodule(self.path).accumulate(args[0], out)
 
-    def lora_factors(self) -> tuple[object, torch.Tensor, torch.Tensor, float] | None:
-        """The armed overlay's factors for this site, or None in a base forward."""
+    def lora_factors(self) -> tuple[str, torch.Tensor, torch.Tensor, float] | None:
+        """The armed overlay's factors for this site, named by its source and the site (the
+        bake's fill identity: the same in every process, so its pages are kept), or None in a
+        base forward."""
         armed = self.owner._arming
         if armed is None:
             return None
         factors = armed.overlay.get_submodule(self.path)
-        return factors, factors.lora_down, factors.lora_up, float(factors.scale)
+        identity = canonical_json.digest([*armed.source, self.path])
+        return identity, factors.lora_down, factors.lora_up, float(factors.scale)
 
 
 class _Site(nn.Module):  # type: ignore[misc]
@@ -315,8 +320,9 @@ class TurboArming:
     """What one DiT forward under the turbo bank reads: set by the DiT's pre-hook from the
     forward's own `attention_kwargs`, cleared by its forward hook, never request state."""
 
-    __slots__ = ("overlay", "step")
+    __slots__ = ("overlay", "source", "step")
 
-    def __init__(self, overlay: TurboOverlay, step: int) -> None:
+    def __init__(self, overlay: TurboOverlay, step: int, source: tuple[str, str]) -> None:
         self.overlay = overlay
         self.step = step
+        self.source = source

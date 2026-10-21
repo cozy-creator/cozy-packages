@@ -150,6 +150,7 @@ from minimax_h3.turbo import (  # noqa: E402
     ATTENTION_KWARG,
     LORA_FAMILIES,
     OVERLAY_KWARG,
+    OVERLAY_SOURCE_KWARG,
     TURBO_BANK,
     LoRAFactors,
     TurboHeads,
@@ -172,6 +173,9 @@ from h3_tables.plans import TASKS, parse_plan  # noqa: E402
 from h3_tables.source import official_full_specs  # noqa: E402
 from h3_tables.table_layout import TableLayout  # noqa: E402
 from h3_tables.turbo import collapse_head_bank, pdd_head_plan, pdd_time_grid  # noqa: E402
+
+#: an armed overlay's source: what names its factors (the bake's fill identity)
+SOURCE = {OVERLAY_SOURCE_KWARG: ("conform", "fl2va_turbo")}
 
 import h3 as package  # noqa: E402
 from story import StoryReference, compile_segments  # noqa: E402
@@ -4071,7 +4075,8 @@ def arm_turbo_forward() -> None:
                 )
             )
             got = pruned(
-                **forward, attention_kwargs={ATTENTION_KWARG: TURBO_BANK, OVERLAY_KWARG: overlay}
+                **forward,
+                attention_kwargs={ATTENTION_KWARG: TURBO_BANK, OVERLAY_KWARG: overlay} | SOURCE,
             )
             handle.remove()
         hooked.append(seen)
@@ -4112,7 +4117,7 @@ def arm_turbo_forward() -> None:
     with torch.no_grad():
         want = reference(**forward)
         got = pruned(
-            **forward, attention_kwargs={ATTENTION_KWARG: TURBO_BANK, OVERLAY_KWARG: stale}
+            **forward, attention_kwargs={ATTENTION_KWARG: TURBO_BANK, OVERLAY_KWARG: stale} | SOURCE
         )
     red(
         "tables without the adaln_proj slice do not reproduce the reference",
@@ -4236,7 +4241,8 @@ def arm_turbo_state() -> None:
     lora = package.H3TurboLoRA.for_test(pipe=lora_pipe)
     with torch.no_grad():
         expected = dit(
-            **forward, attention_kwargs={ATTENTION_KWARG: TURBO_BANK, OVERLAY_KWARG: overlay}
+            **forward,
+            attention_kwargs={ATTENTION_KWARG: TURBO_BANK, OVERLAY_KWARG: overlay} | SOURCE,
         )
         actual = cast(
             Any,

@@ -34,6 +34,7 @@ from .turbo import (
     ATTENTION_KWARG,
     LORA_FAMILIES,
     OVERLAY_KWARG,
+    OVERLAY_SOURCE_KWARG,
     TURBO_BANK,
     TurboArming,
     TurboOverlay,
@@ -318,19 +319,23 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
         tables: Any = self
         try:
             if bank is not None:
-                overlay = selector.get(OVERLAY_KWARG) if isinstance(selector, Mapping) else None
+                assert isinstance(selector, Mapping)
+                overlay, source = selector.get(OVERLAY_KWARG), selector.get(OVERLAY_SOURCE_KWARG)
                 if (
                     bank != TURBO_BANK
                     or not isinstance(overlay, TurboOverlay)
                     or not self._lora_hooks_installed
+                    or not isinstance(source, tuple)
+                    or len(source) != 2
+                    or not all(isinstance(part, str) and part for part in source)
                 ):
                     raise ConformanceError(
-                        f"bank {bank!r} requires a turbo-capable base and prepared "
-                        "overlay component",
+                        f"bank {bank!r} requires a turbo-capable base, a prepared overlay "
+                        "component and its source",
                         code="artifact_config",
                         fields=["attention_kwargs", ATTENTION_KWARG],
                     )
-                self._engage(overlay, overlay.schedule.step(timestep))
+                self._engage(overlay, overlay.schedule.step(timestep), source)
                 tables = overlay
             global_rows = self.time_proj.rows(timestep)
             row_timesteps = global_rows.index_select(0, timestep_indices)
@@ -351,13 +356,13 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
             cleaned = {
                 key: value
                 for key, value in selector.items()
-                if key not in (ATTENTION_KWARG, OVERLAY_KWARG)
+                if key not in (ATTENTION_KWARG, OVERLAY_KWARG, OVERLAY_SOURCE_KWARG)
             }
             return args, {**kwargs, "attention_kwargs": cleaned}
         return None
 
-    def _engage(self, overlay: TurboOverlay, step: int) -> None:
-        self._arming = TurboArming(overlay, step)
+    def _engage(self, overlay: TurboOverlay, step: int, source: tuple[str, str]) -> None:
+        self._arming = TurboArming(overlay, step, source)
         self.time_proj._armed = _Armed(overlay)
         for block, source in zip(self.transformer_blocks, overlay.transformer_blocks, strict=True):
             block.adaln_proj._armed = _Armed(source.adaln_proj)

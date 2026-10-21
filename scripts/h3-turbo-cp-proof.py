@@ -43,6 +43,7 @@ def rank(rank: int, degree: int, rendezvous: str) -> None:
     inputs["attention_kwargs"] = {
         fixture["ATTENTION_KWARG"]: fixture["TURBO_BANK"],
         fixture["OVERLAY_KWARG"]: overlay,
+        **fixture["SOURCE"],
     }
     with torch.no_grad():
         expected = dit(**inputs)

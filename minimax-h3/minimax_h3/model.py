@@ -33,7 +33,7 @@ from .official import (
     build_h3_turbo_base,
     build_h3_turbo_lora,
 )
-from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK
+from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, OVERLAY_SOURCE_KWARG, TURBO_BANK
 
 #: Reference latents one generation keeps (`ReferenceMemo`), least recently used first out; the
 #: Runtime sheds them sooner when memory is short.
@@ -272,6 +272,8 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
                 **(original or {}),
                 ATTENTION_KWARG: TURBO_BANK,
                 OVERLAY_KWARG: overlay,
+                # names the overlay's factors in every process: the bake's fill identity
+                OVERLAY_SOURCE_KWARG: (self.checkpoint_ref, task),
             },
         )
         try:
