@@ -16,6 +16,10 @@ on:
         description: Account index the committed locks are bound to (`cozy package lock`)
         type: string
         default: https://tensorhub.com/v1/index/fidika/simple/
+# Until PyPI holds cozy-runtime 0.30.0 and tensorfs 0.13.0, the gate's locks and installs also
+# find them among the candidate wheels on this prerelease; production locks resolve on PyPI.
+env:
+  UV_FIND_LINKS: https://github.com/cozy-creator/packages/releases/expanded_assets/gate-wheels-4c2bf430-c081f665
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
