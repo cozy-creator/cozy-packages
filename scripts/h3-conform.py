@@ -1720,7 +1720,10 @@ def arm_text_conditioner() -> None:
             built = census(official.build_h3_pipeline(Config(model_config)))
         return {
             "schema": "cozy.runtime.model_construction_contract.v1",
-            "destination_sets": [{"component": name, "keys": keys} for name, keys in built],
+            "destination_sets": [
+                {"component": name, "keys": [f"{name}.{key}" for key in keys]}
+                for name, keys in built
+            ],
         }
 
     first_contract = contract_document()
