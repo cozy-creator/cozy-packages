@@ -1787,11 +1787,6 @@ def arm_adaln_pruned() -> None:
         lambda: _validate_dual_dit_topology({"fl2va": pruned, "ref2va": pruned}),
         "artifact_config",
     )
-    check(
-        "AdaLN-pruned DiT inherits the official forward",
-        "forward" in AdaLNPrunedMiniMaxH3Transformer.__dict__,
-        False,
-    )
 
     pruned_state = pruned.state_dict()
     full_state = full.state_dict()
@@ -1902,7 +1897,19 @@ def arm_adaln_pruned() -> None:
     full_output = full(**forward)
     pruned_output = pruned(**forward)
     check(
-        "the inherited forward changes only the AdaLN-pruned modulation source",
+        "the pruned forward is the official forward, byte for byte, its rows scoped",
+        all(
+            torch.equal(left, right)
+            for left, right in zip(
+                pruned.forward(**forward),
+                MiniMaxH3Transformer3DModel.forward(pruned, **forward),
+                strict=True,
+            )
+        ),
+        True,
+    )
+    check(
+        "the pruned forward changes only the AdaLN-pruned modulation source",
         all(
             torch.allclose(left, right, rtol=2e-5, atol=2e-6)
             for left, right in zip(full_output, pruned_output, strict=True)
