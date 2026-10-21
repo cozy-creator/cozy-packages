@@ -228,7 +228,7 @@ wheels = [
 [[package]]
 name = "cozy-runtime"
 version = "0.30.0"
-source = { registry = "https://github.com/cozy-creator/packages/releases/expanded_assets/gate-wheels-4c2bf430-c081f665" }
+source = { registry = "https://github.com/cozy-creator/packages/releases/expanded_assets/gate-wheels-tfs013-rt01966eb8" }
 dependencies = [
     { name = "cryptography" },
     { name = "msgspec" },
@@ -238,8 +238,8 @@ dependencies = [
     { name = "tensorfs" },
 ]
 wheels = [
-    { url = "https://github.com/cozy-creator/packages/releases/download/gate-wheels-4c2bf430-c081f665/cozy_runtime-0.30.0-py3-none-any.whl" },
-    { url = "https://github.com/cozy-creator/packages/releases/download/gate-wheels-4c2bf430-c081f665/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl" },
+    { url = "https://github.com/cozy-creator/packages/releases/download/gate-wheels-tfs013-rt01966eb8/cozy_runtime-0.30.0-py3-none-any.whl" },
+    { url = "https://github.com/cozy-creator/packages/releases/download/gate-wheels-tfs013-rt01966eb8/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl" },
 ]
 
 [package.optional-dependencies]
@@ -1070,10 +1070,10 @@ wheels = [
 [[package]]
 name = "tensorfs"
 version = "0.13.0"
-source = { registry = "https://github.com/cozy-creator/packages/releases/expanded_assets/gate-wheels-4c2bf430-c081f665" }
+source = { registry = "https://github.com/cozy-creator/packages/releases/expanded_assets/gate-wheels-tfs013-rt01966eb8" }
 wheels = [
-    { url = "https://github.com/cozy-creator/packages/releases/download/gate-wheels-4c2bf430-c081f665/tensorfs-0.13.0-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl" },
-    { url = "https://github.com/cozy-creator/packages/releases/download/gate-wheels-4c2bf430-c081f665/tensorfs-0.13.0-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
+    { url = "https://github.com/cozy-creator/packages/releases/download/gate-wheels-tfs013-rt01966eb8/tensorfs-0.13.0-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl" },
+    { url = "https://github.com/cozy-creator/packages/releases/download/gate-wheels-tfs013-rt01966eb8/tensorfs-0.13.0-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
 ]
 
 [[package]]
