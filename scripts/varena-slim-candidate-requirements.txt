@@ -1,2 +1,2 @@
-cozy-runtime @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-lifetime-candidate-20261020/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl
-tensorfs @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-lifetime-candidate-20261020/tensorfs-0.13.0-cp312-abi3-manylinux_2_28_x86_64.whl
+cozy-runtime @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl
+tensorfs @ https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/tensorfs-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl

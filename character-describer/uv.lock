@@ -10,8 +10,8 @@ supported-markers = [
 
 [manifest]
 overrides = [
-    { name = "cozy-runtime", url = "https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-lifetime-candidate-20261020/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl" },
-    { name = "tensorfs", url = "https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-lifetime-candidate-20261020/tensorfs-0.13.0-cp312-abi3-manylinux_2_28_x86_64.whl" },
+    { name = "cozy-runtime", url = "https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl" },
+    { name = "tensorfs", url = "https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/tensorfs-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl" },
 ]
 
 [[package]]
@@ -114,7 +114,7 @@ wheels = [
 [[package]]
 name = "cozy-runtime"
 version = "0.30.0"
-source = { url = "https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-lifetime-candidate-20261020/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl" }
+source = { url = "https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "msgspec" },
@@ -124,7 +124,7 @@ dependencies = [
     { name = "tensorfs" },
 ]
 wheels = [
-    { url = "https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-lifetime-candidate-20261020/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:08bea8f293e420dabb9df13bdb5a7955294e632aa27f2f02b5d5eacbc90055ba" },
+    { url = "https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:a0be76dae6947351e319f885bfb72a1ec7833214fc2b25119764afd0ba228f88" },
 ]
 
 [package.metadata]
@@ -738,9 +738,9 @@ wheels = [
 [[package]]
 name = "tensorfs"
 version = "0.13.0"
-source = { url = "https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-lifetime-candidate-20261020/tensorfs-0.13.0-cp312-abi3-manylinux_2_28_x86_64.whl" }
+source = { url = "https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/tensorfs-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl" }
 wheels = [
-    { url = "https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-lifetime-candidate-20261020/tensorfs-0.13.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:d05875a998ec758997b7cdb6b248cfe029f57044c430ab61ef9508f008f60772" },
+    { url = "https://github.com/cozy-creator/cozy-runtime/releases/download/varena-slim-canonical-candidate-20261021/tensorfs-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:412cbe079c6d151ab88115252e32a2d8ccfadb168645683f082fd3a47f965f1d" },
 ]
 
 [[package]]
