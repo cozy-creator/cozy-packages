@@ -52,6 +52,8 @@ cozy model publish <account>/qwen3.5-9b --release 0.2.0 --commit main
 cozy run ./character-describer/int8 model.source=<account>/qwen3.5-9b@0.2.0/bf16 \
   --on <name>
 cozy run upload <run> <account>/qwen3.5-9b
-cozy model publish <account>/qwen3.5-9b --release 0.2.0 --lane int8=sha256:<checkpoint>
+cozy model publish <account>/qwen3.5-9b --release 0.2.0 --commit main
 ```
+
+The upload adds the `int8` variant to `main`'s tree, so publishing `main` releases bf16 and int8.
 

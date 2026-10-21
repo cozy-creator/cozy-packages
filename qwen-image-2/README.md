@@ -85,8 +85,10 @@ tower, the input/output projections, the modulation and the VAE keep their sourc
 
 ```sh
 cozy model quantize fidika/qwen-image-2.1@0.1.0/bf16 --int8 --on YOUR_MACHINE
-cozy model publish fidika/qwen-image-2.1 --release 0.1.0 --lane int8=sha256:CHECKPOINT_DIGEST
+cozy model publish fidika/qwen-image-2.1 --release 0.1.0 --commit main
 ```
+
+Quantize adds the `int8` variant to `main`'s tree, so publishing `main` releases bf16 and int8.
 
 ## Python dependency
 

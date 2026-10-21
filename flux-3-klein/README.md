@@ -54,7 +54,7 @@ package against Diffusers' Flux3 modular pipelines on tiny real modules.
 
 Upload each repository as it is. The served checkpoint is the upload: TensorFS takes a Diffusers repo's
 index components (not BFL's `variants/`) and a Transformers repo's config, tokenizer, processor and chat
-template. Publish each as lane `bf16`.
+template. Publish each with `cozy model publish <account>/<model> --release 0.1.0 --commit main`.
 
 ```sh
 cozy model upload hf://black-forest-labs/flux-3-image-klein@8454017f9ebaada30c998fccd9f67a80c7580f68 \
@@ -79,8 +79,10 @@ RTX 30/40); the text and reference early blocks, and `--bits=16`, keep exact att
 
 ```sh
 cozy model quantize <account>/flux-3-klein@0.1.0/bf16 --int8 --on <machine>
-cozy model publish <account>/flux-3-klein --release 0.1.0 --lane int8=sha256:<checkpoint>
+cozy model publish <account>/flux-3-klein --release 0.1.0 --commit main
 ```
+
+Quantize adds the `int8` variant to `main`'s tree, so publishing `main` releases bf16 and int8.
 
 Do the same for `flux-3-klein-base`. Warm 1 MP seconds per step (16-step distilled; 50-step base
 with CFG), and the weights the lane holds:
