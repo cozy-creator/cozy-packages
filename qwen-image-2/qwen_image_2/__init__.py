@@ -132,11 +132,11 @@ def _generate(
 ) -> ImageOutput:
     """Both functions' body: the checkpoint decides the schedule."""
     reference_steps = ("vae",) if payload.reference_images else ()
-    ctx.plan(*reference_steps, "text_encoder", "transformer", "vae")
     sigmas = model.sample_sigmas
     steps = len(sigmas) if sigmas else payload.steps or 40
     if sigmas and payload.steps not in (None, steps):
         adj.clamp("steps", payload.steps, steps, "the checkpoint's own schedule")
+    ctx.plan(*reference_steps, "text_encoder", *(["transformer"] * steps), "vae")
     seed = payload.resolved_seed()
     ctx.raise_if_cancelled()
     reference_images, reference_latents, image_pad_mask = None, None, None

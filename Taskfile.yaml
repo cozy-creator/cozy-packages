@@ -19,7 +19,8 @@ tasks:
         "$p/.venv/bin/cozy-runtime" --json --dir "$p" describe | $py scripts/interface_current.py "$p/metadata/package-interface.json"
         case $p in
           anima) $py scripts/anima-conform.py ;;
-          qwen-image-2) $py scripts/qwen-image-2-conform.py; $py scripts/qwen-image-2-model-proof.py ;;
+          qwen-image-2) $py scripts/qwen-image-2-conform.py; $py scripts/qwen-image-2-model-proof.py; $py scripts/model-memory-plan-proof.py qwen-image-2 ;;
+          sdxl) $py scripts/model-memory-plan-proof.py sdxl ;;
           flux-3-klein) $py scripts/flux-3-klein-model-proof.py ;;
           seedvr2) $py scripts/seedvr2-model-proof.py ;;
           minimax-h3) for s in conform prompt-proof turbo-cp-proof reference-fidelity-proof reference-rows-proof; do $py "scripts/h3-$s.py"; done; $py scripts/h3-assembly-proof.py assembly ;;
