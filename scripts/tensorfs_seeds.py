@@ -15,7 +15,7 @@ from tensorfs import raw
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="tensorfs-schemes-") as directory:
         with tensorfs.Writer(cache_dir=Path(directory)) as writer:
-            component = writer.component("proof", cls="", config={})
+            component = writer.component("proof", cls=("", "", ""), config={})
             component.put("plain", b"data", dtype="U8", shape=[4])
             for name, scheme, dtype, weight_bytes, params, scales in (
                 ("fp8", "fp8.rowwise", "F8_E4M3", 256,

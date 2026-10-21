@@ -213,7 +213,7 @@ def staged(tmp_path: Path) -> None:
         store = tmp_path / f"processor-{name}"
         with tensorfs.Writer(cache_dir=store) as writer:
             writing = writer.component(
-                "processor", cls="Qwen3VLProcessor", config=configuration,
+                "processor", cls=("transformers", "", "Qwen3VLProcessor"), config=configuration,
                 config_file=config_file,
             )
             for filename, raw in files.items():

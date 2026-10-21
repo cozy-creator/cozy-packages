@@ -80,7 +80,9 @@ def configure(output: Output, name: str, data: bytes) -> None:
     value = canonical_json.decode(data)
     if not isinstance(value, dict):
         raise ValueError(f"{name} constructor config must be an object")
-    output.component(name, cls="", config=value)
+    # A config update keeps a source component's class record. A new component uses
+    # Runtime's unknown class record when no source declared it.
+    output.component(name, config=value)
 
 
 @contextmanager
@@ -115,7 +117,7 @@ def model_output(
                 source = sources[selection.source] if selection.source else None
                 original = source.components[selection.source_component] if source is not None else None
                 writer = output.component(
-                    name, cls=original.cls if original else "",
+                    name, cls=original.cls if original else ("", "", ""),
                     config=original.config if original else {},
                 )
                 if source is not None and original is not None:

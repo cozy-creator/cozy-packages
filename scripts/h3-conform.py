@@ -3720,7 +3720,7 @@ def arm_turbo_factor_regions() -> None:
             reference[path] = (x, out)
     with tempfile.TemporaryDirectory(prefix="h3-factor-regions-") as directory:
         with tensorfs.Writer(cache_dir=Path(directory)) as writer:
-            component = writer.component("ref2va_turbo", cls="", config={})
+            component = writer.component("ref2va_turbo", cls=("", "", ""), config={})
             for key, tensor in overlay.state_dict().items():
                 value = tensor.detach().contiguous()
                 dtype = {torch.bfloat16: "BF16", torch.float32: "F32"}[value.dtype]

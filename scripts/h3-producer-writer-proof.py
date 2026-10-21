@@ -41,10 +41,11 @@ def context(store: Path, name: str, bound: int) -> Context:
 
 def fixture(store: Path) -> tensorfs.Checkpoint:
     with tensorfs.Writer(cache_dir=store) as writer:
-        held = writer.component("toy", cls="Example", config={"inputs": 256})
+        held = writer.component("toy", cls=("tests", "1.0", "Example"), config={"inputs": 256})
         held.put("w.weight", np.linspace(-1, 1, 512, dtype=np.float32).reshape(2, 256))
         held.put("keep", b"keep", dtype="U8", shape=[4])
         held.asset("NOTICE", b"original")
+        writer.component("model", cls=("tests", "1.0", "Configuration"), config={"original": True})
         return writer.commit()
 
 
@@ -73,9 +74,10 @@ def prove_copy(store: Path, source: tensorfs.Checkpoint) -> None:
     assert artifact is not None
     with tensorfs.open(artifact.checkpoint, cache_dir=store, local_files_only=True) as got:
         assert set(got.components["renamed"].tensors) == {"keep", "new"}
-        assert got.components["renamed"].cls == "Example"
+        assert got.components["renamed"].cls == source.components["toy"].cls
         assert got.components["renamed"].config == {"inputs": 256}
         assert got.components["model"].config == {"prepared": True}
+        assert got.components["model"].cls == source.components["model"].cls
         assert got.components["renamed"].asset("NOTICE") == b"original"
         assert got.components["renamed"].asset("LICENSE") == b"license"
         for key, expected in (("keep", b"keep"), ("new", b"data")):
@@ -160,7 +162,7 @@ def prove_projection_and_tables(store: Path) -> None:
         for key, (dtype, shape) in source_shapes(topology).items()
     }
     with tensorfs.Writer(cache_dir=store) as writer:
-        component = writer.component("transformer", cls="ToyH3", config={})
+        component = writer.component("transformer", cls=("tests", "", "ToyH3"), config={})
         for key, value in values.items():
             component.put(key, value.contiguous().view(torch.uint8).numpy().tobytes(),
                           dtype="F32" if value.dtype == torch.float32 else "BF16",
