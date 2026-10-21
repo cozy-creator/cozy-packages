@@ -103,6 +103,11 @@ class ImageOutput(msgspec.Struct):
     seed: int
 
 
+#: The decoder's alpha never quite reaches 0 or 255: a transparent background sits at 1–4 and an
+#: opaque subject at 251–255 (runs 12867, 12878, 12891). Those bands snap to exact.
+_ALPHA_NOISE = 4
+
+
 def decoded_image(decoded: Any) -> Image.Image:
     """The decoder's pixels: RGBA when its alpha has any transparency, else RGB."""
     # The model returns B,C,H,W in [-1,1], just as upstream VaeImageProcessor consumes.
@@ -110,8 +115,12 @@ def decoded_image(decoded: Any) -> Image.Image:
     if not np.isfinite(pixels).all():
         raise ValueError("Qwen Image decoder produced non-finite pixels")
     pixels = ((pixels / 2 + 0.5).clip(0, 1) * 255).round().astype(np.uint8)
-    if pixels.shape[-1] == 4 and pixels[..., 3].min() == 255:
-        pixels = pixels[..., :3]
+    if pixels.shape[-1] == 4:
+        alpha = pixels[..., 3]
+        alpha[alpha <= _ALPHA_NOISE] = 0
+        alpha[alpha >= 255 - _ALPHA_NOISE] = 255
+        if alpha.min() == 255:
+            pixels = pixels[..., :3]
     return Image.fromarray(np.ascontiguousarray(pixels))
 
 
