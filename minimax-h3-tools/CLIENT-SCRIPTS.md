@@ -9,7 +9,7 @@ from h3_tables.operations import precompute_adaln, quantize
 async def main(ctx):
     # full is a `bf16-full` lane, e.g. from `cozy run <org>/minimax-h3-tools/bf16-full`.
     pruned = await precompute_adaln(model=full, timesteps=50)
-    fp8 = await quantize(source=pruned, encoding="fp8-rowwise/1")
+    fp8 = await quantize(source=pruned, encoding="fp8.rowwise")
 ```
 
 The current captured plan is the approved union of 30, 40 and 50 denoising steps.

@@ -71,7 +71,7 @@ tensors either. BFL's upsampler system prompts ship in `flux_3_klein/system_prom
 ## The int8 lane
 
 `int8` writes the default lane: every linear of the 43 DiT blocks, the modulation heads, the context
-embedder, the output norm and the text encoder's 32 language layers as `int8-convrot256/1`, served
+embedder, the output norm and the text encoder's 32 language layers as `int8.convrot`, served
 W8A8 on the int8 tensor cores. On real Klein activations each linear is 0.5–1.3% from bf16 (fp8
 row-scaled: 1.5–2.8%), and the images match bf16's. The VAE stays f32. As in BFL's int8 release,
 the image and joint blocks declare 8-bit attention (`attention_bits`; Runtime's `kitchen-int8` on

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-from functools import partial
 from typing import Any
 
 import torch
@@ -16,28 +15,14 @@ from cozy_runtime.author import (
     canonical_json,
     invocable,
 )
-from tensorfs.derived import (
-    Config,
-    Derivation,
-    DerivedTransaction,
-    Part,
-    PartSource,
-    SourceInspection,
-    Target,
-    Tensor,
-)
+from cozy_runtime.weights_store import Derivation
 
 from ._memo import TURBO
-from .adaln_operations import (
-    PLAIN,
-    _asset,
-    _sections,
-    _validate_generators,
-)
-from .kernel import H3Topology, LowRankAdapter, adapter_shapes, precompute_tables, table_shapes
+from .adaln_operations import _asset, _sections, _validate_generators
+from .kernel import H3Topology, LowRankAdapter, adapter_shapes, table_shapes
+from .model_config import DIT_COMPONENT
 from .plans import Task, TimestepPlan, parse_plan
-from .source import inspection
-from .source import structures as _structures
+from .source import Rows, open_source, plain, put, read, rows, write_config, write_tables
 
 RANK = 64
 NUM_STEPS = 32
@@ -135,11 +120,7 @@ def overlay_shapes(
 
 
 def _adapter_component(
-    structure: SourceInspection,
-    component: str,
-    config: dict[str, Any],
-    plan: TimestepPlan,
-    topology: H3Topology,
+    present: Rows, component: str, config: dict[str, Any], plan: TimestepPlan, topology: H3Topology
 ) -> None:
     expected = {
         key: ("bf16", ((NUM_STEPS, *shape[1:]) if dtype == "f32" else shape))
@@ -149,234 +130,33 @@ def _adapter_component(
     expected.update(
         {key: ("bf16", shape) for key, (_, shape) in adapter_shapes(topology, RANK).items()}
     )
-    rows = structure.components[component]
-    if set(rows) != set(expected):
+    found = present[component]
+    if set(found) != set(expected) or not all(
+        plain(found[key], dtype, shape) for key, (dtype, shape) in expected.items()
+    ):
         raise UnsupportedInput(
-            f"PDD adapter component {component} must contain exactly its LoRA factors and "
-            f"32 heads ({len(rows)} rows, expected {len(expected)})",
+            f"PDD adapter component {component} must hold exactly its plain bf16 LoRA factors "
+            f"and 32 heads ({len(found)} rows, expected {len(expected)})",
             code="h3_turbo_adapter",
         )
-    for key, (dtype, shape) in expected.items():
-        row = rows[key]
-        if (row.logical_dtype, row.shape, row.encoding) != (dtype, shape, PLAIN) or tuple(
-            (role, p.dtype, p.shape) for role, p in row.parts.items()
-        ) != (("value", dtype, shape),):
-            raise UnsupportedInput(
-                f"PDD adapter tensor {component}.{key} must be plain {dtype} {shape}",
-                code="h3_turbo_adapter",
-            )
 
 
-def adapter_components(structure: SourceInspection) -> dict[Task, str]:
+def adapter_components(present: Rows) -> dict[Task, str]:
     """Name each task's adapter in one PDD checkpoint: the one component naming the task."""
-    found = {
-        task: [name for name in structure.components if task in name.lower()] for task in TASKS
-    }
-    if any(len(names) != 1 for names in found.values()) or len(structure.components) != 2:
+    found = {task: [name for name in present if task in name.lower()] for task in TASKS}
+    if any(len(names) != 1 for names in found.values()) or len(present) != 2:
         raise UnsupportedInput(
             "the PDD adapter checkpoint must hold exactly two components, one naming fl2va and "
-            f"one naming ref2va; it holds {sorted(structure.components)}",
+            f"one naming ref2va; it holds {sorted(present)}",
             code="h3_turbo_adapter",
         )
     return {task: names[0] for task, names in found.items()}
 
 
-def _read(
-    transaction: DerivedTransaction,
-    source: str,
-    component: str,
-    key: str,
-    dtype: torch.dtype,
-    shape: tuple[int, ...],
-) -> torch.Tensor:
-    value = torch.empty(shape, dtype=dtype, device="cpu")
-    buffer = memoryview(value.view(torch.uint8).numpy()).cast("B")
-    for offset in range(0, len(buffer), 32 << 20):
-        transaction.source_read_into(
-            source, component, key, "value", offset, buffer[offset : offset + (32 << 20)]
-        )
-    return value
-
-
-def _write(transaction: DerivedTransaction, component: str, key: str, value: torch.Tensor) -> None:
-    transaction.add_part(
-        component, key, "value", value.cpu().contiguous().view(torch.uint8).numpy().tobytes()
-    )
-    transaction.checkpoint()
-
-
-def _progress(ctx: Context, tel: Telemetry, task: Task, done: int, total: int) -> None:
-    ctx.raise_if_cancelled()
-    tel.progress(done / total, stage=f"turbo-{task}")
-
-
-def _produce(
-    ctx: Context,
-    tel: Telemetry,
-    *,
-    sources: dict[str, Weights[Any]],
-    adapters: dict[Task, tuple[str, str]],
-    configs: dict[str, Any],
-    topologies: dict[Task, H3Topology],
-    output: str,
-) -> ModelArtifact:
-    """One adapter transaction; LoRA factors inherit their exact source objects.
-
-    ``sources`` names the granted models; ``full`` is the base H3 model and ``adapters``
-    maps each task to its (source name, component) PDD adapter.
-    """
-    structures = _structures(ctx, sources)
-    plans = {task: turbo_plan(task) for task in TASKS}
-    for task, (name, component) in adapters.items():
-        _adapter_component(
-            structures[name], component, configs[f"{task}_dit"], plans[task], topologies[task]
-        )
-    targets: dict[str, Target] = {}
-    output_order: list[tuple[str, str]] = []
-    for task in TASKS:
-        component = f"{task}_turbo"
-        specs = overlay_shapes(configs[f"{task}_dit"], plans[task])
-        targets[component] = Target(
-            "full",
-            f"{task}_dit",
-            drop=tuple(structures["full"].components[f"{task}_dit"]),
-            add={
-                key: Tensor(
-                    dtype,
-                    shape,
-                    PLAIN,
-                    {
-                        "value": Part(
-                            dtype,
-                            shape,
-                            source=(
-                                PartSource(*adapters[task], key, "value")
-                                if key.endswith((".lora_down", ".lora_up"))
-                                else None
-                            ),
-                        )
-                    },
-                )
-                for key, (dtype, shape) in specs.items()
-            },
-        )
-        output_order.extend((component, key) for key in specs)
-    config = {}
-    for task in TASKS:
-        config[f"{task}_turbo"] = {
-            **configs[f"{task}_dit"],
-            "cozy_h3": {
-                "task": task,
-                "modulation": "adaln-pruned",
-                "distillation": "pdd",
-                "table_keys": plans[task].table_keys,
-                "lora_rank": RANK,
-                "lora_alpha": float(RANK),
-                "pdd_num_steps": NUM_STEPS,
-                "pdd_block_size": BLOCK_SIZE,
-            },
-        }
-    raw = canonical_json.encode(config)
-    with ctx.output(output).open(
-        Derivation(
-            sources={name: structure.source for name, structure in structures.items()},
-            targets=targets,
-            configs={"model": Config("add")},
-            order=tuple(output_order),
-        )
-    ) as transaction:
-        if transaction.receipt is not None:
-            return ctx.adopt_model(transaction.receipt)
-        if ctx.device.type == "cuda":
-            torch.backends.cuda.matmul.allow_tf32 = False
-        torch.set_float32_matmul_precision("highest")
-        reused = computed = 0
-        for task in TASKS:
-            ctx.raise_if_cancelled()
-            component = f"{task}_turbo"
-            completed = {
-                key
-                for owner, key, role in transaction.completed_parts()
-                if owner == component and role == "value"
-            }
-            tables = table_shapes(topologies[task], plans[task])
-            produced = tables.keys() | {
-                f"{prefix}.{suffix}"
-                for prefix in ("proj_out", "audio_proj_out")
-                for suffix in ("weight", "bias")
-            }
-            reused += len(produced & completed)
-            computed += len(produced - completed)
-            reader = partial(_read, transaction, *adapters[task])
-            precompute_tables(
-                plan=plans[task],
-                topology=topologies[task],
-                read=partial(_read, transaction, "full", f"{task}_dit"),
-                write=partial(_write, transaction, component),
-                progress=partial(_progress, ctx, tel, task),
-                device=torch.device(str(ctx.device)),
-                completed=frozenset(completed & tables.keys()),
-                adapter=LowRankAdapter(RANK, 1.0, reader),
-            )
-            for prefix, shift in (("proj_out", 12.0), ("audio_proj_out", 3.0)):
-                ctx.raise_if_cancelled()
-                if {f"{prefix}.weight", f"{prefix}.bias"} <= completed:
-                    continue
-                out_shape = targets[component].add[f"{prefix}.weight"].shape
-                weight = reader(f"{prefix}.weight", torch.bfloat16, (NUM_STEPS, *out_shape[1:]))
-                bias = reader(f"{prefix}.bias", torch.bfloat16, (NUM_STEPS, out_shape[1]))
-                fused = collapse_head_bank(
-                    weight, bias, pdd_head_plan(shift, NUM_STEPS, BLOCK_SIZE)
-                )
-                for suffix, value in zip(("weight", "bias"), fused, strict=True):
-                    if f"{prefix}.{suffix}" not in completed:
-                        _write(transaction, component, f"{prefix}.{suffix}", value)
-        tel.metric("h3.turbo.reused_tensors", float(reused))
-        tel.metric("h3.turbo.computed_tensors", float(computed))
-        transaction.add_config("model", raw)
-        return ctx.adopt_model(transaction.commit())
-
-
-def _topologies() -> tuple[dict[str, Any], dict[Task, H3Topology]]:
+def _topologies() -> tuple[dict[Task, dict[str, Any]], dict[Task, H3Topology]]:
     sections = _sections()
-    configs = {
-        f"{task}_dit": sections["transformer" if task == "fl2va" else "transformer_ref"]
-        for task in TASKS
-    }
-    return configs, {task: H3Topology.from_config(configs[f"{task}_dit"]) for task in TASKS}
-
-
-def build_turbo_adapter(
-    ctx: Context,
-    *,
-    full: Weights[Any],
-    fl2va_adapter: Weights[Any],
-    ref2va_adapter: Weights[Any],
-    tel: Telemetry,
-    output: str = "model",
-) -> ModelArtifact:
-    """Prepare a PDD-8 adapter from two single-component adapter checkpoints."""
-    configs, topologies = _topologies()
-    for task in TASKS:
-        _validate_generators(inspection(ctx, full), task, topologies[task])
-    single: dict[Task, Weights[Any]] = {"fl2va": fl2va_adapter, "ref2va": ref2va_adapter}
-    adapters: dict[Task, tuple[str, str]] = {}
-    for task, model in single.items():
-        components = list(inspection(ctx, model).components)
-        if len(components) != 1:
-            raise UnsupportedInput(
-                f"{task}_adapter must be one PDD adapter component", code="h3_turbo_adapter"
-            )
-        adapters[task] = (task, components[0])
-    return _produce(
-        ctx,
-        tel,
-        sources={"full": full, "fl2va": fl2va_adapter, "ref2va": ref2va_adapter},
-        adapters=adapters,
-        configs=configs,
-        topologies=topologies,
-        output=output,
-    )
+    configs = {task: sections[DIT_COMPONENT[task]] for task in TASKS}
+    return configs, {task: H3Topology.from_config(configs[task]) for task in TASKS}
 
 
 @invocable(memo_version="h3-turbo-lora/1", memo_dependencies=TURBO)
@@ -389,22 +169,88 @@ async def turbo_lora(
 ) -> ModelArtifact:
     """Build the standalone PDD-8 turbo LoRA from the upstream PDD adapter pair.
 
-    ``adapters`` is the converted alibaba-pai/MiniMax-H3-Acc-LoRAs release: one component
-    per task. ``base`` is any full-precision H3 checkpoint; only its AdaLN modulation
-    weights and output heads are read. LoRA factors inherit the adapter objects; adapted
-    timestep tables and collapsed heads are computed and checkpointed per tensor, so an
-    interrupted run resumes where it stopped.
+    ``adapters`` is the converted alibaba-pai/MiniMax-H3-Acc-LoRAs release: one component per
+    task. ``base`` is any full-precision H3 checkpoint; only its AdaLN modulation weights are
+    read. LoRA factors keep the adapter objects; adapted timestep tables and collapsed heads
+    are computed per tensor, so an interrupted run resumes where it stopped.
     """
     configs, topologies = _topologies()
+    full, pair = open_source(ctx, base), open_source(ctx, adapters)
     for task in TASKS:
-        _validate_generators(inspection(ctx, base), task, topologies[task])
-    names = adapter_components(inspection(ctx, adapters))
-    return _produce(
-        ctx,
-        tel,
-        sources={"full": base, "adapters": adapters},
-        adapters={task: ("adapters", component) for task, component in names.items()},
-        configs=configs,
-        topologies=topologies,
-        output="pdd8",
-    )
+        _validate_generators(rows(full), task, topologies[task])
+    names = adapter_components(rows(pair))
+    plans = {task: turbo_plan(task) for task in TASKS}
+    for task in TASKS:
+        _adapter_component(rows(pair), names[task], configs[task], plans[task], topologies[task])
+    order = [
+        (f"{task}_turbo", key) for task in TASKS for key in overlay_shapes(configs[task], plans[task])
+    ]
+    config = {
+        f"{task}_turbo": {
+            **configs[task],
+            "cozy_h3": {
+                "task": task,
+                "modulation": "adaln-pruned",
+                "distillation": "pdd",
+                "table_keys": plans[task].table_keys,
+                "lora_rank": RANK,
+                "lora_alpha": float(RANK),
+                "pdd_num_steps": NUM_STEPS,
+                "pdd_block_size": BLOCK_SIZE,
+            },
+        }
+        for task in TASKS
+    }
+    if ctx.device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = False
+    torch.set_float32_matmul_precision("highest")
+    reused = computed = 0
+    with ctx.output("pdd8", Derivation(base=None, sources=(full, pair), order=order)) as out:
+        write_config(out, canonical_json.encode(config))
+        for task in TASKS:
+            ctx.raise_if_cancelled()
+            component, adapter = f"{task}_turbo", names[task]
+            specs = overlay_shapes(configs[task], plans[task])
+            for key in specs:
+                if key.endswith((".lora_down", ".lora_up")) and not out.has(component, key):
+                    out.copy(component, key, pair, from_component=adapter, from_key=key)
+
+            def reader(
+                key: str, dtype: torch.dtype, shape: tuple[int, ...], adapter: str = adapter
+            ) -> torch.Tensor:
+                return read(pair, adapter, key, dtype, shape)
+
+            def progress(done: int, total: int, task: Task = task) -> None:
+                tel.progress(done / total, stage=f"turbo-{task}")
+
+            _, _, kept = write_tables(
+                ctx,
+                plan=plans[task],
+                topology=topologies[task],
+                source=full,
+                component=DIT_COMPONENT[task],
+                target=component,
+                outputs=(out,),
+                progress=progress,
+                adapter=LowRankAdapter(RANK, 1.0, reader),
+            )
+            tables = len(table_shapes(topologies[task], plans[task]))
+            reused, computed = reused + kept, computed + tables - kept
+            for prefix, shift in (("proj_out", 12.0), ("audio_proj_out", 3.0)):
+                ctx.raise_if_cancelled()
+                keys = (f"{prefix}.weight", f"{prefix}.bias")
+                if all(out.has(component, key) for key in keys):
+                    reused += 2
+                    continue
+                shape = specs[f"{prefix}.weight"][1]
+                weight = reader(f"{prefix}.weight", torch.bfloat16, (NUM_STEPS, *shape[1:]))
+                bias = reader(f"{prefix}.bias", torch.bfloat16, (NUM_STEPS, shape[1]))
+                fused = collapse_head_bank(weight, bias, pdd_head_plan(shift, NUM_STEPS, BLOCK_SIZE))
+                for key, value in zip(keys, fused, strict=True):
+                    if not out.has(component, key):
+                        put(out, component, key, value)
+                computed += 2
+        artifact = ctx.adopt_model(out)
+    tel.metric("h3.turbo.reused_tensors", float(reused))
+    tel.metric("h3.turbo.computed_tensors", float(computed))
+    return artifact

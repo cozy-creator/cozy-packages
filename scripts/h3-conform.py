@@ -34,7 +34,6 @@ import numpy as np
 import torch
 from cozy_runtime.author import (
     App,
-    Artifact,
     Assets,
     AttentionLayout,
     AudioAsset,
@@ -43,7 +42,6 @@ from cozy_runtime.author import (
     Context,
     DecodedAudio,
     DecodedAudioChunk,
-    DecodedVideo,
     DecodedVideoFrame,
     ImageAsset,
     InvalidRequest,
@@ -64,7 +62,6 @@ from cozy_runtime.author.fakes import (
     fake_telemetry,
     granted_input,
 )
-from cozy_runtime.internal.derive import derive
 from diffusers import (
     AutoencoderKLMiniMaxH3,
     AutoencoderKLMiniMaxH3Audio,
@@ -132,6 +129,7 @@ from minimax_h3.official import (  # noqa: E402
     _attention_layout,
     _dit_specs,
     _processor,
+    _DIT_COMPONENT,
     _ScopedPipeline,
     _validate_dual_dit_topology,
     _validate_model_contract,
@@ -143,6 +141,7 @@ from minimax_h3.official import (  # noqa: E402
     supported_durations,
     supported_steps,
     timestep_plan_digest,
+    Trunk,
     validate_reference_policy,
 )
 from minimax_h3 import turbo as turbo_module  # noqa: E402
@@ -315,8 +314,8 @@ def arm_checkpoint_table_layout() -> None:
     wrong = run_rows(shuffled, block_values, final_values)
     red("moving labels without table rows changes output", torch.equal(original[0], wrong[0]), True)
 
-    config: dict[str, Any] = {"fl2va_dit": dit_config("fl2va", "adaln-pruned")}
-    config["fl2va_dit"]["cozy_h3"]["table_keys"] = reordered
+    config: dict[str, Any] = {"transformer": dit_config("fl2va", "adaln-pruned")}
+    config["transformer"]["cozy_h3"]["table_keys"] = reordered
     check(
         "serving constructor accepts arbitrary checkpoint row order",
         official._dit_spec(config, "fl2va")[2] == shuffled,
@@ -332,7 +331,7 @@ def arm_checkpoint_table_layout() -> None:
             "modality_tag": 0,
         }
     )
-    config["fl2va_dit"]["cozy_h3"]["table_keys"] = extra
+    config["transformer"]["cozy_h3"]["table_keys"] = extra
     extended = official._dit_spec(config, "fl2va")[2]
     assert extended is not None
     check(
@@ -436,7 +435,7 @@ def arm_producer_configs() -> None:
             {row[1] for row in specs.values()},
             {structure},
         )
-        for component, task in (("fl2va_dit", "fl2va"), ("ref2va_dit", "ref2va")):
+        for component, task in (("transformer", "fl2va"), ("transformer_ref", "ref2va")):
             for field, value in (
                 ("task", "ref2va" if task == "fl2va" else "fl2va"),
                 ("table_keys", {}),
@@ -493,12 +492,9 @@ def arm_producer_construction_order() -> None:
             True,
         )
         if mode == "full":
-            for component, section in (
-                ("fl2va_dit", "transformer"),
-                ("ref2va_dit", "transformer_ref"),
-            ):
+            for component in ("transformer", "transformer_ref"):
                 state = pipeline.components[component].state_dict()
-                specs = official_full_specs(sections[section])
+                specs = official_full_specs(sections[component])
                 check(f"{component} ordered spec names", tuple(specs) == tuple(state), True)
                 check(
                     f"{component} lexical ordering is a rejected control",
@@ -580,6 +576,15 @@ def check(name: str, got: Any, want: Any) -> None:
         observe(name, repr(got))
     else:
         fail(name, f"got {got!r}, want {want!r}")
+
+
+def census(pipe: Any) -> list[tuple[str, list[str]]]:
+    """Each module component's keys in its `state_dict()` order: what Runtime's loader walks."""
+    return [
+        (name, list(module.state_dict()))
+        for name, module in pipe.components.items()
+        if isinstance(module, torch.nn.Module)
+    ]
 
 
 def red(name: str, defective: Any, correct: Any) -> None:
@@ -939,7 +944,7 @@ def arm_zero_reference_preparation() -> None:
     pipe = meta_h3_pipeline()
     # Only preparation executes: synthetic text embeddings and a CPU scope stand
     # in for the preceding encoder and GPU. No model forward or weights are read.
-    pipe.components["fl2va_dit"] = SimpleNamespace(device=torch.device("cpu"))
+    pipe.components["transformer"] = SimpleNamespace(device=torch.device("cpu"))
 
     def start(steps: int, frames: int = DEFAULT_FRAMES) -> Any:
         return pipe.start_fl2va(
@@ -1070,7 +1075,7 @@ def arm_clip_length() -> None:
     # canvas: the packed sequence the DiT would attend over is exactly what `denoise_rows`
     # reports, so the telemetry number is the model's own and not a restatement.
     pipe = meta_h3_pipeline()
-    pipe.components["fl2va_dit"] = SimpleNamespace(device=torch.device("cpu"))
+    pipe.components["transformer"] = SimpleNamespace(device=torch.device("cpu"))
 
     class ReachedDenoise(Exception):
         pass
@@ -1286,10 +1291,10 @@ def arm_graph_and_dtypes() -> None:
     )
     full_sections: dict[str, dict[str, object]] = {
         "audio_vae": {},
-        "fl2va_dit": dit_config("fl2va"),
-        "ref2va_dit": dit_config("ref2va"),
+        "transformer": dit_config("fl2va"),
+        "transformer_ref": dit_config("ref2va"),
         "text_encoder": tiny_text_config(),
-        "video_vae": {},
+        "vae": {},
     }
     check(
         "uniform dual FULL config sections",
@@ -1308,7 +1313,7 @@ def arm_graph_and_dtypes() -> None:
     )
     mixed = {
         **full_sections,
-        "ref2va_dit": dit_config("ref2va", "adaln-pruned"),
+        "transformer_ref": dit_config("ref2va", "adaln-pruned"),
     }
     refusal(
         "mixed FULL and AdaLN-pruned task structures refuse",
@@ -1318,7 +1323,7 @@ def arm_graph_and_dtypes() -> None:
     refusal(
         "task DiTs with different architecture config refuse",
         lambda: _dit_specs(
-            {**full_sections, "ref2va_dit": {**full_sections["ref2va_dit"], "hidden_size": 7}}
+            {**full_sections, "transformer_ref": {**full_sections["transformer_ref"], "hidden_size": 7}}
         ),
         "artifact_config",
     )
@@ -1326,7 +1331,7 @@ def arm_graph_and_dtypes() -> None:
     cast(dict[str, Any], wrong_plan["cozy_h3"])["table_keys"] = {}
     refusal(
         "an AdaLN-pruned checkpoint needs valid row labels",
-        lambda: _dit_specs({**full_sections, "fl2va_dit": wrong_plan}),
+        lambda: _dit_specs({**full_sections, "transformer": wrong_plan}),
         "artifact_config",
     )
     transformer_counts = Counter(str(value.dtype) for value in transformer.state_dict().values())
@@ -1343,7 +1348,7 @@ def arm_graph_and_dtypes() -> None:
     )
     with torch.device("meta"):
         supplied = {
-            f"video_vae.{name}": "f16" if decode_operand(name, tuple(value.shape)) else "f32"
+            f"vae.{name}": "f16" if decode_operand(name, tuple(value.shape)) else "f32"
             for name, value in video_vae.state_dict().items()
         }
         cast_vae = _apply_video_vae_dtype(
@@ -1406,7 +1411,7 @@ def arm_graph_and_dtypes() -> None:
     check(
         "the producer normalises the video VAE at f16 on every lane",
         {name: (t.cast, t.cast_scope) for name, t in NORMALISED_COMPONENTS.items()},
-        {"video_vae": ("f16", "decode_operands")},
+        {"vae": ("f16", "decode_operands")},
     )
     red(
         "an unscoped component cast would store the served destination",
@@ -1704,22 +1709,20 @@ def arm_text_conditioner() -> None:
 
     model_config = {
         "audio_vae": {},
-        "fl2va_dit": dit_config("fl2va", "adaln-pruned"),
-        "ref2va_dit": dit_config("ref2va", "adaln-pruned"),
+        "transformer": dit_config("fl2va", "adaln-pruned"),
+        "transformer_ref": dit_config("ref2va", "adaln-pruned"),
         "text_encoder": source,
-        "video_vae": {},
+        "vae": {},
     }
 
     def contract_document() -> dict[str, object]:
-        result = derive(
-            package.H3Model(),
-            Artifact("se-018-audit", {}, Config(model_config)),
-        )
+        with torch.device("meta"):
+            built = census(official.build_h3_pipeline(Config(model_config)))
         return {
             "schema": "cozy.runtime.model_construction_contract.v1",
             "destination_sets": [
-                {"component": row.component, "keys": list(row.keys)}
-                for row in result.destination_sets
+                {"component": name, "keys": [f"{name}.{key}" for key in keys]}
+                for name, keys in built
             ],
         }
 
@@ -1739,7 +1742,7 @@ def arm_text_conditioner() -> None:
     check(
         "Runtime component order",
         list(dict.fromkeys(component for component, _ in rows)),
-        ["fl2va_dit", "ref2va_dit", "text_encoder", "video_vae", "audio_vae"],
+        ["transformer", "transformer_ref", "text_encoder", "vae", "audio_vae"],
     )
     observe(
         "Runtime order handoff",
@@ -2159,7 +2162,7 @@ def finish_scaffold(frames: int) -> tuple[Any, Any]:
     video_vae, audio_vae = tiny_video_vae(), tiny_audio_vae()
     for workflow in pipe._pipes.values():
         workflow.update_components(vae=video_vae, audio_vae=audio_vae)
-    pipe.components["video_vae"], pipe.components["audio_vae"] = video_vae, audio_vae
+    pipe.components["vae"], pipe.components["audio_vae"] = video_vae, audio_vae
     pipe.sample_rate = int(audio_vae.config.sampling_rate)
     latent_frames = 5 * ((frames - 5) // 17) + 2
     audio_latents = frames * pipe.sample_rate // FPS // 4
@@ -2629,7 +2632,7 @@ def arm_media() -> None:
     poisoned, poisoned_state = finish_scaffold(DEFAULT_FRAMES)
     with torch.no_grad():
         largest = torch.finfo(torch.float32).max
-        poisoned.components["video_vae"].decoder.proj_in.weight.fill_(largest)
+        poisoned.components["vae"].decoder.proj_in.weight.fill_(largest)
     refusal(
         "a non-finite chunk is refused at the chunk, before RGB8 erases it",
         refused_tail("nan", poisoned, poisoned_state),
@@ -2793,7 +2796,7 @@ def arm_video_stream() -> None:
     pipe, state = finish_scaffold(39)
     injected = False
 
-    vae = pipe.components["video_vae"]
+    vae = pipe.components["vae"]
     decode_tiles = vae._decode_tiles
 
     def infinity(batch: Any) -> Any:
@@ -2898,7 +2901,7 @@ def arm_vae_tiles() -> None:
     vae = tiny_video_vae()
     check(
         "the served video VAE is the tile-batched class",
-        type(meta_h3_pipeline().components["video_vae"]),
+        type(meta_h3_pipeline().components["vae"]),
         TileBatchedVideoVAE,
     )
     check("tile-batched VAE keeps the release VAE contract", vae.tokens_chunk_size, 5)
@@ -3064,12 +3067,12 @@ def arm_interface() -> None:
         },
     )
     expected = {
-        "fl2va": (["prompt", "seed", "duration_s", "steps", "assets"], ["fl2va_dit"]),
-        "ref2va": (["prompt", "seed", "duration_s", "steps", "assets"], ["ref2va_dit"]),
-        "fl2va_turbo": (["prompt", "seed", "duration_s", "assets"], ["fl2va_dit", "fl2va_turbo"]),
+        "fl2va": (["prompt", "seed", "duration_s", "steps", "assets"], ["transformer"]),
+        "ref2va": (["prompt", "seed", "duration_s", "steps", "assets"], ["transformer_ref"]),
+        "fl2va_turbo": (["prompt", "seed", "duration_s", "assets"], ["transformer", "fl2va_turbo"]),
         "ref2va_turbo": (
             ["prompt", "seed", "duration_s", "assets"],
-            ["ref2va_dit", "ref2va_turbo"],
+            ["transformer_ref", "ref2va_turbo"],
         ),
     }
     for name, (fields, _leased) in expected.items():
@@ -3156,7 +3159,7 @@ def arm_interface() -> None:
         )
         turbo = name.endswith("_turbo")
         models = child["models"]
-        trunk = name.removesuffix("_turbo")
+        trunk = cast(Trunk, name.removesuffix("_turbo"))
         if turbo:
             check(f"{name} has separately bound base and LoRA models", len(models), 2)
             base_slot, lora_slot = models
@@ -3165,7 +3168,7 @@ def arm_interface() -> None:
             check(
                 f"{name} base turbo sampling lease",
                 base_slot["component_use"][f"sample_{trunk}_turbo"],
-                [f"{trunk}_dit"],
+                [_DIT_COMPONENT[trunk]],
             )
             check(
                 f"{name} LoRA sampling lease",
@@ -3189,7 +3192,7 @@ def arm_interface() -> None:
                 model_slot["encoded_leaves"],
                 "accept",
             )
-        roots = {"fl2va_dit", "ref2va_dit", "text_encoder", "video_vae", "audio_vae"}
+        roots = {"transformer", "transformer_ref", "text_encoder", "vae", "audio_vae"}
         if turbo:
             roots.update(("fl2va_turbo", "ref2va_turbo"))
         check(
@@ -4168,7 +4171,7 @@ def turbo_h3_config() -> dict[str, Any]:
         dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
     )
     for trunk in ("fl2va", "ref2va"):
-        overlay = copy.deepcopy(document[f"{trunk}_dit"])
+        overlay = copy.deepcopy(document[_DIT_COMPONENT[trunk]])
         overlay["cozy_h3"] = {
             "task": trunk,
             "modulation": "adaln-pruned",
@@ -4219,7 +4222,7 @@ def arm_turbo_state() -> None:
 
     base = package.H3TurboBase.for_test(
         pipe=SimpleNamespace(
-            components={"fl2va_dit": dit},
+            components={"transformer": dit},
             _dit_specs={"fl2va": (TURBO_CONFIG, "adaln-pruned", None)},
             denoise=denoise,
         )
@@ -4316,15 +4319,14 @@ def arm_turbo_artifact() -> None:
         lora = official.OfficialH3TurboLoRA(Config(overlay_only))
     check("ordinary model has exactly five real roots", set(base.components), set(base_only))
     check("turbo LoRA has exactly two overlay roots", set(lora.components), set(overlay_only))
-    for cls, config in ((package.H3TurboBase, base_only), (package.H3TurboLoRA, overlay_only)):
-        derived = derive(cls(), Artifact("constructor-audit", {}, Config(config)))
+    for label, built, config in (("H3TurboBase", base, base_only), ("H3TurboLoRA", lora, overlay_only)):
         check(
-            f"{cls.__name__} Runtime census matches its exact checkpoint",
-            {row.component for row in derived.destination_sets},
+            f"{label} census matches its exact checkpoint",
+            {name for name, keys in census(built) if keys},
             set(config),
         )
     for trunk in ("fl2va", "ref2va"):
-        dit = base.components[f"{trunk}_dit"]
+        dit = base.components[_DIT_COMPONENT[trunk]]
         overlay = lora.components[f"{trunk}_turbo"]
         check(
             f"{trunk} base installs permanent LoRA consumers",
@@ -4387,7 +4389,7 @@ def arm_attention_scope() -> None:
         in_channels=24,
         audio_in_channels=32,
     ).eval()
-    pipe.components["fl2va_dit"] = dit
+    pipe.components["transformer"] = dit
     for workflow in ("t2va", "fl2va"):
         pipe._pipes[workflow].update_components(transformer=dit)
 

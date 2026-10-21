@@ -17,7 +17,7 @@ from .upsampler import Drafter, Upsampler
 
 #: Every linear of the 43 DiT blocks, the six modulation heads, the context embedder and the output
 #: norm, and the q/k/v/o and MLP projections of the 32 text-encoder layers the pipeline reads. On real
-#: Klein activations int8-convrot keeps each of them within 0.1-1.3% of bf16 (mean, max 1.6%); plain
+#: Klein activations int8.convrot keeps each of them within 0.1-1.3% of bf16 (mean, max 1.6%); plain
 #: int8 is 1-5.6% and fp8 rowwise 1.5-2.8%. The input/timestep embedders and the output projection
 #: are tiny, and the VAE stays f32.
 INT8 = QuantizationPlan(
@@ -37,13 +37,13 @@ INT8 = QuantizationPlan(
 )
 
 
-#: The int8 lane's weights with the DiT blocks in NVFP4 (`nvfp4-w4a4/1`, Blackwell's FP4 tensor
+#: The int8 lane's weights with the DiT blocks in NVFP4 (`nvfp4`, Blackwell's FP4 tensor
 #: cores): 5-10% per linear on real activations, every image clean in the measured set. The
 #: modulation heads, context embedder, output norm and text encoder stay int8.
 NVFP4 = QuantizationPlan(
     components=INT8.components,
     include=INT8.include,
-    encodings=(EncodingRule("transformer.*blocks.*", "nvfp4-w4a4/1"),),
+    encodings=(EncodingRule("transformer.*blocks.*", "nvfp4"),),
     output_precision="preserve",
 )
 
@@ -83,10 +83,10 @@ UPSAMPLER_NVFP4 = QuantizationPlan(
 
 @invocable(memo_version="flux-3-klein-int8/1")
 async def int8(ctx: Context, *, source: Weights[Klein], tel: Telemetry) -> ModelArtifact:
-    """The int8 lane (`int8-convrot256/1`): W8A8 on int8 tensor cores, the default lane. The VAE and
+    """The int8 lane (`int8.convrot`): W8A8 on int8 tensor cores, the default lane. The VAE and
     every unlisted weight keep their source precision."""
     return quantize_into(
-        ctx, tel, source=source, plan=INT8, encoding="int8-convrot256/1", output="int8"
+        ctx, tel, source=source, plan=INT8, encoding="int8.convrot", output="int8"
     )
 
 
@@ -95,7 +95,7 @@ async def nvfp4(ctx: Context, *, source: Weights[Klein], tel: Telemetry) -> Mode
     """The nvfp4 lane: the DiT blocks as W4A4 on Blackwell's FP4 tensor cores, everything else as
     the int8 lane has it."""
     return quantize_into(
-        ctx, tel, source=source, plan=NVFP4, encoding="int8-convrot256/1", output="nvfp4"
+        ctx, tel, source=source, plan=NVFP4, encoding="int8.convrot", output="nvfp4"
     )
 
 
@@ -103,9 +103,9 @@ async def nvfp4(ctx: Context, *, source: Weights[Klein], tel: Telemetry) -> Mode
 async def upsampler_int8(
     ctx: Context, *, source: Weights[Upsampler], tel: Telemetry
 ) -> ModelArtifact:
-    """The upsampler's int8 lane (`int8-convrot256/1`)."""
+    """The upsampler's int8 lane (`int8.convrot`)."""
     return quantize_into(
-        ctx, tel, source=source, plan=UPSAMPLER_INT8, encoding="int8-convrot256/1", output="int8"
+        ctx, tel, source=source, plan=UPSAMPLER_INT8, encoding="int8.convrot", output="int8"
     )
 
 
@@ -113,9 +113,9 @@ async def upsampler_int8(
 async def upsampler_nvfp4(
     ctx: Context, *, source: Weights[Upsampler], tel: Telemetry
 ) -> ModelArtifact:
-    """The upsampler's 4-bit lane (`nvfp4-w4a4/1`, W4A16 for its token loop)."""
+    """The upsampler's 4-bit lane (`nvfp4`, W4A16 for its token loop)."""
     return quantize_into(
-        ctx, tel, source=source, plan=UPSAMPLER_NVFP4, encoding="nvfp4-w4a4/1", output="nvfp4"
+        ctx, tel, source=source, plan=UPSAMPLER_NVFP4, encoding="nvfp4", output="nvfp4"
     )
 
 

@@ -105,7 +105,7 @@ def main(arguments: list[str]) -> None:
 
     config_path = TOOLS / "model-config.json"
     config = canonical_json.decode(config_path.read_bytes())
-    for component, task in (("fl2va_dit", "fl2va"), ("ref2va_dit", "ref2va")):
+    for component, task in (("transformer", "fl2va"), ("transformer_ref", "ref2va")):
         config[component]["cozy_h3"] = {
             "task": task,
             "modulation": "adaln-pruned",

@@ -1,100 +1,57 @@
 """The H3 lane catalogue: what each lane does to each of the five components.
 
-A lane is a NAME plus, per component, what this producer does to it. A component the
-lane does not name is INHERITED BY REFERENCE — TensorFS copies its tensor metadata and
-ObjectRefs unchanged through the zero-read/zero-hash inherit gate — so every lane that
-leaves the conditioner and the two VAEs alone points at exactly the same stored objects.
-That is why the treatment map is sparse and must stay sparse: naming a component costs
-its bytes once per lane that names it, and the four published lanes share 58.2 GiB of
-untouched conditioner/VAE today precisely because none of them names those three.
-
-The catalogue is CODE, not a request field. Output slot names are decorator-time facts,
-so they cannot come off the wire; and every lane here mints a MiniMax H3 Model Derivative
-under §I.11(i) of the community licence, which is a reviewed act rather than a caller
-choice. The request selects a subset of these rows; it can never author one.
+A lane is a NAME plus, per component, what this producer does to it. A component the lane
+does not name is copied unchanged (its large parts keep their objects), so every lane that
+leaves the conditioner and the two VAEs alone shares their stored objects. The catalogue is
+CODE, not a request field: output slots are decorator-time facts, and every lane mints a
+MiniMax H3 Model Derivative under §I.11(i) of the community licence, a reviewed act.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Literal
 
 import numpy as np
-from cozy_runtime.author import (
-    Context,
-    Telemetry,
-    UnsupportedInput,
-)
+from cozy_runtime.author import Context, Telemetry, UnsupportedInput
 from cozy_runtime.derive import safetensors_io as st
 from cozy_runtime.derive.quantization import (
     BF16_ROUND_TRIP_BOUND,
-    MAX_OUTPUT_BYTES,
-    PLAIN_SPEC,
     ArtifactQuantizationPlan,
     QuantizationTensor,
     prepare_source_quantization,
-    quantization_additions,
 )
-from tensorfs.derived import DerivedTransaction, Part, SourceInspection, Target, Tensor
+from cozy_runtime.weights_store import Checkpoint, Output
 
-from .source import TARGET_COMPONENT
+from .model_config import DIT_COMPONENT
+from .source import Row, dtype, plain
 
 CastDtype = Literal["bf16", "f16"]
-#: Which of a component's float32 rows a cast covers. ``component`` is every plain one.
-#: ``decode_operands`` is the video VAE's serving destination and nothing else — see
-#: ``VIDEO_VAE_NORMALISATION``.
+#: Which of a component's float32 rows a cast covers: `component` is every plain one,
+#: `decode_operands` the video VAE's serving destination only (`NORMALISED_COMPONENTS`).
 CastScope = Literal["component", "decode_operands"]
-Encoding = Literal["fp8-rowwise/1", "int8-convrot256/1", "nvfp4-w4a4/1"]
+Encoding = Literal["fp8.rowwise", "int8.convrot", "nvfp4"]
 Modulation = Literal["full", "adaln-pruned"]
 
-#: The five components of an H3 checkpoint. Every lane declares all five: the ones it does
-#: not treat are declared as plain inheriting targets, which is what carries their objects.
-COMPONENTS = ("fl2va_dit", "ref2va_dit", "text_encoder", "video_vae", "audio_vae")
+#: The DiTs encode through the package-owned reviewed plan (`quantization.dit_plan`), never
+#: the structural selector: their AdaLN table rows are rank-2 bf16 `.weight`-less tensors a
+#: shape rule would still be tempted by, and the plan is the reviewed set.
+DIT_COMPONENTS = frozenset(DIT_COMPONENT.values())
 
-#: The component name the reviewed DiT quantization plan addresses its 313 keys under.
-DIT_PLAN_COMPONENT = "dit"
-
-#: The two DiTs quantize through the package-owned reviewed plan
-#: (``assets/h3-dit-quantization-plan.json``), never the generic structural
-#: selector: their AdaLN table rows are rank-2 bf16 tensors whose keys end in `.weight`
-#: too, and a shape rule would happily encode them.
-DIT_COMPONENTS = frozenset(TARGET_COMPONENT.values())
-
-#: What each encoded lane of the vocabulary (`bf16 fp16 int8 fp8 nvfp4`) stores. Runtime serves
-#: every one from sm80 and picks the kernel by the GPU's family, so no card refuses a lane here.
+#: What each encoded lane of the vocabulary (`bf16 fp16 int8 fp8 nvfp4`) stores.
 LANE_ENCODINGS: Mapping[str, Encoding] = {
-    "int8": "int8-convrot256/1",
-    "fp8": "fp8-rowwise/1",
-    "nvfp4": "nvfp4-w4a4/1",
+    "int8": "int8.convrot",
+    "fp8": "fp8.rowwise",
+    "nvfp4": "nvfp4",
 }
 
-#: Components no lane may treat, and why. This is a refusal BY NAME, not by shape, because
-#: the shape rule does not catch it. Of the audio VAE's 1,087 rows, 637 are rank-3 — 344 of
-#: them the BigVGAN decoder's `weight_norm` `weight_g`/`weight_v` pairs, the rest alias-free
-#: resampling filters — and all of them are unrepresentable: `fp8-rowwise/1` pins
-#: `logical_rank: Some(2)` and `weight_g` never matches the `.weight` suffix. But the
-#: component also carries exactly SIX rank-2 float `.weight` rows, all of them in the
-#: `pre_block` ENCODER attention/MLP and all block-aligned. So the structural selector does
-#: NOT refuse this component — it
-#: silently selects those six (12.6 M of 151 M parameters, dominated by
-#: `pre_block.attn.qkv.weight [6144, 2048]`), quantizes the audio CONDITIONING path, leaves
-#: the BigVGAN decoder untouched and saves nothing. Every ecosystem publisher pins audio
-#: autoencoders to fp32 and h3a-006 already records the same conclusion.
-#:
-#: The mechanism is only half of it, and the other half is why this component is not merely
-#: unrepresentable but must not move at ANY width, fp16 and bf16 included. THIS is the real
-#: instance of "VAE decoders sometimes genuinely break in low precision" — the audio one,
-#: not the video one. `AutoencoderKLMiniMaxH3Audio` pins all six of its roots in
-#: `_keep_in_fp32_modules` and says why: the DAC/BigVGAN stack (weight-normalised
-#: convolutions, Snake activations) "degrades audibly under bfloat16, roughly 20 dB quieter
-#: decodes". And unlike the video VAE there is no autocast to hide behind:
-#: `MiniMaxH3AudioDecodeStep` calls `audio_vae.decode` in plain float32, so a narrower
-#: store is a real change to the arithmetic rather than a store of a rounding the forward
-#: already performs. `decode` even branches on it — `if decoder_dtype != torch.float32` —
-#: which is upstream saying out loud that float32 is the supported path. 0.56 GiB is the
-#: whole component; there is nothing here worth an audible risk.
+#: Components no lane may treat. Refused BY NAME: the structural selector would take the
+#: audio VAE's six rank-2 `pre_block` ENCODER linears, encode the conditioning path and
+#: leave the BigVGAN decoder (rank-3 weight_norm pairs) alone. Upstream pins the component
+#: to float32 (`_keep_in_fp32_modules`; bf16 decodes about 20 dB quieter) and decodes it in
+#: plain float32 with no autocast, so it must not move at any width.
 REFUSED_COMPONENTS: Mapping[str, str] = {
     "audio_vae": (
         "the audio VAE is not representable: 637 of its 1,087 rows are rank-3, including the "
@@ -104,16 +61,14 @@ REFUSED_COMPONENTS: Mapping[str, str] = {
     ),
 }
 
-#: Author-declared ceilings on the new bytes ONE treatment of a component may write. Not a
-#: second copy of the census: the transaction's own byte accounting is exact and TensorFS
-#: locks the output bound before it pulls a byte. This sizes the declared output slot,
-#: which is a decorator-time fact and cannot be measured from a source nobody has granted
-#: yet. Each is comfortably above the component's whole plain size.
+#: Author-declared ceilings on the new bytes ONE treatment of a component may write: they size
+#: the declared output slots, a decorator-time fact. Each is above the component's plain size.
+MAX_DIT_BYTES = 32 << 30
 COMPONENT_MAX_NEW_BYTES: Mapping[str, int] = {
-    "fl2va_dit": MAX_OUTPUT_BYTES,
-    "ref2va_dit": MAX_OUTPUT_BYTES,
+    "transformer": MAX_DIT_BYTES,
+    "transformer_ref": MAX_DIT_BYTES,
     "text_encoder": 56 << 30,
-    "video_vae": 12 << 30,
+    "vae": 12 << 30,
 }
 
 
@@ -121,16 +76,10 @@ COMPONENT_MAX_NEW_BYTES: Mapping[str, int] = {
 class Treatment:
     """What one lane does to one component.
 
-    ``cast`` rewrites every plain float32 tensor of the component at the named dtype;
-    an already-16-bit tensor inherits untouched, exactly as the ingest normalization does
-    (#695 — fp16 carries the same bytes as bf16 and re-rounding it loses three mantissa
-    bits for nothing). ``encode`` replaces the component's block-aligned rank-2 float
-    weights with the named encoding. ``keep`` names exact keys the encoding must NOT
-    select; they still follow ``cast`` like any other tensor.
-
-    Both fields are optional and at least one must be present — a treatment that changes
-    nothing is spelled by leaving the component out of the lane, which is what preserves
-    the shared ObjectRefs.
+    ``cast`` rewrites every plain float32 tensor (in ``cast_scope``) at the named dtype; a
+    16-bit tensor is copied untouched (#695). ``encode`` replaces the component's selected
+    weights with the named scheme; ``keep`` names exact keys the encoding must NOT select.
+    A treatment that changes nothing is spelled by leaving the component out of the lane.
     """
 
     cast: CastDtype | None = None
@@ -169,21 +118,17 @@ class Lane:
     components: Mapping[str, Treatment] = field(default_factory=dict)
 
 
-_DIT_FP8 = Treatment(encode="fp8-rowwise/1")
+_DIT_FP8 = Treatment(encode="fp8.rowwise")
 
 
 def _both_dits(treatment: Treatment) -> dict[str, Treatment]:
     return {component: treatment for component in sorted(DIT_COMPONENTS)}
 
 
-#: The conditioner rows h3a-028 holds at bf16, measured against the real shard headers.
-#: The structural selector takes 441 rows of the reviewed 902-row conditioner; exactly 350
-#: of them are the wanted `layers.{0..49}` projections. The other 91 are the token
-#: embedding table, the whole 27-block visual tower, its two mergers and the three
-#: deepstack mergers — all rank-2, all block-aligned, and all things a shape rule takes and
-#: a conditioner must not lose. `blocks.N.mlp.linear_fc2 [1152, 4304]` is deliberately
-#: ABSENT: 4304 % 32 == 16, so the selector never picks it and naming it would trip the
-#: unmatched-keep refusal.
+#: The conditioner rows h3a-028 holds at bf16. The structural selector takes 441 rows of the
+#: 902-row conditioner; the wanted ones are the 350 `layers.{0..49}` projections. The other 91
+#: are the token embedding, the 27-block visual tower and its mergers. `blocks.N.mlp.linear_fc2
+#: [1152, 4304]` is absent on purpose: 4304 % 32 == 16, so the selector never takes it.
 TEXT_ENCODER_KEEP: tuple[str, ...] = (
     "model.language_model.embed_tokens.weight",
     "model.visual.pos_embed.weight",
@@ -201,11 +146,11 @@ TEXT_ENCODER_KEEP: tuple[str, ...] = (
     ),
 )
 
-_TEXT_ENCODER_FP8 = Treatment(encode="fp8-rowwise/1", keep=TEXT_ENCODER_KEEP)
+_TEXT_ENCODER_FP8 = Treatment(encode="fp8.rowwise", keep=TEXT_ENCODER_KEEP)
 
-#: nvfp4's DiT keep list, the published recipes' consensus (NVIDIA ModelOpt for Wan/LTX/Qwen-Image,
-#: Lightricks LTX-2.3, rockerBOO's H3 file): the first and last two blocks, the token refiner and
-#: the context embedder stay bf16; every other block's q/k/v/out and SwiGLU in/out are W4A4.
+#: nvfp4's DiT keep list, the published recipes' consensus (ModelOpt for Wan/LTX/Qwen-Image,
+#: LTX-2.3, rockerBOO's H3 file): the first and last two blocks, the token refiner and the
+#: context embedder stay bf16; every other block's q/k/v/out and SwiGLU in/out are W4A4.
 NVFP4_DIT_KEEP: tuple[str, ...] = (
     "context_embedder.weight",
     *(
@@ -220,24 +165,13 @@ NVFP4_DIT_KEEP: tuple[str, ...] = (
     ),
 )
 
-#: The video VAE's stored form is NOT a lane choice, so it is not authored per row.
-#:
-#: `MiniMaxH3VideoDecodeStep` decodes inside `torch.autocast(float16)`, so the decoder's
-#: conv/linear operands are rounded f32->f16 by autocast on every forward whatever they are
-#: stored as. `official.py:_apply_video_vae_dtype` therefore BUILDS them at float16, which
-#: is bit-exact and halves the component (10,415,475,936 -> 5,570,955,360 B). `fill.py`
-#: refuses a stored dtype that differs from the destination, so every lane must store what
-#: the serving code destines — including `bf16-full`, which authors no treatments of its
-#: own. That is what makes this a producer-wide normalisation rather than a lane row.
-#:
-#: The scope is the whole of the argument. The encode side has NO autocast
-#: (`encode_vae_condition`), norms, biases and register tokens are exactly what autocast
-#: keeps in float32, and `decoder.rope.inv_freq` is a config-derived buffer float16 could
-#: not restore. Casting them too still decodes at 78 dB, but it is no longer an identity,
-#: and it buys 2.4 MiB of a 4.51 GiB saving.
-#:
-#: `h3-conform.py`'s `graph` arm proves this predicate selects exactly the keys
-#: `_apply_video_vae_dtype` casts, so the two spellings cannot drift apart.
+#: The video VAE's stored form is not a lane choice. `MiniMaxH3VideoDecodeStep` decodes inside
+#: `torch.autocast(float16)`, so the decoder's conv/linear operands are rounded to f16 on every
+#: forward whatever they are stored as; `official.py:_apply_video_vae_dtype` builds them at
+#: float16 (bit-exact, 10.4 -> 5.6 GB), and the fill refuses a stored dtype that differs from
+#: the destination, so every lane stores f16 operands, `bf16-full` included. The encoder, norms,
+#: biases and `decoder.rope.inv_freq` stay f32. `h3-conform.py` proves this predicate selects
+#: exactly the keys `_apply_video_vae_dtype` casts.
 DECODE_OPERAND_KEYS = frozenset({"post_quant_conv.weight"})
 DECODE_OPERAND_PREFIX = "decoder."
 
@@ -256,10 +190,9 @@ CAST_SCOPES: Mapping[str, Callable[[str, Sequence[int]], bool]] = {
     "decode_operands": decode_operand,
 }
 
-#: Applied to EVERY lane, ahead of whatever that lane authors. A component named here may
-#: not also be authored by a lane row: one component, one treatment.
+#: Applied to EVERY lane, ahead of whatever that lane authors; one component, one treatment.
 NORMALISED_COMPONENTS: Mapping[str, Treatment] = {
-    "video_vae": Treatment(cast="f16", cast_scope="decode_operands"),
+    "vae": Treatment(cast="f16", cast_scope="decode_operands"),
 }
 
 
@@ -268,16 +201,9 @@ def lane_treatments(lane: Lane) -> Mapping[str, Treatment]:
     return {**NORMALISED_COMPONENTS, **lane.components}
 
 
-#: The reviewed catalogue. Adding a lane is ONE row here: `job.py` derives its
-#: `WeightsOutput`, its byte ceiling, its targets and its writers from this mapping, so
-#: there is no second list of names to keep in step.
-#:
-#: The quantized lanes encode both DiTs and the text conditioner's 350 decoder linears
-#: (`TEXT_ENCODER_KEEP` stays bf16): 2026-10-09, the conditioner at fp8 drifted 0.1 % in mean
-#: cosine on the served encoder and kept 15 s A/B renders equivalent (progress/h3-te-fp8-20261009).
-#: The video VAE's encoding is still open with its conversion lane (h3a-027), and would be
-#:
-#:     "video_vae": Treatment(cast="f16", encode="fp8-rowwise/1")
+#: The reviewed catalogue. The quantized lanes encode both DiTs and the text conditioner's 350
+#: decoder linears (`TEXT_ENCODER_KEEP` stays bf16): at fp8 the conditioner drifted 0.1 % in mean
+#: cosine and kept 15 s A/B renders equivalent (progress/h3-te-fp8-20261009).
 LANES: Mapping[str, Lane] = {
     "bf16-full": Lane("full"),
     "bf16": Lane("adaln-pruned"),
@@ -331,190 +257,102 @@ def lane_max_new_bytes(lane: Lane, *, full_bytes: int, pruned_bytes: int) -> int
 
 @dataclass(frozen=True, slots=True)
 class Selection:
-    """One component's resolved work: which keys cast, which encode, under what plan."""
+    """One component's resolved work: which keys cast, which encode."""
 
     component: str
     treatment: Treatment
     cast: tuple[tuple[str, tuple[int, ...]], ...]
     plan: ArtifactQuantizationPlan | None
-    plan_component: str
 
     @property
     def encoded(self) -> tuple[str, ...]:
         return () if self.plan is None else tuple(tensor.key for tensor in self.plan.tensors)
 
     @property
-    def replaced(self) -> tuple[str, ...]:
-        return tuple(sorted({key for key, _ in self.cast} | set(self.encoded)))
-
-
-def carried(target: Target, structure: SourceInspection) -> SourceInspection:
-    """The source rows one target actually carries: its component MINUS its dropped rows.
-
-    A treatment must never see a row the lane removes. The conditioner is where this bites:
-    the reviewed 50-layer pre-norm target drops the official model's layers 50-63, its final
-    norm and its language-model head — 156 rows, of which `lm_head.weight [151936, 5120]` is
-    rank-2, block-aligned and therefore exactly what a structural selector would take. Left
-    unscoped, an encoding would resurrect the row the lane exists to delete.
-    """
-    dropped = set(target.drop)
-    rows = {
-        key: tensor
-        for key, tensor in structure.components.get(target.source_component, {}).items()
-        if key not in dropped
-    }
-    return replace(structure, components={target.source_component: rows}, configs={})
-
-
-def _plain_value(tensor: Tensor) -> bool:
-    return tensor.parts == {"value": Part(tensor.logical_dtype, tensor.shape)}
+    def replaced(self) -> frozenset[str]:
+        return frozenset(key for key, _ in self.cast) | frozenset(self.encoded)
 
 
 def select(
     component: str,
     treatment: Treatment,
-    structure: SourceInspection,
+    source: Checkpoint,
+    carried: Mapping[str, Row],
     *,
-    dit_plan: ArtifactQuantizationPlan | None = None,
+    dit_plan: Sequence[tuple[str, tuple[int, int]]] = (),
     allow_inert: bool = False,
 ) -> Selection:
-    """Resolve one treatment against the granted source structure.
+    """Resolve one treatment against the rows a lane carries of `component`.
 
-    ``allow_inert`` is for the NORMALISATIONS only: a lane row that changes nothing is a
-    catalogue mistake and refuses, but a source whose video VAE is already at the serving
-    destination (a `bf16-full` input) has nothing left to do, and that is a success.
-
-    The two DiTs encode through the reviewed plan, never through shape. Every other
-    component selects structurally with the Runtime's own ``prepare_source_quantization``
-    minus the treatment's ``keep`` list — and a ``keep`` entry that excludes nothing
-    REFUSES, because the failure this list exists to stop is a typo that silently
-    quantizes an embedding table.
+    `carried` excludes the rows the lane drops, so an encoding never resurrects one (the
+    conditioner's `lm_head.weight` is rank-2 and block-aligned). ``allow_inert`` is for the
+    normalisations only: a source whose video VAE is already at the serving destination has
+    nothing left to do. A ``keep`` entry that excludes nothing REFUSES: it is a typo that
+    would otherwise silently quantize, say, an embedding table.
     """
     if component in REFUSED_COMPONENTS:
         raise UnsupportedInput(
             f"{component} is refused: {REFUSED_COMPONENTS[component]}",
             code="h3_component_refused",
         )
-    present = structure.components.get(component, {})
-    if not present:
+    if not carried:
         raise UnsupportedInput(f"source has no component {component!r}", code="h3_component_absent")
-
     plan: ArtifactQuantizationPlan | None = None
-    plan_component = component
     if treatment.encode is not None:
         if component in DIT_COMPONENTS:
-            if dit_plan is None:
+            if not dit_plan:
                 raise UnsupportedInput(
                     f"{component} encodes through the reviewed DiT plan, which was not supplied",
                     code="h3_plan_absent",
                 )
-            plan, plan_component = dit_plan, DIT_PLAN_COMPONENT
-            if treatment.keep:
-                kept = set(treatment.keep)
-                missing = sorted(kept - {tensor.key for tensor in plan.tensors})
-                if missing:
+            for key, shape in dit_plan:
+                row = carried.get(key)
+                if row is None or not plain(row, "bf16", shape):
                     raise UnsupportedInput(
-                        f"{component} keep list names {missing}, which the reviewed plan never selects",
-                        code="h3_keep_unmatched",
+                        f"{component}.{key} is not the reviewed plain bf16 {list(shape)} weight",
+                        code="h3_plan_source",
                     )
-                plan = replace_plan(plan, [t for t in plan.tensors if t.key not in kept])
+            candidates = [QuantizationTensor(component, key, "bf16", shape) for key, shape in dit_plan]
+            unmatched = "the reviewed plan never selects"
         else:
-            structural = prepare_source_quantization(structure, components=(component,))
-            kept = set(treatment.keep)
-            missing = sorted(kept - {tensor.key for tensor in structural.tensors})
-            if missing:
-                raise UnsupportedInput(
-                    f"{component} keep list names {missing}, which the structural selection "
-                    "never picked; a keep entry that excludes nothing is a typo",
-                    code="h3_keep_unmatched",
-                )
-            selected = [tensor for tensor in structural.tensors if tensor.key not in kept]
-            if not selected:
-                raise UnsupportedInput(
-                    f"{component} keep list excludes every selected weight",
-                    code="h3_keep_exhaustive",
-                )
-            plan = ArtifactQuantizationPlan(
-                components=[component],
-                configs=[],
-                order=[(component, key) for key in present],
-                tensors=selected,
+            structural = prepare_source_quantization(source, components=(component,))
+            candidates = [tensor for tensor in structural.tensors if tensor.key in carried]
+            unmatched = "the structural selection never picked; a keep entry that excludes nothing is a typo"
+        kept = set(treatment.keep)
+        missing = sorted(kept - {tensor.key for tensor in candidates})
+        if missing:
+            raise UnsupportedInput(
+                f"{component} keep list names {missing}, which {unmatched}",
+                code="h3_keep_unmatched",
             )
-
+        selected = [tensor for tensor in candidates if tensor.key not in kept]
+        if not selected:
+            raise UnsupportedInput(
+                f"{component} keep list excludes every selected weight", code="h3_keep_exhaustive"
+            )
+        plan = ArtifactQuantizationPlan(
+            components=[component], order=[(component, key) for key in carried], tensors=selected
+        )
     encoded = {tensor.key for tensor in plan.tensors} if plan is not None else set()
     cast: list[tuple[str, tuple[int, ...]]] = []
     if treatment.cast is not None:
-        for key, tensor in present.items():
-            # Only float32 converts. A 16-bit source already carries the target's byte
-            # width and re-rounding it loses mantissa bits for nothing (#695), so it
-            # inherits by reference — which is what stops a cast lane from rewriting a
-            # component it barely changes.
-            if key in encoded or tensor.logical_dtype != "f32":
+        for key, row in carried.items():
+            # Only plain float32 converts; a 16-bit tensor already has the target's width.
+            if key in encoded or dtype(row) != "f32" or row.encoding is not None:
                 continue
-            if not CAST_SCOPES[treatment.cast_scope](key, tensor.shape):
-                continue
-            if not _plain_value(tensor):
-                raise UnsupportedInput(
-                    f"{component}.{key} is not one plain value role and cannot be cast",
-                    code="h3_cast_encoded_source",
-                )
-            cast.append((key, tuple(tensor.shape)))
+            if CAST_SCOPES[treatment.cast_scope](key, row.shape):
+                cast.append((key, tuple(row.shape)))
     if not cast and plan is None and not allow_inert:
         raise UnsupportedInput(
             f"{component} treatment {treatment.describe()!r} changes nothing on this source",
             code="h3_treatment_inert",
         )
-    return Selection(component, treatment, tuple(cast), plan, plan_component)
-
-
-def replace_plan(plan: ArtifactQuantizationPlan, tensors: list[QuantizationTensor]) -> ArtifactQuantizationPlan:
-    return ArtifactQuantizationPlan(
-        components=plan.components, configs=plan.configs, order=plan.order, tensors=tensors
-    )
-
-
-def additions(selection: Selection) -> dict[str, Tensor]:
-    """The declared replacement tensors for one resolved treatment."""
-    dtype = selection.treatment.cast
-    result: dict[str, Tensor] = {}
-    for key, shape in selection.cast:
-        assert dtype is not None
-        result[key] = Tensor(
-            logical_dtype=dtype,
-            shape=shape,
-            encoding=PLAIN_SPEC,
-            parts={"value": Part(dtype, shape)},
-        )
-    if selection.plan is not None and selection.treatment.encode is not None:
-        result.update(
-            quantization_additions(
-                selection.treatment.encode,
-                selection.plan,
-                selection.plan_component,
-                target_logical_dtype=dtype,
-            )
-        )
-    return result
-
-
-def apply(target: Target, selection: Selection) -> Target:
-    """Fold one resolved treatment into a component's target declaration.
-
-    Only the treated keys are dropped. A target's other additions — the AdaLN timestep
-    tables — are pure creations with no source row to drop, and TensorFS refuses a drop of
-    a key its selected source component does not carry.
-    """
-    return Target(
-        source=target.source,
-        source_component=target.source_component,
-        drop=tuple(sorted(set(target.drop) | set(selection.replaced))),
-        add={**target.add, **additions(selection)},
-    )
+    return Selection(component, treatment, tuple(cast), plan)
 
 
 @dataclass(frozen=True, slots=True)
 class CastStats:
-    """What one cast recorded — the same tier-1 round-trip shape the encoders record."""
+    """What one cast recorded: the tier-1 round-trip shape the encoders record."""
 
     converted_keys: int
     reused_keys: int
@@ -523,107 +361,63 @@ class CastStats:
     worst_relative_frobenius: float | None
 
 
-#: Half-ulp of each carrier's significand, as a multiple of the tensor's amax. bf16 keeps
-#: 8 significand bits, fp16 keeps 11. Overflow is not covered by a relative bound and is
-#: caught separately: fp32 reaches 3.4e38 and fp16 stops at 65504, so an fp16 cast of a
-#: tensor with a large outlier produces inf, and that is a refusal, never a saturation.
+#: Half-ulp of each carrier's significand as a multiple of the tensor's amax. Overflow is not a
+#: rounding error: an fp16 cast of a large outlier produces inf, and that refuses.
 CAST_ROUND_TRIP_BOUND: Mapping[str, float] = {"bf16": BF16_ROUND_TRIP_BOUND, "f16": 2.0**-11}
-CAST_READ_CHUNK = 32 << 20
 MAX_CAST_TENSOR_BYTES = 1 << 30
 
 
 def write_cast(
-    transaction: DerivedTransaction,
-    ctx: Context,
-    tel: Telemetry,
-    *,
-    selection: Selection,
-    source: str,
-    source_component: str,
-    target_component: str,
-    mirrors: Sequence[DerivedTransaction] = (),
+    source: Checkpoint, out: Output, ctx: Context, tel: Telemetry, *, selection: Selection
 ) -> CastStats:
-    """Stream one component's float32 cut through RNE into the declared carrier.
-
-    Every converted tensor's round trip is measured against the carrier's representational
-    bound and the worst relative Frobenius rides the returned stats — the same recorded
-    derivation the BF16 ingest normalization performs, never a silent `.astype`. A cast
-    that produced a non-finite value refuses: fp16's exponent range is three orders of
-    magnitude narrower than fp32's and an overflowed weight is not a rounding error.
-    """
-    dtype = selection.treatment.cast
-    if dtype is None or not selection.cast:
+    """Stream one component's float32 cut through RNE into the declared carrier, each tensor's
+    round trip held to the carrier's bound and its relative Frobenius recorded."""
+    target = selection.treatment.cast
+    if target is None or not selection.cast:
         return CastStats(0, 0, 0, 0, None)
-    carrier = dtype.upper()
-    bound = CAST_ROUND_TRIP_BOUND[dtype]
-    writers = [(writer, frozenset(writer.completed_parts())) for writer in (transaction, *mirrors)]
-    completed = frozenset.intersection(*(parts for _, parts in writers))
+    component, carrier, bound = selection.component, target.upper(), CAST_ROUND_TRIP_BOUND[target]
     read = written = reused = 0
     worst = 0.0
     total = len(selection.cast)
     for done, (key, shape) in enumerate(selection.cast, 1):
         ctx.raise_if_cancelled()
-        stage = f"cast-{dtype}-{target_component}"
-        if (target_component, key, "value") in completed:
+        stage = f"cast-{target}-{component}"
+        if out.has(component, key):
             reused += 1
             tel.progress(done / total, stage=stage)
             continue
-        values, length = _read_f32(
-            transaction,
-            source=source,
-            component=source_component,
-            key=key,
-            shape=shape,
-        )
+        values, length = _read_f32(source, component, key, shape)
         with np.errstate(over="ignore"):
             raw = st.from_f32(values, carrier)
         restored = st.to_f32(raw, carrier, list(shape))
         if not bool(np.isfinite(restored).all()):
             raise UnsupportedInput(
-                f"{source_component}.{key}: the {dtype} cast overflowed to a non-finite "
-                f"value (source amax {float(np.max(np.abs(values))):.6g})",
+                f"{component}.{key}: the {target} cast overflowed to a non-finite value "
+                f"(source amax {float(np.max(np.abs(values))):.6g})",
                 code="quantization_tripwire",
             )
         error = np.abs(values - restored)
         allowed = float(np.max(np.abs(values))) * bound
         if float(np.max(error)) > allowed:
             raise UnsupportedInput(
-                f"{source_component}.{key}: {dtype} round-trip error "
-                f"{float(np.max(error)):.4g} exceeds the representational bound {allowed:.4g}",
+                f"{component}.{key}: {target} round-trip error {float(np.max(error)):.4g} "
+                f"exceeds the representational bound {allowed:.4g}",
                 code="quantization_tripwire",
             )
         norm = float(np.linalg.norm(values))
         relative = float(np.linalg.norm(error)) / norm if norm else 0.0
         worst = max(worst, relative)
-        for writer, accepted in writers:
-            if (target_component, key, "value") not in accepted:
-                writer.add_part(target_component, key, "value", raw)
-                writer.checkpoint()
+        out.put(component, key, carrier, shape, raw)
         read += length
         written += len(raw)
-        tel.log(
-            "cast tensor",
-            level="info",
-            dtype=dtype,
-            component=target_component,
-            key=key,
-            relative_frobenius=relative,
-            done=done,
-            total=total,
-        )
+        tel.log("cast tensor", level="info", dtype=target, component=component, key=key,
+                relative_frobenius=relative, done=done, total=total)  # fmt: skip
         tel.progress(done / total, stage=stage)
-        del values, raw, restored, error
-    converted = total - reused
-    return CastStats(converted, reused, read, written, None if reused else worst)
+    return CastStats(total - reused, reused, read, written, None if reused else worst)
 
 
 def _read_f32(
-    transaction: DerivedTransaction,
-    *,
-    source: str,
-    component: str,
-    key: str,
-    shape: tuple[int, ...],
+    source: Checkpoint, component: str, key: str, shape: tuple[int, ...]
 ) -> tuple[np.ndarray, int]:
     length = math.prod(shape) * 4
     if length > MAX_CAST_TENSOR_BYTES:
@@ -633,16 +427,7 @@ def _read_f32(
             code="h3_cast_tensor_bound",
         )
     raw = bytearray(length)
-    view = memoryview(raw)
-    for offset in range(0, length, CAST_READ_CHUNK):
-        transaction.source_read_into(
-            source,
-            component,
-            key,
-            "value",
-            offset,
-            view[offset : min(offset + CAST_READ_CHUNK, length)],
-        )
+    source.components[component].tensors.read_into(key, raw)
     values = st.to_f32(raw, "F32", list(shape))
     if not bool(np.isfinite(values).all()):
         raise UnsupportedInput(

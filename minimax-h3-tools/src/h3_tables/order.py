@@ -9,17 +9,18 @@ from typing import Any
 
 from cozy_runtime.author import canonical_json
 
-from .source import TARGET_COMPONENT, official_full_specs
+from .model_config import DIT_COMPONENT
+from .source import official_full_specs
 
 CURRENT_ORDER = (
-    "sha256:4767caa9b6187bae5966b15633668123fdbcb61bf06b2f99788f49fd0cb527b5"
+    "sha256:fbc4fb5675efe3a11e1f9f101b9be6b834dde37f48c4218a1253217538cca582"
 )
 CURRENT_ROWS = 3858
 CURRENT_COMPONENT_COUNTS = {
-    "fl2va_dit": 583,
-    "ref2va_dit": 583,
+    "transformer": 583,
+    "transformer_ref": 583,
     "text_encoder": 902,
-    "video_vae": 703,
+    "vae": 703,
     "audio_vae": 1087,
 }
 MAX_BYTES = 8 << 20
@@ -92,14 +93,11 @@ def current_order(raw: bytes) -> ConstructionOrder:
 def full_order(
     sections: dict[str, dict[str, Any]], current: tuple[tuple[str, str], ...]
 ) -> tuple[tuple[str, str], ...]:
-    fl = tuple(
-        ("fl2va_dit", key) for key in official_full_specs(sections["transformer"])
+    fl, ref = (
+        tuple((component, key) for key in official_full_specs(sections[component]))
+        for component in DIT_COMPONENT.values()
     )
-    ref = tuple(
-        ("ref2va_dit", key)
-        for key in official_full_specs(sections["transformer_ref"])
-    )
-    shared = tuple(row for row in current if row[0] not in TARGET_COMPONENT.values())
+    shared = tuple(row for row in current if row[0] not in DIT_COMPONENT.values())
     if len(fl) != 638 or len(ref) != 638 or len(shared) != 2692:
         raise ValueError(
             f"full H3 order is {len(fl)}/{len(ref)}/{len(shared)}, expected 638/638/2692"

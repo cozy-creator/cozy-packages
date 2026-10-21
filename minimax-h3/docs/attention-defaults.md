@@ -1,6 +1,6 @@
 # H3 attention
 
-`H3Model` declares `attention_bits={"fl2va_dit": 4, "ref2va_dit": 4}` (`minimax_h3/model.py`):
+`H3Model` declares `attention_bits={"transformer": 4, "transformer_ref": 4}` (`minimax_h3/model.py`):
 its DiTs' attention may run at 4 bits, and the VAEs and text encoder keep exact attention. The
 package names no GPU and no kernel. Runtime serves each site with the first kernel of the GPU
 family's cell at that level ([precision tiers §2.4](https://github.com/cozy-creator/tracker/blob/master/design/precision-tiers.md)):
@@ -26,7 +26,7 @@ A pin takes precedence over the rules:
 
 ```sh
 cozy run fidika/minimax-h3/fl2va_turbo --input clip.json --on my-machine \
-  --attention-kernel=fl2va_dit=kitchen-sol-producer-fp4-lowmem-shared-qkv
+  --attention-kernel=transformer=kitchen-sol-producer-fp4-lowmem-shared-qkv
 ```
 
 A dense-only pin keeps every evaluation dense. An unsupported pin fails instead of substituting

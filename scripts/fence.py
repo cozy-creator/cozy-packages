@@ -165,7 +165,8 @@ def runtime_imports(tree: ast.AST) -> Iterator[tuple[str, int]]:
 
 #: The runtime surface anything in this repo may import: `cozy_runtime.author`, the
 #: `derive` (derivation), `fusion` (fused DiT blocks) and `lm` (LM decode) planes Runtime's
-#: `checks/architecture.py` fences like it, and their PUBLIC submodules. An
+#: `checks/architecture.py` fences like it, `weights_store` (derived outputs), and their
+#: PUBLIC submodules. An
 #: underscored submodule — `author._assets`, `author._services` — is Runtime's own
 #: mechanism, and `cozy_runtime.internal` is the plane the author surface exists to hide.
 #: Both break the same way: the name stops existing on a later Runtime with nothing here
@@ -175,6 +176,7 @@ PUBLIC_RUNTIME_ROOTS = (
     ["cozy_runtime", "derive"],
     ["cozy_runtime", "fusion"],
     ["cozy_runtime", "lm"],
+    ["cozy_runtime", "weights_store"],
 )
 
 
@@ -218,14 +220,6 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "Construct package tokenizers under Runtime's real admission write fence; retire when "
         "the public fakes install that fence. "
     ),
-    ("scripts/h3-conform.py", "cozy_runtime.internal.derive"): (
-        "the derive harness is Runtime's CONSTRUCTION plane and cannot become author surface: "
-        "`cozy_runtime.author` is torch-free by construction and Runtime's own "
-        "`checks/architecture.py` forbids it importing `cozy_runtime.internal`. The supported "
-        "spelling is `cozy-model-contract-proof`, which today derives only inside a receipt- "
-        "selected sandboxed build seat and has no in-process entry point for one synthetic "
-        "model. Retire this entry when it grows one. "
-    ),
     ("scripts/seedvr2-model-proof.py", "cozy_runtime.internal"): (
         "Find SeedVR2's window-attention sites and install Runtime's kernel on them, as the "
         "executor does; retire with a public attention-site harness."
@@ -259,7 +253,7 @@ def surface_violations(label: str, source: str, *, driver: bool) -> list[str]:
                 f"`cozy_runtime.author` surface and nothing else from the runtime; a "
                 f"private module is a coupling that breaks silently.{how}"
             )
-        if not driver and top in STORE_AND_NETWORK and module != "tensorfs.derived":
+        if not driver and top in STORE_AND_NETWORK and "/scripts/" not in label:
             bad.append(
                 f"{label}:{line}: {module!r} — package code speaks to no store, "
                 "no hub and no network; every byte it sees arrives as a typed input"
@@ -322,7 +316,7 @@ def fence_driver_arm() -> Fence:
     for source in ARM_PUBLIC:
         if surface_violations("scripts/arm.py", source, driver=True):
             bad.append(f"a driver importing the public {source!r} fails the fence")
-    recorded = "from cozy_runtime.internal.derive import derive"
+    recorded = "from cozy_runtime.author._demand import normalize"
     if surface_violations("scripts/h3-conform.py", recorded, driver=True):
         bad.append("the recorded exception does not admit the driver it names")
     if not surface_violations("scripts/torch_family.py", recorded, driver=True):
@@ -421,9 +415,6 @@ IDENTIFIERS = (
 #: identifier rule applies to these files unchanged.
 DIGEST_PINNED_PREFIXES = (
     "minimax-h3-tools/src/h3_tables/",
-    # Native plain-tensor encoding identity, not a selected checkpoint. The CPU
-    # normalization function writes explicit source conditioning into managed tensors.
-    "seedvr2/seedvr2/normalize.py",
 )
 
 
@@ -586,25 +577,11 @@ def fence_no_choreography() -> Fence:
             and node.names
             and all(alias.name in own for alias in node.names)
         }
-        # This CPU conversion function ingests two explicitly granted, SHA-checked
-        # upstream conditioning tensors. It does not load inference weights.
-        # Keep the exception at the safe standard-library call, not the whole file.
-        source_reads = {
-            node.lineno
-            for node in ast.walk(ast.parse(source))
-            if rel(path) == "seedvr2/seedvr2/normalize.py"
-            and isinstance(node, ast.Call)
-            and ast.unparse(node.func) == "torch.load"
-            and any(k.arg == "weights_only" and isinstance(k.value, ast.Constant)
-                    and k.value.value is True for k in node.keywords)
-        }
         for line_no, line in enumerate(code.splitlines(), 1):
             if line_no in serializers:
                 # Remove only the permitted import token, not other operations on
                 # the same line (for example a semicolon followed by torch.load).
                 line = line.replace("safetensors.torch", "", 1)
-            if line_no in source_reads:
-                line = line.replace("torch.load", "", 1)
             for pattern, what in CHOREOGRAPHY:
                 if pattern.search(line):
                     bad.append(
@@ -766,7 +743,7 @@ ARM_GPU_CHOICES = (
 )
 ARM_GPU_DECLARATIONS = (
     "register(Producer('kitchen-sol-producer-fast-shared-qkv', 'kitchen-sol'))\n",
-    "class M(Model, attention_bits={'fl2va_dit': 4}): pass\n",
+    "class M(Model, attention_bits={'transformer': 4}): pass\n",
     "if device.type != 'cuda': pass\n",
 )
 

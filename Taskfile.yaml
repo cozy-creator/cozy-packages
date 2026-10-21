@@ -13,7 +13,7 @@ tasks:
       - |
         set -euo pipefail; p="{{.CLI_ARGS}}"; test -f "$p/package.toml" || { echo "usage: task conform -- <package>" >&2; exit 2; }
         work=$(mktemp -d); trap 'rm -rf "$work"' EXIT; git ls-files -z | tar --null -T - -c | tar -x -C "$work"; cd "$work"
-        scripts/bind-account-index.sh "$(grep -om1 'https://[^"]*/v1/index/[^/]*/simple/' "$p/uv.lock" || true)" "$p"
+        scripts/bind-account-index.sh "$(grep -om1 'https\?://[^"]*/v1/index/[^/]*/simple/' "$p/uv.lock" || true)" "$p"
         uv sync -q --locked --no-install-project --python 3.12 --project "$p"; py=$PWD/$p/.venv/bin/python; export CUDA_VISIBLE_DEVICES=
         $py scripts/torch_family.py; $py scripts/direct_requirements.py; $py scripts/package_import.py "$p"
         "$p/.venv/bin/cozy-runtime" --json --dir "$p" describe | $py scripts/interface_current.py "$p/metadata/package-interface.json"
@@ -22,9 +22,11 @@ tasks:
           qwen-image-2) $py scripts/qwen-image-2-conform.py; $py scripts/qwen-image-2-model-proof.py ;;
           flux-3-klein) $py scripts/flux-3-klein-model-proof.py ;;
           seedvr2) $py scripts/seedvr2-model-proof.py ;;
+          sdxl) $py scripts/sdxl-model-proof.py ;;
           minimax-h3) for s in conform prompt-proof turbo-cp-proof reference-fidelity-proof reference-rows-proof; do $py "scripts/h3-$s.py"; done; $py scripts/h3-assembly-proof.py assembly ;;
-          minimax-h3-tools) for s in order stage full-source table-metadata; do PYTHONPATH=$p/src $py "$p/scripts/$s-proof.py"; done; PYTHONPATH=$p/src $py scripts/tensorfs_seeds.py ;;
+          minimax-h3-tools) for s in lane table-metadata; do PYTHONPATH=$p/src $py "$p/scripts/$s-proof.py"; done ;;
         esac
+        $py scripts/lane-plans-proof.py "$p"
         uv build -q --project "$p" --wheel --out-dir dist; uv pip install -q --python "$py" --no-deps dist/*.whl
         $py -P scripts/package_import.py "$p" --installed
         if [ "$p" = minimax-h3-tools ]; then $py -P scripts/h3-adaln-interface-proof.py; fi
@@ -50,7 +52,7 @@ tasks:
         raised() { for q in $up; do for d in cozy-runtime tensorfs; do f=$(floor "$q" "$d"); l=$(locked "$1" "$d")
           [ -n "$f" ] && [ -n "$l" ] && [ "$(printf '%s\n' "$f" "$l" | sort -V | head -1)" != "$f" ] && echo "$d"; done; done | sort -u; }
         published() {
-          i=$(grep -om1 'https://[^"]*/v1/index/[^/]*/simple/' "$1/uv.lock"); a=${i%/simple/}
+          i=$(grep -om1 'https\?://[^"]*/v1/index/[^/]*/simple/' "$1/uv.lock"); a=${i%/simple/}
           cozy package info "${a##*/}/$1" --tensorhub "${i%%/v1/*}" --json | jq -e --arg v "$(ver "$1")" 'any(.releases[]; .release == $v)' >/dev/null
         }
         ship() { for h in {{.HUBS}}; do rm -rf "${work:?}/$1"; git archive HEAD "$1" | tar -x -C "$work"; (cd "$work/$1" && cozy package publish --tensorhub "$h"); done; }

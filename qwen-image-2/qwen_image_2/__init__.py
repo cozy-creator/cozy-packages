@@ -75,11 +75,7 @@ class GenerateInput(msgspec.Struct):
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     reference_images: Annotated[
         list[ImageAsset],
-        AssetBound(
-            max_bytes=32 << 20,
-            max_decoded_bytes=20 << 20,
-            media_types=("image/png", "image/jpeg", "image/webp"),
-        ),
+        AssetBound(max_bytes=32 << 20),
         ImagePreparation(max_pixels=4 << 20),
         msgspec.Meta(max_length=10),
     ] = msgspec.field(default_factory=list)
@@ -107,19 +103,16 @@ class ImageOutput(msgspec.Struct):
     seed: int
 
 
-def rgb_image(decoded: Any) -> Image.Image:
-    """Preserve native RGBA semantics and flatten alpha over white for H3 references."""
+def decoded_image(decoded: Any) -> Image.Image:
+    """The decoder's pixels: RGBA when its alpha has any transparency, else RGB."""
     # The model returns B,C,H,W in [-1,1], just as upstream VaeImageProcessor consumes.
     pixels = decoded[0].detach().float().cpu().permute(1, 2, 0).numpy()
     if not np.isfinite(pixels).all():
         raise ValueError("Qwen Image decoder produced non-finite pixels")
     pixels = ((pixels / 2 + 0.5).clip(0, 1) * 255).round().astype(np.uint8)
-    image = Image.fromarray(pixels)
-    if image.mode == "RGBA":
-        background = Image.new("RGB", image.size, "white")
-        background.paste(image, mask=image.getchannel("A"))
-        return background
-    return image
+    if pixels.shape[-1] == 4 and pixels[..., 3].min() == 255:
+        pixels = pixels[..., :3]
+    return Image.fromarray(np.ascontiguousarray(pixels))
 
 
 def _generate(
@@ -140,7 +133,8 @@ def _generate(
     reference_images, reference_latents, image_pad_mask = None, None, None
     if payload.reference_images:
         with tel.stage("encoding reference images", overall_range=(0.0, 0.08)):
-            reference_images = [asset.read() for asset in payload.reference_images]
+            # Upstream feeds the VAE RGBA; its vision encoder sees alpha composited over white.
+            reference_images = [asset.read(mode="RGBA") for asset in payload.reference_images]
             conditioning_images, reference_latents = model.encode_reference_images(reference_images)
         ctx.raise_if_cancelled()
     tier, ratio = payload.shape(reference_images[-1].size if reference_images else None)
@@ -171,7 +165,7 @@ def _generate(
     ctx.raise_if_cancelled()
     with tel.stage("decoding image", overall_range=(0.9, 0.98)):
         decoded = model.decode(latents, width=width, height=height)
-        image = rgb_image(decoded)
+        image = decoded_image(decoded)
     with tel.stage("saving image", overall_range=(0.98, 1.0)):
         asset = out.save_image(image, format="png")
     return ImageOutput(asset, width, height, seed)

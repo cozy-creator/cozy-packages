@@ -16,19 +16,17 @@ reply = json.loads(args.adoption.read_text())
 if reply.get("status") != "completed":
     raise SystemExit("adoption must be an actual completed ordinary CLI run")
 artifact = reply["result"]["value"]
-if set(artifact) != {"producer_request_id", "output_slot", "manifest", "tensorfs_receipt_digest"}:
+if set(artifact) != {"producer_request_id", "output_slot", "checkpoint", "transaction"}:
     raise SystemExit("adoption did not return one exact ModelArtifact")
 if not artifact["producer_request_id"] or artifact["output_slot"] != "original":
     raise SystemExit("adoption has no genuine producer/output provenance")
-for digest in (artifact["manifest"]["digest"], artifact["tensorfs_receipt_digest"]):
+for digest in (artifact["checkpoint"], artifact["transaction"]):
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         raise SystemExit("adoption lacks exact native digest provenance")
-if not isinstance(artifact["manifest"]["length"], int) or artifact["manifest"]["length"] <= 0:
-    raise SystemExit("adoption manifest length is missing")
 body = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
 code = '''# /// script
 # requires-python = ">=3.12,<3.13"
-# dependencies = ["cozy-runtime>=0.27.0,<1", "minimax-h3-tools"]
+# dependencies = ["cozy-runtime>=0.30.0,<1", "minimax-h3-tools"]
 # [tool.cozy]
 # accelerator = false
 # ///

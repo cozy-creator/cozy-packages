@@ -60,16 +60,19 @@ Weight source: `numz/SeedVR2_comfyUI` revision `09ced71023636e9bc8cdf9cdecfb2625
 Apache-2.0 FP16 conversions of the ByteDance-Seed model. Upstream provenance and modifications
 are in `seedvr2/upstream/NOTICE`.
 
-The normalize callable takes `model.dit`, `model.vae`, and a `conditioning` Tree containing the
-upstream `pos_emb.pt`/`neg_emb.pt` constants. It verifies their exact published hashes, reads
-them with PyTorch `weights_only=True`, and writes managed BF16 tensors. The installed package
-carries no model files and inference performs no file loading or upstream download.
+TensorFS's `seedvr2` converter table makes the checkpoint at import: `dit` and `vae` from
+`seedvr2_ema_7b_fp16.safetensors` and `ema_vae_fp16.safetensors`, and `conditioning` from
+upstream's `pos_emb.pt`/`neg_emb.pt` (SeedVR `e4de8c24`), read by pinned digest and offset, never
+unpickled. The installed package carries no model files and inference performs no file loading
+or upstream download.
 
 ```sh
-cozy model upload 'hf://numz/SeedVR2_comfyUI@09ced71023636e9bc8cdf9cdecfb2625d1e691e8/seedvr2_ema_7b_fp16.safetensors' paul/seedvr2-7b-dit-raw --source-profile=as-is/1 --tensorhub local
-cozy model upload 'hf://numz/SeedVR2_comfyUI@09ced71023636e9bc8cdf9cdecfb2625d1e691e8/ema_vae_fp16.safetensors' paul/seedvr2-vae-raw --source-profile=as-is/1 --tensorhub local
-cozy run ./seedvr2/normalize model.dit=paul/seedvr2-7b-dit-raw#sha256:DIT_CHECKPOINT model.vae=paul/seedvr2-vae-raw#sha256:VAE_CHECKPOINT conditioning=conditioning --input-tree conditioning=/path/to/upstream/constants --tensorhub local
-cozy run upload <run> paul/seedvr2-7b --tensorhub local
+tfs import \
+  hf://numz/SeedVR2_comfyUI@09ced71023636e9bc8cdf9cdecfb2625d1e691e8/seedvr2_ema_7b_fp16.safetensors \
+  hf://numz/SeedVR2_comfyUI@09ced71023636e9bc8cdf9cdecfb2625d1e691e8/ema_vae_fp16.safetensors \
+  https://raw.githubusercontent.com/ByteDance-Seed/SeedVR/e4de8c24441a67e1b7df56abea10645059bb1185/pos_emb.pt \
+  https://raw.githubusercontent.com/ByteDance-Seed/SeedVR/e4de8c24441a67e1b7df56abea10645059bb1185/neg_emb.pt \
+  --name fidika/seedvr2-7b
 ```
 
 Publish the result as `seedvr2-7b@0.1.0`, lane `bf16`: the package's default release.

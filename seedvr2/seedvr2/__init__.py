@@ -28,12 +28,10 @@ from cozy_runtime.author import (
 from .color import Correction
 from .frames import extend
 from .model import RestorationModel, restore as restore_window
-from .normalize import normalize
 from .quantize import int8
 from .upstream.temporal import blend_overlapping_frames
 
 app = App()
-app.entrypoint(normalize, weights=(WeightsOutput("model", max_new_bytes=2 << 20),), accelerator=False)
 app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
 
 

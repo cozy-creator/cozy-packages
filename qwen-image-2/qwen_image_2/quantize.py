@@ -26,8 +26,8 @@ INT8 = QuantizationPlan(
 
 @invocable(memo_version="qwen-image-2-int8/1")
 async def int8(ctx: Context, *, source: Weights[QwenImage21Model], tel: Telemetry) -> ModelArtifact:
-    """The int8 lane (`int8-convrot256/1`): W8A8 on int8 tensor cores, the fast lane on
+    """The int8 lane (`int8.convrot`): W8A8 on int8 tensor cores, the fast lane on
     consumer cards. VAE and every unlisted weight keep their source precision."""
     return quantize_into(
-        ctx, tel, source=source, plan=INT8, encoding="int8-convrot256/1", output="int8"
+        ctx, tel, source=source, plan=INT8, encoding="int8.convrot", output="int8"
     )
