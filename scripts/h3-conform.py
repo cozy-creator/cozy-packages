@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import replace
 from fractions import Fraction
 from functools import partial
@@ -4595,6 +4595,57 @@ def _code(call: Callable[[], object]) -> str:
     return ""
 
 
+def arm_memory_plan() -> None:
+    """Execute both rendering paths through real Context.plan, stopping before model work."""
+    class Planned(Exception):
+        pass
+
+    def capture(name: str, render: Callable[[Context], object], expected: tuple[str | frozenset[str], ...]) -> None:
+        captured: list[tuple[str | frozenset[str], ...]] = []
+
+        def planned(steps: Sequence[str | Collection[str]]) -> None:
+            captured.append(tuple(step if isinstance(step, str) else frozenset(step) for step in steps))
+            raise Planned
+
+        try:
+            render(Context("h3-memory-plan", float("inf"), _plan=planned))
+        except Planned:
+            pass
+        else:
+            raise AssertionError("rendering started model work without declaring its plan")
+        check(name, captured, [expected])
+
+    # No model constructor, weights, decoder, or media access runs: the real plan
+    # callback above ends the actual rendering function at its first declaration.
+    model = object.__new__(package.H3TurboBase)
+    adapter = object.__new__(package.H3TurboLoRA)
+    payload = package.ReferenceClipInput(prompt="plan", seed=62, duration_s=5, video_audio=())
+    assets: Assets[ImageAsset | VideoAsset | AudioAsset] = Assets([])
+    out, tel = fake_outputs(), fake_telemetry()
+    image = PILImage.new("RGB", (1, 1))
+    for turbo, evaluations in ((True, package.TURBO_STEPS), (False, 30), (False, 40)):
+        lora = adapter if turbo else None
+        ref = frozenset({"transformer_ref", "ref2va_turbo"}) if turbo else "transformer_ref"
+        task: Task = "ref2va_turbo" if turbo else "ref2va"
+        capture(
+            f"{task} declares every one of {evaluations} joint/ordered denoise passes",
+            partial(package._references_to_video, task=task, payload=payload, assets=assets,
+                    model=model, out=out, tel=tel, steps=evaluations, turbo_lora=lora),
+            ("text_encoder", frozenset({"vae", "audio_vae"}), *([ref] * evaluations), "audio_vae", "vae"),
+        )
+        task = "fl2va_turbo" if turbo else "fl2va"
+        dit = frozenset({"transformer", "fl2va_turbo"}) if turbo else "transformer"
+        for first, last in ((None, None), (image, None), (None, image)):
+            keyframes = ("vae",) if first is not None or last is not None else ()
+            capture(
+                f"{task} declares {evaluations} denoise passes with keyframes={bool(keyframes)}",
+                partial(package._render_keyframes, task=task, model=model, out=out, tel=tel,
+                        prompt="plan", seed=62, duration_s=5, steps=evaluations,
+                        first=first, last=last, turbo_lora=lora),
+                ("text_encoder", *keyframes, *([dit] * evaluations), "audio_vae", "vae"),
+            )
+
+
 def arm_glue() -> None:
     """The fused glue's Diffusers contract and topology match on a real (narrow) H3 DiT; a
     device without the kernels serves eager, reported, with nothing substituted."""
@@ -4759,6 +4810,7 @@ def arm_producer() -> None:
 
 
 ARMS = {
+    "memory-plan": arm_memory_plan,
     "turbo-factor-regions": arm_turbo_factor_regions,
     "turbo-call-source": arm_turbo_call_source,
     "attention-scope": arm_attention_scope,
