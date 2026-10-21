@@ -195,7 +195,7 @@ wheels = [
 [[package]]
 name = "cozy-runtime"
 version = "0.30.0"
-source = { registry = "https://github.com/cozy-creator/packages/releases/expanded_assets/gate-wheels-tfs013-rt01966eb8" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "msgspec" },
@@ -204,9 +204,11 @@ dependencies = [
     { name = "pillow" },
     { name = "tensorfs" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/a0/78/45f9131d4d3788ba016637bb4983c21d00cc13804a235231106c21ee5d5b/cozy_runtime-0.30.0.tar.gz", hash = "sha256:3a6647e318878496f9a17211ea5e9741d95f8c8f53f60ac3082284cd06558bea", size = 2828419, upload-time = "2026-10-21T19:05:42.982Z" }
 wheels = [
-    { url = "https://github.com/cozy-creator/packages/releases/download/gate-wheels-tfs013-rt01966eb8/cozy_runtime-0.30.0-py3-none-any.whl" },
-    { url = "https://github.com/cozy-creator/packages/releases/download/gate-wheels-tfs013-rt01966eb8/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl" },
+    { url = "https://files.pythonhosted.org/packages/77/bc/625d44a557a336b7aca8a8853782c2162a00e852bbe1e526f657fbdaf632/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:d14762a94d603055b4ddc5ae3b32fbc0bf3d59381f0d2c92633ec895f1d0bbe0", size = 19715157, upload-time = "2026-10-21T19:05:32.596Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/3a/a1e244d98a10f41cdfb7df967b5d680a893c8fd260d1e3b487554e530a63/cozy_runtime-0.30.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c6b31bcc3748ea042381f7406b84184470c9eab3ceb03e452173396ba3987393", size = 20461916, upload-time = "2026-10-21T19:05:35.754Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/fb/663e6a16b71b3e7416a09f1b5aa20a77cac886dad166b87c7ac39827c5e9/cozy_runtime-0.30.0-py3-none-any.whl", hash = "sha256:5e4e0e46b2f359aeb5493a44b5099c7259c0a1b47731e442d59eff06b925977a", size = 2021310, upload-time = "2026-10-21T19:05:41.301Z" },
 ]
 
 [package.optional-dependencies]
@@ -1140,10 +1142,11 @@ wheels = [
 [[package]]
 name = "tensorfs"
 version = "0.13.0"
-source = { registry = "https://github.com/cozy-creator/packages/releases/expanded_assets/gate-wheels-tfs013-rt01966eb8" }
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e1/7e/28d5e1a9a97a4507381a88c6ada9c8d5d83b464a600781232fd734ea026d/tensorfs-0.13.0.tar.gz", hash = "sha256:08de2ffa38e847eaf228b3e866a686b0712f1d3290c1e64da7e600463bbf9fbc", size = 5615600, upload-time = "2026-10-21T19:02:41.428Z" }
 wheels = [
-    { url = "https://github.com/cozy-creator/packages/releases/download/gate-wheels-tfs013-rt01966eb8/tensorfs-0.13.0-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl" },
-    { url = "https://github.com/cozy-creator/packages/releases/download/gate-wheels-tfs013-rt01966eb8/tensorfs-0.13.0-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
+    { url = "https://files.pythonhosted.org/packages/4c/64/448514e17f7efa8d273b3b6e2ea4146f4182f88e92d75e3218288338b9f4/tensorfs-0.13.0-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:2919a956a8f3f16fe3aa14756b29d99f396f417c240aa54f578729c8e1eb581f", size = 10251053, upload-time = "2026-10-21T19:02:33.296Z" },
+    { url = "https://files.pythonhosted.org/packages/32/20/5e4bbf1f8b5b03d907b836cc96c0a06f485dfca6a5ab27fd2ca806a3f537/tensorfs-0.13.0-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:921e5442b1f4d73374c6cb9a4106507e203ba17db68e01717977eca31399b8db", size = 11003044, upload-time = "2026-10-21T19:02:35.87Z" },
 ]
 
 [[package]]
