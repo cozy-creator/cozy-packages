@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The H3 lanes and quantize recipes resolved against real cozytensors/1 headers, on the CPU.
+"""The H3 lanes and quantize recipes resolved against real cozytensors headers, on the CPU.
 
 `--pruned` is a released AdaLN-pruned bf16 lane's header and `--full` a bf16-full lane's, both
 with D4's component names. Everything that decides an output's tensors runs on them: the rows a
@@ -28,7 +28,7 @@ VECTORS = ROOT / "scripts" / "lane-headers"
 
 def source(path: Path) -> Any:
     """A granted checkpoint as the producer reads it: its parsed header."""
-    return SimpleNamespace(checkpoint=tensorfs.Checkpoint.parse(path.read_bytes()), manifest="")
+    return SimpleNamespace(checkpoint=tensorfs.open(path, local_files_only=True), manifest="")
 
 
 def refuses(code: str, call: Callable[[], object]) -> None:

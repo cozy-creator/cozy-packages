@@ -3,8 +3,8 @@
 
     sdxl/.venv/bin/python scripts/lane-plans-proof.py sdxl
 
-Each header in `lane-headers/` is what TensorFS's import writes from the family's real source
-(`lane-headers/make.py`), so its names and geometry are the converted ones (D4: SDXL's
+Each header in `lane-headers/` is a family's source lane as its Hub holds it, header only
+(`lane-headers/fetch.py`), so its names and geometry are the converted ones (D4: SDXL's
 `text_model.`, H3's Diffusers components). Every plan goes through Runtime's own selection and
 must take exactly the tensors the published lane encodes.
 """
@@ -16,7 +16,6 @@ import importlib
 import sys
 from collections import Counter
 from pathlib import Path
-from types import SimpleNamespace
 
 import tensorfs
 from cozy_runtime.derive.operations import QuantizationPlan, SelectionPlan, _selection
@@ -57,19 +56,18 @@ LANES = {
 
 
 def resolve(header: str, plan: object, encoding: str) -> Counter[str]:
-    ck = tensorfs.Checkpoint.parse((ROOT / "scripts" / "lane-headers" / f"{header}.cozytensors").read_bytes())
-    source = SimpleNamespace(checkpoint=ck)  # what Runtime's selection reads of a granted source
+    ck = tensorfs.open(ROOT / "scripts" / "lane-headers" / f"{header}.cozytensors", local_files_only=True)
     if isinstance(plan, QuantizationPlan):
-        return Counter(t.encoding or encoding for t in _selection(source, plan, encoding).tensors)  # type: ignore[arg-type]
+        return Counter(t.encoding or encoding for t in _selection(ck, plan, encoding).tensors)
     if isinstance(plan, tuple):
-        chosen = prepare_source_quantization(source, components=plan, block=column_block(encoding))  # type: ignore[arg-type]
+        chosen = prepare_source_quantization(ck, components=plan, block=column_block(encoding))
         return Counter({encoding: len(chosen.tensors)})
     if isinstance(plan, SelectionPlan):
-        names = [f"{c}.{k}" for c, keys in ck.tensors.items() for k in keys]
+        names = [f"{c}.{k}" for c, component in ck.components.items() for k in component.tensors]
         return Counter({"": sum(any(fnmatch.fnmatchcase(n, r) for r in plan.include) for n in names)})
     assert isinstance(plan, set), plan
-    missing = plan - set(ck.tensors)
-    assert not missing, f"{header} lacks components {sorted(missing)} (has {sorted(ck.tensors)})"
+    missing = plan - set(ck.components)
+    assert not missing, f"{header} lacks components {sorted(missing)} (has {sorted(ck.components)})"
     return Counter({"": len(plan)})
 
 
