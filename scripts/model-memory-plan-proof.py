@@ -11,6 +11,15 @@ from cozy_runtime.author import Context, ImageAsset
 from cozy_runtime.author.fakes import fake_adjustments, fake_attempt, fake_outputs, fake_telemetry
 
 ROOT = Path(__file__).resolve().parent.parent
+# Each package is exercised in its own locked environment, with imports declared
+# at module scope while avoiding the other package's optional dependencies.
+if sys.argv[1:] == ["sdxl"]:
+    sys.path.insert(0, str(ROOT / "sdxl"))
+    import sdxl as sdxl_package
+elif sys.argv[1:] == ["qwen-image-2"]:
+    sys.path.insert(0, str(ROOT / "qwen-image-2"))
+    import qwen_image_2 as qwen_package
+    from qwen_image_2.model import QwenImage21Graph, QwenImage21Model
 
 
 class Planned(Exception):
@@ -34,28 +43,21 @@ def capture(render: Callable[[Context], object], expected: tuple[str | frozenset
 
 
 def sdxl() -> None:
-    sys.path.insert(0, str(ROOT / "sdxl"))
-    import sdxl as package
-
     # The first actual declaration ends execution before construction, tokenizing,
     # scheduling, CUDA or media access. Uninitialized models own no weights.
-    model = object.__new__(package.SdxlModel)
+    model = object.__new__(sdxl_package.SdxlModel)
     attempt = fake_attempt("sdxl-plan")
     out, tel = fake_outputs(attempt), fake_telemetry(attempt)
     for steps in (1, 20, 30, 50):
-        payload = package.Txt2ImgInput(prompt="plan", seed=62, steps=steps)
+        payload = sdxl_package.Txt2ImgInput(prompt="plan", seed=62, steps=steps)
         capture(
-            partial(package.generate, payload=payload, model=model, out=out, tel=tel),
+            partial(sdxl_package.generate, payload=payload, model=model, out=out, tel=tel),
             (frozenset({"text_encoder", "text_encoder_2"}), *(["unet"] * steps), "vae"),
         )
     print("PASS SDXL memory plan: every requested UNet evaluation and unchanged encoder/decode phases")
 
 
 def qwen() -> None:
-    sys.path.insert(0, str(ROOT / "qwen-image-2"))
-    import qwen_image_2 as package
-    from qwen_image_2.model import QwenImage21Graph, QwenImage21Model
-
     model = object.__new__(QwenImage21Model)
     model.graph = object.__new__(QwenImage21Graph)
     attempt = fake_attempt("qwen-plan")
@@ -64,14 +66,14 @@ def qwen() -> None:
         for requested, fixed, expected in ((None, None, 40), (7, None, 7),
                                            (None, 8, 8), (40, 8, 8)):
             model.graph.sample_sigmas = [1.0 - index / fixed for index in range(fixed)] if fixed is not None else None
-            payload = package.GenerateInput(
+            payload = qwen_package.GenerateInput(
                 "plan", seed=62, steps=requested,
                 reference_images=[ImageAsset("reference")] if references else [],
             )
             adj = fake_adjustments(attempt)
             before = len(adj.rows)
             capture(
-                partial(package._generate, payload=payload, model=model, out=out, tel=tel, adj=adj),
+                partial(qwen_package._generate, payload=payload, model=model, out=out, tel=tel, adj=adj),
                 (*(["vae"] if references else []), "text_encoder",
                  *(["transformer"] * expected), "vae"),
             )
