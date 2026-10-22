@@ -4588,6 +4588,19 @@ def arm_glue() -> None:
         (served, model._cozy_fusion_report["code"], type(dit.transformer_blocks[0]).__name__),
         ("", "fusion_device_incapable", "MiniMaxH3TransformerBlock"),
     )
+    reports: list[tuple[str, Any]] = []
+    reporting = SimpleNamespace(  # a Runtime 0.31 plan: it takes the outcome for `run show`
+        device="cpu",
+        load=never,
+        when_ready=None,
+        report=lambda name, document: reports.append((name, document)),
+    )
+    glue.install(SimpleNamespace(), SimpleNamespace(components={"dit": dit}), cast(Plan, reporting))
+    check(
+        "a plan that takes reports receives the glue's outcome, its refusal code included",
+        [(name, document["applied"], document["code"]) for name, document in reports],
+        [("glue", False, "fusion_device_incapable")],
+    )
     check("the plan's identity is stable", glue.identity(), glue.identity())
     check(
         "eager too, every block's attention is H3's, the producer's dense call with it",
