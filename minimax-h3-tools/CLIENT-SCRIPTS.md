@@ -13,11 +13,10 @@ async def main(ctx):
 ```
 
 Each source DiT must carry `timestep-plan.json`: `transformer` for FL2VA and
-`transformer_ref` for Ref2VA. There is no package plan fallback. The currently
-approved model plan is the union of 30, 40 and 50 denoising steps.
-`timesteps` selects a supported step count; the retained BF16 bank supports all
-three. Other schedules refuse until their model plan and serving contract are
-qualified. The argument does not silently invent a new scheduler.
+`transformer_ref` for Ref2VA. There is no package plan fallback; the model's plan
+(30, 40 and 50 denoising steps in `minimax-h3@1.0.0-rc.4`) is the authority.
+`timesteps` selects a step count that plan serves; the retained BF16 bank supports
+all of them. The argument does not silently invent a new scheduler.
 
 `precompute_adaln` runs in the calling script; it needs no `ctx` argument or
 separate call of its own. It invokes two inexpensive generating-weight projections,

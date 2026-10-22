@@ -120,8 +120,8 @@ was fabricated merely to make a dry-run appear complete.
 5. **Coverage-plan refusal control.** `coverage_variant.py LOCAL_CHECKPOINT` reads the source component asset and retains the existing
    30-step schedule and regenerates first-distinct table keys. The private FL
    fixture has60 timesteps and92 block rows. It passes the structural validator
-   and is correctly refused by the unchanged production launch pin. Use this as
-   a negative plan control only; do not widen `LAUNCH_PLAN_DIGESTS` or call it a
+   and its digest differs from the source model's plan. Use this as a negative
+   plan control only; never write it into a production model or call it a
    production positive bank. Positive changed-plan production remains dependent
    on an independently reviewed new production plan. `compute_fl.py` obtains the
    exact plan digest from its source selection reply to qualify a single task. Never substitute

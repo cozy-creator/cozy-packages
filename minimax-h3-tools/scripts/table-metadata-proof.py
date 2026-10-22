@@ -15,7 +15,7 @@ from h3_tables.model_config import (
     DIT_COMPONENT,
     dual_adaln_pruned_config,
     dual_full_config,
-    parse_production_config,
+    parse_full_config,
 )
 from h3_tables.plans import TimestepPlan
 from h3_tables.table_layout import TableLayout
@@ -34,11 +34,10 @@ def main() -> None:
             task, "", canonical_json.encode({"table_keys": table_keys}),
             layout.timesteps, layout.block_keys, (),
         )
-    current = job._asset("model-config.json")
-    sections = parse_production_config(current)
-    assert dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"]) == current
+    sections = parse_full_config(job._asset("model-config.json"))
+    pruned = dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
     assert sorted(sections) == sorted(COMPONENTS)
-    for name, want in (("minimax-h3", current), ("minimax-h3-full", dual_full_config(sections))):
+    for name, want in (("minimax-h3", pruned), ("minimax-h3-full", dual_full_config(sections))):
         header = tensorfs.open(VECTORS / f"{name}.cozytensors", local_files_only=True)
         assert config(header) == want, f"{name}'s component configs are not the producer's"
 

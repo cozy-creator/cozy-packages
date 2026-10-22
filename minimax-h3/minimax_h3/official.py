@@ -150,6 +150,8 @@ _OVERLAY_COMPONENT: dict[Trunk, str] = {"fl2va": "fl2va_turbo", "ref2va": "ref2v
 _DISTILLATION = "pdd"
 #: The timesteps and sigmas a component's modulation tables hold rows for, in its folder.
 PLAN_ASSET = "timestep-plan.json"
+#: The first release of each model whose components carry their plans.
+PLANS_SINCE = {False: "minimax-h3@1.0.0-rc.4", True: "minimax-h3-turbo-lora@1.0.1"}
 _ASSETS = Path(__file__).resolve().parent
 # NVIDIA's H3 sparse policy protects conditioning and the initial sensitive work.
 # This supplies semantics only; Runtime chooses the kernels.
@@ -367,9 +369,10 @@ class TimestepPlan:
         """The denoise step counts (transformer evaluations) this plan serves."""
         return tuple(schedule.transformer_evaluations for schedule in self.schedules)
 
-    def schedule(self, steps: int) -> Schedule:
+    def schedule(self, steps: int | None = None) -> Schedule:
+        """The schedule of `steps` evaluations; absent, the plan's fewest."""
         for schedule in self.schedules:
-            if schedule.transformer_evaluations == steps:
+            if steps is None or schedule.transformer_evaluations == steps:
                 return schedule
         raise InvalidRequest(
             f"this release serves {', '.join(map(str, self.steps))} denoise steps, not {steps}",
@@ -589,11 +592,17 @@ def timestep_plan(raw: bytes, trunk: Trunk) -> TimestepPlan:
 
 def model_plans(assets: ModelAssets, *, turbo: bool = False) -> dict[Trunk, TimestepPlan]:
     """Each trunk's plan: the asset of the component (DiT or turbo overlay) whose tables it labels."""
-    names = _OVERLAY_COMPONENT if turbo else _DIT_COMPONENT
-    return {
-        trunk: timestep_plan(assets.read(f"{name}/{PLAN_ASSET}"), trunk)
-        for trunk, name in names.items()
-    }
+    names = {trunk: f"{name}/{PLAN_ASSET}" for trunk, name in
+             (_OVERLAY_COMPONENT if turbo else _DIT_COMPONENT).items()}
+    missing = sorted(set(names.values()) - set(assets.names()))
+    if missing:
+        raise InvalidRequest(
+            f"this model release carries no {', '.join(missing)}: H3 reads its timestep plans "
+            f"from the model, first carried by {PLANS_SINCE[turbo]}",
+            code="model_asset_missing",
+            fields=missing,
+        )
+    return {trunk: timestep_plan(assets.read(name), trunk) for trunk, name in names.items()}
 
 
 def _validate_plan(plan: TimestepPlan, trunk: Trunk, layout: TableLayout | None) -> None:
@@ -602,14 +611,21 @@ def _validate_plan(plan: TimestepPlan, trunk: Trunk, layout: TableLayout | None)
     Header rows are authoritative: their order may differ and they may cover additional
     schedules. Every schedule this plan offers must be covered by those actual rows.
     """
-    if plan.task != trunk or (plan.video_shift, plan.audio_shift) != (12.0, 3.0):
+    if plan.task != trunk:
         raise ConformanceError(
-            f"the model's {trunk} timestep plan does not match its scheduler",
-            code="artifact_config",
+            f"the model's {trunk} timestep plan names {plan.task}", code="artifact_config"
         )
     if layout is not None:
         for schedule in plan.schedules:
             layout.require(schedule.video_timesteps, schedule.audio_timesteps)
+
+
+def _schedulers(plan: TimestepPlan) -> dict[str, MiniMaxH3Scheduler]:
+    """Fresh official schedulers at the plan's shifts; `executed` proves the grid they build."""
+    return {
+        "scheduler": MiniMaxH3Scheduler(shift=plan.video_shift),
+        "audio_scheduler": MiniMaxH3Scheduler(shift=plan.audio_shift),
+    }
 
 
 def reference_image_size(
@@ -845,8 +861,7 @@ class OfficialH3Pipeline:
                 processor=processor,
                 vae=video_vae,
                 audio_vae=audio_vae,
-                scheduler=MiniMaxH3Scheduler(shift=12.0),
-                audio_scheduler=MiniMaxH3Scheduler(shift=3.0),
+                **_schedulers(plans[_TRUNK[task]]),
                 **{_DIT_COMPONENT[_TRUNK[task]]: dits[_TRUNK[task]]},
             )
 
@@ -866,7 +881,7 @@ class OfficialH3Pipeline:
         self.sample_rate = int(audio_vae.config.sampling_rate)
         self._blocks = blocks
         self._pipes = pipes
-        self.plans: dict[Task, TimestepPlan] = {trunk: plans[trunk] for trunk in _TRUNKS}
+        self.plans: dict[Trunk, TimestepPlan] = {trunk: plans[trunk] for trunk in _TRUNKS}
         self._dit_specs = dit_specs
         self._intake = _IntakeLengths()
 
@@ -1013,12 +1028,12 @@ class OfficialH3Pipeline:
         # evaluations are the schedule's grid points less the terminal zero. A turbo task's
         # plan is its turbo LoRA's, which the caller passes.
         if plan is None:
-            if task not in self.plans:
+            if _BANK[task] is not None:
                 raise ConformanceError(
                     "a turbo request requires its selected overlay's timestep plan",
                     code="artifact_config",
                 )
-            plan = self.plans[task]
+            plan = self.plans[_TRUNK[task]]
         if plan.task != _TRUNK[task]:
             raise ConformanceError("timestep plan belongs to a different trunk", code="artifact_config")
         schedule = plan.schedule(steps)
@@ -1317,8 +1332,7 @@ class OfficialH3Pipeline:
             self._pipes[self._workflow(task, state)],
             self.components[_DIT_COMPONENT[_TRUNK[task]]],
             overrides={
-                "scheduler": MiniMaxH3Scheduler(shift=12.0),
-                "audio_scheduler": MiniMaxH3Scheduler(shift=3.0),
+                **_schedulers(state.get(_PLAN)),
                 "max_duration": _CEILING_S,
             },
         )
@@ -1678,9 +1692,9 @@ def _overlay_spec(
             fields=[component, "cozy_h3"],
         )
     _validate_plan(plan, trunk, layout)
-    if plan.steps != (8,):
+    if plan.steps != (int(expected["pdd_num_steps"]) // int(expected["pdd_block_size"]),):
         raise ConformanceError(
-            "the released PDD overlay requires an eight-evaluation timestep plan",
+            "the PDD overlay's timestep plan must hold its one distilled schedule",
             code="artifact_config",
         )
     return section, layout

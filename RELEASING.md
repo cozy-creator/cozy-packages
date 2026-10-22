@@ -25,7 +25,7 @@ at runtime, so a package never waits on an image.
 Package source names no account. A package publishes into the namespace of the
 account that runs `cozy package publish` on the command's Tensorhub: `paul` on
 the local `127.0.0.1:8819` Hub, `fidika` on tensorhub.com. Default releases for the
-publisher's own models omit the org (`minimax-h3@1.0.0-rc.3`); Creator
+publisher's own models omit the org (`minimax-h3@1.0.0-rc.4`); Creator
 writes the account into the published interface. Same-account package dependencies
 name the `tensorhub` index (`qwen-image-2 = { index = "tensorhub" }`).
 

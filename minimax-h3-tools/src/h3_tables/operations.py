@@ -22,7 +22,7 @@ from .adaln_operations import (
     select_adaln_weights,
 )
 from .lanes import Encoding
-from .model_config import DIT_COMPONENT, parse_production_config
+from .model_config import DIT_COMPONENT, parse_full_config
 from .order import current_order, full_order
 from .quantization import dit_plan
 
@@ -36,7 +36,7 @@ def quantization_plan() -> QuantizationPlan:
     ]
     assets = files(__package__).joinpath("assets")
     pruned = current_order(assets.joinpath("whole-order.json").read_bytes())
-    sections = parse_production_config(assets.joinpath("model-config.json").read_bytes())
+    sections = parse_full_config(assets.joinpath("model-config.json").read_bytes())
     full = full_order(sections, pruned.rows)
     return QuantizationPlan(
         components=components,

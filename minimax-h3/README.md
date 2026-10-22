@@ -9,7 +9,10 @@ Video with sound from MiniMax H3: 5 to 15 seconds at 768p, optionally upscaled b
 | `ref2va` | a prompt and references: characters, backgrounds, audio, action videos |
 | `long_form` | several segments sharing their references, joined into one video ([LONG_FORM.md](LONG_FORM.md)) |
 
-`fl2va_turbo` and `ref2va_turbo` take eight steps instead of `steps` (30, 40 or 50).
+The model's timestep plans set the step counts: `fl2va` and `ref2va` take `steps` 30, 40 or 50
+(default 30), and `fl2va_turbo` and `ref2va_turbo` run the turbo LoRA's eight. The functions
+default to `minimax-h3@1.0.0-rc.4` and `minimax-h3-turbo-lora@1.0.1`, the first releases whose
+headers carry those plans; an older release refuses with `model_asset_missing`, naming them.
 
 ```sh
 cozy run fidika/minimax-h3/fl2va_turbo prompt='The camera pulls back from a lighthouse as a storm rolls in.' \

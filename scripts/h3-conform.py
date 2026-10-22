@@ -164,7 +164,7 @@ from h3_tables.lanes import NORMALISED_COMPONENTS, decode_operand  # noqa: E402
 from h3_tables.model_config import (  # noqa: E402
     dual_adaln_pruned_config,
     dual_full_config,
-    parse_production_config,
+    parse_full_config,
 )
 from h3_tables.order import current_order, full_order  # noqa: E402
 from h3_tables.plans import TASKS, parse_plan  # noqa: E402
@@ -315,13 +315,15 @@ def arm_model_plan_assets() -> None:
         partial(OfficialH3Pipeline, Config(wrong_rows), plans),
         "artifact_config",
     )
-    wrong_shift = dict(plans)
-    wrong_shift["fl2va"] = replace(plans["fl2va"], video_shift=6.0)
-    refusal(
-        "a selected plan with another scheduler shift refuses before construction",
-        partial(OfficialH3Pipeline, Config(mapping), wrong_shift),
-        "artifact_config",
+    shifted = replace(plans["fl2va"], video_shift=6.0, audio_shift=2.0)
+    check(
+        "the selected plan's shifts configure its official schedulers",
+        [s.config.shift for s in official._schedulers(shifted).values()],
+        [6.0, 2.0],
     )
+    check("a request without steps runs the plan's fewest", plans["fl2va"].schedule(), plans["fl2va"].schedules[0])
+    check("a turbo plan's default is its one schedule",
+          oracle_plan("fl2va_turbo").schedule().transformer_evaluations, 8)
     for trunk in TASKS:
         layout = official._dit_spec(mapping, trunk)[2]
         official._validate_plan(plans[trunk], trunk, layout)
@@ -498,7 +500,7 @@ def arm_producer_configs() -> None:
     sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
 
     assets = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
-    sections = parse_production_config((assets / "model-config.json").read_bytes())
+    sections = parse_full_config((assets / "model-config.json").read_bytes())
     plans = {
         task: parse_plan(oracle_plan(cast(Any, task)).canonical_bytes(), task=task)
         for task in ("fl2va", "ref2va")
@@ -545,7 +547,7 @@ def arm_producer_construction_order() -> None:
     """The producer's one ordered spec resource follows the real serving factory."""
     sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
 
-    sections = parse_production_config(_asset("model-config.json"))
+    sections = parse_full_config(_asset("model-config.json"))
     current = current_order(_asset("whole-order.json"))
     plans = {
         task: parse_plan(oracle_plan(cast(Any, task)).canonical_bytes(), task=task)
@@ -876,7 +878,7 @@ def meta_h3_pipeline() -> Any:
 
     assets = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
     config = canonical_json.decode(
-        dual_full_config(parse_production_config((assets / "model-config.json").read_bytes()))
+        dual_full_config(parse_full_config((assets / "model-config.json").read_bytes()))
     )
     with torch.device("meta"):
         return OfficialH3Pipeline(Config(config), oracle_plans())
@@ -1037,11 +1039,6 @@ def arm_zero_reference_preparation() -> None:
         )
 
     refusal("an unserved step count refuses before preparation", lambda: start(29), "steps")
-    check(
-        "the declared request default has an artifact schedule",
-        package.DEFAULT_STEPS in STEPS,
-        True,
-    )
     check(
         "every served step count states its official grid",
         [start(steps).num_inference_steps for steps in STEPS],
@@ -3102,8 +3099,9 @@ def arm_rgb8_handoff() -> None:
 
 
 def arm_interface() -> None:
-    check("wire step values match both model-asset oracle plans", package.SUPPORTED_STEPS, STEPS)
-    check("the default is the shortest shipped schedule", package.DEFAULT_STEPS, min(STEPS))
+    check("the package holds no step counts: the model's plans own them",
+          [name for name in ("SUPPORTED_STEPS", "DEFAULT_STEPS", "TURBO_STEPS") if hasattr(package, name)],
+          [])
     print("\n== committed public surface ==")
     interface_path = H3 / "metadata" / "package-interface.json"
     interface = json.loads(interface_path.read_text())
@@ -3179,19 +3177,16 @@ def arm_interface() -> None:
             )
         if name.endswith("_turbo"):
             check(
-                f"{name} has no steps on its wire: the plan fixes {package.TURBO_STEPS}",
+                f"{name} has no steps on its wire: the turbo LoRA's plan fixes them",
                 any(field["name"] == "steps" for field in entry["request"]["fields"]),
                 False,
             )
         else:
+            steps_field = next(f for f in entry["request"]["fields"] if f["name"] == "steps")
             check(
-                f"{name} wire steps match model-asset oracle plans",
-                next(
-                    field["type"]
-                    for field in entry["request"]["fields"]
-                    if field["name"] == "steps"
-                ),
-                {"literal": list(STEPS)},
+                f"{name} wire steps are any count, absent for the plan's fewest",
+                (steps_field["type"], steps_field.get("default")),
+                ({"union": ["int", "null"]}, None),
             )
         duration = next(
             field for field in entry["request"]["fields"] if field["name"] == "duration_s"
@@ -3224,7 +3219,6 @@ def arm_interface() -> None:
             for seconds in (min(DURATIONS), max(DURATIONS))
             for count in (1, 2)
         }
-        steps = {} if name.endswith("_turbo") else {"steps": package.DEFAULT_STEPS}
         check(
             f"{name} shape cell is frames and reference count",
             cells,
@@ -3232,7 +3226,6 @@ def arm_interface() -> None:
                 (seconds, count): {
                     "assets": count,
                     "frames": official.frames_for(seconds),
-                    **steps,
                 }
                 for seconds, count in cells
             },
@@ -3297,8 +3290,6 @@ def arm_interface() -> None:
             list(wire.__struct_fields__),
             ["prompt", "seed", "duration_s"],
         )
-    check("the turbo functions run the plans' eight evaluations", package.TURBO_STEPS, 8)
-    red("eight is not a base step count", package.TURBO_STEPS in STEPS, True)
     print("\n== long-form composition ==")
     check(
         "composition, assembly and the direct workflows are CPU functions",
@@ -3365,7 +3356,7 @@ def arm_interface() -> None:
                         prompt="x",
                         seed=1,
                         duration_s=seconds,
-                        steps=package.TURBO_STEPS,
+                        steps=None,
                         turbo=True,
                         frames=package.held_frames(plan),
                         video_audio=(),
@@ -3375,13 +3366,13 @@ def arm_interface() -> None:
             for seconds, plan in ((6, opener), (12, follower))
         ],
         [
-            {"frames": 158, "steps": 8},
-            {"frames": 345 + 56, "steps": 8},
+            {"frames": 158},
+            {"frames": 345 + 56},
         ],
     )
     adapter = object()
 
-    def sampled(turbo: bool, steps: int) -> object:
+    def sampled(turbo: bool, steps: int | None) -> object:
         segment = package.MotionInput(
             prompt="x", seed=1, duration_s=6, steps=steps, turbo=turbo, frames=158, video_audio=()
         )
@@ -3389,15 +3380,10 @@ def arm_interface() -> None:
 
     check(
         "one construction samples turbo with its adapter and standard with none",
-        [sampled(True, package.TURBO_STEPS) is adapter, sampled(False, 30)],
-        [True, None],
+        [sampled(True, None) is adapter, sampled(False, 30), sampled(False, None)],
+        [True, None, None],
     )
-    for selected, evaluations in ((True, 30), (False, package.TURBO_STEPS)):
-        refusal(
-            f"turbo={selected} refuses {evaluations} steps",
-            partial(sampled, selected, evaluations),
-            "invalid_request",
-        )
+    refusal("a turbo segment refuses steps", partial(sampled, True, 8), "invalid_request")
     segment_fields = next(
         field for field in workflows["long_form"]["request"]["fields"] if field["name"] == "segments"
     )["type"]["list"]["fields"]
@@ -3418,7 +3404,7 @@ def arm_interface() -> None:
         [None, None],
     )
     check("long-form defaults to turbo", unseeded.mode, "turbo")
-    check("default segments use eight evaluations", package.segment_sampling(unseeded), (True, 8))
+    check("default segments run turbo at its plan's count", package.segment_sampling(unseeded), (True, None))
     for job in (package.LongFormInput, package.LongFormCutsInput):
         for encoding in (msgspec.json, msgspec.yaml):
             authored_segments = {
@@ -3429,14 +3415,14 @@ def arm_interface() -> None:
             request = encoding.decode(encoding.encode(authored_segments), type=job)
             label = f"{job.__name__} {encoding.__name__}"
             check(f"{label} removed segment flags cannot override global turbo",
-                  package.segment_sampling(request), (True, 8))
+                  package.segment_sampling(request), (True, None))
             request.steps = 30
             refusal(f"{label} turbo refuses explicit steps",
                     partial(package.segment_sampling, request), "invalid_request")
             request.mode = "standard"
             request.steps = None
             check(f"{label} global standard applies to every segment",
-                  package.segment_sampling(request), (False, 30))
+                  package.segment_sampling(request), (False, None))
             request.steps = 40
             check(f"{label} global standard preserves its authored step count",
                   package.segment_sampling(request), (False, 40))
@@ -4242,7 +4228,7 @@ def turbo_h3_config() -> dict[str, Any]:
     """The producer's exact AdaLN-pruned config plus the two overlay sections."""
     sys.path.insert(0, str(ROOT / "minimax-h3-tools" / "src"))
     assets = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
-    sections = parse_production_config((assets / "model-config.json").read_bytes())
+    sections = parse_full_config((assets / "model-config.json").read_bytes())
     plans = {
         task: parse_plan(oracle_plan(cast(Any, task)).canonical_bytes(), task=task)
         for task in ("fl2va", "ref2va")

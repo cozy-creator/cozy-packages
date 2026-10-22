@@ -48,8 +48,9 @@ lanes. It does not accept a pruned or quantized checkpoint as a substitute for t
 
 Every source DiT carries its schedule as `timestep-plan.json` (`transformer` for
 FL2VA, `transformer_ref` for Ref2VA). Turbo production reads each task's plan
-from its adapter component and requires the supported PDD-8 schedule. Missing,
-wrong-task or unsupported plans refuse; there is no packaged fallback. Outputs,
+from its adapter component, whose one schedule has an evaluation per distilled PDD
+block (32 / 4 = 8); its shifts set the collapsed heads. Missing, wrong-task or
+unsupported plans refuse; there is no packaged fallback or plan digest pin. Outputs,
 projections and table banks retain the plan asset, and full-model derivations
 preserve other component assets. The source checkpoint identity binds plan bytes
 to resumable computation. See [client preparation](CLIENT-SCRIPTS.md) for the

@@ -120,8 +120,8 @@ Four-GPU placement is chosen when submitting the run, not by the composition fun
 The `fl2va_turbo` and `ref2va_turbo` functions take two independent model slots:
 `base_model: H3TurboBase` holds an AdaLN-pruned five-root checkpoint, and
 `turbo_lora: H3TurboLoRA` holds only `fl2va_turbo` and `ref2va_turbo`. Both
-checkpoints must have matching DiT configurations. They default to `minimax-h3@1.0.0-rc.3` and
-`minimax-h3-turbo-lora@1.0.0`; callers can select other compatible releases explicitly.
+checkpoints must have matching DiT configurations. They default to `minimax-h3@1.0.0-rc.4` and
+`minimax-h3-turbo-lora@1.0.1`; callers can select other releases that carry timestep plans.
 Each sampling scope holds its base DiT and separate overlay together. LoRA hooks
 are installed during construction, before Runtime chooses fusion or Ulysses
 execution. All three model classes declare degrees 2 and 4.
@@ -265,14 +265,16 @@ lane is re-tabled for one. Every attempt logs its length and resulting packed-se
 `h3 output geometry` row. Task-selector, graph-selector, and AdaLN-mode request fields are absent.
 The artifact config fixes both DiTs to one modulation structure before construction: reference
 artifacts use the official FULL AdaLN path, while production artifacts use exact table rows for the
-two committed TimestepPlans and contain no replaced timestep/AdaLN projection destinations. A
-pruned lane carries the union of every served schedule's rows, so one checkpoint serves every
-`steps` value; a lane whose plan identity differs from the package's refuses at construction. The
+TimestepPlan each DiT carries as its `timestep-plan.json` asset, and contain no replaced
+timestep/AdaLN projection destinations. The plans are the one authority for step counts, sigmas
+and scheduler shifts; the package holds no copy. A pruned lane carries the union of every served
+schedule's rows, so one checkpoint serves every `steps` value; a plan its rows do not cover
+refuses at construction. The
 AdaLN-pruned extension inherits Diffusers' forward and changes only those projection modules; it
 does not interpolate a curve or carry a second model port. The machine selects the lane before
 fetch (Model defaults above); model computation and environment variables do not choose one.
 
-`minimax-h3@1.0.0-rc.3` serves AdaLN-pruned lanes `bf16`, `fp8`, `int8` and `nvfp4`, and the
+`minimax-h3@1.0.0-rc.4` serves AdaLN-pruned lanes `bf16`, `fp8`, `int8` and `nvfp4`, and the
 FULL reference lane `bf16-full`. `adaln-curve` is reserved for approximate community curve
 artifacts and is not a lane.
 
