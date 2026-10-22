@@ -127,8 +127,8 @@ A retry computes only what TensorD has not journaled (`has`); a committed output
 A local commit does not imply remote custody; Creator still verifies uploads before
 publishing a release.
 
-The production inputs are package-owned and immutable: exact model config, full DiT shape
-contract, construction order, and task plans live as importlib resources in the tools wheel;
+The tools wheel carries the exact model config, full DiT shape contract and construction
+order as immutable importlib resources. Task plans come from source model component assets;
 the Runtime wheel carries the reviewed quantization tensor specifications. The ordinary
 `h3_tables.operations.quantization_plan()` helper binds their exact two-DiT geometry and
 this package's full/pruned construction-order digests for the single Runtime-owned

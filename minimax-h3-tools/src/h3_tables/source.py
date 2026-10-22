@@ -8,12 +8,13 @@ from typing import Any
 
 import msgspec
 import torch
-from cozy_runtime.author import Context, UnsupportedInput, Weights, canonical_json
+from cozy_runtime.author import ConformanceError, Context, UnsupportedInput, Weights, canonical_json
 from cozy_runtime.weights_store import Checkpoint, Output, TensorMetadata
 
 from .kernel import H3Topology, LowRankAdapter, precompute_tables, table_shapes
 from .model_config import DIT_COMPONENT
 from .plans import Task, TimestepPlan, parse_plan
+from .table_layout import TableLayout
 
 TIMESTEP_PLAN = "timestep-plan.json"
 
@@ -77,17 +78,18 @@ def timestep_plan(
         )
     try:
         plan = parse_plan(held.asset(TIMESTEP_PLAN), task=task, launch=launch)
-    except (ValueError, TypeError) as exc:
-        raise UnsupportedInput(f"H3 source {name} has an invalid timestep plan: {exc}", code="adaln_plan") from exc
-    stamp = held.config.get("cozy_h3")
-    if (
-        isinstance(stamp, dict)
-        and stamp.get("modulation") == "adaln-pruned"
-        and stamp.get("table_keys") != plan.table_keys
-    ):
+        stamp = held.config.get("cozy_h3")
+        if isinstance(stamp, dict) and stamp.get("modulation") == "adaln-pruned":
+            layout = TableLayout.parse(stamp.get("table_keys"))
+            available = {(layout.timesteps[row], tag) for row, tag in layout.block_keys}
+            required = {(plan.timesteps[row], tag) for row, tag in plan.block_rows}
+            if not required <= available:
+                raise ValueError("the stored table rows do not cover the source plan")
+    except (ValueError, TypeError, OverflowError, ConformanceError) as exc:
         raise UnsupportedInput(
-            f"H3 source {name} plan does not describe its stored table rows", code="adaln_plan"
-        )
+            f"H3 source {name} has an invalid timestep plan or table layout: {exc}",
+            code="adaln_plan",
+        ) from exc
     return plan
 
 
