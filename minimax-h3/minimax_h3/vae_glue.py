@@ -27,7 +27,6 @@ frame 70.3 dB); 99.6 % are identical and none is more than one 8-bit level off.
 from __future__ import annotations
 
 import hashlib
-import sys
 from typing import Any
 
 import torch
@@ -43,6 +42,8 @@ from diffusers.models.autoencoders.autoencoder_kl_minimax_h3 import (
 from triton.language.extra import libdevice
 
 from cozy_runtime.author.kernels import INT8_CONVROT, KernelsUnavailable, Launch, Plan, TritonEntry, TritonKernels
+
+from .glue import record
 
 #: The release decoder's widths: the only ones compiled.
 HIDDEN, HEAD_DIM, ROTARY, FFN = 2048, 64, 48, 8192
@@ -341,7 +342,6 @@ def identity() -> str:
 
 
 def _install(blocks: Any, launch: Launch) -> None:
-    print(f"[minimax-h3] vae glue: {len(blocks)} decoder blocks fused", file=sys.stderr)
     for block in blocks:
         processor = FusedVideoAttnProcessor()
         processor._attention_backend = block.attn.processor._attention_backend
@@ -354,23 +354,49 @@ def _install(blocks: Any, launch: Launch) -> None:
         block._glue = launch
 
 
-def install(vae: Any, plan: Plan) -> str:
+def install(model: object, vae: Any, plan: Plan) -> str:
     """The fused glue on `vae`'s decoder blocks once its kernels are built (now, or at the next
-    request's start); "" when the decoder is not the release shape or the device cannot."""
+    request's start); "" when the decoder is not the release shape or the device cannot. The
+    outcome is reported as `vae_glue` (`glue.record`): eager with its code, or deferred until
+    the install lands and then fused."""
     device = torch.device(plan.device)
     decoder = getattr(vae, "decoder", None)
-    if device.type != "cuda" or decoder is None or torch.cuda.get_device_capability(device)[0] < 8:
-        return ""
+    if device.type != "cuda" or torch.cuda.get_device_capability(device)[0] < 8:
+        reason = f"decoder glue needs CUDA sm80+, not {device}"
+        return _report(model, plan, "fusion_device_incapable", reason)
+    if decoder is None:
+        return _report(model, plan, "fusion_no_transformer", "the VAE has no transformer decoder")
     blocks = list(decoder.transformer_blocks)
     if not blocks or not all(_matches(b) for b in blocks) or decoder.rope.inv_freq.numel() * 6 != ROTARY:
-        print("[minimax-h3] vae glue: eager (decoder is not the release shape)", file=sys.stderr)
-        return ""
+        return _report(model, plan, "fusion_block_shape", "the decoder is not the release shape")
+    return _fuse(model, plan, blocks)
+
+
+def _fuse(model: object, plan: Plan, blocks: list[Any]) -> str:
     try:
         if plan.when_ready is None:
-            _install(blocks, plan.load(GLUE))
+            _landed(model, plan, blocks, plan.load(GLUE))
         else:
-            plan.when_ready(GLUE, lambda launch: _install(blocks, launch))
+            # Reported first, so an install that lands at once reports over it.
+            reason = "fuses at a request boundary once its kernels are built"
+            _report(model, plan, "deferred", reason, len(blocks))
+            plan.when_ready(GLUE, lambda launch: _landed(model, plan, blocks, launch))
     except KernelsUnavailable as exc:
-        print(f"[minimax-h3] vae glue: eager ({exc.code})", file=sys.stderr)
-        return ""
+        return _report(model, plan, f"fusion_{exc.code}", str(exc))
     return identity()
+
+
+def _landed(model: object, plan: Plan, blocks: list[Any], launch: Launch) -> None:
+    try:
+        _install(blocks, launch)
+    except Exception as exc:
+        _report(model, plan, "fusion_install_failed", f"{type(exc).__name__}: {exc}", len(blocks))
+        raise
+    document = {"applied": True, "code": "", "reason": "", "sites": len(blocks)}
+    record(model, plan, "vae_glue", {**document, "identity": identity()})
+
+
+def _report(model: object, plan: Plan, code: str, reason: str, sites: int = 0) -> str:
+    document = {"applied": False, "code": code, "reason": reason, "sites": sites, "identity": ""}
+    record(model, plan, "vae_glue", document)
+    return ""
