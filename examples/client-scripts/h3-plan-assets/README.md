@@ -17,3 +17,8 @@ README and LICENSE remain unchanged. It refuses legacy generating-projection bin
 Preparation does not upload or publish. Upload `proposed/` through a CLI supporting CozyTensors
 folder sources, verify the private commit against the receipt, then publish the replacement
 model release before releasing consumers. Preserve the old model releases.
+
+Read a published checkpoint back through the machine's normal model grant:
+`cozy run ./examples/client-scripts/h3-plan-assets/inspect.py model.source=org/model@release/lane --on MACHINE`.
+Its header identity, plan references and missing tensor-chunk counts verify metadata access
+without reading tensor values.
