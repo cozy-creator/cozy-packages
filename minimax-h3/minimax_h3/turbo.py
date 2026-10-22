@@ -17,7 +17,7 @@ with the overlay absent from every forward they run.
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 import torch
 from torch import nn
@@ -78,6 +78,10 @@ class LoRAFactors(nn.Module):  # type: ignore[misc]
             tail = F.pad(flat[start:], (0, 0, 0, pad)).addmm_(low, up, alpha=self.scale)
             flat[start:].copy_(tail[:count])
 
+    def forward(self, x: torch.Tensor, out: torch.Tensor) -> None:
+        """`accumulate` as this piece's forward, so the factors are bound while it reads them."""
+        self.accumulate(x, out)
+
 
 class _LoRAHook:
     """A permanent consumer hook, inactive for base forwards. The weight plane bakes the armed
@@ -95,7 +99,7 @@ class _LoRAHook:
         del module
         armed = self.owner._arming
         if armed is not None and not self._cozy_baked:
-            armed.overlay.get_submodule(self.path).accumulate(args[0], out)
+            armed.overlay.get_submodule(self.path)(args[0], out)
 
     def lora_factors(self) -> tuple[object, torch.Tensor, torch.Tensor, float] | None:
         """The armed overlay's factors for this site, or None in a base forward."""
@@ -123,6 +127,10 @@ class TurboTables(nn.Module):  # type: ignore[misc]
         self.table = nn.Parameter(table)
         if index is not None:
             self.register_buffer("table_index", index, persistent=False)
+
+    def forward(self, rows: torch.Tensor) -> torch.Tensor:
+        """The table's `rows`, read inside its forward: the table is a piece of its overlay."""
+        return self.table.index_select(0, rows)
 
 
 class TurboHeads(nn.Module):  # type: ignore[misc]
@@ -186,6 +194,9 @@ class TurboOverlay(nn.Module):  # type: ignore[misc]
     """
 
     present = True
+    #: Its pieces: each site's factors, each table and each head is its own block, so a
+    #: consumer binds the few MB it reads, never the whole overlay (~620 MB, cr-203 U9 (c)).
+    _no_split_modules: ClassVar[list[str]] = ["LoRAFactors", "TurboTables", "TurboHeads"]
 
     def __init__(
         self,
