@@ -16,7 +16,6 @@ from cozy_runtime.derive.operations import quantize as runtime_quantize
 
 from .adaln_operations import (
     Selection,
-    _plan,
     apply_adaln,
     compute_adaln_tables,
     retable_adaln,
@@ -92,19 +91,19 @@ async def precompute_adaln(
         retable_adaln if generating_model is not None else apply_adaln,
     )
 
-    if (
-        type(timesteps) is not int
-        or timesteps not in _plan("fl2va").steps
-        or timesteps not in _plan("ref2va").steps
-    ):
-        raise UnsupportedInput(
-            "H3 currently supports approved 30, 40 and 50 step schedules", code="adaln_plan"
-        )
     # Managed proxies carry exact ModelArtifact values; the owner injects the bound
     # model only into each child implementation. Generated caller interfaces express this.
     generator = generating_model or model
     selected_fl = await select(source=generator, task="fl2va")
     selected_ref = await select(source=generator, task="ref2va")
+    if (
+        type(timesteps) is not int
+        or timesteps not in selected_fl.steps
+        or timesteps not in selected_ref.steps
+    ):
+        raise UnsupportedInput(
+            "H3 timestep count is not supported by both source model plans", code="adaln_plan"
+        )
     if selected_fl.ready and selected_ref.ready:
         if generating_model is not None:
             raise UnsupportedInput(
@@ -120,12 +119,12 @@ async def precompute_adaln(
     fl = await compute(
         source=selected_fl.projection,
         task="fl2va",
-        plan_digest=_plan("fl2va").digest,
+        plan_digest=selected_fl.plan_digest,
     )
     ref = await compute(
         source=selected_ref.projection,
         task="ref2va",
-        plan_digest=_plan("ref2va").digest,
+        plan_digest=selected_ref.plan_digest,
     )
     return await attach(
         source=model,

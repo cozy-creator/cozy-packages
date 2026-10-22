@@ -12,22 +12,25 @@ async def main(ctx):
     fp8 = await quantize(source=pruned, encoding="fp8.rowwise")
 ```
 
-The current captured plan is the approved union of 30, 40 and 50 denoising steps.
+Each source DiT must carry `timestep-plan.json`: `transformer` for FL2VA and
+`transformer_ref` for Ref2VA. There is no package plan fallback. The currently
+approved model plan is the union of 30, 40 and 50 denoising steps.
 `timesteps` selects a supported step count; the retained BF16 bank supports all
-three. Other schedules refuse until their package plan and serving contract are
+three. Other schedules refuse until their model plan and serving contract are
 qualified. The argument does not silently invent a new scheduler.
 
 `precompute_adaln` runs in the calling script; it needs no `ctx` argument or
 separate call of its own. It invokes two inexpensive generating-weight projections,
 two independent table computations and one native metadata attachment; each one's
 committed derivation replays for the same code and inputs.
-Runtime's caller overlay preserves this helper and the package's plan assets;
-each leaf operation runs with its own managed services and cancellation checks.
+The selection replies carry the source plan digest and supported step counts to
+the caller. Each leaf runs with its own managed services and cancellation checks;
+the source checkpoint identity includes its assets and binds the derivation.
 Each table computation checkpoints completed block tables and final normalization;
 a retry skips their projections and source-weight reads.
 
-Projection content contains only the task's original generating weights and
-required topology. Changes to unrelated body weights therefore preserve the
+Projection content contains the task's original generating weights, required
+topology and component assets, including its timestep plan. Changes to unrelated body weights therefore preserve the
 projection identity. Body quantization has no influence on table bytes; changing
 generating weights, the plan, numerical contract or captured code invalidates
 compatible reuse. Runtime owns the memo index; these operations introduce no
@@ -39,10 +42,15 @@ when table shape and timestep plan match. An already-pruned current-plan model
 with these bindings can be returned after validation. To replace older tables,
 pass `generating_model=full`; the source must contain the original dynamic weights.
 Older artifacts with no generating binding refuse this reuse path because the
-removed weights cannot be recovered from a table's shape.
+removed weights cannot be recovered from a table's shape. Planless projections
+and banks also refuse: recompute them from a migrated full model. An existing
+`generating_projection_digest` from a planless projection cannot be silently
+rewritten when adding assets; its bank and body binding need recomputation. This
+release retains the existing exact approved-plan digest boundary. It does not
+claim retabling to a newly approved schedule across that older binding format.
 
-The native operation, small CPU math and generated-interface proofs are
-`scripts/h3-adaln-{binding,resume,interface}-proof.py`. They do not establish
-production GPU numerical quality or a paid remote pipeline qualification.
-The interface driver takes `--implementation-wheel` pointing to the built tools
-wheel and verifies its real caller overlay before exercising the helper's leaf calls.
+`minimax-h3-tools/scripts/model-assets-proof.py` checks native asset reads,
+refusals, derivation identity and asset retention with tiny CPU tensors.
+`scripts/h3-adaln-interface-proof.py` checks the installed helper's source-bound
+selection and child-call routing. These do not establish full-model GPU
+numerical quality or paid remote pipeline qualification.

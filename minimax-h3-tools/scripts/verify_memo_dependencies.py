@@ -69,20 +69,19 @@ def qualify(root: Path) -> dict[str, object]:
     after_kernel = identities(root)
     for name in ('compute_adaln_tables', 'turbo_lora', 'fp8_pruned', 'retable'):
         assert after_kernel[name] != before[name]
-    plan = root / 'h3_tables/assets/timestep-plan.fl2va.json'
-    data = json.loads(plan.read_text())
-    data['video_shift'] = '0x1.0000000000000p+3'
-    plan.write_text(json.dumps(data))
-    after_plan = identities(root)
-    for name in ('select_adaln_weights', 'compute_adaln_tables', 'apply_adaln', 'retable_adaln',
-                 'fp8_pruned', 'retable'):
-        assert after_plan[name] != after_kernel[name]
+    # Schedules are model inputs. Only constructor/order resources belong to code closure.
+    assert not list((root / 'h3_tables/assets').glob('timestep-plan*.json'))
+    resource = root / 'h3_tables/assets/whole-order.json'
+    resource.write_text(resource.read_text() + '\n')
+    after_resource = identities(root)
+    for name in before:
+        assert after_resource[name] != after_kernel[name]
     changed_native_version(root, "tensorfs")
     after_native = identities(root)
-    assert all(after_native[name] != after_plan[name] for name in before)
+    assert all(after_native[name] != after_resource[name] for name in before)
     return {'qualified': 'source-identity-only', 'operations': sorted(before),
             'caller_stable': True, 'h3_kernel_invalidates': True,
-            'h3_resource_invalidates': True, 'native_version_invalidates': True, 'regular_cli_matrix_complete': False}
+            'structure_resource_invalidates': True, 'package_plan_resources_absent': True, 'native_version_invalidates': True, 'regular_cli_matrix_complete': False}
 
 
 if __name__ == '__main__':

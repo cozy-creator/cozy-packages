@@ -79,8 +79,8 @@ def run(root: Path) -> None:
         artifact("pruned", "6"),
     )
     answers = [
-        Selection(projected_fl, False),
-        Selection(projected_ref, False),
+        Selection(projected_fl, False, "sha256:" + "a" * 64, [30, 40, 50]),
+        Selection(projected_ref, False, "sha256:" + "b" * 64, [30, 40, 50]),
         bank_fl,
         bank_ref,
         pruned,
@@ -121,6 +121,8 @@ def run(root: Path) -> None:
     payloads = [json.loads(call.payload) for call in calls]
     assert payloads[2]["source"] == msgspec.to_builtins(projected_fl)
     assert payloads[3]["source"] == msgspec.to_builtins(projected_ref)
+    assert payloads[2]["plan_digest"] == "sha256:" + "a" * 64
+    assert payloads[3]["plan_digest"] == "sha256:" + "b" * 64
     assert payloads[4] == {
         "source": msgspec.to_builtins(original),
         "fl2va": msgspec.to_builtins(bank_fl),
@@ -137,7 +139,8 @@ def run(root: Path) -> None:
             calls=_Broker("invalid", bindings, exchange),
         ),
     )
-    assert refused.code == "adaln_plan" and not calls, refused
+    assert refused.code == "adaln_plan", refused
+    assert [call.export for call in calls] == ["select_adaln_weights"] * 2, calls
     print(
         json.dumps(
             {
@@ -145,7 +148,8 @@ def run(root: Path) -> None:
                 "precompute_job_registered": False,
                 "managed_sibling_calls": 5,
                 "per_task_projection_inputs": True,
-                "invalid_plan_refused_before_calls": True,
+                "plan_identity_from_source_selection": True,
+                "invalid_plan_refused_before_compute": True,
             }
         )
     )

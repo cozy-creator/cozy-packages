@@ -15,14 +15,16 @@ from cozy_runtime.author import (
     canonical_json,
     invocable,
 )
-from cozy_runtime.weights_store import Derivation
+from cozy_runtime.weights_store import Checkpoint, Derivation
 
 from ._memo import TURBO
-from .adaln_operations import _asset, _sections, _validate_generators
+from .adaln_operations import _sections, _validate_generators
 from .kernel import H3Topology, LowRankAdapter, adapter_shapes, table_shapes
 from .model_config import DIT_COMPONENT
-from .plans import Task, TimestepPlan, parse_plan
-from .source import Rows, open_source, plain, put, read, rows, write_config, write_tables
+from .plans import Task, TimestepPlan
+from .source import (
+    Rows, copy_assets, open_source, plain, put, read, rows, timestep_plan, write_config, write_tables,
+)
 
 RANK = 64
 NUM_STEPS = 32
@@ -34,8 +36,8 @@ PLAN_DIGESTS: dict[Task, str] = {
 TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
 
 
-def turbo_plan(task: Task) -> TimestepPlan:
-    plan = parse_plan(_asset(f"timestep-plan.{task}.turbo.json"), task=task, launch=False)
+def turbo_plan(source: Checkpoint, task: Task, component: str) -> TimestepPlan:
+    plan = timestep_plan(source, task, component=component, launch=False)
     if plan.digest != PLAN_DIGESTS[task]:
         raise UnsupportedInput("PDD tables require the captured eight-evaluation plan")
     return plan
@@ -179,7 +181,7 @@ async def turbo_lora(
     for task in TASKS:
         _validate_generators(rows(full), task, topologies[task])
     names = adapter_components(rows(pair))
-    plans = {task: turbo_plan(task) for task in TASKS}
+    plans = {task: turbo_plan(pair, task, names[task]) for task in TASKS}
     for task in TASKS:
         _adapter_component(rows(pair), names[task], configs[task], plans[task], topologies[task])
     order = [
@@ -210,6 +212,7 @@ async def turbo_lora(
         for task in TASKS:
             ctx.raise_if_cancelled()
             component, adapter = f"{task}_turbo", names[task]
+            copy_assets(out, pair, adapter, target=component)
             specs = overlay_shapes(configs[task], plans[task])
             for key in specs:
                 if key.endswith((".lora_down", ".lora_up")) and not out.has(component, key):

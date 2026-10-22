@@ -28,8 +28,11 @@ from .model_config import (
     parse_production_config,
 )
 from .order import current_order, full_order
-from .plans import Task, TimestepPlan, parse_declared_plan
-from .source import Rows, config, open_source, plain, rows, write_config, write_tables
+from .plans import Task, TimestepPlan
+from .source import (
+    TIMESTEP_PLAN, Rows, config, copy_assets, open_source, plain, rows,
+    timestep_plan, write_config, write_tables,
+)
 from .table_layout import TableLayout
 
 _BINDING = "generating_projection_digest"
@@ -42,14 +45,16 @@ _TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
 class Selection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     projection: ModelArtifact | None
     ready: bool
+    plan_digest: str
+    steps: list[int]
 
 
 def _asset(name: str) -> bytes:
     return files(__package__).joinpath("assets", name).read_bytes()
 
 
-def _plan(task: Task) -> TimestepPlan:
-    return parse_declared_plan(_asset(f"timestep-plan.{task}.json"))
+def _plan(source: Checkpoint, task: Task) -> TimestepPlan:
+    return timestep_plan(source, task)
 
 
 def _sections() -> dict[str, dict[str, Any]]:
@@ -176,6 +181,7 @@ def _project(ctx: Context, source: Checkpoint, task: Task, output: str) -> Model
     order = tuple((component, key) for key in removed_keys(_topology(task)))
     with ctx.output(output, Derivation(base=None, sources=(source,), order=order)) as out:
         if out.done is None:
+            copy_assets(out, source, component, omit=(METADATA,))
             out.component(component).asset(METADATA, _projection_config(task))
         for row in order:
             if not out.has(*row):
@@ -188,30 +194,31 @@ async def select_adaln_weights(ctx: Context, *, source: Weights[Any], task: Task
     ctx.raise_if_cancelled()
     opened = open_source(ctx, source)
     present = rows(opened)
+    plan = _plan(opened, task)
     pruned = _body_kind(present)
     document = _validate_body_config(config(opened), pruned)
     if not pruned:
-        return Selection(_project(ctx, opened, task, "model"), False)
+        return Selection(_project(ctx, opened, task, "model"), False, plan.digest, list(plan.steps))
     _bindings(document)
     layout = document[DIT_COMPONENT[task]]["cozy_h3"]["table_keys"]
-    if layout != _plan(task).table_keys:
+    if layout != plan.table_keys:
         raise UnsupportedInput(
             "retabling a previous schedule requires the full generating_model",
             code="adaln_generating_weights",
         )
-    _validate_table_rows(present, task, bank=False)
+    _validate_table_rows(present, task, plan, bank=False)
     order = current_order(_asset("whole-order.json")).rows
     with ctx.output("model", Derivation(base=opened, order=order)) as out:
-        return Selection(ctx.adopt_model(out), True)
+        return Selection(ctx.adopt_model(out), True, plan.digest, list(plan.steps))
 
 
-def _bank_config(task: Task, projection: str) -> bytes:
+def _bank_config(task: Task, projection: str, plan: TimestepPlan) -> bytes:
     return canonical_json.encode(
         {
             "schema": "h3-adaln-bank/1",
             "task": task,
             "projection": projection,
-            "table_keys": _plan(task).table_keys,
+            "table_keys": plan.table_keys,
             "dtype": "bf16",
             "numerics": _NUMERICS,
         }
@@ -227,12 +234,12 @@ async def compute_adaln_tables(
     plan_digest: str,
     tel: Telemetry,
 ) -> ModelArtifact:
-    plan = _plan(task)
+    opened = open_source(ctx, source)
+    plan = _plan(opened, task)
     if plan_digest != plan.digest:
         raise UnsupportedInput(
-            "AdaLN plan differs from the captured approved package plan", code="adaln_plan"
+            "AdaLN plan differs from the source projection plan", code="adaln_plan"
         )
-    opened = open_source(ctx, source)
     present = rows(opened)
     _validate_generators(present, task)
     component = DIT_COMPONENT[task]
@@ -250,7 +257,8 @@ async def compute_adaln_tables(
     torch.set_float32_matmul_precision("highest")
     with ctx.output("model", Derivation(base=None, sources=(opened,), order=order)) as out:
         if out.done is None:
-            out.component(component).asset(METADATA, _bank_config(task, source.checkpoint_ref))
+            copy_assets(out, opened, component, omit=(METADATA,))
+            out.component(component).asset(METADATA, _bank_config(task, source.checkpoint_ref, plan))
         read, _, reused = write_tables(
             ctx, plan=plan, topology=topology, source=opened, component=component,
             outputs=(out,),
@@ -262,9 +270,9 @@ async def compute_adaln_tables(
     return artifact
 
 
-def _validate_table_rows(present: Rows, task: Task, *, bank: bool) -> None:
+def _validate_table_rows(present: Rows, task: Task, plan: TimestepPlan, *, bank: bool) -> None:
     component = DIT_COMPONENT[task]
-    tables = table_shapes(_topology(task), _plan(task))
+    tables = table_shapes(_topology(task), plan)
     found = {
         key: row
         for key, row in present.get(component, {}).items()
@@ -282,17 +290,17 @@ def _validate_table_rows(present: Rows, task: Task, *, bank: bool) -> None:
         )
 
 
-def _bank_projection(bank: Checkpoint, task: Task) -> str:
+def _bank_projection(bank: Checkpoint, task: Task, plan: TimestepPlan) -> str:
     metadata = _metadata(bank, task)
     value = None if metadata is None else canonical_json.decode(metadata)
     if not isinstance(value, dict) or not isinstance(value.get("projection"), str):
         raise UnsupportedInput("AdaLN bank has no generating-weight binding", code="adaln_binding")
     projection = str(value["projection"])
-    if value != canonical_json.decode(_bank_config(task, projection)):
+    if value != canonical_json.decode(_bank_config(task, projection, plan)):
         raise UnsupportedInput(
             "AdaLN bank task, schedule or numerical contract differs", code="adaln_binding"
         )
-    _validate_table_rows(rows(bank), task, bank=True)
+    _validate_table_rows(rows(bank), task, plan, bank=True)
     return projection
 
 
@@ -313,22 +321,25 @@ def _apply_adaln(
             "AdaLN attachment source has a different pruning state", code="adaln_source"
         )
     document = _validate_body_config(config(opened), pruned)
+    for task in _TASKS:
+        _plan(opened, task)
     bindings: dict[Task, str] = (
         _bindings(document)
         if pruned
         else {task: _project(ctx, opened, task, f"{task}-weights").checkpoint for task in _TASKS}
     )
     banks: dict[Task, Checkpoint] = {"fl2va": open_source(ctx, fl2va), "ref2va": open_source(ctx, ref2va)}
+    plans = {task: _plan(bank, task) for task, bank in banks.items()}
     bank_of = {DIT_COMPONENT[task]: bank for task, bank in banks.items()}
     tables: set[tuple[str, str]] = set()
     for task in _TASKS:
-        if _bank_projection(banks[task], task) != bindings[task]:
+        if _bank_projection(banks[task], task, plans[task]) != bindings[task]:
             raise UnsupportedInput(
                 "AdaLN bank was computed from different generating weights", code="adaln_binding"
             )
-        tables |= {(DIT_COMPONENT[task], key) for key in table_shapes(_topology(task), _plan(task))}
+        tables |= {(DIT_COMPONENT[task], key) for key in table_shapes(_topology(task), plans[task])}
     configured = canonical_json.decode(
-        dual_adaln_pruned_config(_sections(), _plan("fl2va"), _plan("ref2va"))
+        dual_adaln_pruned_config(_sections(), plans["fl2va"], plans["ref2va"])
     )
     for task in _TASKS:
         configured[DIT_COMPONENT[task]]["cozy_h3"][_BINDING] = bindings[task]
@@ -341,6 +352,9 @@ def _apply_adaln(
         write_config(out, canonical_json.encode(configured))
         if not pruned:
             out.inherit(opened)
+        if out.done is None:
+            for task, component in DIT_COMPONENT.items():
+                out.component(component).asset(TIMESTEP_PLAN, plans[task].canonical_bytes)
         for row in order:
             if out.has(*row):
                 continue

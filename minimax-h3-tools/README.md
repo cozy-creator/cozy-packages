@@ -46,6 +46,15 @@ rows still present (the native `rope.inv_freq` buffer and the text model's layer
 final norm and head), so the converted upstream release and `bf16-full` produce the same
 lanes. It does not accept a pruned or quantized checkpoint as a substitute for the full source.
 
+Every source DiT carries its schedule as `timestep-plan.json` (`transformer` for
+FL2VA, `transformer_ref` for Ref2VA). Turbo production reads each task's plan
+from its adapter component and requires the supported PDD-8 schedule. Missing,
+wrong-task or unsupported plans refuse; there is no packaged fallback. Outputs,
+projections and table banks retain the plan asset, and full-model derivations
+preserve other component assets. The source checkpoint identity binds plan bytes
+to resumable computation. See [client preparation](CLIENT-SCRIPTS.md) for the
+migration boundary of older projection/bank bindings.
+
 Pruned checkpoint configs describe the ordered AdaLN rows as `cozy_h3.table_keys`:
 each final-normalization row names an exact float32 timestep, and each block-modulation
 row names a timestep and modality. Sampling-plan hashes remain generation provenance;

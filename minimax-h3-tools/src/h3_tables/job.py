@@ -47,15 +47,18 @@ from .model_config import (
     parse_production_config,
 )
 from .order import current_order, full_order
-from .plans import Task, TimestepPlan, parse_declared_plan
+from .plans import Task, TimestepPlan
 from .quantization import dit_plan
 from .source import (
     DTYPE,
+    TIMESTEP_PLAN,
+    copy_assets,
     Rows,
     official_full_specs,
     open_source,
     plain,
     rows,
+    timestep_plan,
     write_config,
     write_tables,
 )
@@ -67,23 +70,21 @@ def _asset(name: str) -> bytes:
     return files(__package__).joinpath("assets", name).read_bytes()
 
 
-def _production_plan(task: Task) -> TimestepPlan:
-    plan = parse_declared_plan(_asset(f"timestep-plan.{task}.json"))
-    if plan.task != task:
-        raise ValueError(f"package timestep plan is {plan.task!r}, expected {task!r}")
-    return plan
+def _production_plan(source: Checkpoint, task: Task) -> TimestepPlan:
+    return timestep_plan(source, task)
 
 
-def _check_table_budget(declared: int) -> None:
-    """Refuse before native writes if either committed task plan exceeds the ceiling."""
+def _check_table_budget(plans: Mapping[Task, TimestepPlan], declared: int) -> None:
+    """Refuse before native writes if either source task plan exceeds the ceiling."""
     sections = parse_production_config(_asset("model-config.json"))
     measured = max(
-        table_bytes(H3Topology.from_config(sections[component]), _production_plan(task))
+        table_bytes(H3Topology.from_config(sections[component]), plans[task])
         for task, component in DIT_COMPONENT.items()
     )
     if measured > declared:
-        raise ValueError(
-            f"the committed plans need {measured} table bytes, above budget {declared}"
+        raise UnsupportedInput(
+            f"the source plans need {measured} table bytes, above budget {declared}",
+            code="adaln_plan",
         )
 
 
@@ -93,7 +94,6 @@ MAX_FULL_BYTES = 64 << 10
 MAX_PRUNED_BYTES = 2 * MAX_TABLE_BYTES + (128 << 10)
 MAX_QUANTIZED_BYTES = 2 * MAX_DIT_BYTES + MAX_PRUNED_BYTES
 
-_check_table_budget(MAX_TABLE_BYTES)
 
 #: The declared output slots, spelled as literals because cr-114's static reader folds the
 #: decorator from SOURCE over a closed vocabulary; `_check_lane_outputs` proves they ARE the
@@ -185,7 +185,7 @@ def _tables(
         with tel.stage(stage):
             got = write_tables(
                 ctx,
-                plan=_production_plan(task),
+                plan=_production_plan(source, task),
                 topology=H3Topology.from_config(sections[component]),
                 source=source,
                 component=component,
@@ -249,7 +249,7 @@ def _log_treatment(tel: Telemetry, slot: str, selection: Selection, stats: Treat
 
 
 def lane_rows(
-    name: str, present: Rows
+    name: str, present: Rows, plans: Mapping[Task, TimestepPlan]
 ) -> tuple[tuple[tuple[str, str], ...], dict[str, dict[str, Any]], frozenset[tuple[str, str]]]:
     """A lane's output order, the source rows it carries per component, and the rows it
     computes (tables). Refuses a source that is not one full-precision H3 checkpoint."""
@@ -273,7 +273,7 @@ def lane_rows(
     computed = frozenset(
         (component, key)
         for task, component in DIT_COMPONENT.items()
-        for key in table_shapes(H3Topology.from_config(sections[component]), _production_plan(task))
+        for key in table_shapes(H3Topology.from_config(sections[component]), plans[task])
     ) if pruned else frozenset()  # fmt: skip
     carried: dict[str, dict[str, Any]] = {component: {} for component in COMPONENTS}
     for component, key in order:
@@ -297,7 +297,9 @@ def _produce_lane(
     `bf16-full` lane). Every row it does not rewrite is copied, keeping the source's objects;
     an interrupted attempt resumes what it wrote, a committed one replays."""
     source = open_source(ctx, weights)
-    order, carried, computed = lane_rows(name, rows(source))
+    plans = {task: _production_plan(source, task) for task in DIT_COMPONENT}
+    _check_table_budget(plans, MAX_TABLE_BYTES)
+    order, carried, computed = lane_rows(name, rows(source), plans)
     lane = LANES[name]
     selections = [
         _lanes.select(
@@ -312,7 +314,7 @@ def _produce_lane(
     ]
     sections = parse_production_config(_asset("model-config.json"))
     config = (
-        dual_adaln_pruned_config(sections, _production_plan("fl2va"), _production_plan("ref2va"))
+        dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
         if computed
         else dual_full_config(sections)
     )
@@ -323,6 +325,7 @@ def _produce_lane(
     reused = written = read = 0
     with ctx.output(name, Derivation(base=None, sources=(source,), order=order)) as out:
         write_config(out, config)
+        out.inherit(source)
         with tel.stage(f"{name}-copy"):
             for done, row in enumerate(order, 1):
                 if row not in computed and row not in replaced and not out.has(*row):
@@ -457,6 +460,8 @@ def _quantize_lane(
     max_relative_frobenius: float | None,
 ) -> ModelArtifact:
     source = open_source(ctx, weights)
+    for task in DIT_COMPONENT:
+        _production_plan(source, task)
     selections = quantizer_selections(source, encoding)
     order = [(component, key) for component, keys in rows(source).items() for key in keys]
     request = ArtifactQuantizationRequest(max_relative_frobenius=max_relative_frobenius)
@@ -548,7 +553,9 @@ def _check_lane_functions() -> None:
 _check_lane_functions()
 
 
-def retable_rows(pruned: Rows, full: Rows) -> dict[str, tuple[str, ...]]:
+def retable_rows(
+    pruned: Rows, full: Rows, plans: Mapping[Task, TimestepPlan]
+) -> dict[str, tuple[str, ...]]:
     """Each DiT's table keys, once `pruned` is an AdaLN-pruned H3 carrying table rows only and
     `full` carries the exact modulation weights they are computed from."""
     if set(pruned) != set(COMPONENTS):
@@ -560,7 +567,7 @@ def retable_rows(pruned: Rows, full: Rows) -> dict[str, tuple[str, ...]]:
     for task, component in DIT_COMPONENT.items():
         topology = H3Topology.from_config(sections[component])
         keys = set(pruned[component])
-        tables[component] = tuple(table_shapes(topology, _production_plan(task)))
+        tables[component] = tuple(table_shapes(topology, plans[task]))
         if not set(tables[component]) <= keys or set(removed_keys(topology)) & keys:
             raise UnsupportedInput(
                 f"{component} is not an AdaLN-pruned source carrying table rows only",
@@ -591,22 +598,29 @@ async def retable(
     table bytes, never a requantization. The same rows also commit as a two-DiT table bank.
     """
     pruned_source, full_source = open_source(ctx, pruned), open_source(ctx, full)
-    tables = retable_rows(rows(pruned_source), rows(full_source))
+    for task in DIT_COMPONENT:
+        _production_plan(pruned_source, task)
+    plans = {task: _production_plan(full_source, task) for task in DIT_COMPONENT}
+    _check_table_budget(plans, MAX_TABLE_BYTES)
+    tables = retable_rows(rows(pruned_source), rows(full_source), plans)
     sections = parse_production_config(_asset("model-config.json"))
-    plans = {task: _production_plan(task) for task in DIT_COMPONENT}
     config = dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
     bank_config = canonical_json.encode(
         {c: section for c, section in canonical_json.decode(config).items() if c in tables}
     )
     order = current_order(_asset("whole-order.json")).rows
     bank_order = tuple((c, k) for c, k in order if k in tables.get(c, ()))
-    retabled_derivation = Derivation(base=pruned_source, order=order)
+    retabled_derivation = Derivation(base=pruned_source, sources=(full_source,), order=order)
     bank_derivation = Derivation(base=None, sources=(full_source,), order=bank_order)
     with ctx.output("adaln-pruned", retabled_derivation) as retabled, ctx.output(
         "tables", bank_derivation
     ) as bank:
         write_config(retabled, config)
         write_config(bank, bank_config)
+        for task, component in DIT_COMPONENT.items():
+            copy_assets(bank, full_source, component)
+            if retabled.done is None:
+                retabled.component(component).asset(TIMESTEP_PLAN, plans[task].canonical_bytes)
         if not all(retabled.has(*row) and bank.has(*row) for row in bank_order):
             _require_cuda()
         read, written, _ = _tables(ctx, tel, full_source, (retabled, bank))

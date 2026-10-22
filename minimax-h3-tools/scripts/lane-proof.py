@@ -15,14 +15,32 @@ from collections.abc import Callable
 from pathlib import Path
 
 import tensorfs
-from cozy_runtime.author import UnsupportedInput
+from cozy_runtime.author import UnsupportedInput, canonical_json
 from h3_tables import adaln_operations, job, lanes
 from h3_tables.model_config import COMPONENTS, DIT_COMPONENT, parse_production_config
 from h3_tables.order import current_order, full_order
+from h3_tables.plans import Task, TimestepPlan
+from h3_tables.table_layout import TableLayout
 from h3_tables.source import rows
 
 ROOT = Path(__file__).resolve().parents[2]
 VECTORS = ROOT / "scripts" / "lane-headers"
+def plans() -> dict[Task, TimestepPlan]:
+    """Geometry from captured pruned headers, without requiring a serving environment.
+
+    This fixture deliberately carries no schedule; model-assets-proof.py separately
+    checks complete source plans against the independent serving scheduler oracle.
+    """
+    source = tensorfs.open(VECTORS / "minimax-h3.cozytensors", local_files_only=True)
+    result = {}
+    for task, component in DIT_COMPONENT.items():
+        table_keys = source.components[component].config["cozy_h3"]["table_keys"]
+        layout = TableLayout.parse(table_keys)
+        result[task] = TimestepPlan(
+            task, "", canonical_json.encode({"table_keys": table_keys}),
+            layout.timesteps, layout.block_keys, (),
+        )
+    return result
 
 
 def refuses(code: str, call: Callable[[], object]) -> None:
@@ -55,7 +73,7 @@ def recipes(pruned: tensorfs.Checkpoint) -> None:
     refuses("h3_keep_unmatched", lambda: lanes.select(
         "text_encoder", lanes.Treatment(encode="fp8.rowwise", keep=("model.no_such.weight",)),
         pruned, present["text_encoder"]))
-    refuses("h3_lane_source", lambda: job.lane_rows("bf16-full", present))
+    refuses("h3_lane_source", lambda: job.lane_rows("bf16-full", present, plans()))
     print("PASS refusals: audio_vae, an unmatched keep, a pruned source for a lane")
 
 
@@ -68,7 +86,7 @@ def lanes_from_full(full: tensorfs.Checkpoint) -> None:
         ("bf16", current, 102),
         ("fp8", current, 102),
     ):
-        order, carried, computed = job.lane_rows(name, present)
+        order, carried, computed = job.lane_rows(name, present, plans())
         assert order == tuple(order_want) and len(computed) == computed_want, name
         assert set(carried) == set(COMPONENTS), name
         assert all(row in computed or row[1] in carried[row[0]] for row in order), name
@@ -89,7 +107,7 @@ def lanes_from_full(full: tensorfs.Checkpoint) -> None:
 
 
 def adaln(pruned: tensorfs.Checkpoint, full: tensorfs.Checkpoint) -> None:
-    tables = job.retable_rows(rows(pruned), rows(full))
+    tables = job.retable_rows(rows(pruned), rows(full), plans())
     assert {c: len(keys) for c, keys in tables.items()} == {c: 51 for c in DIT_COMPONENT.values()}
     assert adaln_operations._body_kind(rows(pruned)) is True
     assert adaln_operations._body_kind(rows(full)) is False
