@@ -851,11 +851,13 @@ def _require_calls() -> None:
 
 
 def record(model: object, plan: Plan, name: str, document: Mapping[str, object]) -> None:
-    """One part of the execution plan's outcome (`glue`, `vae_glue`): on the model
-    (`_cozy_fusion_report[name]`), in the executor's log, and in the construction's receipts
-    where the Runtime's plan takes reports (0.31: `measurements.execution.plan_reports`), so
-    `run show` names a refusal. An install deferred to a request boundary reports again, through
-    the same plan, when it lands. A plan without `report` (before 0.31) keeps the log line."""
+    """One part of the execution plan's outcome, named by its kernel set (`GLUE.name`): on the
+    model (`_cozy_fusion_report[name]`), in the executor's log, and in the construction's
+    receipts where the Runtime's plan takes reports (0.31: `measurements.execution.plan_reports`),
+    so `run show` names a refusal. An install deferred to a request boundary reports again,
+    through the same plan, when it lands; one whose build fails never reaches the package, and
+    Runtime reports that under the same kernel-set name. A plan without `report` (before 0.31)
+    keeps the log line."""
     if hasattr(model, "__dict__"):
         vars(model).setdefault("_cozy_fusion_report", {})[name] = dict(document)
     print(f"[minimax-h3] {name} fusion: {json.dumps(document, sort_keys=True)}", file=sys.stderr)
@@ -865,7 +867,7 @@ def record(model: object, plan: Plan, name: str, document: Mapping[str, object])
 
 
 def _record(model: object, plan: Plan, result: Applied) -> Applied:
-    record(model, plan, "glue", result.document())
+    record(model, plan, GLUE.name, result.document())
     return result
 
 
