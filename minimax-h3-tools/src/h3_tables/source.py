@@ -65,9 +65,7 @@ def config(source: Checkpoint) -> bytes:
     return canonical_json.encode({name: c.config for name, c in source.components.items()})
 
 
-def timestep_plan(
-    source: Checkpoint, task: Task, *, component: str | None = None, launch: bool = True
-) -> TimestepPlan:
+def timestep_plan(source: Checkpoint, task: Task, *, component: str | None = None) -> TimestepPlan:
     """The source model owns its schedule; package resources are never a fallback."""
     name = component or DIT_COMPONENT[task]
     held = source.components.get(name)
@@ -77,7 +75,7 @@ def timestep_plan(
             code="adaln_plan",
         )
     try:
-        plan = parse_plan(held.asset(TIMESTEP_PLAN), task=task, launch=launch)
+        plan = parse_plan(held.asset(TIMESTEP_PLAN), task=task)
         stamp = held.config.get("cozy_h3")
         if isinstance(stamp, dict) and stamp.get("modulation") == "adaln-pruned":
             layout = TableLayout.parse(stamp.get("table_keys"))

@@ -18,11 +18,6 @@ from cozy_runtime.author import canonical_json
 Task = Literal["fl2va", "ref2va"]
 TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
 
-LAUNCH_PLAN_DIGESTS: dict[Task, str] = {
-    "fl2va": "sha256:9a48803d17d7bb5499ca8c018f60c86c9890eb91496249ac7cb199bc9e45201e",
-    "ref2va": "sha256:565a164cbf0cefa58d4976cb4c84887cf9807cc7c4be62263d5e0e0c5d9bc50e",
-}
-
 _TOP_LEVEL = {
     "adaln_row_index",
     "audio_shift",
@@ -52,6 +47,12 @@ class TimestepPlan:
     @property
     def table_keys(self) -> dict[str, Any]:
         return cast(dict[str, Any], canonical_json.decode(self.canonical_bytes)["table_keys"])
+
+    @property
+    def shifts(self) -> tuple[float, float]:
+        """The video and audio scheduler shifts the plan's sigmas were built with."""
+        document = canonical_json.decode(self.canonical_bytes)
+        return float.fromhex(document["video_shift"]), float.fromhex(document["audio_shift"])
 
 
 def _f32(value: float) -> float:
@@ -162,14 +163,10 @@ def _parse_schedule(value: object, field: str, class_rows: list[dict[str, Any]])
     return forwards
 
 
-def parse_plan(raw: bytes, *, task: str, launch: bool = True) -> TimestepPlan:
-    """Validate one complete plan and return its exact table selectors.
-
-    `launch=True` pins the currently approved oracle bytes. The structural validator itself
-    admits any exact schedule set, so widening the approved digest does not require a second
-    numerical implementation.
-    """
-    if task not in LAUNCH_PLAN_DIGESTS:
+def parse_plan(raw: bytes, *, task: str) -> TimestepPlan:
+    """Validate one complete plan and return its exact table selectors. The model that carries
+    the plan is its authority: any exact schedule set passes."""
+    if task not in TASKS:
         raise ValueError(f"unknown MiniMax-H3 task {task!r}")
     try:
         decoded = canonical_json.decode(raw)
@@ -245,11 +242,6 @@ def parse_plan(raw: bytes, *, task: str, launch: bool = True) -> TimestepPlan:
         for row in block_expected
     )
     digest = canonical_json.digest(document)
-    if launch and digest != LAUNCH_PLAN_DIGESTS[typed_task]:
-        raise ValueError(
-            f"{task} plan {digest} is structurally valid but is not the launch oracle "
-            f"{LAUNCH_PLAN_DIGESTS[typed_task]}"
-        )
     return TimestepPlan(typed_task, digest, canonical, timesteps, block_rows, steps)
 
 
@@ -259,6 +251,6 @@ def parse_declared_plan(raw: bytes) -> TimestepPlan:
         value = canonical_json.decode(raw)
     except ValueError as exc:
         raise ValueError("timestep plan is not JSON") from exc
-    if not isinstance(value, dict) or value.get("task") not in LAUNCH_PLAN_DIGESTS:
+    if not isinstance(value, dict) or value.get("task") not in TASKS:
         raise ValueError("timestep plan does not declare fl2va or ref2va")
     return parse_plan(raw, task=str(value["task"]))

@@ -44,7 +44,7 @@ from .model_config import (
     DIT_COMPONENT,
     dual_adaln_pruned_config,
     dual_full_config,
-    parse_production_config,
+    parse_full_config,
 )
 from .order import current_order, full_order
 from .plans import Task, TimestepPlan
@@ -76,7 +76,7 @@ def _production_plan(source: Checkpoint, task: Task) -> TimestepPlan:
 
 def _check_table_budget(plans: Mapping[Task, TimestepPlan], declared: int) -> None:
     """Refuse before native writes if either source task plan exceeds the ceiling."""
-    sections = parse_production_config(_asset("model-config.json"))
+    sections = parse_full_config(_asset("model-config.json"))
     measured = max(
         table_bytes(H3Topology.from_config(sections[component]), plans[task])
         for task, component in DIT_COMPONENT.items()
@@ -174,7 +174,7 @@ def _tables(
     outputs: tuple[Output, ...],
 ) -> tuple[int, int, int]:
     """Both DiTs' tables from `source`'s modulation weights into `outputs`."""
-    sections = parse_production_config(_asset("model-config.json"))
+    sections = parse_full_config(_asset("model-config.json"))
     read = written = reused = 0
     for task, component in DIT_COMPONENT.items():
         stage = f"timestep-table-{task}"
@@ -257,7 +257,7 @@ def lane_rows(
         raise UnsupportedInput(
             f"source components are {sorted(present)}, not H3's five", code="h3_lane_source"
         )
-    sections = parse_production_config(_asset("model-config.json"))
+    sections = parse_full_config(_asset("model-config.json"))
     for component in DIT_COMPONENT.values():
         for key, (dtype, shape) in official_full_specs(sections[component]).items():
             row = present[component].get(key)
@@ -312,7 +312,7 @@ def _produce_lane(
         )
         for component, treatment in lane_treatments(lane).items()
     ]
-    sections = parse_production_config(_asset("model-config.json"))
+    sections = parse_full_config(_asset("model-config.json"))
     config = (
         dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
         if computed
@@ -421,7 +421,7 @@ def quantizer_selections(source: Checkpoint, encoding: _lanes.Encoding) -> list[
         raise UnsupportedInput(
             f"source components are {sorted(present)}, not H3's five", code="h3_quantize_source"
         )
-    sections = parse_production_config(_asset("model-config.json"))
+    sections = parse_full_config(_asset("model-config.json"))
     for component in DIT_COMPONENT.values():
         if set(removed_keys(H3Topology.from_config(sections[component]))) & set(present[component]):
             raise UnsupportedInput(
@@ -562,7 +562,7 @@ def retable_rows(
         raise UnsupportedInput(
             f"retable source components are {sorted(pruned)}", code="h3_retable_source"
         )
-    sections = parse_production_config(_asset("model-config.json"))
+    sections = parse_full_config(_asset("model-config.json"))
     tables: dict[str, tuple[str, ...]] = {}
     for task, component in DIT_COMPONENT.items():
         topology = H3Topology.from_config(sections[component])
@@ -603,7 +603,7 @@ async def retable(
     plans = {task: _production_plan(full_source, task) for task in DIT_COMPONENT}
     _check_table_budget(plans, MAX_TABLE_BYTES)
     tables = retable_rows(rows(pruned_source), rows(full_source), plans)
-    sections = parse_production_config(_asset("model-config.json"))
+    sections = parse_full_config(_asset("model-config.json"))
     config = dual_adaln_pruned_config(sections, plans["fl2va"], plans["ref2va"])
     bank_config = canonical_json.encode(
         {c: section for c, section in canonical_json.decode(config).items() if c in tables}

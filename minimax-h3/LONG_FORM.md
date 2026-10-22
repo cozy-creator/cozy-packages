@@ -37,8 +37,9 @@ so the workflow copies the global information into it.
 - `mode` (`turbo` or `standard`) and `steps` (standard only).
 
 Both long-form composers default to Turbo: eight PDD evaluations per segment.
-The top-level `mode` applies to every segment. `mode: standard` uses 30 steps by
-default; its optional `steps` selects 30, 40 or 50. Omit `steps` with `mode: turbo`.
+The top-level `mode` applies to every segment. `mode: standard` uses the model plan's
+fewest steps (30) by default; its optional `steps` selects 30, 40 or 50. Omit `steps` with
+`mode: turbo`.
 There is no per-segment sampling override.
 
 Omit CLI `--gpus` for this workflow: each model then uses its supported GPU count.

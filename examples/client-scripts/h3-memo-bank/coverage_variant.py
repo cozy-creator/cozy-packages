@@ -1,4 +1,4 @@
-"""Derive a private 30-step coverage fixture; never changes the production plan pin."""
+"""Derive a private 30-step coverage fixture from a source model's plan; never a production plan."""
 import argparse
 import json
 from pathlib import Path
@@ -14,7 +14,8 @@ parser.add_argument("--task", choices=("fl2va", "ref2va"), default="fl2va")
 parser.add_argument("--out", type=Path, default=Path.home() / ".cozy/outputs/h3-bank-qualification/coverage-30.json")
 args = parser.parse_args()
 source = tensorfs.open(args.checkpoint, local_files_only=True)
-document = json.loads(timestep_plan(source, args.task).canonical_bytes)
+production = timestep_plan(source, args.task)
+document = json.loads(production.canonical_bytes)
 document["schedules"] = [schedule for schedule in document["schedules"] if schedule["transformer_evaluations"] == 30]
 if len(document["schedules"]) != 1:
     raise SystemExit("the source must contain exactly one reviewed 30-step schedule")
@@ -32,14 +33,9 @@ for evaluation in document["schedules"][0]["evaluations"]:
             final.append({"index": len(final), "timestep": pair[0]})
 document["table_keys"] = {"block_modulation": blocks, "final_normalization": final}
 raw = canonical_json.encode(document)
-plan = parse_plan(raw, task=args.task, launch=False)
-try:
-    parse_plan(raw, task=args.task)
-except ValueError as error:
-    if "not the launch oracle" not in str(error):
-        raise
-else:
-    raise SystemExit("qualification variant unexpectedly equals the production launch plan")
+plan = parse_plan(raw, task=args.task)
+if plan.digest == production.digest:
+    raise SystemExit("qualification variant unexpectedly equals the source model's plan")
 args.out.parent.mkdir(parents=True, exist_ok=True)
 args.out.write_bytes(raw)
-print(json.dumps({"task": args.task, "digest": plan.digest, "steps": plan.steps, "timesteps": len(plan.timesteps), "block_rows": len(plan.block_rows), "file": str(args.out), "production_launch_refused": True}, sort_keys=True))
+print(json.dumps({"task": args.task, "digest": plan.digest, "steps": plan.steps, "timesteps": len(plan.timesteps), "block_rows": len(plan.block_rows), "file": str(args.out), "source_plan": production.digest}, sort_keys=True))

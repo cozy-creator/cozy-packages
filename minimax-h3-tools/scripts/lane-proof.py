@@ -17,7 +17,7 @@ from pathlib import Path
 import tensorfs
 from cozy_runtime.author import UnsupportedInput, canonical_json
 from h3_tables import adaln_operations, job, lanes
-from h3_tables.model_config import COMPONENTS, DIT_COMPONENT, parse_production_config
+from h3_tables.model_config import COMPONENTS, DIT_COMPONENT, parse_full_config
 from h3_tables.order import current_order, full_order
 from h3_tables.plans import Task, TimestepPlan
 from h3_tables.table_layout import TableLayout
@@ -79,7 +79,7 @@ def recipes(pruned: tensorfs.Checkpoint) -> None:
 
 def lanes_from_full(full: tensorfs.Checkpoint) -> None:
     present = rows(full)
-    sections = parse_production_config(job._asset("model-config.json"))
+    sections = parse_full_config(job._asset("model-config.json"))
     current = current_order(job._asset("whole-order.json")).rows
     for name, order_want, computed_want in (
         ("bf16-full", full_order(sections, current), 0),

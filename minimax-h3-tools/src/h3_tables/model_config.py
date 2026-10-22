@@ -1,5 +1,6 @@
 """H3's construction config: one section per component (D4 names), stored as each
-component's config; Runtime reassembles them into one `{component: config}` mapping."""
+component's config; Runtime reassembles them into one `{component: config}` mapping. The
+package's copy holds the supported constructor only; a DiT's table rows come from its plan."""
 
 from __future__ import annotations
 
@@ -9,7 +10,6 @@ from cozy_runtime.author import canonical_json
 
 from .kernel import H3Topology
 from .plans import Task, TimestepPlan
-from .table_layout import TableLayout
 
 COMPONENTS = ("transformer", "transformer_ref", "text_encoder", "vae", "audio_vae")
 DIT_COMPONENT: dict[Task, str] = {"fl2va": "transformer", "ref2va": "transformer_ref"}
@@ -54,25 +54,6 @@ def parse_full_config(raw: bytes) -> dict[str, dict[str, Any]]:
     H3Topology.from_config(fl)
     validate_text_conditioner(sections["text_encoder"])
     return sections
-
-
-def parse_production_config(raw: bytes) -> dict[str, dict[str, Any]]:
-    """The official sections of an AdaLN-pruned config, its task/table stamps removed."""
-    sections = _sections(raw, "production H3 model config")
-    for task, component in DIT_COMPONENT.items():
-        config = dict(sections[component])
-        stamp = config.pop("cozy_h3", None)
-        if (
-            not isinstance(stamp, dict)
-            or set(stamp) != {"task", "modulation", "table_keys"}
-            or stamp["task"] != task
-            or stamp["modulation"] != "adaln-pruned"
-            or not isinstance(stamp["table_keys"], dict)
-        ):
-            raise ValueError(f"model config {component!r} changed its task/table metadata")
-        TableLayout.parse(stamp["table_keys"])
-        sections[component] = config
-    return parse_full_config(canonical_json.encode(sections))
 
 
 def dual_full_config(sections: dict[str, dict[str, Any]]) -> bytes:

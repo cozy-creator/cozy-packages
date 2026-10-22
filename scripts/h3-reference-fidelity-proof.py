@@ -40,7 +40,7 @@ from minimax_h3.official import (  # noqa: E402
     reference_image_vision_tokens,
     supported_durations,
 )
-from h3_tables.model_config import dual_full_config, parse_production_config  # noqa: E402
+from h3_tables.model_config import dual_full_config, parse_full_config  # noqa: E402
 from h3_plans import BASE_STEPS, oracle_plans  # noqa: E402
 
 
@@ -66,7 +66,7 @@ class RecordingVAE:
 
 def meta_pipeline() -> OfficialH3Pipeline:
     source = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets" / "model-config.json"
-    config = canonical_json.decode(dual_full_config(parse_production_config(source.read_bytes())))
+    config = canonical_json.decode(dual_full_config(parse_full_config(source.read_bytes())))
     with torch.device("meta"):
         return OfficialH3Pipeline(Config(config), oracle_plans())
 

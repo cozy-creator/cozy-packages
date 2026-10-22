@@ -29,17 +29,18 @@ from .source import (
 RANK = 64
 NUM_STEPS = 32
 BLOCK_SIZE = 4
-PLAN_DIGESTS: dict[Task, str] = {
-    "fl2va": "sha256:d2eb1605c1c1e01a4c5fdaaf1912ab43f33d9ce4772febf1c75b9bbfc8f7ba9d",
-    "ref2va": "sha256:896a10881805e3047f6df514dd4e70fcea078837469eeb22ce67f0bd3f679cb7",
-}
 TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
 
 
 def turbo_plan(source: Checkpoint, task: Task, component: str) -> TimestepPlan:
-    plan = timestep_plan(source, task, component=component, launch=False)
-    if plan.digest != PLAN_DIGESTS[task]:
-        raise UnsupportedInput("PDD tables require the captured eight-evaluation plan")
+    """The adapter's own plan: one schedule, one evaluation per distilled PDD block."""
+    plan = timestep_plan(source, task, component=component)
+    if plan.steps != (NUM_STEPS // BLOCK_SIZE,):
+        raise UnsupportedInput(
+            f"the PDD adapter's {task} plan serves {plan.steps}, not its one "
+            f"{NUM_STEPS // BLOCK_SIZE}-evaluation schedule",
+            code="adaln_plan",
+        )
     return plan
 
 
@@ -239,7 +240,7 @@ async def turbo_lora(
             )
             tables = len(table_shapes(topologies[task], plans[task]))
             reused, computed = reused + kept, computed + tables - kept
-            for prefix, shift in (("proj_out", 12.0), ("audio_proj_out", 3.0)):
+            for prefix, shift in zip(("proj_out", "audio_proj_out"), plans[task].shifts, strict=True):
                 ctx.raise_if_cancelled()
                 keys = (f"{prefix}.weight", f"{prefix}.bias")
                 if all(out.has(component, key) for key in keys):

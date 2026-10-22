@@ -25,7 +25,7 @@ from .model_config import (
     DIT_COMPONENT,
     dual_adaln_pruned_config,
     dual_full_config,
-    parse_production_config,
+    parse_full_config,
 )
 from .order import current_order, full_order
 from .plans import Task, TimestepPlan
@@ -58,7 +58,7 @@ def _plan(source: Checkpoint, task: Task) -> TimestepPlan:
 
 
 def _sections() -> dict[str, dict[str, Any]]:
-    return parse_production_config(_asset("model-config.json"))
+    return parse_full_config(_asset("model-config.json"))
 
 
 def _topology(task: Task) -> H3Topology:
@@ -152,7 +152,7 @@ def _validate_body_config(raw: bytes, pruned: bool) -> dict[str, Any]:
             )
         TableLayout.parse(stamp["table_keys"])
         # A previous supported bank may be replaced while keeping constructor facts.
-        row["cozy_h3"] = expected[component]["cozy_h3"]
+        del row["cozy_h3"]
     if value != expected:
         raise UnsupportedInput("H3 pruned body changed its constructor facts", code="adaln_config")
     return document

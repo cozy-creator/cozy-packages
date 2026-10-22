@@ -85,7 +85,7 @@ def encode_text(
             first_frame=None,
             last_frame=None,
             generator=model.pipe.generator(view.generator),
-            steps=30,
+            steps=model.pipe.plans["fl2va"].schedule().transformer_evaluations,
             frames=frames_for(5),
             task="fl2va",
         )

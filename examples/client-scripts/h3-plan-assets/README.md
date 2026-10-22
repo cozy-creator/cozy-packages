@@ -1,24 +1,15 @@
-# H3 timestep asset migration
+# H3 timestep plan assets
 
-Generate the historical base and Turbo plan assets with `scripts/h3_plans.py --output DIR`
-(base: `30 40 50`; Turbo: `--turbo 8`). Prepare a JSON request containing `source_repo`,
-`source_revision` (the exact `sha256:` tree), `endpoint`, `plan_dir`, a new `work_dir`, and
-`turbo` (boolean), then run locally:
+Each H3 DiT carries its timestep plan as the `timestep-plan.json` asset of its component
+(`transformer`, `transformer_ref`; the turbo LoRA's `fl2va_turbo`, `ref2va_turbo`), first in
+`minimax-h3@1.0.0-rc.4` and `minimax-h3-turbo-lora@1.0.1`. The package reads them from the
+selected model and holds no copy.
 
-```sh
-cozy run ./examples/client-scripts/h3-plan-assets/prepare.py --asset request=./request.json --on local
-```
+`scripts/h3_plans.py --output DIR 30 40 50` (Turbo: `--turbo 8`) generates plans from the official
+scheduler. A plan reaches a model through the producer: `minimax-h3-tools` `retable`, the lane
+functions and `turbo-lora` write it with the tables it labels. Adding a plan to an existing release
+without rewriting tables needs a metadata-only TensorFS commit: `tensorfs.Writer(base=...)` fetches
+every carried tensor chunk before it commits, so that is a TensorFS change, not a script here.
 
-The script reads only variant headers and repository files. It creates `source/`, `proposed/`
-and `receipt.json` under the requested work directory. Native readback and structural equality
-checks verify that only plan references were added; tensor references, configs, other assets,
-README and LICENSE remain unchanged. It refuses legacy generating-projection bindings.
-
-Preparation does not upload or publish. Upload `proposed/` through a CLI supporting CozyTensors
-folder sources, verify the private commit against the receipt, then publish the replacement
-model release before releasing consumers. Preserve the old model releases.
-
-Read a published checkpoint back through the machine's normal model grant:
+Read a published checkpoint's header and plan references without reading tensor values:
 `cozy run ./examples/client-scripts/h3-plan-assets/inspect.py model.source=org/model@release/lane --on MACHINE`.
-Its header identity, plan references and missing tensor-chunk counts verify metadata access
-without reading tensor values.

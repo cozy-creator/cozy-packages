@@ -84,6 +84,8 @@ from minimax_h3.official import (
     ReferencePolicyFacts,
     ScheduleFacts,
     Task,
+    TimestepPlan,
+    Trunk,
     assert_duration_envelope,
     denoise_rows,
     frames_for,
@@ -229,14 +231,17 @@ KeyframeAssets = Annotated[
 DEFAULT_REFERENCE_IMAGE_SHORT_EDGE = 1024
 _SHORT_EDGE_LADDER = (2048, 1536, 1024, 768, 512, 256)
 _REFERENCE_FIDELITY_EDGES = {"low": 256, "medium": 1024, "high": REFERENCE_IMAGE_SHORT_EDGE}
-# The step counts the wire offers; the model's timestep plans serve them (`TimestepPlan.schedule`).
-SUPPORTED_STEPS = (30, 40, 50)
-DEFAULT_STEPS = 30  # Static and imported descriptors must expose the same default.
-#: PDD-8: what the turbo functions run, fixed by the turbo LoRA's plans and absent from their wire.
-TURBO_STEPS = 8
+# The model's timestep plans own the step counts: a request names one of them or none (the
+# fewest), and a turbo function always runs its LoRA's one schedule (`TimestepPlan.schedule`).
 Steps = Annotated[
-    Literal[SUPPORTED_STEPS],  # type: ignore[valid-type]
-    msgspec.Meta(description="Denoise steps (transformer evaluations); fewer is faster."),
+    int,
+    msgspec.Meta(
+        ge=1,
+        description=(
+            "Denoise steps (transformer evaluations): a count the model's timestep plan "
+            "serves; absent, its fewest. Fewer is faster."
+        ),
+    ),
 ]
 # Length is the request's largest cost lever: the DiT attends over ONE packed sequence whose
 # rows scale with the frame count, and attention is quadratic in it. Every whole second in
@@ -284,7 +289,7 @@ class ClipInput(msgspec.Struct, kw_only=True):
 class StandardClipInput(ClipInput, kw_only=True):
     """`ClipInput` with the standard calls' denoise steps."""
 
-    steps: Steps = DEFAULT_STEPS
+    steps: Steps | None = None
 
 
 class ReferenceClipInput(ClipInput, kw_only=True):
@@ -294,7 +299,7 @@ class ReferenceClipInput(ClipInput, kw_only=True):
 
 
 class ReferenceStandardClipInput(ReferenceClipInput, kw_only=True):
-    steps: Steps = DEFAULT_STEPS
+    steps: Steps | None = None
 
 
 class Resolution(Enum):
@@ -334,7 +339,7 @@ class RenderInput(ClipInput, kw_only=True):
 
 
 class StandardRenderInput(RenderInput, kw_only=True):
-    steps: Steps = DEFAULT_STEPS
+    steps: Steps | None = None
 
 
 class ReferenceRenderInput(RenderInput, kw_only=True):
@@ -347,7 +352,7 @@ class ReferenceRenderInput(RenderInput, kw_only=True):
 
 
 class ReferenceStandardRenderInput(ReferenceRenderInput, kw_only=True):
-    steps: Steps = DEFAULT_STEPS
+    steps: Steps | None = None
 
 
 class H3VideoOutput(msgspec.Struct):
@@ -959,7 +964,7 @@ async def generate_fl2va_turbo(
         base_model,
         out,
         tel,
-        steps=TURBO_STEPS,
+        steps=None,
         turbo_lora=turbo_lora,
     )
 
@@ -1009,7 +1014,7 @@ async def generate_ref2va_turbo(
         base_model,
         out,
         tel,
-        steps=TURBO_STEPS,
+        steps=None,
         turbo_lora=turbo_lora,
     )
 
@@ -1027,15 +1032,16 @@ async def _render_workflow(
     video_audio: tuple[bool, ...] = (),
 ) -> RenderOutput:
     seed = shot_seed(payload, ctx.request_id, 0)
+    turbo = task.endswith("_turbo")
     fields: dict[str, Any] = {"prompt": payload.prompt, "seed": seed, "duration_s": payload.duration_s}
-    if steps is not None:
+    if not turbo:
         fields["steps"] = steps
     request = (
-        (ReferenceClipInput if steps is None else ReferenceStandardClipInput)(
+        (ReferenceClipInput if turbo else ReferenceStandardClipInput)(
             **fields, video_audio=video_audio
         )
         if task.startswith("ref2va")
-        else (ClipInput if steps is None else StandardClipInput)(**fields)
+        else (ClipInput if turbo else StandardClipInput)(**fields)
     )
     functions = {"fl2va": generate_fl2va, "fl2va_turbo": generate_fl2va_turbo,
                  "ref2va": generate_ref2va, "ref2va_turbo": generate_ref2va_turbo}
@@ -1164,7 +1170,7 @@ def _keyframes_to_video(
     out: Outputs,
     tel: Telemetry,
     *,
-    steps: int,
+    steps: int | None,
     turbo_lora: H3TurboLoRA | None = None,
 ) -> H3VideoOutput:
     ctx.raise_if_cancelled()
@@ -1185,6 +1191,11 @@ def _keyframes_to_video(
     )
 
 
+def _plan(model: H3Model, turbo_lora: H3TurboLoRA | None, trunk: Trunk) -> TimestepPlan:
+    """The schedules a call may run: its turbo LoRA's when it samples with one, else its model's."""
+    return (model.pipe if turbo_lora is None else turbo_lora.pipe).plans[trunk]
+
+
 def _render_keyframes(
     ctx: Context,
     task: Task,
@@ -1195,12 +1206,14 @@ def _render_keyframes(
     prompt: str,
     seed: int | None,
     duration_s: int,
-    steps: int,
+    steps: int | None,
     first: Image | None,
     last: Image | None,
     turbo_lora: H3TurboLoRA | None = None,
 ) -> H3VideoOutput:
     """Shared FL2VA rendering for direct requests and chained asset handoffs."""
+    plan = _plan(model, turbo_lora, "fl2va")
+    steps = plan.schedule(steps).transformer_evaluations
     keyframes = ("vae",) if first is not None or last is not None else ()
     dit = "transformer" if turbo_lora is None else {"transformer", "fl2va_turbo"}
     ctx.plan("text_encoder", *keyframes, dit, "audio_vae", "vae")
@@ -1216,7 +1229,7 @@ def _render_keyframes(
             steps=steps,
             frames=frames_for(duration_s),
             task=task,
-            plan=None if turbo_lora is None else turbo_lora.pipe.plans["fl2va"],
+            plan=plan,
         )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
         model.condition_text(task, state)
@@ -1255,13 +1268,15 @@ def _references_to_video(
     out: Outputs,
     tel: Telemetry,
     *,
-    steps: int,
+    steps: int | None,
     turbo_lora: H3TurboLoRA | None = None,
     context: AVContext | None = None,
     delivery: ContinuationPlan | None = None,
     expected_context_provenance: str | None = None,
     completed: Callable[[Any], None] | None = None,
 ) -> H3VideoOutput:
+    plan = _plan(model, turbo_lora, "ref2va")
+    steps = plan.schedule(steps).transformer_evaluations
     dit = "transformer_ref" if turbo_lora is None else {"transformer_ref", "ref2va_turbo"}
     ctx.plan("text_encoder", {"vae", "audio_vae"}, dit, "audio_vae", "vae")
     ctx.raise_if_cancelled()
@@ -1293,7 +1308,7 @@ def _references_to_video(
             expected_context_provenance=expected_context_provenance,
             reference_image_short_edges=sizing.edges,
             task=task,
-            plan=None if turbo_lora is None else turbo_lora.pipe.plans["ref2va"],
+            plan=plan,
         )
         for index, reference in enumerate(state.normalized_references):
             if reference.kind == "image":
@@ -1436,7 +1451,7 @@ def segment_clock(durations: Sequence[int]) -> tuple[list[int], int]:
 
 
 class CutInput(ReferenceClipInput, kw_only=True):
-    steps: int
+    steps: int | None
     turbo: bool
     expected_provenance: RenderProvenance | None = None
     previous_provenance: RenderProvenance | None = None
@@ -1444,13 +1459,9 @@ class CutInput(ReferenceClipInput, kw_only=True):
 
 def _sampling(payload: CutInput | MotionInput, turbo_lora: H3TurboLoRA) -> H3TurboLoRA | None:
     """The segment's sampler over the one shared construction: the PDD adapter, or none."""
-    if payload.turbo:
-        if payload.steps != TURBO_STEPS:
-            raise InvalidRequest("turbo segments require eight PDD evaluations")
-        return turbo_lora
-    if payload.steps not in SUPPORTED_STEPS:
-        raise InvalidRequest("standard segments require 30, 40 or 50 steps")
-    return None
+    if payload.turbo and payload.steps is not None:
+        raise InvalidRequest("a turbo segment runs its LoRA's one schedule; it takes no steps")
+    return turbo_lora if payload.turbo else None
 
 
 def _render_cut(
@@ -1461,7 +1472,7 @@ def _render_cut(
     out: Outputs,
     tel: Telemetry,
     *,
-    steps: int,
+    steps: int | None,
     turbo_lora: H3TurboLoRA | None = None,
 ) -> SegmentOutput:
     observed = provenance(
@@ -1525,7 +1536,7 @@ class MotionInput(msgspec.Struct):
     prompt: str
     seed: int
     duration_s: SegmentSeconds
-    steps: int
+    steps: int | None
     turbo: bool
     #: `held_frames` of this segment: the shape Runtime banks its memory by. A continuation
     #: holds more than its seconds say, so a 12 s segment after a 6 s one ran on the 6 s
@@ -1656,14 +1667,19 @@ class LongFormCutsInput(msgspec.Struct):
 
 def segment_sampling(
     payload: LongFormInput | LongFormCutsInput,
-) -> tuple[bool, int]:
+) -> tuple[bool, int | None]:
+    """Whether segments run turbo, and their step count (None: the plan's own)."""
     turbo = payload.mode == "turbo"
     if turbo and payload.steps is not None:
         raise InvalidRequest(
-            "turbo fixes eight PDD evaluations; omit steps or select mode=standard",
+            "turbo runs its LoRA's one schedule; omit steps or select mode=standard",
             fields=["mode", "steps"],
         )
-    return turbo, TURBO_STEPS if turbo else payload.steps or DEFAULT_STEPS
+    return turbo, payload.steps
+
+
+#: Progress weight of one generated reference image, in segment frames.
+_REFERENCE_FRAMES = 5
 
 
 def log_prompt(tel: Telemetry, event: str, prompt: str, **fields: str | int) -> None:
@@ -1897,9 +1913,8 @@ async def long_form_cuts(
     turbo, steps = segment_sampling(payload)
     calls = segment_calls(payload)
     planned_frames = [frames_for(shot.duration_s) for shot in payload.segments]
-    render_work = [frames * steps for frames in planned_frames]
-    reference_steps = 40
-    reference_work = sum(FILE[ref.kind] == "image" and ref.image is None for ref in payload.references) * reference_steps
+    render_work = planned_frames
+    reference_work = sum(FILE[ref.kind] == "image" and ref.image is None for ref in payload.references) * _REFERENCE_FRAMES
     total_work = sum(render_work) + reference_work
     prefetch(cut_segment)
     references: list[ImageAsset] = []
@@ -2040,8 +2055,8 @@ async def long_form(
             durations, carries, [*carries[1:], Carry()], strict=True
         )
     ]
-    render_work = [plan.sample_frames * steps for plan in plans]
-    reference_work = sum(FILE[ref.kind] == "image" and ref.image is None for ref in payload.references) * 40
+    render_work = [plan.sample_frames for plan in plans]
+    reference_work = sum(FILE[ref.kind] == "image" and ref.image is None for ref in payload.references) * _REFERENCE_FRAMES
     total_work = sum(render_work) + reference_work
     prefetch(motion_segment)
     references: list[ImageAsset] = []
@@ -2138,7 +2153,7 @@ async def long_form(
     tel.log(
         "h3 long-form delivery",
         mode=payload.mode,
-        steps=steps,
+        steps=steps or "plan",
         segments=count,
         delivered_frames=delivered_frames,
     )
