@@ -4585,7 +4585,7 @@ def arm_glue() -> None:
     served = glue.install(model, SimpleNamespace(components={"dit": dit}), Plan("cpu", never))
     check(
         "a CPU executor serves eager, reported, unsubstituted",
-        (served, model._cozy_fusion_report["code"], type(dit.transformer_blocks[0]).__name__),
+        (served, model._cozy_fusion_report["glue"]["code"], type(dit.transformer_blocks[0]).__name__),
         ("", "fusion_device_incapable", "MiniMaxH3TransformerBlock"),
     )
     reports: list[tuple[str, Any]] = []
@@ -4762,8 +4762,49 @@ def arm_vae_glue() -> None:
 
     check(
         "a CPU executor serves the eager decoder",
-        (vae_glue.install(vae, Plan("cpu", never)), type(block).__name__),
+        (vae_glue.install(SimpleNamespace(), vae, Plan("cpu", never)), type(block).__name__),
         ("", "MiniMaxH3VideoTransformerBlock"),
+    )
+    reports: list[tuple[str, Any]] = []
+    waiting: list[Any] = []
+
+    def defer(kernels: object, install: Any) -> bool:  # the kernels are still building
+        waiting.append(install)
+        return False
+
+    def plan(device: str) -> Plan:  # a Runtime 0.31 plan: it defers installs and takes reports
+        return cast(
+            Plan,
+            SimpleNamespace(
+                device=device,
+                load=never,
+                when_ready=defer,
+                report=lambda name, document: reports.append((name, document)),
+            ),
+        )
+
+    def outcomes() -> list[tuple[str, object, object]]:
+        return [(name, document["applied"], document["code"]) for name, document in reports]
+
+    vae_glue.install(SimpleNamespace(), vae, plan("cpu"))
+    check(
+        "the CPU refusal reaches a reporting plan",
+        outcomes(),
+        [("vae_glue", False, "fusion_device_incapable")],
+    )
+    reports.clear()
+    model = SimpleNamespace()
+    served = vae_glue._fuse(model, plan("cuda"), blocks)
+    check(
+        "an install deferred to a request boundary reports deferred at plan time",
+        (served == vae_glue.identity(), outcomes(), type(block).__name__),
+        (True, [("vae_glue", False, "deferred")], "MiniMaxH3VideoTransformerBlock"),
+    )
+    waiting[0](never)  # the boundary: the kernels are built and the install lands
+    check(
+        "its landing reports through the same plan, and on the model",
+        (outcomes()[1:], model._cozy_fusion_report["vae_glue"]["applied"], type(block).__name__),
+        ([("vae_glue", True, "")], True, "FusedVideoTransformerBlock"),
     )
 
 
