@@ -75,7 +75,7 @@ embedder, the output norm and the text encoder's 32 language layers as `int8.con
 W8A8 on the int8 tensor cores. On real Klein activations each linear is 0.5–1.3% from bf16 (fp8
 row-scaled: 1.5–2.8%), and the images match bf16's. The VAE stays f32. As in BFL's int8 release,
 the image and joint blocks declare 8-bit attention (`attention_bits`; Runtime's `kitchen-int8` on
-RTX 30/40); the text and reference early blocks, and `--bits=16`, keep exact attention.
+RTX 30/40); the text and reference early blocks, and `--lane 16`, keep exact attention.
 
 ```sh
 cozy model quantize <account>/flux-3-klein@0.1.0/bf16 --int8 --on <machine>

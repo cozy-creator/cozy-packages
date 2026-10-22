@@ -52,15 +52,16 @@ dependencies or qualifying a worker image.
 A package publishes model slots (`<callable>.models.<param>`) and, beside the callable, each
 slot's default release: `defaults={"model": "sdxl@1.0.0"}`. A default names a release, never a
 lane; an org-less one names a model of the publishing account. To change a default, publish the
-package again. A request overrides one slot with `model.<param>=<org/model@release>`, and pins a
-lane with `.../<lane>`.
+package again. A request overrides one slot with `model.<param>=<org/model@release>`. A variant is
+its path in the release; only `cozy model download --variant <path>` pins one.
 
-The machine picks the lane: 8 bits on the GPU's most accurate native format (`int8`, else `fp8`),
-4 bits (`nvfp4`) or 16 (`bf16`) when the request says `--bits`. The package declares only its
-tolerances, as `Model` class keywords:
+The machine picks the lane: 8 bits on the GPU's most accurate native format (`int8`; `fp8` where
+int8 has no tensor cores, as on B300), else whatever variant works. `--lane 4` or `--lane 16` asks
+for only that lane (`nvfp4`, `bf16`), and a release without it is refused. The package declares
+only its tolerances, as `Model` class keywords:
 
 - `min_bits=` (16, 8 or 4; default 8): the fewest bits the machine may pick by itself. A slot at
-  4 takes `nvfp4` when it decodes or its 8-bit weights exceed the GPU.
+  4 takes `nvfp4` when it decodes; memory never lowers a lane.
 - `phase="decode"` for an LM's token loop (the describer's and Klein's upsampler's Qwen3.5-9B).
 - `attention_bits=` (16, 8 or 4, or a mapping from a component-qualified module prefix to one;
   default 16): the fewest bits attention may run at. H3 declares 4 on its DiTs, Klein 8 on its
