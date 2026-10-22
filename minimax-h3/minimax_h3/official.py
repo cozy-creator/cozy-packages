@@ -576,7 +576,7 @@ def timestep_plan(raw: bytes, trunk: Trunk) -> TimestepPlan:
             audio_shift=float.fromhex(document["audio_shift"]),
             schedules=tuple(schedules),
         )
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
         raise ConformanceError(
             f"the model's {trunk} timestep plan is malformed", code="artifact_config"
         ) from exc
@@ -594,6 +594,22 @@ def model_plans(assets: ModelAssets, *, turbo: bool = False) -> dict[Trunk, Time
         trunk: timestep_plan(assets.read(f"{name}/{PLAN_ASSET}"), trunk)
         for trunk, name in names.items()
     }
+
+
+def _validate_plan(plan: TimestepPlan, trunk: Trunk, layout: TableLayout | None) -> None:
+    """Refuse a mismatched selected asset before constructing weighted components.
+
+    Header rows are authoritative: their order may differ and they may cover additional
+    schedules. Every schedule this plan offers must be covered by those actual rows.
+    """
+    if plan.task != trunk or (plan.video_shift, plan.audio_shift) != (12.0, 3.0):
+        raise ConformanceError(
+            f"the model's {trunk} timestep plan does not match its scheduler",
+            code="artifact_config",
+        )
+    if layout is not None:
+        for schedule in plan.schedules:
+            layout.require(schedule.video_timesteps, schedule.audio_timesteps)
 
 
 def reference_image_size(
@@ -800,12 +816,14 @@ class OfficialH3Pipeline:
 
     def __init__(self, config: Config, plans: Mapping[Trunk, TimestepPlan]) -> None:
         mapping = _artifact_sections(config.mapping())
+        dit_specs = _dit_specs(mapping)
+        for trunk, (_upstream, _structure, layout) in dit_specs.items():
+            _validate_plan(plans[trunk], trunk, layout)
         blocks = {
             name: MiniMaxH3Blocks().get_workflow(_diffusers_workflow(name))
             for name in _WORKFLOW_TASKS
         }
         pipes = {name: MiniMaxH3ModularPipeline(blocks=block) for name, block in blocks.items()}
-        dit_specs = _dit_specs(mapping)
         dits = {
             trunk: _build_dit(upstream, structure, layout)
             for trunk, (upstream, structure, layout) in dit_specs.items()
@@ -994,7 +1012,15 @@ class OfficialH3Pipeline:
         # The plan, not the request, spells the official grid: `steps` transformer
         # evaluations are the schedule's grid points less the terminal zero. A turbo task's
         # plan is its turbo LoRA's, which the caller passes.
-        plan = self.plans[task] if plan is None else plan
+        if plan is None:
+            if task not in self.plans:
+                raise ConformanceError(
+                    "a turbo request requires its selected overlay's timestep plan",
+                    code="artifact_config",
+                )
+            plan = self.plans[task]
+        if plan.task != _TRUNK[task]:
+            raise ConformanceError("timestep plan belongs to a different trunk", code="artifact_config")
         schedule = plan.schedule(steps)
         state = PipelineState()
         fixed = {
@@ -1651,8 +1677,12 @@ def _overlay_spec(
             code="artifact_config",
             fields=[component, "cozy_h3"],
         )
-    (schedule,) = plan.schedules
-    layout.require(schedule.video_timesteps, schedule.audio_timesteps)
+    _validate_plan(plan, trunk, layout)
+    if plan.steps != (8,):
+        raise ConformanceError(
+            "the released PDD overlay requires an eight-evaluation timestep plan",
+            code="artifact_config",
+        )
     return section, layout
 
 

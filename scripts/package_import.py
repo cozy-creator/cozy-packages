@@ -120,8 +120,9 @@ def main(argv: list[str]) -> int:
             assert carried.parent == location.parent, f"minimax_h3 answered from {carried}"
             for name in ("H3Model", "H3TurboBase", "H3TurboLoRA"):
                 assert getattr(module, name) is getattr(model, name)
-            for asset in ("processor", "tokenizer", "timestep-plans"):
+            for asset in ("processor", "tokenizer"):
                 assert (carried / asset).is_dir(), f"the wheel carries no minimax_h3/{asset}/"
+            assert not (carried / "timestep-plans").exists(), "timestep plans belong to model assets"
         print(f"{package}: {module_name} imported from the installed wheel")
     app = module.app
     print(f"{package}: {module_name}:app registers {sorted(app._registry)}")

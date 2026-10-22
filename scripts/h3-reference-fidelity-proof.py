@@ -39,9 +39,9 @@ from minimax_h3.official import (  # noqa: E402
     reference_image_size,
     reference_image_vision_tokens,
     supported_durations,
-    supported_steps,
 )
 from h3_tables.model_config import dual_full_config, parse_production_config  # noqa: E402
+from h3_plans import BASE_STEPS, oracle_plans  # noqa: E402
 
 
 class Cancelled(BaseException):
@@ -68,7 +68,7 @@ def meta_pipeline() -> OfficialH3Pipeline:
     source = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets" / "model-config.json"
     config = canonical_json.decode(dual_full_config(parse_production_config(source.read_bytes())))
     with torch.device("meta"):
-        return OfficialH3Pipeline(Config(config))
+        return OfficialH3Pipeline(Config(config), oracle_plans())
 
 
 def picture(width: int, height: int, *, rgba: bool = False) -> Image:
@@ -92,7 +92,7 @@ def start(
         prompt="<Picture 1> and <Picture 2> beside <Picture 3>.",
         references=references,
         generator=torch.Generator().manual_seed(7),
-        steps=min(supported_steps()),
+        steps=min(BASE_STEPS),
         frames=frames_for(min(supported_durations())),
         reference_image_short_edges=edges,
     )
