@@ -576,13 +576,15 @@ def generate(
     tel: Telemetry,
 ) -> ImageOutput:
     """One text-to-image generation: tokenize, encode, denoise, decode, encode a PNG."""
-    ctx.plan({"text_encoder", "text_encoder_2"}, "unet", "vae")
     seed = payload.seed if payload.seed is not None else secrets.randbits(53)
     view = model.for_request(ctx, seed=seed)
     width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
     above_native = payload.megapixels is not Megapixels.MP1
     hidiffusion_applied = above_native if payload.hidiffusion is None else payload.hidiffusion
     steps = payload.steps if payload.steps is not None else 30 if hidiffusion_applied else 20
+    # Every UNet call is a step of the plan: its pages keep a declared next use through the loop
+    # (one declared step left them unused after the first call, and pressure evicted them).
+    ctx.plan({"text_encoder", "text_encoder_2"}, *["unet"] * steps, "vae")
     guidance = payload.guidance if payload.guidance is not None else 7.5 if hidiffusion_applied else 7.0
     negative_prompt = _negative_prompt(payload.negative_prompt, hidiffusion_applied)
     warnings: list[str] = []
