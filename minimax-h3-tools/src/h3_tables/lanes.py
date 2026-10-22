@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
+import msgspec
 import numpy as np
 from cozy_runtime.author import Context, Telemetry, UnsupportedInput
 from cozy_runtime.derive import safetensors_io as st
@@ -78,7 +79,8 @@ class Treatment:
 
     ``cast`` rewrites every plain float32 tensor (in ``cast_scope``) at the named dtype; a
     16-bit tensor is copied untouched (#695). ``encode`` replaces the component's selected
-    weights with the named scheme; ``keep`` names exact keys the encoding must NOT select.
+    weights with the named scheme; ``keep`` names exact keys the encoding must NOT select, and
+    ``encode_as`` exact selected keys that take another scheme instead.
     A treatment that changes nothing is spelled by leaving the component out of the lane.
     """
 
@@ -86,6 +88,7 @@ class Treatment:
     encode: Encoding | None = None
     keep: tuple[str, ...] = ()
     cast_scope: CastScope = "component"
+    encode_as: tuple[tuple[str, Encoding], ...] = ()
 
     def __post_init__(self) -> None:
         if self.cast is None and self.encode is None:
@@ -96,6 +99,13 @@ class Treatment:
             raise ValueError("a keep list only excludes keys from an encoding")
         if len(set(self.keep)) != len(self.keep):
             raise ValueError("a treatment keep list repeats a key")
+        other = [key for key, _ in self.encode_as]
+        if other and self.encode is None:
+            raise ValueError("encode_as only redirects keys of an encoding")
+        if len(set(other)) != len(other) or set(other) & set(self.keep):
+            raise ValueError("encode_as repeats a key or names a kept one")
+        if any(scheme not in LANE_ENCODINGS.values() for _, scheme in self.encode_as):
+            raise ValueError(f"encode_as names a scheme outside {sorted(LANE_ENCODINGS.values())}")
 
     def describe(self) -> str:
         spelled = []
@@ -107,6 +117,8 @@ class Treatment:
             spelled.append(f"encode={self.encode}")
             if self.keep:
                 spelled.append(f"keep={len(self.keep)}")
+            for scheme in sorted({scheme for _, scheme in self.encode_as}):
+                spelled.append(f"{scheme}={sum(s == scheme for _, s in self.encode_as)}")
         return " ".join(spelled)
 
 
@@ -148,9 +160,9 @@ TEXT_ENCODER_KEEP: tuple[str, ...] = (
 
 _TEXT_ENCODER_FP8 = Treatment(encode="fp8.rowwise", keep=TEXT_ENCODER_KEEP)
 
-#: nvfp4's DiT keep list, the published recipes' consensus (ModelOpt for Wan/LTX/Qwen-Image,
-#: LTX-2.3, rockerBOO's H3 file): the first and last two blocks, the token refiner and the
-#: context embedder stay bf16; every other block's q/k/v/out and SwiGLU in/out are W4A4.
+#: nvfp4's DiT keep list: the text-only `context_embedder` and token refiner stay bf16 (they run
+#: on prompt rows, about 1 % of the DiT's FLOPs). Measured on H3 (cr-207, RTX PRO 4500): the
+#: first and last blocks' W4A4 error sits in the middle blocks' range, so they are W4A4.
 NVFP4_DIT_KEEP: tuple[str, ...] = (
     "context_embedder.weight",
     *(
@@ -158,12 +170,11 @@ NVFP4_DIT_KEEP: tuple[str, ...] = (
         for block in range(2)
         for leaf in ("attn.to_q", "attn.to_k", "attn.to_v", "attn.to_out.0", "ff.net.0.proj", "ff.net.2")
     ),
-    *(
-        f"transformer_blocks.{block}.{leaf}.weight"
-        for block in (0, 1, 48, 49)
-        for leaf in ("attn.to_q", "attn.to_k", "attn.to_v", "attn.to_out.0", "ff.net.0.proj", "ff.net.2")
-    ),
 )
+#: nvfp4's DiT linears that serve int8.convrot instead: `ff.net.2` of blocks 0-2, whose audio rows
+#: sit far below the video rows' amax, so one per-call activation scale gives 56-100 % of their
+#: 16-element groups a subnormal E4M3 scale (block 1: W4A4 audio error 0.14-0.16, int8 0.01).
+NVFP4_DIT_INT8: tuple[str, ...] = tuple(f"transformer_blocks.{block}.ff.net.2.weight" for block in range(3))
 
 #: The video VAE's stored form is not a lane choice. `MiniMaxH3VideoDecodeStep` decodes inside
 #: `torch.autocast(float16)`, so the decoder's conv/linear operands are rounded to f16 on every
@@ -330,6 +341,19 @@ def select(
             raise UnsupportedInput(
                 f"{component} keep list excludes every selected weight", code="h3_keep_exhaustive"
             )
+        scheme_of = dict(treatment.encode_as)
+        missing = sorted(set(scheme_of) - {tensor.key for tensor in selected})
+        if missing:
+            raise UnsupportedInput(
+                f"{component} encode_as names {missing}, which {unmatched}",
+                code="h3_keep_unmatched",
+            )
+        selected = [
+            msgspec.structs.replace(tensor, encoding=scheme_of[tensor.key])
+            if tensor.key in scheme_of
+            else tensor
+            for tensor in selected
+        ]
         plan = ArtifactQuantizationPlan(
             components=[component], order=[(component, key) for key in carried], tensors=selected
         )
