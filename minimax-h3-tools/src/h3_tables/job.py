@@ -390,13 +390,15 @@ app.entrypoint(
 )
 
 
-#: `cozy model quantize <H3 checkpoint> --fp8|--int8|--nvfp4`: the quantized lanes' recipe over an
+#: `cozy model quantize <H3 checkpoint> --fp8|--int8|--nvfp4|--w4a8`: the quantized lanes' recipe over an
 #: AdaLN-pruned checkpoint. Both DiTs encode through the reviewed plan and the conditioner's 350
 #: decoder-layer linears through the structural selection minus `TEXT_ENCODER_KEEP`. A recipe
 #: component the source still holds plain is encoded; one already carrying this scheme is
 #: inherited; one carrying another refuses. Everything else carries over from the source. nvfp4
 #: takes the DiTs minus `NVFP4_DIT_KEEP` and its conditioner is int8.convrot (the nvfp4 leaf is
 #: W4A4 at prompt length, and the conditioner runs once a request); `NVFP4_DIT_INT8` serve int8.convrot.
+#: w4a8 (xs-062) takes nvfp4's kept keys with every other DiT linear in W4A8 (its per-token
+#: activation scales have none of nvfp4's subnormal-scale hazard), the conditioner int8.convrot.
 QUANTIZER_RECIPES: Mapping[str, Mapping[str, _lanes.Treatment]] = {
     encoding: {
         component: _lanes.Treatment(encode=encoding, keep=treatment.keep)
@@ -410,7 +412,12 @@ QUANTIZER_RECIPES: Mapping[str, Mapping[str, _lanes.Treatment]] = {
                encode_as=tuple((key, "int8.convrot") for key in _lanes.NVFP4_DIT_INT8),
            ) for dit in sorted(_lanes.DIT_COMPONENTS)},
         "text_encoder": _lanes.Treatment(encode="int8.convrot", keep=_lanes.TEXT_ENCODER_KEEP),
-    }
+    },
+    "w4a8.convrot": {
+        **{dit: _lanes.Treatment(encode="w4a8.convrot", keep=_lanes.NVFP4_DIT_KEEP)
+           for dit in sorted(_lanes.DIT_COMPONENTS)},
+        "text_encoder": _lanes.Treatment(encode="int8.convrot", keep=_lanes.TEXT_ENCODER_KEEP),
+    },
 }
 #: Both DiTs and the conditioner at most; the output's own accounting is exact.
 MAX_QUANTIZER_BYTES = 2 * MAX_DIT_BYTES + MAX_TEXT_ENCODER_BYTES
@@ -508,6 +515,19 @@ async def nvfp4(
 
 
 @invocable(memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
+async def w4a8(
+    ctx: Context,
+    *,
+    source: Weights[Any],
+    max_relative_frobenius: float | None = None,
+    tel: Telemetry,
+) -> ModelArtifact:
+    """H3's recipe at `w4a8.convrot`: W4A8 on the int8 tensor cores (Ampere, Ada,
+    Hopper), the same weights as nvfp4."""
+    return _quantize_lane(ctx, tel, source, "w4a8", "w4a8.convrot", max_relative_frobenius)
+
+
+@invocable(memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
 async def int8(
     ctx: Context,
     *,
@@ -535,6 +555,12 @@ app.entrypoint(
     nvfp4,
     name="nvfp4",
     weights=(WeightsOutput("nvfp4", max_new_bytes=MAX_QUANTIZER_BYTES),),
+    accelerator=False,
+)
+app.entrypoint(
+    w4a8,
+    name="w4a8",
+    weights=(WeightsOutput("w4a8", max_new_bytes=MAX_QUANTIZER_BYTES),),
     accelerator=False,
 )
 

@@ -33,7 +33,7 @@ CastDtype = Literal["bf16", "f16"]
 #: Which of a component's float32 rows a cast covers: `component` is every plain one,
 #: `decode_operands` the video VAE's serving destination only (`NORMALISED_COMPONENTS`).
 CastScope = Literal["component", "decode_operands"]
-Encoding = Literal["fp8.rowwise", "int8.convrot", "nvfp4"]
+Encoding = Literal["fp8.rowwise", "int8.convrot", "nvfp4", "w4a8.convrot"]
 Modulation = Literal["full", "adaln-pruned"]
 
 #: The DiTs encode through the package-owned reviewed plan (`quantization.dit_plan`), never
@@ -41,11 +41,12 @@ Modulation = Literal["full", "adaln-pruned"]
 #: shape rule would still be tempted by, and the plan is the reviewed set.
 DIT_COMPONENTS = frozenset(DIT_COMPONENT.values())
 
-#: What each encoded lane of the vocabulary (`bf16 fp16 int8 fp8 nvfp4`) stores.
+#: What each encoded lane of the vocabulary (`bf16 fp16 int8 fp8 nvfp4 w4a8`) stores.
 LANE_ENCODINGS: Mapping[str, Encoding] = {
     "int8": "int8.convrot",
     "fp8": "fp8.rowwise",
     "nvfp4": "nvfp4",
+    "w4a8": "w4a8.convrot",
 }
 
 #: Components no lane may treat. Refused BY NAME: the structural selector would take the
