@@ -136,9 +136,16 @@ def qkv_chunks(
 def rope_presentation(
     rotary: tuple[torch.Tensor, torch.Tensor], tokens: int, state: RequestState
 ) -> torch.Tensor:
+    # Kept while the step's rotary tables are the same tensors, which the transformer computes
+    # once per layout (`adaln_pruned.StepInvariants`), so every step of a phase reuses one
+    # presentation, and Kitchen's table cache keyed on it. The held tensors cannot be reused
+    # under another identity. A value key would read the device every call; a shape key would
+    # serve one document's angles to another of the same length (a continuation's shifted
+    # positions).
     cos, sin = rotary
-    if state.rope is not None and state.rope[0] is cos and state.rope[1] is sin:
-        return state.rope[2]
+    held = state.rope
+    if held is not None and held[0] is cos and held[1] is sin and held[2].shape[0] == tokens:
+        return held[2]
     if cos.shape != sin.shape or cos.shape[-1] % 8:
         raise ValueError("H3 producer requires matching split-half rotary tables")
     width = cos.shape[-1]
@@ -395,7 +402,9 @@ class _RetainRotary(ModelHook):  # type: ignore[misc]  # untyped Diffusers hook 
         if getattr(self.component, "_parallel_config", None) is None:
             return output  # one GPU: the producer reads the rotary its call receives
         state, layout = PRODUCERS[FIXED_MEANS].request_state(), active_attention_layout()
-        if state is None or layout is None or layout.step < layout.dense_until_step:
+        # Kept at every step: the transformer computes the rotary once per layout, on a dense
+        # step, and the sparse steps that read it reuse that computation.
+        if state is None or layout is None:
             return output
         backends = (getattr(m.processor, "_attention_backend", None) for m in self.modules)
         names = (_BACKENDS.get(str(getattr(backend, "value", backend))) for backend in backends)

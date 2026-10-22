@@ -14,7 +14,9 @@ factors through the same modules; every other forward reads the base tables it a
 from __future__ import annotations
 
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, ClassVar, cast
 
 import torch
@@ -39,6 +41,51 @@ from .turbo import (
     TurboOverlay,
     _LoRAHook,
 )
+
+
+class StepInvariants:
+    """What one denoise computes once rather than every step: the rotary tables of its packed
+    positions and its refined text rows. Each is kept while the same input tensors come back
+    unmodified (the same objects at the same in-place version) under the same turbo overlay, so
+    a layout change (a clip's rows leaving before the first sparse step) recomputes it."""
+
+    __slots__ = ("held",)
+
+    def __init__(self) -> None:
+        self.held: dict[str, tuple[tuple[tuple[object, int], ...], Any]] = {}
+
+    def get(self, name: str, inputs: tuple[object, ...], compute: Callable[[], Any]) -> Any:
+        key = tuple((value, getattr(value, "_version", 0)) for value in inputs)
+        held = self.held.get(name)
+        if (
+            held is not None
+            and len(held[0]) == len(key)
+            and all(
+                old is new and old_version == new_version
+                for (old, old_version), (new, new_version) in zip(held[0], key, strict=True)
+            )
+        ):
+            return held[1]
+        value = compute()
+        self.held[name] = (key, value)
+        return value
+
+
+_STEP_INVARIANTS: ContextVar[StepInvariants | None] = ContextVar(
+    "minimax_h3_step_invariants", default=None
+)
+
+
+@contextmanager
+def step_invariants() -> Iterator[StepInvariants]:
+    """One denoise loop's step invariants, dropped when it ends."""
+    memo = StepInvariants()
+    token = _STEP_INVARIANTS.set(memo)
+    try:
+        yield memo
+    finally:
+        _STEP_INVARIANTS.reset(token)
+        memo.held.clear()
 
 
 class _Armed:
@@ -237,10 +284,21 @@ class AdaLNPrunedMiniMaxH3Transformer(MiniMaxH3Transformer3DModel):  # type: ign
                 f"`position_ids`, got {list(token_tags.shape)} and {list(timestep_indices.shape)} "
                 f"for seq_len={sequence_length}."
             )
-        rotary_emb = self.rope(position_ids)
-        text = self.token_refiner(
-            self.context_embedder(encoder_hidden_states.to(get_parameter_dtype(self.context_embedder)))
-        )
+
+        def refined() -> torch.Tensor:
+            dtype = get_parameter_dtype(self.context_embedder)
+            return cast(
+                torch.Tensor,
+                self.token_refiner(self.context_embedder(encoder_hidden_states.to(dtype))),
+            )
+
+        memo = _STEP_INVARIANTS.get()
+        if memo is None:
+            rotary_emb, text = self.rope(position_ids), refined()
+        else:  # inside a denoise loop: once per layout, not once per step
+            rotary_emb = memo.get("rope", (position_ids,), lambda: self.rope(position_ids))
+            overlay = self._arming.overlay if self._arming is not None else None
+            text = memo.get("text", (encoder_hidden_states, overlay), refined)
         rows = text.new_zeros((text.shape[0], sequence_length, text.shape[-1]))
         rows = rows.index_copy(1, text_indices, text)
         del text

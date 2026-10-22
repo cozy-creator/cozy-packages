@@ -76,7 +76,7 @@ from cozy_runtime.author import (
 )
 from h3_tables.table_layout import TableLayout
 
-from .adaln_pruned import AdaLNPrunedMiniMaxH3Transformer
+from .adaln_pruned import AdaLNPrunedMiniMaxH3Transformer, step_invariants
 from .conditioner import FinalHiddenState, PresentationLength, build_text_conditioner
 from .continuation import (
     AVContext,
@@ -1365,15 +1365,16 @@ class OfficialH3Pipeline:
             references, latents = state.normalized_references, state.condition_latents
             clips = ClipRows(block_state, references, latents, scoped.patch_size)
             clips.thin(block_state)
-        for index, timestep in enumerate(block_state.timesteps):
-            cancel()
-            if clips is not None and index == sol_dense_steps:
-                clips.release(block_state)
-            with attention_scope(
-                _attention_layout(block_state, index, sol_dense_steps=sol_dense_steps)
-            ):
-                _, block_state = loop.loop_step(scoped, block_state, i=index, t=timestep)
-            on_step(index)
+        with step_invariants():
+            for index, timestep in enumerate(block_state.timesteps):
+                cancel()
+                if clips is not None and index == sol_dense_steps:
+                    clips.release(block_state)
+                with attention_scope(
+                    _attention_layout(block_state, index, sol_dense_steps=sol_dense_steps)
+                ):
+                    _, block_state = loop.loop_step(scoped, block_state, i=index, t=timestep)
+                on_step(index)
         loop.set_block_state(state, block_state)
         self._run_with(task, scoped, "denoise.after_denoise", state)
         return facts

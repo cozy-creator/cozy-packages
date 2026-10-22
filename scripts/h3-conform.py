@@ -108,6 +108,7 @@ from minimax_h3.adaln_pruned import (  # noqa: E402
     _AdaLNPrunedBlockTable,
     _AdaLNPrunedOutputTable,
     _AdaLNPrunedTimestepLookup,
+    step_invariants,
 )
 from minimax_h3.conditioner import (  # noqa: E402
     FinalHiddenState,
@@ -2023,6 +2024,106 @@ def arm_adaln_pruned() -> None:
         ),
         "artifact_config",
     )
+
+
+def arm_step_invariants() -> None:
+    """Inside a denoise loop the pruned DiT computes its rotary tables and its refined text rows
+    once per layout, not once per step, and serves every step the same bytes: a new layout
+    (a clip's rows leaving) or an in-place edit recomputes them. The Kitchen producer's rotary
+    presentation is reused across those steps and never across documents."""
+    print("\n== step invariants: rotary and text rows once per layout ==")
+    timesteps, block_keys = oracle_plan("fl2va").table_layout()
+    torch.manual_seed(21)
+    dit = AdaLNPrunedMiniMaxH3Transformer.from_official_config(
+        TURBO_CONFIG, table_timesteps=timesteps, table_block_keys=block_keys
+    ).eval()
+    with torch.no_grad():
+        for parameter in dit.parameters():
+            parameter.copy_(torch.randn_like(parameter) * 0.2)
+    calls = Counter[str]()
+    for name in ("rope", "token_refiner"):
+        getattr(dit, name).register_forward_hook(lambda *_, name=name: calls.update([name]))
+    torch.manual_seed(22)
+    fixed = {
+        "encoder_hidden_states": torch.randn(1, 1, 8),
+        "timestep": torch.tensor([0.0, _as_float32(0.999)]),
+        "timestep_indices": torch.tensor([0, 0, 1, 0]),
+        "token_tags": torch.tensor([1, 0, 0, 2]),
+        "position_ids": torch.tensor(
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 2.0], [0.0, 0.0, 3.0]]
+        ),
+        "video_indices": torch.tensor([1, 2]),
+        "audio_indices": torch.tensor([3]),
+        "text_indices": torch.tensor([0]),
+        "return_dict": False,
+    }
+    latents = [(torch.randn(1, 2, 2), torch.randn(1, 1, 2)) for _ in range(3)]
+
+    def steps(inputs: dict[str, Any]) -> list[Any]:
+        return [
+            dit(hidden_states=video, audio_hidden_states=audio, **inputs)
+            for video, audio in latents
+        ]
+
+    def same(left: list[Any], right: list[Any]) -> bool:
+        return all(
+            torch.equal(a, b)
+            for x, y in zip(left, right, strict=True)
+            for a, b in zip(x, y, strict=True)
+        )
+
+    with torch.no_grad():
+        every_step = steps(fixed)
+        check(
+            "outside a loop each step computes both", dict(calls), {"rope": 3, "token_refiner": 3}
+        )
+        calls.clear()
+        with step_invariants():
+            once = steps(fixed)
+            check("inside it, once per layout", dict(calls), {"rope": 1, "token_refiner": 1})
+            check(
+                "every step's output is the per-step computation's, bit for bit",
+                same(once, every_step),
+                True,
+            )
+            shifted = dict(fixed, position_ids=fixed["position_ids"] * 2)  # new relative positions
+            moved = steps(shifted)
+            fixed["position_ids"][3, 2] += 1  # in place: a new version of the same tensor
+            edited = steps(fixed)
+            check(
+                "a new layout or an in-place edit recomputes the rotary only",
+                dict(calls),
+                {"rope": 3, "token_refiner": 1},
+            )
+        calls.clear()
+        check(
+            "and serves what a per-step computation serves",
+            (same(moved, steps(shifted)), same(edited, steps(fixed))),
+            (True, True),
+        )
+        red("another layout's output is not the first layout's", same(moved, once), True)
+
+    state = producer.RequestState()
+    cos, sin = (torch.randn(1, 17, 1, 96) for _ in range(2))
+    first = producer.rope_presentation((cos, sin), 17, state)
+    check(
+        "one presentation serves every step of a layout",
+        producer.rope_presentation((cos, sin), 17, state) is first,
+        True,
+    )
+    other = (cos + 1, sin - 1)  # another document of the same length: angles at shifted positions
+    fresh = producer.rope_presentation(other, 17, producer.RequestState())
+    check(
+        "another document's tables, same shape, are presented anew",
+        torch.equal(producer.rope_presentation(other, 17, state), fresh),
+        True,
+    )
+    red(
+        "a shape-keyed presentation would serve the first document's angles",
+        torch.equal(first, fresh),
+        True,
+    )
+    state.close()
 
 
 def arm_processor() -> None:
@@ -4858,6 +4959,7 @@ ARMS = {
     "conditioner": arm_text_conditioner,
     "conditioner-lifecycle": arm_conditioner_lifecycle,
     "adaln-pruned": arm_adaln_pruned,
+    "step-invariants": arm_step_invariants,
     "processor": arm_processor,
     "media": arm_media,
     "reference-media": arm_reference_media,
