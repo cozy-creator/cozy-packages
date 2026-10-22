@@ -57,8 +57,9 @@ its path in the release; only `cozy model download --variant <path>` pins one.
 
 The machine picks the lane: 8 bits on the GPU's most accurate native format (`int8`; `fp8` where
 int8 has no tensor cores, as on B300), else whatever variant works. `--lane 4` or `--lane 16` asks
-for only that lane (`nvfp4`, `bf16`), and a release without it is refused. The package declares
-only its tolerances, as `Model` class keywords:
+for only that lane (`nvfp4`, `bf16`) of the function's main model, and a release without it is
+refused; its LoRAs, other models and calls into other packages keep the machine's choice. The
+package declares only its tolerances, as `Model` class keywords:
 
 - `min_bits=` (16, 8 or 4; default 8): the fewest bits the machine may pick by itself. A slot at
   4 takes `nvfp4` when it decodes; memory never lowers a lane.
@@ -142,13 +143,13 @@ cozy package install ./minimax-h3
 This needs no package publication. A published release can instead be installed
 with `cozy package install paul/minimax-h3@1.14.3`
 once available. With both checkpoint references available, a turbo invocation
-selects their exact releases and lanes independently:
+selects their exact releases independently, and `--lane` the base model's lane:
 
 ```sh
 cozy run local/minimax-h3/fl2va_turbo \
   'prompt=<your H3 prompt>' duration_s=5 seed=24680 \
-  'model.base_model=<org/base-model>@<release>/<lane>' \
-  'model.turbo_lora=<org/turbo-lora>@<release>/<lane>' \
+  'model.base_model=<org/base-model>@<release>' \
+  'model.turbo_lora=<org/turbo-lora>@<release>' \
   --on <existing-machine-name>
 ```
 
