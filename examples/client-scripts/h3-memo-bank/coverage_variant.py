@@ -1,17 +1,20 @@
 """Derive a private 30-step coverage fixture; never changes the production plan pin."""
 import argparse
 import json
-from importlib.resources import files
 from pathlib import Path
+import tensorfs
 
 from cozy_runtime.author import canonical_json
 from h3_tables.plans import parse_plan
+from h3_tables.source import timestep_plan
 
 parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("checkpoint", type=Path, help="local migrated source checkpoint")
 parser.add_argument("--task", choices=("fl2va", "ref2va"), default="fl2va")
 parser.add_argument("--out", type=Path, default=Path.home() / ".cozy/outputs/h3-bank-qualification/coverage-30.json")
 args = parser.parse_args()
-document = json.loads(files("h3_tables").joinpath("assets", f"timestep-plan.{args.task}.json").read_bytes())
+source = tensorfs.open(args.checkpoint, local_files_only=True)
+document = json.loads(timestep_plan(source, args.task).canonical_bytes)
 document["schedules"] = [schedule for schedule in document["schedules"] if schedule["transformer_evaluations"] == 30]
 if len(document["schedules"]) != 1:
     raise SystemExit("the source must contain exactly one reviewed 30-step schedule")

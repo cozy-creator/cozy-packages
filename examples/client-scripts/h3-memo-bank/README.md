@@ -3,7 +3,11 @@
 Owner `/root/astra_memoization_finish`; branch
 `qualify/h3-positive-bank-plan-20260925`, base
 `56cce9cdaa62465009de51795aa942eaeafb5fc2`.
-This is a finite execution plan and dry-run fixture. No GPU was rented or bank computed.
+This is a historical execution plan and dry-run fixture. No GPU was rented or bank computed.
+The old model references below predate the required timestep-plan assets: use a
+migrated full model and a new adoption receipt before executing the current tools.
+Planless projections/banks and their old generating-projection bindings must be
+recomputed; adding an asset does not authorize rewriting a binding.
 The later root-owned worker must be idle after its film; never fault another request.
 All invocations use the global `cozy` CLI and normal `~/.cozy` history/outputs.
 
@@ -31,7 +35,9 @@ the full 190 GB checkpoint. Do not price the download as only 52 GB.
 | Union timesteps / block rows | 207 / 315 |
 
 Both tasks total 52,284,158,976 generator bytes and 2,041,030,656 table bytes.
-`geometry.py` derives these numbers from the current library, including dtypes.
+`geometry.py LOCAL_CHECKPOINT` derives these numbers from the migrated model
+plan and current library topology, including dtypes. The table above records the
+original approved 30/40/50-plan geometry.
 
 The kernel holds one block projection at a time on one `ctx.device`. It does not
 load the full model into VRAM, and extra GPUs do not automatically accelerate the
@@ -111,14 +117,14 @@ was fabricated merely to make a dry-run appear complete.
    new library revision/computation and actual bank production, with equal table
    bytes. Whole-package closure changes may also invalidate cheap projections;
    do not promise finer-grained invalidation than the current implementation.
-5. **Coverage-plan refusal control.** `coverage_variant.py` retains the existing
+5. **Coverage-plan refusal control.** `coverage_variant.py LOCAL_CHECKPOINT` reads the source component asset and retains the existing
    30-step schedule and regenerates first-distinct table keys. The private FL
    fixture has60 timesteps and92 block rows. It passes the structural validator
    and is correctly refused by the unchanged production launch pin. Use this as
    a negative plan control only; do not widen `LAUNCH_PLAN_DIGESTS` or call it a
    production positive bank. Positive changed-plan production remains dependent
-   on an independently reviewed new production plan. `compute_fl.py` can use the
-   exact currently captured plan digest to qualify a single task. Never substitute
+   on an independently reviewed new production plan. `compute_fl.py` obtains the
+   exact plan digest from its source selection reply to qualify a single task. Never substitute
    a30→40 wrapper-argument change for plan invalidation.
 
 6. **Numerical and graft custody checks.** Compare all bank header/part hashes and

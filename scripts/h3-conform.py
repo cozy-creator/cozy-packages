@@ -46,6 +46,7 @@ from cozy_runtime.author import (
     ImageAsset,
     InvalidRequest,
     Invocation,
+    ModelAssets,
     VideoAsset,
     attention_scope,
     canonical_json,
@@ -133,13 +134,11 @@ from minimax_h3.official import (  # noqa: E402
     _ScopedPipeline,
     _validate_dual_dit_topology,
     _validate_model_contract,
-    canonical_timestep_plan,
     denoise_rows,
     frames_for,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
     supported_durations,
-    supported_steps,
     timestep_plan_digest,
     Trunk,
     validate_reference_policy,
@@ -177,8 +176,9 @@ import h3 as package  # noqa: E402
 from story import StoryReference, compile_segments  # noqa: E402
 from gates import MediaFacts, refuse_before_encode  # noqa: E402
 from h3_order import construction_order, encode_order  # noqa: E402
+from h3_plans import BASE_STEPS, oracle_plan, oracle_plans  # noqa: E402
 
-STEPS = supported_steps()
+STEPS = BASE_STEPS
 DEFAULT_STEPS = min(STEPS)
 DURATIONS = supported_durations()
 DEFAULT_DURATION_S = min(DURATIONS)  # this driver's fixture length; the package has no default
@@ -259,16 +259,94 @@ TOKEN_CORPUS_DIGEST = "47759c8d2e1a24944edb8f712c7ffe66b650aa3481352487970bcdb3c
 
 
 def dit_config(task: str, modulation: str = "full") -> dict[str, Any]:
-    plan = canonical_timestep_plan(cast(Any, task))
+    plan = oracle_plan(cast(Any, task))
     extension: dict[str, Any] = {"task": task, "modulation": modulation}
     if modulation == "adaln-pruned":
         extension["table_keys"] = canonical_json.decode(plan.canonical_bytes())["table_keys"]
     return {"cozy_h3": extension}
 
 
+def arm_model_plan_assets() -> None:
+    """Selected model assets alone choose schedules, validated before model construction."""
+    plans = oracle_plans()
+    values = {
+        f"{_DIT_COMPONENT[trunk]}/timestep-plan.json": plan.canonical_bytes()
+        for trunk, plan in plans.items()
+    }
+    assets = ModelAssets(values, lambda _operation: None)
+    selected = official.model_plans(assets)
+    check("both plans come from selected component assets",
+          {task: plan.digest for task, plan in selected.items()}, PLAN_DIGESTS)
+    narrowed = replace(plans["fl2va"], schedules=(plans["fl2va"].schedule(30),))
+    changed = dict(values, **{"transformer/timestep-plan.json": narrowed.canonical_bytes()})
+    selected = official.model_plans(ModelAssets(changed, lambda _operation: None))
+    check("a selected model controls its served schedules", selected["fl2va"].steps, (30,))
+    refusal("unselected schedule cannot use a package fallback", partial(selected["fl2va"].schedule, 40), "steps")
+    for missing in values:
+        incomplete = {name: value for name, value in values.items() if name != missing}
+        refusal(
+            f"missing {missing} refuses before construction",
+            partial(official.model_plans, ModelAssets(incomplete, lambda _operation: None)),
+            "model_asset_missing",
+        )
+    refusal(
+        "a plan from the other trunk refuses",
+        partial(official.timestep_plan, values["transformer_ref/timestep-plan.json"], "fl2va"),
+        "artifact_config",
+    )
+    malformed = json.loads(plans["fl2va"].canonical_bytes())
+    malformed["schedules"][0]["evaluations"][0]["video_sigma"] = "0x1p+99999"
+    refusal(
+        "an overflowing scalar is a typed asset refusal",
+        partial(official.timestep_plan, json.dumps(malformed).encode(), "fl2va"),
+        "artifact_config",
+    )
+    header = {trunk: dit_config(trunk, "adaln-pruned") for trunk in TASKS}
+    mapping = {_DIT_COMPONENT[trunk]: value for trunk, value in header.items()}
+    mapping.update({name: {} for name in ("text_encoder", "vae", "audio_vae")})
+    # These empty upstream configs cannot construct a model: a typed artifact refusal
+    # therefore proves the selected plan is rejected before reaching weighted factories.
+    wrong_rows = copy.deepcopy(mapping)
+    wrong_rows["transformer"]["cozy_h3"]["table_keys"] = json.loads(
+        oracle_plan("fl2va_turbo").canonical_bytes()
+    )["table_keys"]
+    refusal(
+        "header rows that do not cover the selected plan refuse before construction",
+        partial(OfficialH3Pipeline, Config(wrong_rows), plans),
+        "artifact_config",
+    )
+    wrong_shift = dict(plans)
+    wrong_shift["fl2va"] = replace(plans["fl2va"], video_shift=6.0)
+    refusal(
+        "a selected plan with another scheduler shift refuses before construction",
+        partial(OfficialH3Pipeline, Config(mapping), wrong_shift),
+        "artifact_config",
+    )
+    for trunk in TASKS:
+        layout = official._dit_spec(mapping, trunk)[2]
+        official._validate_plan(plans[trunk], trunk, layout)
+    turbo = oracle_plans(turbo=True)
+    turbo_values = {
+        f"{trunk}_turbo/timestep-plan.json": plan.canonical_bytes()
+        for trunk, plan in turbo.items()
+    }
+    check(
+        "turbo plans come from the selected overlay components",
+        {trunk: plan.digest for trunk, plan in official.model_plans(
+            ModelAssets(turbo_values, lambda _operation: None), turbo=True
+        ).items()},
+        {trunk: plan.digest for trunk, plan in turbo.items()},
+    )
+    refusal(
+        "base assets cannot stand in for selected overlay plans",
+        partial(official.model_plans, assets, turbo=True),
+        "model_asset_missing",
+    )
+
+
 def arm_checkpoint_table_layout() -> None:
     """Row labels travel with table values; no package digest determines their meaning."""
-    plan = canonical_timestep_plan("fl2va")
+    plan = oracle_plan("fl2va")
     document = canonical_json.decode(plan.canonical_bytes())["table_keys"]
     layout = TableLayout.parse(document)
     for schedule in plan.schedules:
@@ -279,6 +357,7 @@ def arm_checkpoint_table_layout() -> None:
         for index, row in enumerate(rows):
             row["index"] = index
     shuffled = TableLayout.parse(reordered)
+    official._validate_plan(plan, "fl2va", shuffled)
     for schedule in plan.schedules:
         shuffled.require(schedule.video_timesteps, schedule.audio_timesteps)
 
@@ -334,6 +413,7 @@ def arm_checkpoint_table_layout() -> None:
     config["transformer"]["cozy_h3"]["table_keys"] = extra
     extended = official._dit_spec(config, "fl2va")[2]
     assert extended is not None
+    official._validate_plan(plan, "fl2va", extended)
     check(
         "checkpoint can add rows without a package change",
         len(extended.block_keys),
@@ -420,7 +500,7 @@ def arm_producer_configs() -> None:
     assets = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
     sections = parse_production_config((assets / "model-config.json").read_bytes())
     plans = {
-        task: parse_plan((assets / f"timestep-plan.{task}.json").read_bytes(), task=task)
+        task: parse_plan(oracle_plan(cast(Any, task)).canonical_bytes(), task=task)
         for task in ("fl2va", "ref2va")
     }
     for structure, raw in (
@@ -468,7 +548,7 @@ def arm_producer_construction_order() -> None:
     sections = parse_production_config(_asset("model-config.json"))
     current = current_order(_asset("whole-order.json"))
     plans = {
-        task: parse_plan(_asset(f"timestep-plan.{task}.json"), task=task)
+        task: parse_plan(oracle_plan(cast(Any, task)).canonical_bytes(), task=task)
         for task in ("fl2va", "ref2va")
     }
     for mode, raw, expected in (
@@ -480,7 +560,7 @@ def arm_producer_construction_order() -> None:
         ),
     ):
         with torch.device("meta"):
-            pipeline = OfficialH3Pipeline(Config(canonical_json.decode(raw)))
+            pipeline = OfficialH3Pipeline(Config(canonical_json.decode(raw)), oracle_plans())
         actual = tuple(
             (component, key)
             for component, module in pipeline.components.items()
@@ -614,17 +694,17 @@ def float_digest(values: Any) -> str:
 
 def arm_schedule() -> None:
     print("\n== exact schedule and AdaLN-pruned handoff ==")
-    plans = {task: canonical_timestep_plan(task) for task in ("fl2va", "ref2va")}
+    plans = {task: oracle_plan(task) for task in ("fl2va", "ref2va")}
     for task, plan in plans.items():
         check(f"{task} canonical plan digest", plan.digest, PLAN_DIGESTS[task])
-        committed = files("minimax_h3").joinpath("timestep-plans", f"{task}.json").read_bytes()
+        generated = plan.canonical_bytes()
         check(
-            f"{task} committed semantic document",
-            canonical_json.encode(canonical_json.decode(committed)),
-            plan.canonical_bytes(),
+            f"{task} generated asset round trip",
+            official.timestep_plan(generated, plan.task).canonical_bytes() == plan.canonical_bytes(),
+            True,
         )
-        check(f"{task} committed semantic identity", timestep_plan_digest(committed), plan.digest)
-        parsed = cast(dict[str, Any], canonical_json.decode(committed))
+        check(f"{task} generated asset identity", timestep_plan_digest(generated), plan.digest)
+        parsed = cast(dict[str, Any], canonical_json.decode(generated))
         canonical = canonical_json.encode(parsed)
         reordered = json.dumps(
             dict(reversed(list(parsed.items()))), indent=2, ensure_ascii=False
@@ -799,7 +879,7 @@ def meta_h3_pipeline() -> Any:
         dual_full_config(parse_production_config((assets / "model-config.json").read_bytes()))
     )
     with torch.device("meta"):
-        return OfficialH3Pipeline(Config(config))
+        return OfficialH3Pipeline(Config(config), oracle_plans())
 
 
 def arm_reference_resolution() -> None:
@@ -998,12 +1078,12 @@ def arm_zero_reference_preparation() -> None:
     check("text-only default grid means the default forwards", len(state.timesteps), DEFAULT_STEPS)
     check(
         "the executed schedule is the plan's default",
-        pipe._plans["fl2va"].executed(state.timesteps.tolist(), state.audio_timesteps.tolist()),
-        pipe._plans["fl2va"].schedule(DEFAULT_STEPS),
+        pipe.plans["fl2va"].executed(state.timesteps.tolist(), state.audio_timesteps.tolist()),
+        pipe.plans["fl2va"].schedule(DEFAULT_STEPS),
     )
     refusal(
         "an off-plan executed schedule refuses",
-        lambda: pipe._plans["fl2va"].executed(state.timesteps.tolist()[:-1], []),
+        lambda: pipe.plans["fl2va"].executed(state.timesteps.tolist()[:-1], []),
         "artifact_config",
     )
 
@@ -1227,7 +1307,7 @@ def arm_clip_length() -> None:
     # A plan holds one row per (timestep, modality); no row depends on the frame count, so
     # a served length never needs a re-tabled checkpoint.
     for task in ("fl2va", "ref2va"):
-        plan = canonical_timestep_plan(cast(Any, task))
+        plan = oracle_plan(cast(Any, task))
         check(f"{task} plan identity is length-independent", plan.digest, PLAN_DIGESTS[task])
 
 
@@ -1717,7 +1797,7 @@ def arm_text_conditioner() -> None:
 
     def contract_document() -> dict[str, object]:
         with torch.device("meta"):
-            built = census(official.build_h3_pipeline(Config(model_config)))
+            built = census(official.build_h3_pipeline(Config(model_config), oracle_plans()))
         return {
             "schema": "cozy.runtime.model_construction_contract.v1",
             "destination_sets": [
@@ -1753,7 +1833,7 @@ def arm_text_conditioner() -> None:
 
 def arm_adaln_pruned() -> None:
     print("\n== AdaLN-pruned modulation over the inherited Diffusers forward ==")
-    plan = canonical_timestep_plan("fl2va")
+    plan = oracle_plan("fl2va")
     timesteps, block_keys = plan.table_layout()
     config = {
         "num_attention_heads": 1,
@@ -3022,7 +3102,7 @@ def arm_rgb8_handoff() -> None:
 
 
 def arm_interface() -> None:
-    check("wire step values come from both verified task plans", package.SUPPORTED_STEPS, STEPS)
+    check("wire step values match both model-asset oracle plans", package.SUPPORTED_STEPS, STEPS)
     check("the default is the shortest shipped schedule", package.DEFAULT_STEPS, min(STEPS))
     print("\n== committed public surface ==")
     interface_path = H3 / "metadata" / "package-interface.json"
@@ -3105,7 +3185,7 @@ def arm_interface() -> None:
             )
         else:
             check(
-                f"{name} wire steps come from the shipped plans",
+                f"{name} wire steps match model-asset oracle plans",
                 next(
                     field["type"]
                     for field in entry["request"]["fields"]
@@ -3617,7 +3697,7 @@ TURBO_RANK, TURBO_ALPHA = 4, 4.0
 
 
 def turbo_layout() -> tuple[Any, TurboSchedule, tuple[float, ...], tuple[tuple[int, int], ...]]:
-    plan = canonical_timestep_plan("fl2va_turbo")
+    plan = oracle_plan("fl2va_turbo")
     (schedule,) = plan.schedules
     timesteps, block_keys = plan.table_layout()
     return (
@@ -3643,7 +3723,7 @@ def tiny_overlay(config: Mapping[str, Any]) -> Any:
 
 
 def tiny_pruned_dit(config: Mapping[str, Any], task: str = "fl2va") -> Any:
-    timesteps, block_keys = canonical_timestep_plan(cast(Any, task)).table_layout()
+    timesteps, block_keys = oracle_plan(cast(Any, task)).table_layout()
     return AdaLNPrunedMiniMaxH3Transformer.from_official_config(
         config, table_timesteps=timesteps, table_block_keys=block_keys
     ).eval()
@@ -3703,13 +3783,13 @@ def arm_turbo_plan() -> None:
     steps = PDD_HEADER["pdd_num_steps"]
     block = PDD_HEADER["pdd_block_size"]
     check("eight evaluations", steps // block, 8)
-    check("turbo_steps() reads both plans", official.turbo_steps(), 8)
+    check("both turbo oracle assets fix eight evaluations", {plan.steps for plan in oracle_plans(turbo=True).values()}, {(8,)})
     for task in ("fl2va_turbo", "ref2va_turbo"):
-        plan = canonical_timestep_plan(cast(Any, task))
+        plan = oracle_plan(cast(Any, task))
         check(f"{task} plan is stamped with its trunk", plan.task, task.removesuffix("_turbo"))
         check(f"{task} canonical plan digest", plan.digest, TURBO_PLAN_DIGESTS[task])
-        committed = files("minimax_h3").joinpath("timestep-plans", f"{task}.json").read_bytes()
-        check(f"{task} committed semantic identity", timestep_plan_digest(committed), plan.digest)
+        generated = plan.canonical_bytes()
+        check(f"{task} generated asset identity", timestep_plan_digest(generated), plan.digest)
         check(f"{task} one fixed schedule", plan.steps, (8,))
         (schedule,) = plan.schedules
         check(f"{task} nfe + 1 grid points", schedule.sigma_grid_points, 9)
@@ -3973,7 +4053,7 @@ def arm_turbo_forward() -> None:
             head.weight.copy_(head.weight.bfloat16().float())
             head.bias.copy_(head.bias.bfloat16().float())
 
-    base_plan = canonical_timestep_plan("fl2va")
+    base_plan = oracle_plan("fl2va")
     base_timesteps, base_keys = base_plan.table_layout()
     pruned = tiny_pruned_dit(TURBO_CONFIG)
     shared = {
@@ -4143,7 +4223,7 @@ def arm_turbo_forward() -> None:
     # 40-step evaluation, which is why the bank is named per call and never inferred.
     check(
         "the turbo timesteps are base 40-step rows",
-        set(schedule.video) <= set(canonical_timestep_plan("fl2va").schedule(40).video_timesteps),
+        set(schedule.video) <= set(oracle_plan("fl2va").schedule(40).video_timesteps),
         True,
     )
     with torch.no_grad():
@@ -4164,7 +4244,7 @@ def turbo_h3_config() -> dict[str, Any]:
     assets = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets"
     sections = parse_production_config((assets / "model-config.json").read_bytes())
     plans = {
-        task: parse_plan((assets / f"timestep-plan.{task}.json").read_bytes(), task=task)
+        task: parse_plan(oracle_plan(cast(Any, task)).canonical_bytes(), task=task)
         for task in ("fl2va", "ref2va")
     }
     document = canonical_json.decode(
@@ -4177,7 +4257,7 @@ def turbo_h3_config() -> dict[str, Any]:
             "modulation": "adaln-pruned",
             "distillation": "pdd",
             "table_keys": canonical_json.decode(
-                canonical_timestep_plan(cast(Any, f"{trunk}_turbo")).canonical_bytes()
+                oracle_plan(cast(Any, f"{trunk}_turbo")).canonical_bytes()
             )["table_keys"],
             "lora_rank": PDD_HEADER["lora_rank"],
             "lora_alpha": PDD_HEADER["lora_alpha"],
@@ -4230,7 +4310,7 @@ def arm_turbo_state() -> None:
     lora_pipe = object.__new__(official.OfficialH3TurboLoRA)
     lora_pipe.components = {"fl2va_turbo": overlay}
     layout = TableLayout.parse(
-        json.loads(canonical_timestep_plan("fl2va_turbo").canonical_bytes())["table_keys"]
+        json.loads(oracle_plan("fl2va_turbo").canonical_bytes())["table_keys"]
     )
     lora_pipe.specs = {"fl2va": (TURBO_CONFIG, layout)}
     lora = package.H3TurboLoRA.for_test(pipe=lora_pipe)
@@ -4292,12 +4372,12 @@ def arm_turbo_artifact() -> None:
     overlay_only = {name: value for name, value in document.items() if name.endswith("_turbo")}
     refusal(
         "ordinary construction rejects turbo roots",
-        lambda: OfficialH3Pipeline(Config(document)),
+        lambda: OfficialH3Pipeline(Config(document), oracle_plans()),
         "artifact_config",
     )
     refusal(
         "LoRA construction requires both overlay roots",
-        lambda: official.OfficialH3TurboLoRA(Config({"fl2va_turbo": overlay_only["fl2va_turbo"]})),
+        lambda: official.OfficialH3TurboLoRA(Config({"fl2va_turbo": overlay_only["fl2va_turbo"]}), oracle_plans(turbo=True)),
         "artifact_config",
     )
     for field, value in (
@@ -4311,12 +4391,12 @@ def arm_turbo_artifact() -> None:
         changed["fl2va_turbo"]["cozy_h3"][field] = value
         refusal(
             f"unsupported PDD {field} refuses",
-            partial(official._overlay_spec, changed, "fl2va"),
+            partial(official._overlay_spec, changed, "fl2va", oracle_plan("fl2va_turbo")),
             "artifact_config",
         )
     with torch.device("meta"):
-        base = official.build_h3_turbo_base(Config(base_only))
-        lora = official.OfficialH3TurboLoRA(Config(overlay_only))
+        base = official.build_h3_turbo_base(Config(base_only), oracle_plans())
+        lora = official.OfficialH3TurboLoRA(Config(overlay_only), oracle_plans(turbo=True))
     check("ordinary model has exactly five real roots", set(base.components), set(base_only))
     check("turbo LoRA has exactly two overlay roots", set(lora.components), set(overlay_only))
     for label, built, config in (("H3TurboBase", base, base_only), ("H3TurboLoRA", lora, overlay_only)):
@@ -4636,6 +4716,7 @@ def arm_producer() -> None:
 ARMS = {
     "attention-scope": arm_attention_scope,
     "checkpoint-table-layout": arm_checkpoint_table_layout,
+    "model-plan-assets": arm_model_plan_assets,
     "turbo-plan": arm_turbo_plan,
     "turbo-heads": arm_turbo_heads,
     "turbo-lora": arm_turbo_lora,

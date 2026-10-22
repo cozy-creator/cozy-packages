@@ -1,13 +1,21 @@
 """Source-derived geometry only; this does not execute a model or prove memo reuse."""
+import argparse
 import json
+from pathlib import Path
+import tensorfs
 import math
 import torch
 from h3_tables.adaln_operations import _plan, _topology
 from h3_tables.kernel import source_shapes, table_shapes
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("checkpoint", type=Path, help="local migrated full model checkpoint")
+args = parser.parse_args()
+checkpoint = tensorfs.open(args.checkpoint, local_files_only=True)
+
 rows = []
 for task in ("fl2va", "ref2va"):
-    plan, topology = _plan(task), _topology(task)
+    plan, topology = _plan(checkpoint, task), _topology(task)
     source = {key: math.prod(shape) * torch.empty((), dtype=dtype).element_size()
               for key, (dtype, shape) in source_shapes(topology).items()}
     tables = {key: math.prod(shape) * 2 for key, shape in table_shapes(topology, plan).items()}

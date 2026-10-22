@@ -48,7 +48,6 @@ from cozy_runtime.author import (
     UnsupportedInput,
     VideoAsset,
     VideoProbe,
-    data_values,
     invocable,
     prefetch,
 )
@@ -91,7 +90,6 @@ from minimax_h3.official import (
     reference_image_vision_tokens,
     read_reference_video,
     reference_video_vision_tokens,
-    turbo_steps,
     validate_reference_policy,
 )
 from qwen_image_2 import ImageOutput as ReferenceImageOutput
@@ -231,20 +229,11 @@ KeyframeAssets = Annotated[
 DEFAULT_REFERENCE_IMAGE_SHORT_EDGE = 1024
 _SHORT_EDGE_LADDER = (2048, 1536, 1024, 768, 512, 256)
 _REFERENCE_FIDELITY_EDGES = {"low": 256, "medium": 1024, "high": REFERENCE_IMAGE_SHORT_EDGE}
-# The shipped plans own the enum and must agree for both inference tasks.
-SUPPORTED_STEPS = data_values(
-    __file__, "minimax_h3/timestep-plans/fl2va.json", "schedules", "transformer_evaluations"
-)
-if (
-    data_values(
-        __file__, "minimax_h3/timestep-plans/ref2va.json", "schedules", "transformer_evaluations"
-    )
-    != SUPPORTED_STEPS
-):
-    raise ValueError("H3 task plans declare different supported step counts")
+# The step counts the wire offers; the model's timestep plans serve them (`TimestepPlan.schedule`).
+SUPPORTED_STEPS = (30, 40, 50)
 DEFAULT_STEPS = 30  # Static and imported descriptors must expose the same default.
-#: PDD-8: what the turbo functions run, fixed by their plans and absent from their wire.
-TURBO_STEPS = turbo_steps()
+#: PDD-8: what the turbo functions run, fixed by the turbo LoRA's plans and absent from their wire.
+TURBO_STEPS = 8
 Steps = Annotated[
     Literal[SUPPORTED_STEPS],  # type: ignore[valid-type]
     msgspec.Meta(description="Denoise steps (transformer evaluations); fewer is faster."),
@@ -915,8 +904,8 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
 
 
 #: The releases every H3 callable defaults to; the machine picks each lane from the GPU.
-_MODEL = "minimax-h3@1.0.0-rc.3"
-_TURBO_LORA = "minimax-h3-turbo-lora@1.0.0"
+_MODEL = "minimax-h3@1.0.0-rc.4"
+_TURBO_LORA = "minimax-h3-turbo-lora@1.0.1"
 
 
 #: The components each task runs. A machine downloads these first and the rest behind the
@@ -1227,6 +1216,7 @@ def _render_keyframes(
             steps=steps,
             frames=frames_for(duration_s),
             task=task,
+            plan=None if turbo_lora is None else turbo_lora.pipe.plans["fl2va"],
         )
     with tel.stage("condition_text", overall_range=(0.03, 0.08)):
         model.condition_text(task, state)
@@ -1303,6 +1293,7 @@ def _references_to_video(
             expected_context_provenance=expected_context_provenance,
             reference_image_short_edges=sizing.edges,
             task=task,
+            plan=None if turbo_lora is None else turbo_lora.pipe.plans["ref2va"],
         )
         for index, reference in enumerate(state.normalized_references):
             if reference.kind == "image":

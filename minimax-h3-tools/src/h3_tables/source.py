@@ -8,11 +8,15 @@ from typing import Any
 
 import msgspec
 import torch
-from cozy_runtime.author import Context, Weights, canonical_json
+from cozy_runtime.author import ConformanceError, Context, UnsupportedInput, Weights, canonical_json
 from cozy_runtime.weights_store import Checkpoint, Output, TensorMetadata
 
 from .kernel import H3Topology, LowRankAdapter, precompute_tables, table_shapes
-from .plans import TimestepPlan
+from .model_config import DIT_COMPONENT
+from .plans import Task, TimestepPlan, parse_plan
+from .table_layout import TableLayout
+
+TIMESTEP_PLAN = "timestep-plan.json"
 
 _FULL_SPECS_DIGEST = "sha256:3af7354b5080f4c117922157971261fd079f12790f9584615e87b4fdd95ae3e2"
 _FULL_CONFIG_DIGEST = "sha256:4150e2b9009aad13cf5a18b9878337346b2bfa7662b3f8037a0286cdaa806382"
@@ -59,6 +63,47 @@ def rows(source: Checkpoint) -> Rows:
 def config(source: Checkpoint) -> bytes:
     """The checkpoint's `{component: config}` document."""
     return canonical_json.encode({name: c.config for name, c in source.components.items()})
+
+
+def timestep_plan(
+    source: Checkpoint, task: Task, *, component: str | None = None, launch: bool = True
+) -> TimestepPlan:
+    """The source model owns its schedule; package resources are never a fallback."""
+    name = component or DIT_COMPONENT[task]
+    held = source.components.get(name)
+    if held is None or TIMESTEP_PLAN not in held.assets:
+        raise UnsupportedInput(
+            f"H3 source {name} lacks its required {TIMESTEP_PLAN} asset; use a migrated model",
+            code="adaln_plan",
+        )
+    try:
+        plan = parse_plan(held.asset(TIMESTEP_PLAN), task=task, launch=launch)
+        stamp = held.config.get("cozy_h3")
+        if isinstance(stamp, dict) and stamp.get("modulation") == "adaln-pruned":
+            layout = TableLayout.parse(stamp.get("table_keys"))
+            available = {(layout.timesteps[row], tag) for row, tag in layout.block_keys}
+            required = {(plan.timesteps[row], tag) for row, tag in plan.block_rows}
+            if not required <= available:
+                raise ValueError("the stored table rows do not cover the source plan")
+    except (ValueError, TypeError, OverflowError, ConformanceError) as exc:
+        raise UnsupportedInput(
+            f"H3 source {name} has an invalid timestep plan or table layout: {exc}",
+            code="adaln_plan",
+        ) from exc
+    return plan
+
+
+def copy_assets(
+    out: Output, source: Checkpoint, component: str, *, target: str | None = None,
+    omit: tuple[str, ...] = (),
+) -> None:
+    """Preserve a component's assets when deriving a projection or renamed component."""
+    if out.done is None:
+        writer = out.component(target or component)
+        held = source.components[component]
+        for name in held.assets:
+            if name not in omit:
+                writer.asset(name, held.asset(name))
 
 
 def write_config(out: Output, document: bytes) -> None:
