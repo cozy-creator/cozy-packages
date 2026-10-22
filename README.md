@@ -293,13 +293,16 @@ attention work while the generated video retains its resolution; output quality 
 still require measurement. Prompts are bounded to 4,096 characters. The token budget is a
 conservative capacity limit, not a measured maximum-size GPU fit guarantee.
 
-The task-stamped canonical plans live in `minimax-h3/minimax_h3/timestep-plans/`, derived from the
-official scheduler by `python scripts/h3_plans.py 30 40 50` (which also restamps the producer's
-copies and model config). Each plan lists one schedule per step count — its exact 31/41/51 video and audio
+The task-stamped canonical plans live in the model components as `timestep-plan.json`:
+`transformer` and `transformer_ref` in the base model, and `fl2va_turbo` and `ref2va_turbo`
+in the turbo adapter. Serving and producer tools read the selected model's assets. To generate
+replacement model assets from the official scheduler, use
+`python scripts/h3_plans.py --output /path/to/model-assets 30 40 50`, or `--turbo 8`
+for the adapter. Each base plan lists one schedule per step count — its exact 31/41/51 video and audio
 sigmas, 30/40/50 timesteps, and all five finite modulation classes (including the 0.999 clean-video
 and 1.0 clean-audio anchors) — plus one deduplicated union order of 315 block-modulation keys and 207
-final-normalization keys. These documents are the input boundary for `minimax-h3-tools`; that
-producer must not import package code. Each task has one table bank for the whole plan.
+final-normalization keys. The selected plan must be covered by its component's table layout;
+there is no packaged-plan fallback. Each task has one table bank for the whole plan.
 
 Both actions return exactly one muxed MP4 and its warnings — the customer result carries nothing
 else. Checkpoint, plan, geometry, and digest facts are attempt observations emitted through
