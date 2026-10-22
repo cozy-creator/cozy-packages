@@ -36,7 +36,7 @@ import json
 import sys
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import torch
@@ -53,7 +53,7 @@ from diffusers.models.transformers.transformer_minimax_h3 import (
 )
 from triton.language.extra import libdevice
 
-from cozy_runtime.author import CapabilityError
+from cozy_runtime.author import CapabilityError, Cut, split
 from cozy_runtime.author.kernels import (
     ROWWISE_FP8,
     KernelsUnavailable,
@@ -723,14 +723,54 @@ class FusedMiniMaxH3TransformerBlock(MiniMaxH3TransformerBlock):  # type: ignore
             self.norm2.eps,
             fp8=self._fusion_ff_fp8,
         )
-        # `ff.net` is [SwiGLU, Dropout(0.0), Linear]. An fp8 operand skips the identity dropout
-        # to reach the out projection directly; otherwise `ff` runs whole, so the memory's token
-        # cut of the FFN keeps only its output live, not the [tokens, 2 x ffn] intermediate.
-        if self.ff.net[0]._fusion_fp8:
-            ff_output = self.ff.net[2](self.ff.net[0](normed))
-        else:
-            ff_output = self.ff(normed)
+        ff_output = feed_forward(self.ff, normed)
         return gate_add(self._glue, hidden_states, gate_mlp, ff_output, adaln_indices)
+
+
+def feed_forward(ff: Any, normed: Any) -> Any:
+    """H3's FFN, [SwiGLU, Dropout(0.0), Linear], through `split` by tokens: whole while the
+    device holds it, else in the token windows the memory picks, so the [tokens, 2 x ffn]
+    intermediate (6.4 GB at 15 s) is never whole on a small card. Each token's output reads
+    only its own row, an fp8 operand's per-row scale with it."""
+    tokens = _Tokens(normed) if isinstance(normed, PreQuantized) else normed
+    return split(_FFN(ff), tokens, Cut(1))
+
+
+class _FFN:
+    """`split`'s function: the FFN over a window of tokens, its identity dropout skipped."""
+
+    __slots__ = ("ff",)
+
+    def __init__(self, ff: Any) -> None:
+        self.ff = ff
+
+    def __call__(self, normed: Any) -> Any:
+        if isinstance(normed, _Tokens):
+            normed = normed.operand
+        return self.ff.net[2](self.ff.net[0](normed))
+
+
+class _Tokens:
+    """A row-quantized FFN input as `split` sees it: the bf16 activation's [batch, tokens,
+    channels], a window of tokens being those rows' payload and scales."""
+
+    __slots__ = ("device", "dtype", "operand", "shape")
+
+    def __init__(self, operand: PreQuantized) -> None:
+        self.operand, self.shape = operand, operand.shape
+        self.dtype, self.device = operand.payload.dtype, operand.payload.device
+
+    def dim(self) -> int:
+        return len(self.shape)
+
+    def __getitem__(self, index: tuple[slice, ...]) -> PreQuantized:
+        batch, tokens = self.shape[0], self.shape[1]
+        payload, scale = (
+            t.view(batch, tokens, -1)[:, index[1]].flatten(0, 1)
+            for t in (self.operand.payload, self.operand.scale)
+        )
+        window = (batch, payload.shape[0] // batch, *self.shape[2:])
+        return replace(self.operand, payload=payload, scale=scale, shape=window)
 
 
 # ------------------------------------------------------------------------ install

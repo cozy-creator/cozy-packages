@@ -53,6 +53,7 @@ from cozy_runtime.author import (
     decode_request,
     describe,
 )
+from cozy_runtime.author import _split
 from cozy_runtime.author import attempt as kernel_attempt
 from cozy_runtime.author._attention_scope import _ACTIVE_LAYOUT
 from cozy_runtime.author._demand import normalize
@@ -4631,6 +4632,99 @@ def _released_qkv(attn: Any) -> None:
     red("Diffusers' processor holds them through it", held, [False])
 
 
+class _Level:
+    """The memory's side of `split` at one level, as the Runtime runs it: windows of at most
+    1/2^level of the elements, never finer than the finest window."""
+
+    def __init__(self, level: int) -> None:
+        self.level = level
+
+    def split(self, name: str, key: str, total: int, finest: int, run: Any) -> Any:
+        return run(max(-(-total // (1 << self.level)), finest))
+
+    def __call__(self, name: str, key: str, device: Any, total: int, finest: int, run: Any) -> Any:
+        """Runtime 0.30's call form (the package's lock until it moves to the varena Runtime)."""
+        return self.split(name, key, total, finest, run)
+
+    def piece(self) -> None:
+        pass
+
+
+def arm_ffn_split() -> None:
+    """The fused block's FFN goes through `split` by tokens (`glue.feed_forward`), on a real
+    narrow H3 block: whole at level 0, Diffusers' FFN bit for bit; at levels 1-3 its
+    [tokens, 2 x ffn] intermediate is 2^level times narrower and the output stays within one
+    bf16 rounding of the whole. A row-quantized operand cuts with its rows' scales."""
+    print("\n== FFN token split ==")
+    torch.manual_seed(76183)
+    dit = (
+        MiniMaxH3Transformer3DModel(
+            num_layers=1,
+            num_refiner_layers=1,
+            hidden_size=256,
+            ffn_dim=512,
+            num_attention_heads=2,
+            attention_head_dim=128,
+            time_embed_hidden_dim=256,
+            time_embed_dim=128,
+        )
+        .eval()
+        .bfloat16()
+    )
+    ff, tokens = dit.transformer_blocks[0].ff, 1000
+    x = torch.randn(1, tokens, 256, dtype=torch.bfloat16)
+    widths: list[int] = []
+    handle = ff.net[0].proj.register_forward_hook(lambda _m, _a, out: widths.append(out.shape[1]))
+    try:
+        with torch.inference_mode():
+            whole = ff(x)
+            check(
+                "without a memory it is Diffusers' FFN",
+                torch.equal(glue.feed_forward(ff, x), whole),
+                True,
+            )
+            red("Diffusers' FFN holds every token's intermediate", widths[:1], [-(-tokens // 8)])
+            bound = torch.finfo(torch.bfloat16).eps * float(whole.abs().max())
+            for level in range(4):
+                widths.clear()
+                _split.install(_Level(level))
+                try:
+                    got = glue.feed_forward(ff, x)
+                finally:
+                    _split.install(None)
+                error = float((got.float() - whole.float()).abs().max())
+                print(f"         level {level}: {len(widths)} windows, max |error| {error:.3g}")
+                check(
+                    f"level {level}: the widest intermediate",
+                    max(widths),
+                    -(-tokens // (1 << level)),
+                )
+                check(f"level {level}: every token once", sum(widths), tokens)
+                if level == 0:
+                    check("level 0 is the whole FFN, bit for bit", torch.equal(got, whole), True)
+                else:
+                    check(
+                        f"level {level} is within one bf16 rounding of whole", error <= bound, True
+                    )
+    finally:
+        handle.remove()
+
+    payload = torch.randn(2 * 6, 4).to(torch.float8_e4m3fn)
+    operand = PreQuantized(payload, torch.rand(2 * 6, 1), (2, 6, 4))
+    window = glue._Tokens(operand)[(slice(None), slice(2, 5), slice(None))]
+    rows = [2, 3, 4, 8, 9, 10]
+    check(
+        "a row-quantized window is its tokens' payload and scales, in both batches",
+        (
+            torch.equal(window.payload.view(torch.uint8), payload[rows].view(torch.uint8)),
+            torch.equal(window.scale, operand.scale[rows]),
+            window.shape,
+            window.provider,
+        ),
+        (True, True, (2, 3, 4), operand.provider),
+    )
+
+
 def arm_vae_glue() -> None:
     """The VAE decoder glue matches the release decoder as the package builds it (float16
     linears, float32 norms and scales) and refuses anything else; a CPU plan serves eager."""
@@ -4773,6 +4867,7 @@ ARMS = {
     "rgb8-handoff": arm_rgb8_handoff,
     "interface": arm_interface,
     "glue": arm_glue,
+    "ffn-split": arm_ffn_split,
     "vae-glue": arm_vae_glue,
     "attention-producer": arm_producer,
 }
