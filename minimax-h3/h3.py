@@ -909,7 +909,7 @@ def _nonfinite_fraction(torch: Any, value: Any) -> float:
 
 
 #: The releases every H3 callable defaults to; the machine picks each lane from the GPU.
-_MODEL = "minimax-h3@1.0.0-rc.4"
+_MODEL = "minimax-h3@1.0.0-rc.5"
 _TURBO_LORA = "minimax-h3-turbo-lora@1.0.1"
 
 
