@@ -88,6 +88,7 @@ from diffusers.modular_pipelines.minimax_h3.denoise import (
 )
 from PIL import Image as PILImage
 from torch.nn import functional as F
+from tensorfs.varena.torch import blocks_of
 from torch.multiprocessing.reductions import StorageWeakRef
 from torch.utils._python_dispatch import TorchDispatchMode
 from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
@@ -156,6 +157,7 @@ from minimax_h3.turbo import (  # noqa: E402
     TurboHeads,
     TurboOverlay,
     TurboSchedule,
+    TurboTables,
     _LoRAHook,
 )
 from minimax_h3.vae_tiles import TileBatchedVideoVAE  # noqa: E402
@@ -4259,6 +4261,29 @@ def turbo_h3_config() -> dict[str, Any]:
     return cast(dict[str, Any], document)
 
 
+def arm_overlay_pieces() -> None:
+    """cr-203 U9 (c): the turbo overlay is read in pieces, never whole. Each site's factors,
+    each table and each head is its own block, so the memory binds the few MB a consumer
+    reads (a bake, a table row, a head) and nothing of the overlay is common."""
+    print("\n== turbo overlay pieces ==")
+    overlay = tiny_overlay(TURBO_CONFIG)
+    pieces = blocks_of(overlay)
+    kinds = (LoRAFactors, TurboTables, TurboHeads)
+    check(
+        "every factor pair, table and head is a piece of its own",
+        sorted(pieces),
+        sorted(path for path, sub in overlay.named_modules() if isinstance(sub, kinds)),
+    )
+    check(
+        "no tensor of the overlay is outside a piece (no common region)",
+        [n for n, _ in overlay.named_parameters() if not any(n.startswith(p + ".") for p in pieces)],
+        [],
+    )
+    plain = torch.nn.Module()
+    plain.add_module("transformer_blocks", overlay.transformer_blocks)
+    red("an overlay that declares no pieces is one region", blocks_of(plain), pieces)
+
+
 def arm_turbo_state() -> None:
     """The public two-model sample passes its overlay through the real Diffusers state."""
     torch.manual_seed(512)
@@ -4847,6 +4872,7 @@ ARMS = {
     "turbo-lora": arm_turbo_lora,
     "turbo-forward": arm_turbo_forward,
     "turbo-state": arm_turbo_state,
+    "overlay-pieces": arm_overlay_pieces,
     "turbo-artifact": arm_turbo_artifact,
     "producer-configs": arm_producer_configs,
     "producer-construction-order": arm_producer_construction_order,
