@@ -29,7 +29,7 @@ from .model_config import (
 )
 from .order import current_order, full_order
 from .plans import Task, TimestepPlan, parse_declared_plan
-from .source import Rows, config, open_source, plain, rows, write_config, write_tables
+from .source import Rows, config, open_source, plain, rows, write_config, write_plan, write_tables
 from .table_layout import TableLayout
 
 _BINDING = "generating_projection_digest"
@@ -177,6 +177,7 @@ def _project(ctx: Context, source: Checkpoint, task: Task, output: str) -> Model
     with ctx.output(output, Derivation(base=None, sources=(source,), order=order)) as out:
         if out.done is None:
             out.component(component).asset(METADATA, _projection_config(task))
+            write_plan(out, component, _plan(task))
         for row in order:
             if not out.has(*row):
                 out.copy(*row, source)
@@ -251,6 +252,7 @@ async def compute_adaln_tables(
     with ctx.output("model", Derivation(base=None, sources=(opened,), order=order)) as out:
         if out.done is None:
             out.component(component).asset(METADATA, _bank_config(task, source.checkpoint_ref))
+            write_plan(out, component, plan)
         read, _, reused = write_tables(
             ctx, plan=plan, topology=topology, source=opened, component=component,
             outputs=(out,),
@@ -339,6 +341,8 @@ def _apply_adaln(
     )  # fmt: skip
     with ctx.output("model", derivation) as out:
         write_config(out, canonical_json.encode(configured))
+        for task, component in DIT_COMPONENT.items():
+            write_plan(out, component, _plan(task))
         if not pruned:
             out.inherit(opened)
         for row in order:

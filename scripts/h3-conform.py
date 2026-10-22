@@ -133,13 +133,11 @@ from minimax_h3.official import (  # noqa: E402
     _ScopedPipeline,
     _validate_dual_dit_topology,
     _validate_model_contract,
-    canonical_timestep_plan,
     denoise_rows,
     frames_for,
     reference_image_vision_tokens,
     reference_video_vision_tokens,
     supported_durations,
-    supported_steps,
     timestep_plan_digest,
     Trunk,
     validate_reference_policy,
@@ -177,6 +175,8 @@ import h3 as package  # noqa: E402
 from story import StoryReference, compile_segments  # noqa: E402
 from gates import MediaFacts, refuse_before_encode  # noqa: E402
 from h3_order import construction_order, encode_order  # noqa: E402
+
+from h3_plan_fixtures import canonical_timestep_plan, plan_bytes, plans as model_plans_fixture, supported_steps
 
 STEPS = supported_steps()
 DEFAULT_STEPS = min(STEPS)
@@ -480,7 +480,7 @@ def arm_producer_construction_order() -> None:
         ),
     ):
         with torch.device("meta"):
-            pipeline = OfficialH3Pipeline(Config(canonical_json.decode(raw)))
+            pipeline = OfficialH3Pipeline(Config(canonical_json.decode(raw)), model_plans_fixture())
         actual = tuple(
             (component, key)
             for component, module in pipeline.components.items()
@@ -617,7 +617,7 @@ def arm_schedule() -> None:
     plans = {task: canonical_timestep_plan(task) for task in ("fl2va", "ref2va")}
     for task, plan in plans.items():
         check(f"{task} canonical plan digest", plan.digest, PLAN_DIGESTS[task])
-        committed = files("minimax_h3").joinpath("timestep-plans", f"{task}.json").read_bytes()
+        committed = plan_bytes(cast(Any, task))
         check(
             f"{task} committed semantic document",
             canonical_json.encode(canonical_json.decode(committed)),
@@ -799,7 +799,7 @@ def meta_h3_pipeline() -> Any:
         dual_full_config(parse_production_config((assets / "model-config.json").read_bytes()))
     )
     with torch.device("meta"):
-        return OfficialH3Pipeline(Config(config))
+        return OfficialH3Pipeline(Config(config), model_plans_fixture())
 
 
 def arm_reference_resolution() -> None:
@@ -998,12 +998,12 @@ def arm_zero_reference_preparation() -> None:
     check("text-only default grid means the default forwards", len(state.timesteps), DEFAULT_STEPS)
     check(
         "the executed schedule is the plan's default",
-        pipe._plans["fl2va"].executed(state.timesteps.tolist(), state.audio_timesteps.tolist()),
-        pipe._plans["fl2va"].schedule(DEFAULT_STEPS),
+        pipe.plans["fl2va"].executed(state.timesteps.tolist(), state.audio_timesteps.tolist()),
+        pipe.plans["fl2va"].schedule(DEFAULT_STEPS),
     )
     refusal(
         "an off-plan executed schedule refuses",
-        lambda: pipe._plans["fl2va"].executed(state.timesteps.tolist()[:-1], []),
+        lambda: pipe.plans["fl2va"].executed(state.timesteps.tolist()[:-1], []),
         "artifact_config",
     )
 
@@ -1717,7 +1717,7 @@ def arm_text_conditioner() -> None:
 
     def contract_document() -> dict[str, object]:
         with torch.device("meta"):
-            built = census(official.build_h3_pipeline(Config(model_config)))
+            built = census(official.build_h3_pipeline(Config(model_config), model_plans_fixture()))
         return {
             "schema": "cozy.runtime.model_construction_contract.v1",
             "destination_sets": [
@@ -3703,12 +3703,12 @@ def arm_turbo_plan() -> None:
     steps = PDD_HEADER["pdd_num_steps"]
     block = PDD_HEADER["pdd_block_size"]
     check("eight evaluations", steps // block, 8)
-    check("turbo_steps() reads both plans", official.turbo_steps(), 8)
+    check("turbo_steps() reads both plans", canonical_timestep_plan("fl2va_turbo").steps[0], 8)
     for task in ("fl2va_turbo", "ref2va_turbo"):
         plan = canonical_timestep_plan(cast(Any, task))
         check(f"{task} plan is stamped with its trunk", plan.task, task.removesuffix("_turbo"))
         check(f"{task} canonical plan digest", plan.digest, TURBO_PLAN_DIGESTS[task])
-        committed = files("minimax_h3").joinpath("timestep-plans", f"{task}.json").read_bytes()
+        committed = plan_bytes(cast(Any, task))
         check(f"{task} committed semantic identity", timestep_plan_digest(committed), plan.digest)
         check(f"{task} one fixed schedule", plan.steps, (8,))
         (schedule,) = plan.schedules
@@ -4292,12 +4292,12 @@ def arm_turbo_artifact() -> None:
     overlay_only = {name: value for name, value in document.items() if name.endswith("_turbo")}
     refusal(
         "ordinary construction rejects turbo roots",
-        lambda: OfficialH3Pipeline(Config(document)),
+        lambda: OfficialH3Pipeline(Config(document), model_plans_fixture()),
         "artifact_config",
     )
     refusal(
         "LoRA construction requires both overlay roots",
-        lambda: official.OfficialH3TurboLoRA(Config({"fl2va_turbo": overlay_only["fl2va_turbo"]})),
+        lambda: official.OfficialH3TurboLoRA(Config({"fl2va_turbo": overlay_only["fl2va_turbo"]}), model_plans_fixture(turbo=True)),
         "artifact_config",
     )
     for field, value in (
@@ -4311,12 +4311,12 @@ def arm_turbo_artifact() -> None:
         changed["fl2va_turbo"]["cozy_h3"][field] = value
         refusal(
             f"unsupported PDD {field} refuses",
-            partial(official._overlay_spec, changed, "fl2va"),
+            partial(official._overlay_spec, changed, "fl2va", canonical_timestep_plan("fl2va_turbo")),
             "artifact_config",
         )
     with torch.device("meta"):
-        base = official.build_h3_turbo_base(Config(base_only))
-        lora = official.OfficialH3TurboLoRA(Config(overlay_only))
+        base = official.build_h3_turbo_base(Config(base_only), model_plans_fixture())
+        lora = official.OfficialH3TurboLoRA(Config(overlay_only), model_plans_fixture(turbo=True))
     check("ordinary model has exactly five real roots", set(base.components), set(base_only))
     check("turbo LoRA has exactly two overlay roots", set(lora.components), set(overlay_only))
     for label, built, config in (("H3TurboBase", base, base_only), ("H3TurboLoRA", lora, overlay_only)):

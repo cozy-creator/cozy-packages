@@ -12,7 +12,7 @@ from cozy_runtime.author import Context, Weights, canonical_json
 from cozy_runtime.weights_store import Checkpoint, Output, TensorMetadata
 
 from .kernel import H3Topology, LowRankAdapter, precompute_tables, table_shapes
-from .plans import TimestepPlan
+from .plans import PLAN_ASSET, TimestepPlan
 
 _FULL_SPECS_DIGEST = "sha256:3af7354b5080f4c117922157971261fd079f12790f9584615e87b4fdd95ae3e2"
 _FULL_CONFIG_DIGEST = "sha256:4150e2b9009aad13cf5a18b9878337346b2bfa7662b3f8037a0286cdaa806382"
@@ -65,6 +65,12 @@ def write_config(out: Output, document: bytes) -> None:
     """Each component's config of a `{component: config}` document, before its tensors."""
     for component, section in canonical_json.decode(document).items():
         out.config(component, section)
+
+
+def write_plan(out: Output, component: str, plan: TimestepPlan) -> None:
+    """Keep the exact schedule beside the modulation tables whose rows it names."""
+    if out.done is None:
+        out.component(component).asset(PLAN_ASSET, plan.canonical_bytes)
 
 
 def read(source: Checkpoint, component: str, key: str, dtype: torch.dtype, shape: tuple[int, ...]) -> torch.Tensor:

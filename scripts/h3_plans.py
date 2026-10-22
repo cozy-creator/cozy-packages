@@ -6,9 +6,8 @@
 
 Each argument is a denoise step count (transformer evaluations); its sigma grid is
 `MiniMaxH3Scheduler.set_timesteps(steps + 1)` per modality, exactly as the official
-pipeline spaces `num_inference_steps`. Writes both task plans for the serving package and
-the producer, and copies the producer's ordered table keys into its model config.
-`--turbo` writes the serving package's `<task>_turbo.json` plans only: one fixed schedule,
+pipeline spaces `num_inference_steps`. Writes both task plans for the producer, which embeds them as model assets, and copies the producer's ordered table keys into its model config.
+`--turbo` writes the producer's `timestep-plan.<task>.turbo.json` plans: one fixed schedule,
 stamped with the trunk task, which the turbo overlay's tables are keyed to.
 """
 
@@ -89,10 +88,9 @@ def main(arguments: list[str]) -> None:
         plan = TimestepPlan(task, VIDEO_SHIFT, AUDIO_SHIFT, schedules)
         raw = plan.canonical_bytes()
         if turbo:
-            (H3 / "minimax_h3" / "timestep-plans" / f"{task}_turbo.json").write_bytes(raw)
+            (TOOLS / f"timestep-plan.{task}.turbo.json").write_bytes(raw)
             print(f"{task}_turbo: sha256:{plan.digest} steps={plan.steps}")
             continue
-        (H3 / "minimax_h3" / "timestep-plans" / f"{task}.json").write_bytes(raw)
         (TOOLS / f"timestep-plan.{task}.json").write_bytes(raw)
         digests[task] = f"sha256:{plan.digest}"
         final_rows, block_rows = plan.table_layout()

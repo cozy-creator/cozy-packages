@@ -32,6 +32,7 @@ from .official import (
     build_h3_pipeline,
     build_h3_turbo_base,
     build_h3_turbo_lora,
+    model_plans,
 )
 from .turbo import ATTENTION_KWARG, OVERLAY_KWARG, TURBO_BANK
 
@@ -93,7 +94,8 @@ class H3Model(
     pipe: OfficialH3Pipeline
 
     def load(self, loader: Loader) -> None:
-        self.pipe = loader.construct(OfficialH3Pipeline, factory=build_h3_pipeline)
+        plans = model_plans(loader.assets)
+        self.pipe = loader.construct(OfficialH3Pipeline, factory=partial(build_h3_pipeline, plans=plans))
         self._declare_caches(loader)
 
     def _declare_caches(self, loader: Loader) -> None:
@@ -162,7 +164,8 @@ class H3TurboBase(H3Model, encoded_leaves="accept"):
     """
 
     def load(self, loader: Loader) -> None:
-        self.pipe = loader.construct(OfficialH3Pipeline, factory=build_h3_turbo_base)
+        plans = model_plans(loader.assets)
+        self.pipe = loader.construct(OfficialH3Pipeline, factory=partial(build_h3_turbo_base, plans=plans))
         self._declare_caches(loader)
 
     @uses_components("transformer")
@@ -209,7 +212,8 @@ class H3TurboLoRA(Model[OfficialH3TurboLoRA], encoded_leaves="accept"):
     pipe: OfficialH3TurboLoRA
 
     def load(self, loader: Loader) -> None:
-        self.pipe = loader.construct(OfficialH3TurboLoRA, factory=build_h3_turbo_lora)
+        plans = model_plans(loader.assets, turbo=True)
+        self.pipe = loader.construct(OfficialH3TurboLoRA, factory=partial(build_h3_turbo_lora, plans=plans))
 
     def unload(self, loader: Loader) -> None:
         return None

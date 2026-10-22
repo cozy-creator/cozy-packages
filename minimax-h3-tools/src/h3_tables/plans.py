@@ -17,6 +17,7 @@ from cozy_runtime.author import canonical_json
 
 Task = Literal["fl2va", "ref2va"]
 TASKS: tuple[Task, ...] = ("fl2va", "ref2va")
+PLAN_ASSET = "timestep-plan.json"
 
 LAUNCH_PLAN_DIGESTS: dict[Task, str] = {
     "fl2va": "sha256:9a48803d17d7bb5499ca8c018f60c86c9890eb91496249ac7cb199bc9e45201e",

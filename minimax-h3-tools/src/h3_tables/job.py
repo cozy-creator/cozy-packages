@@ -57,6 +57,7 @@ from .source import (
     plain,
     rows,
     write_config,
+    write_plan,
     write_tables,
 )
 
@@ -323,6 +324,8 @@ def _produce_lane(
     reused = written = read = 0
     with ctx.output(name, Derivation(base=None, sources=(source,), order=order)) as out:
         write_config(out, config)
+        for task, component in DIT_COMPONENT.items():
+            write_plan(out, component, _production_plan(task))
         with tel.stage(f"{name}-copy"):
             for done, row in enumerate(order, 1):
                 if row not in computed and row not in replaced and not out.has(*row):
@@ -607,6 +610,9 @@ async def retable(
     ) as bank:
         write_config(retabled, config)
         write_config(bank, bank_config)
+        for task, component in DIT_COMPONENT.items():
+            write_plan(retabled, component, plans[task])
+            write_plan(bank, component, plans[task])
         if not all(retabled.has(*row) and bank.has(*row) for row in bank_order):
             _require_cuda()
         read, written, _ = _tables(ctx, tel, full_source, (retabled, bank))

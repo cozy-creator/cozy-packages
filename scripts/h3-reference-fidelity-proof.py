@@ -39,8 +39,8 @@ from minimax_h3.official import (  # noqa: E402
     reference_image_size,
     reference_image_vision_tokens,
     supported_durations,
-    supported_steps,
 )
+from h3_plan_fixtures import plans as model_plans_fixture, supported_steps
 from h3_tables.model_config import dual_full_config, parse_production_config  # noqa: E402
 
 
@@ -68,7 +68,7 @@ def meta_pipeline() -> OfficialH3Pipeline:
     source = ROOT / "minimax-h3-tools" / "src" / "h3_tables" / "assets" / "model-config.json"
     config = canonical_json.decode(dual_full_config(parse_production_config(source.read_bytes())))
     with torch.device("meta"):
-        return OfficialH3Pipeline(Config(config))
+        return OfficialH3Pipeline(Config(config), model_plans_fixture())
 
 
 def picture(width: int, height: int, *, rgba: bool = False) -> Image:
