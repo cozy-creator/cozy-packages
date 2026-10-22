@@ -21,7 +21,6 @@ from concurrent.futures import CancelledError, Future
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from fractions import Fraction
-from functools import lru_cache
 from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
@@ -68,6 +67,7 @@ from cozy_runtime.author import (
     DerivedCache,
     Image,
     InvalidRequest,
+    ModelAssets,
     ThreadPoolExecutor,
     attention_scope,
     canonical_json,
@@ -95,7 +95,6 @@ from .vae_tiles import TileBatchedVideoVAE, encode_condition
 Trunk = Literal["fl2va", "ref2va"]
 Task = Literal["fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo"]
 _TRUNKS: tuple[Trunk, ...] = ("fl2va", "ref2va")
-_TASKS: tuple[Task, ...] = ("fl2va", "ref2va", "fl2va_turbo", "ref2va_turbo")
 _TRUNK: dict[Task, Trunk] = {
     "fl2va": "fl2va",
     "ref2va": "ref2va",
@@ -149,6 +148,8 @@ _OVERLAY_CONFIG_SECTIONS = {"fl2va_turbo", "ref2va_turbo"}
 _DIT_COMPONENT: dict[Trunk, str] = {"fl2va": "transformer", "ref2va": "transformer_ref"}
 _OVERLAY_COMPONENT: dict[Trunk, str] = {"fl2va": "fl2va_turbo", "ref2va": "ref2va_turbo"}
 _DISTILLATION = "pdd"
+#: The timesteps and sigmas a component's modulation tables hold rows for, in its folder.
+PLAN_ASSET = "timestep-plan.json"
 _ASSETS = Path(__file__).resolve().parent
 # NVIDIA's H3 sparse policy protects conditioning and the initial sensitive work.
 # This supplies semantics only; Runtime chooses the kernels.
@@ -546,13 +547,9 @@ def validate_reference_policy(kinds: Sequence[str]) -> ReferencePolicyFacts:
     return facts
 
 
-@lru_cache(maxsize=len(_TASKS))
-def canonical_timestep_plan(task: Task) -> TimestepPlan:
-    """Read and self-verify the committed official-oracle plan without a tensor device.
-
-    A turbo task's plan is stamped with its TRUNK, because the producer tables one trunk's
-    modulation rows at it; the file name carries the task."""
-    raw = (_ASSETS / "timestep-plans" / f"{task}.json").read_bytes()
+def timestep_plan(raw: bytes, trunk: Trunk) -> TimestepPlan:
+    """Read and self-verify one plan asset without a tensor device. A turbo plan is stamped with
+    its TRUNK, because the producer tables one trunk's modulation rows at it."""
     try:
         document = canonical_json.decode(raw)
         if not isinstance(document, dict):
@@ -574,32 +571,29 @@ def canonical_timestep_plan(task: Task) -> TimestepPlan:
                 )
             )
         plan = TimestepPlan(
-            task=_TRUNK[task],
+            task=trunk,
             video_shift=float.fromhex(document["video_shift"]),
             audio_shift=float.fromhex(document["audio_shift"]),
             schedules=tuple(schedules),
         )
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError(f"committed MiniMax-H3 {task} TimestepPlan is malformed") from exc
+        raise ConformanceError(
+            f"the model's {trunk} timestep plan is malformed", code="artifact_config"
+        ) from exc
     if plan.canonical_bytes() != canonical_json.encode(document):
-        raise ValueError(f"committed MiniMax-H3 {task} TimestepPlan has unexpected semantics")
+        raise ConformanceError(
+            f"the model's {trunk} timestep plan has unexpected semantics", code="artifact_config"
+        )
     return plan
 
 
-def supported_steps() -> tuple[int, ...]:
-    """The denoise step counts both committed base plans serve."""
-    steps = {trunk: canonical_timestep_plan(trunk).steps for trunk in _TRUNKS}
-    if len(set(steps.values())) != 1:
-        raise ValueError("the FL2VA and Ref2VA plans must serve the same denoise step counts")
-    return steps["fl2va"]
-
-
-def turbo_steps() -> int:
-    """The one evaluation count both committed turbo plans fix; there is no other."""
-    steps = {task: canonical_timestep_plan(task).steps for task in _TASKS if _BANK[task]}
-    if len(set(steps.values())) != 1 or any(len(value) != 1 for value in steps.values()):
-        raise ValueError("the turbo plans must each fix exactly one, shared, evaluation count")
-    return steps["fl2va_turbo"][0]
+def model_plans(assets: ModelAssets, *, turbo: bool = False) -> dict[Trunk, TimestepPlan]:
+    """Each trunk's plan: the asset of the component (DiT or turbo overlay) whose tables it labels."""
+    names = _OVERLAY_COMPONENT if turbo else _DIT_COMPONENT
+    return {
+        trunk: timestep_plan(assets.read(f"{name}/{PLAN_ASSET}"), trunk)
+        for trunk, name in names.items()
+    }
 
 
 def reference_image_size(
@@ -743,6 +737,8 @@ class _ImageEdges:
 
 #: The request state's handle on its intake length statement (`OfficialH3Pipeline._expect`).
 _INTAKE = "intake_length_statement"
+#: The request state's timestep plan, the one `_start` scheduled and `denoise` proves.
+_PLAN = "timestep_plan"
 
 
 class _IntakeLengths:
@@ -802,7 +798,7 @@ def _audio_weight_norm_scope(audio_vae: Any) -> Iterator[None]:
 class OfficialH3Pipeline:
     """Both official task workflows over one shared, dual-DiT construction."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, plans: Mapping[Trunk, TimestepPlan]) -> None:
         mapping = _artifact_sections(config.mapping())
         blocks = {
             name: MiniMaxH3Blocks().get_workflow(_diffusers_workflow(name))
@@ -852,9 +848,7 @@ class OfficialH3Pipeline:
         self.sample_rate = int(audio_vae.config.sampling_rate)
         self._blocks = blocks
         self._pipes = pipes
-        self._plans: dict[Task, TimestepPlan] = {
-            task: canonical_timestep_plan(task) for task in _TASKS
-        }
+        self.plans: dict[Task, TimestepPlan] = {trunk: plans[trunk] for trunk in _TRUNKS}
         self._dit_specs = dit_specs
         self._intake = _IntakeLengths()
 
@@ -910,6 +904,7 @@ class OfficialH3Pipeline:
         steps: int,
         frames: int,
         task: Task = "fl2va",
+        plan: TimestepPlan | None = None,
     ) -> Any:
         # With no anchor, state the official default canvas. With an anchor, leaving the
         # dimensions absent makes the first supplied keyframe the geometry authority.
@@ -924,6 +919,7 @@ class OfficialH3Pipeline:
             last_image=last_frame,
             height=height,
             width=width,
+            plan=plan,
         )
         self._expect(task, state)
         return state
@@ -938,6 +934,7 @@ class OfficialH3Pipeline:
         frames: int,
         reference_image_short_edges: Sequence[int],
         task: Task = "ref2va",
+        plan: TimestepPlan | None = None,
         context: AVContext | None = None,
         delivery: ContinuationPlan | None = None,
         expected_context_provenance: str | None = None,
@@ -966,6 +963,7 @@ class OfficialH3Pipeline:
             frames=frames,
             references=list(references),
             image_short_edges=tuple(reference_image_short_edges),
+            plan=plan,
         )
         state.set("normalized_references", [
             replace(normalized, frames=source.motion[:frames])
@@ -990,13 +988,17 @@ class OfficialH3Pipeline:
         steps: int,
         frames: int,
         image_short_edges: Sequence[int] = (),
+        plan: TimestepPlan | None = None,
         **values: Any,
     ) -> Any:
         # The plan, not the request, spells the official grid: `steps` transformer
-        # evaluations are the schedule's grid points less the terminal zero.
-        schedule = self._plans[task].schedule(steps)
+        # evaluations are the schedule's grid points less the terminal zero. A turbo task's
+        # plan is its turbo LoRA's, which the caller passes.
+        plan = self.plans[task] if plan is None else plan
+        schedule = plan.schedule(steps)
         state = PipelineState()
         fixed = {
+            _PLAN: plan,
             "prompt": prompt,
             "generator": generator,
             "num_frames": frames,
@@ -1309,7 +1311,7 @@ class OfficialH3Pipeline:
 
         # The receipt names the schedule the official blocks actually built, proven
         # against the plan by exact float32 equality of both modality vectors.
-        plan = self._plans[task]
+        plan = state.get(_PLAN)
         schedule = plan.executed(_float_tuple(state.timesteps), _float_tuple(state.audio_timesteps))
         if _BANK[task] is None:
             layout = self._dit_specs[_TRUNK[task]][2]
@@ -1456,20 +1458,17 @@ def _trunk_task(task: Task, trunk: Trunk) -> Task:
 class OfficialH3TurboLoRA:
     """The standalone adapter's two roots, independent of the base checkpoint."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, plans: Mapping[Trunk, TimestepPlan]) -> None:
         mapping = config.mapping()
         if set(mapping) != _OVERLAY_CONFIG_SECTIONS:
             raise ConformanceError(
                 "a turbo LoRA checkpoint contains exactly fl2va_turbo and ref2va_turbo",
                 code="artifact_config",
             )
-        self.specs = {trunk: _overlay_spec(mapping, trunk) for trunk in _TRUNKS}
+        self.plans = {trunk: plans[trunk] for trunk in _TRUNKS}
+        self.specs = {trunk: _overlay_spec(mapping, trunk, self.plans[trunk]) for trunk in _TRUNKS}
         overlays = {
-            trunk: _build_overlay(
-                self.specs[trunk][0],
-                canonical_timestep_plan("fl2va_turbo" if trunk == "fl2va" else "ref2va_turbo"),
-                self.specs[trunk][1],
-            )
+            trunk: _build_overlay(self.specs[trunk][0], self.plans[trunk], self.specs[trunk][1])
             for trunk in _TRUNKS
         }
         _validate_dual_topology(overlays, _OVERLAY_COMPONENT)
@@ -1485,23 +1484,23 @@ class OfficialH3TurboLoRA:
         return self.components[_OVERLAY_COMPONENT[trunk]]
 
 
-def build_h3_turbo_base(config: Config) -> OfficialH3Pipeline:
+def build_h3_turbo_base(config: Config, plans: Mapping[Trunk, TimestepPlan]) -> OfficialH3Pipeline:
     """The ordinary five-root artifact, with its turbo consumers installed before fill."""
     specs = _dit_specs(_artifact_sections(config.mapping()))
     if any(structure != "adaln-pruned" for _config, structure, _layout in specs.values()):
         raise ConformanceError("turbo requires an AdaLN-pruned base", code="artifact_config")
-    pipe = OfficialH3Pipeline(config)
+    pipe = OfficialH3Pipeline(config, plans)
     for name in _DIT_COMPONENT.values():
         pipe.components[name].install_lora_consumers()
     return pipe
 
 
-def build_h3_turbo_lora(config: Config) -> OfficialH3TurboLoRA:
-    return OfficialH3TurboLoRA(config)
+def build_h3_turbo_lora(config: Config, plans: Mapping[Trunk, TimestepPlan]) -> OfficialH3TurboLoRA:
+    return OfficialH3TurboLoRA(config, plans)
 
 
-def build_h3_pipeline(config: Config) -> OfficialH3Pipeline:
-    return OfficialH3Pipeline(config)
+def build_h3_pipeline(config: Config, plans: Mapping[Trunk, TimestepPlan]) -> OfficialH3Pipeline:
+    return OfficialH3Pipeline(config, plans)
 
 
 def _section(mapping: Mapping[str, object], name: str) -> dict[str, Any]:
@@ -1627,7 +1626,7 @@ def _build_dit(config: Mapping[str, Any], structure: str, layout: TableLayout | 
 
 
 def _overlay_spec(
-    mapping: Mapping[str, object], trunk: Trunk
+    mapping: Mapping[str, object], trunk: Trunk, plan: TimestepPlan
 ) -> tuple[dict[str, Any], TableLayout]:
     """Only the released rank-64 PDD-8 adapter is supported."""
     component = _OVERLAY_COMPONENT[trunk]
@@ -1637,8 +1636,6 @@ def _overlay_spec(
         raise ConformanceError("missing PDD metadata", code="artifact_config")
     extension = dict(extension)
     layout = TableLayout.parse(extension.pop("table_keys", None))
-    task: Task = "fl2va_turbo" if trunk == "fl2va" else "ref2va_turbo"
-    plan = canonical_timestep_plan(task)
     expected: dict[str, object] = {
         "task": trunk,
         "modulation": "adaln-pruned",
