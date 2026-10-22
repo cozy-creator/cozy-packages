@@ -4585,7 +4585,11 @@ def arm_glue() -> None:
     served = glue.install(model, SimpleNamespace(components={"dit": dit}), Plan("cpu", never))
     check(
         "a CPU executor serves eager, reported, unsubstituted",
-        (served, model._cozy_fusion_report["glue"]["code"], type(dit.transformer_blocks[0]).__name__),
+        (
+            served,
+            model._cozy_fusion_report[glue.GLUE.name]["code"],
+            type(dit.transformer_blocks[0]).__name__,
+        ),
         ("", "fusion_device_incapable", "MiniMaxH3TransformerBlock"),
     )
     reports: list[tuple[str, Any]] = []
@@ -4599,7 +4603,7 @@ def arm_glue() -> None:
     check(
         "a plan that takes reports receives the glue's outcome, its refusal code included",
         [(name, document["applied"], document["code"]) for name, document in reports],
-        [("glue", False, "fusion_device_incapable")],
+        [(glue.GLUE.name, False, "fusion_device_incapable")],
     )
     check("the plan's identity is stable", glue.identity(), glue.identity())
     check(
@@ -4790,7 +4794,7 @@ def arm_vae_glue() -> None:
     check(
         "the CPU refusal reaches a reporting plan",
         outcomes(),
-        [("vae_glue", False, "fusion_device_incapable")],
+        [(vae_glue.GLUE.name, False, "fusion_device_incapable")],
     )
     reports.clear()
     model = SimpleNamespace()
@@ -4798,13 +4802,17 @@ def arm_vae_glue() -> None:
     check(
         "an install deferred to a request boundary reports deferred at plan time",
         (served == vae_glue.identity(), outcomes(), type(block).__name__),
-        (True, [("vae_glue", False, "deferred")], "MiniMaxH3VideoTransformerBlock"),
+        (True, [(vae_glue.GLUE.name, False, "deferred")], "MiniMaxH3VideoTransformerBlock"),
     )
     waiting[0](never)  # the boundary: the kernels are built and the install lands
     check(
         "its landing reports through the same plan, and on the model",
-        (outcomes()[1:], model._cozy_fusion_report["vae_glue"]["applied"], type(block).__name__),
-        ([("vae_glue", True, "")], True, "FusedVideoTransformerBlock"),
+        (
+            outcomes()[1:],
+            model._cozy_fusion_report[vae_glue.GLUE.name]["applied"],
+            type(block).__name__,
+        ),
+        ([(vae_glue.GLUE.name, True, "")], True, "FusedVideoTransformerBlock"),
     )
 
 

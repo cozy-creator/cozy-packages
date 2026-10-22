@@ -349,8 +349,8 @@ def _install(blocks: Any, launch: Launch) -> None:
 def install(model: object, vae: Any, plan: Plan) -> str:
     """The fused glue on `vae`'s decoder blocks once its kernels are built (now, or at the next
     request's start); "" when the decoder is not the release shape or the device cannot. The
-    outcome is reported as `vae_glue` (`glue.record`): eager with its code, or deferred until
-    the install lands and then fused."""
+    outcome is reported under the kernel set's name (`glue.record`): eager with its code, or
+    deferred until the install lands and then fused."""
     device = torch.device(plan.device)
     decoder = getattr(vae, "decoder", None)
     if device.type != "cuda" or torch.cuda.get_device_capability(device)[0] < 8:
@@ -385,10 +385,10 @@ def _landed(model: object, plan: Plan, blocks: list[Any], launch: Launch) -> Non
         _report(model, plan, "fusion_install_failed", f"{type(exc).__name__}: {exc}", len(blocks))
         raise
     document = {"applied": True, "code": "", "reason": "", "sites": len(blocks)}
-    record(model, plan, "vae_glue", {**document, "identity": identity()})
+    record(model, plan, GLUE.name, {**document, "identity": identity()})
 
 
 def _report(model: object, plan: Plan, code: str, reason: str, sites: int = 0) -> str:
     document = {"applied": False, "code": code, "reason": reason, "sites": sites, "identity": ""}
-    record(model, plan, "vae_glue", document)
+    record(model, plan, GLUE.name, document)
     return ""
