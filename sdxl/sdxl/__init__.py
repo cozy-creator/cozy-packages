@@ -58,6 +58,7 @@ from cozy_runtime.author import (
     AssetBound,
     ConformanceError,
     Context,
+    Cut,
     ImageAsset,
     ImageFrame,
     Loader,
@@ -73,6 +74,7 @@ from cozy_runtime.author import (
     Weights,
     WeightsOutput,
     invocable,
+    split,
     uses_components,
 )
 from diffusers import AutoencoderKL, DDIMScheduler, EulerDiscreteScheduler, UNet2DConditionModel
@@ -426,10 +428,32 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
             latents = latents.to(dtype=wide)
         try:
             with torch.inference_mode():
-                return vae.decode(latents / self.pipe.vae_scale).sample
+                return split(_Decoded(vae), latents / self.pipe.vae_scale, *DECODE_TILES)
         finally:
             if upcast:
                 vae.to(dtype=original_dtype)
+
+
+#: The decode cuts the latents into tiles along height and width when the device holds less than
+#: the whole (the Runtime's `split`; whole while it holds it, as before). Neighbouring tiles share
+#: DECODE_OVERLAP latent pixels (8 image pixels each), cross-faded. Measured on SDXL's VAE over a
+#: 1024 px image (fp32, CPU), PSNR against whole at the Runtime's levels 1/2/3: overlap 0 gives
+#: 41.0/39.3/37.3 dB with seams (max abs 1.32), 4 gives 41.7/40.2/39.1, 8 gives 42.3/40.7/39.6,
+#: 16 gives 43.1/41.6/40.4 (the least overlap at 40 dB at every level), and 32 gives 44.5/42.6
+#: but can cut no finer than a quarter. Tiles never match exactly: each normalizes its own groups
+#: and the mid block attends within it.
+DECODE_OVERLAP = 16
+DECODE_TILES = (Cut(2, scale=8, overlap=DECODE_OVERLAP), Cut(3, scale=8, overlap=DECODE_OVERLAP))
+
+
+class _Decoded:
+    """The VAE's decode of a window of latents (`split`'s function)."""
+
+    def __init__(self, vae: Any) -> None:
+        self.vae = vae
+
+    def __call__(self, latents: Any) -> Any:
+        return self.vae.decode(latents).sample
 
 
 # ------------------------------------------------------------------ the handler
