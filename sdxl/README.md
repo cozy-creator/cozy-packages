@@ -13,7 +13,7 @@ default 20), `guidance` (0–20, default 7) and `seed`. The image is a WebP in
 `~/.cozy/outputs`.
 
 GPU: any NVIDIA card with 8 GB. The default 8-bit lane is 3.8 GiB (`fidika/sdxl@1.0.0`);
-`--bits 16` loads the 6.5 GiB bf16 lane. A 1024² image at 20 steps takes about 2.6 s on an
+`--lane 16` loads the 6.5 GiB bf16 lane. A 1024² image at 20 steps takes about 2.6 s on an
 RTX 4090 and 17 s on an 8 GB RTX 4070 Laptop. Without an NVIDIA GPU, add `--on new` to rent
 one.
 
