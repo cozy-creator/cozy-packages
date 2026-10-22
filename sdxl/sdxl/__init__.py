@@ -235,6 +235,9 @@ def _hidiffusion_unet_type() -> type[Any]:
         request's step (`cozy_step`), and each window block draws from the request's seed, step
         and its own index: a block runs the same however often it runs."""
 
+        # Its calls are the base's (it only adds methods): Runtime may replay a whole call as
+        # one CUDA graph while no HiDiffusion hook is on it (design §5's package declaration).
+        __cozy_graph_contract__ = UNet2DConditionModel
         _cozy_base_num_upsamplers: int
         _cozy_hidiffusion_active: bool
         cozy_step = 0
