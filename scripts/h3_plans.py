@@ -58,7 +58,7 @@ def oracle_plan(task: Task) -> TimestepPlan:
         raise ValueError(f"unknown H3 task {task!r}")
     steps = (TURBO_STEPS,) if task.endswith("_turbo") else BASE_STEPS
     return TimestepPlan(
-        cast(Trunk, trunk), VIDEO_SHIFT, AUDIO_SHIFT,
+        trunk, VIDEO_SHIFT, AUDIO_SHIFT,
         tuple(official_schedule(count) for count in steps),
     )
 

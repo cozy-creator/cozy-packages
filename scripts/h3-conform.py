@@ -315,7 +315,8 @@ def arm_model_plan_assets() -> None:
         partial(OfficialH3Pipeline, Config(wrong_rows), plans),
         "artifact_config",
     )
-    wrong_shift = dict(plans, fl2va=replace(plans["fl2va"], video_shift=6.0))
+    wrong_shift = dict(plans)
+    wrong_shift["fl2va"] = replace(plans["fl2va"], video_shift=6.0)
     refusal(
         "a selected plan with another scheduler shift refuses before construction",
         partial(OfficialH3Pipeline, Config(mapping), wrong_shift),
