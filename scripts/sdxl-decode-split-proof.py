@@ -47,6 +47,11 @@ class Level:
         self.windows = _split._windows(self.shape, DECODE_TILES, most)
         return run(most)
 
+    def __call__(self, name: str, key: str, device: Any, total: int, finest: int, run: Any) -> Any:
+        """Runtime 0.30 calls its memory with the device too (the package's lock until the
+        cohort moves to the varena Runtime, which calls `split`)."""
+        return self.split(name, key, total, finest, run)
+
     def piece(self) -> None:
         pass
 
