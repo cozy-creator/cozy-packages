@@ -61,11 +61,16 @@ def recipes(pruned: tensorfs.Checkpoint) -> None:
     for encoding, dit_scheme, dit_rows, te_scheme in (
         ("fp8.rowwise", "fp8.rowwise", 313, "fp8.rowwise"),
         ("int8.convrot", "int8.convrot", 313, "int8.convrot"),
-        ("nvfp4", "nvfp4", 276, "int8.convrot"),
+        ("nvfp4", "nvfp4", 300, "int8.convrot"),
     ):
         got = counts(job.quantizer_selections(pruned, encoding))
         want = {dit: (dit_scheme, dit_rows) for dit in dits} | {"text_encoder": (te_scheme, 350)}
         assert got == want, f"{encoding}: {got}"
+        if encoding == "nvfp4":
+            for selection in job.quantizer_selections(pruned, encoding):
+                if selection.component in dits:
+                    own = {t.key for t in selection.plan.tensors if t.encoding == "int8.convrot"}
+                    assert own == set(lanes.NVFP4_DIT_INT8), own
         print(f"PASS --{encoding}: {got}")
     present = rows(pruned)
     refuses("h3_component_refused", lambda: lanes.select(

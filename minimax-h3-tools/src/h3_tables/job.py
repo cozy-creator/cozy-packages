@@ -396,7 +396,7 @@ app.entrypoint(
 #: component the source still holds plain is encoded; one already carrying this scheme is
 #: inherited; one carrying another refuses. Everything else carries over from the source. nvfp4
 #: takes the DiTs minus `NVFP4_DIT_KEEP` and its conditioner is int8.convrot (the nvfp4 leaf is
-#: W4A4 at prompt length, and the conditioner runs once a request).
+#: W4A4 at prompt length, and the conditioner runs once a request); `NVFP4_DIT_INT8` serve int8.convrot.
 QUANTIZER_RECIPES: Mapping[str, Mapping[str, _lanes.Treatment]] = {
     encoding: {
         component: _lanes.Treatment(encode=encoding, keep=treatment.keep)
@@ -405,8 +405,10 @@ QUANTIZER_RECIPES: Mapping[str, Mapping[str, _lanes.Treatment]] = {
     for encoding in ("fp8.rowwise", "int8.convrot")
 } | {
     "nvfp4": {
-        **{dit: _lanes.Treatment(encode="nvfp4", keep=_lanes.NVFP4_DIT_KEEP)
-           for dit in sorted(_lanes.DIT_COMPONENTS)},
+        **{dit: _lanes.Treatment(
+               encode="nvfp4", keep=_lanes.NVFP4_DIT_KEEP,
+               encode_as=tuple((key, "int8.convrot") for key in _lanes.NVFP4_DIT_INT8),
+           ) for dit in sorted(_lanes.DIT_COMPONENTS)},
         "text_encoder": _lanes.Treatment(encode="int8.convrot", keep=_lanes.TEXT_ENCODER_KEEP),
     }
 }
