@@ -46,6 +46,16 @@ def _files(root: Path) -> dict[str, str]:
     }
 
 
+def _tree(root: Path, files: dict[str, str]) -> str:
+    document = {
+        "format": "cozytensors.tree/1",
+        "files": {name: {"sha256": digest, "length": (root / name).stat().st_size}
+                  for name, digest in files.items()},
+    }
+    raw = json.dumps(document, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+    return "sha256:" + _sha(raw)
+
+
 def _header(raw: bytes) -> list[Any]:
     stream = io.BytesIO(raw)
     doc = cbor2.load(stream)
@@ -86,6 +96,8 @@ def _prepare(
     if any((source / "chunks").iterdir()):
         raise ValueError("metadata-only snapshot unexpectedly contains component payload")
     original_files = _files(source)
+    if _tree(source, original_files) != source_revision:
+        raise ValueError("materialized files do not reproduce the pinned source tree")
     headers = sorted(p for p in original_files if p.endswith(".cozytensors"))
     if not headers:
         raise ValueError("source tree contains no CozyTensors variants")
@@ -151,6 +163,7 @@ def _prepare(
         "source_repo": source_repo, "source_revision": source_revision, "endpoint": endpoint,
         "tensorfs": tensorfs.__version__, "proposed_folder": str(proposed),
         "source_files": original_files, "proposed_files": files, "headers": receipts,
+        "expected_commit": _tree(proposed, files),
         "plan_assets": {name: _sha(raw) for name, (raw, _) in plans.items()},
         "payload_scope": "only new plan assets; no source component payload requested",
         "published": False,
