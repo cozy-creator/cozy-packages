@@ -48,6 +48,19 @@ base model; the merged weights exist only on the GPU. `scripts/qwen-image-edit-m
 the package against Diffusers on tiny real modules: the same pixels for editing with and without
 CFG, and Diffusers' own reading of a Lightning-format LoRA.
 
+## Quality and speed (A40, warm)
+
+Same seed and size as Diffusers' bf16 pipeline: the bf16 lane is the same image (61.0 dB on a one-reference
+edit, 55.4 dB on a two-reference compose); the turbo function's per-step LoRA is 30.5 dB from Diffusers'
+8-step Lightning, and the default bake is visually the same image. The int8 lane re-samples the same image
+(18–26 dB from bf16) and keeps every reference's identity in two-reference composes.
+
+| request | bf16 | int8 |
+| --- | --- | --- |
+| `generate`, one 0.5 MP reference, 40 steps | 3.1 s/step | 2.7 s/step |
+| `generate`, two references, 0.9 MP out, 40 steps | 6.6 s/step | 5.5 s/step |
+| `generate_turbo`, 8 steps | | 13–23 s sampling |
+
 ## Lanes
 
 `int8` writes the default lane: every linear of the 60 DiT blocks, their modulation heads included,

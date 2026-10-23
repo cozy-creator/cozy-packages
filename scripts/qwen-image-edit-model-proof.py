@@ -305,8 +305,6 @@ def kernel(model: QwenImageEdit, lora: QwenImageEditLoRA) -> None:
                 assert (png.format, png.size) == ("PNG", expected)
             rows = [(row.kind, row.field) for row in result.adjustments if row.kind == "clamp"]
             assert rows == clamps, (given, result.adjustments)
-            if function == "generate_turbo":
-                print("turbo adjustments", result.adjustments)
     assert model.graph.arming.lora is None
 
 
