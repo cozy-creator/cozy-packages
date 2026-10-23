@@ -26,7 +26,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "hidream-o1"))
 
 from hidream_o1 import app, layout  # noqa: E402
-from hidream_o1.agent import PromptAgent, caption  # noqa: E402
 from hidream_o1.model import (  # noqa: E402
     FIX_POINT,
     HiDreamO1,
@@ -196,17 +195,9 @@ def sizes() -> None:
             assert all(p.size == area_resize(i, side).size for p, i in zip(prepared, images, strict=True))
 
 
-def agent_replies() -> None:
-    assert caption('{"prompt": "a fox", "reasoning": "x"}', "fox") == "a fox"
-    assert caption('```json\n{"prompt": "two\nlines"}\n```', "fox") == "two\nlines"
-    assert caption("no json here", "fox") == "fox, highly detailed, masterpiece, best quality, sharp focus"
-
-
 def functions(root: Path) -> None:
-    """`generate` and `generate_turbo` through the real kernel on real PNGs; `prompt_upsampling`
-    never reaches the agent for an edit, and is off by default."""
-    models = {"model": HiDreamO1.for_test(graph=graph(torch.bfloat16), processor=build_processor(assets())),
-              "agent": PromptAgent.for_test()}
+    """`generate` and `generate_turbo` through the real kernel on real PNGs."""
+    models = {"model": HiDreamO1.for_test(graph=graph(torch.bfloat16), processor=build_processor(assets()))}
     rng = np.random.default_rng(5)
     paths = []
     for index, size in enumerate(((96, 64), (64, 96))):
@@ -215,7 +206,7 @@ def functions(root: Path) -> None:
         paths.append(path)
     cases: list[tuple[str, list[Path], dict[str, object], tuple[int, int], set[str]]] = [
         ("generate", [], {"megapixels": 1, "steps": 2}, (1024, 1024), set()),
-        ("generate", paths[:1], {"steps": 2, "prompt_upsampling": True}, (1248, 832), {"megapixels", "prompt_upsampling"}),
+        ("generate", paths[:1], {"steps": 2}, (1248, 832), {"megapixels"}),
         ("generate", paths, {"steps": 1, "guidance": 1.0, "aspect_ratio": "2:1", "megapixels": 1}, (1440, 704), set()),
         ("generate_turbo", paths[:1], {"steps": 4}, (1248, 832), {"megapixels", "steps"}),
     ]
@@ -234,7 +225,6 @@ def functions(root: Path) -> None:
 
 
 if __name__ == "__main__":
-    agent_replies()
     schedules()
     sizes()
     structure()
