@@ -1,0 +1,29 @@
+[project]
+name = "hidream-o1"
+version = "0.1.0"
+description = "Cozy text-to-image and reference editing with HiDream-O1-Image, full and Dev"
+requires-python = ">=3.12"
+dependencies = [
+    "cozy-runtime[media]>=0.30.13,<0.32",
+    "msgspec>=0.19",
+    "numpy>=1.26",
+    "pillow>=12",
+    "tensorfs>=0.13,<0.15",
+    "tokenizers>=0.23.1",
+    "torch>=2.13",
+    "torchvision>=0.28",
+    "transformers>=5.17",
+]
+
+[project.entry-points."cozy.application"]
+default = "hidream_o1:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["hidream_o1"]
+
+[tool.uv]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'", "sys_platform == 'linux' and platform_machine == 'aarch64'"]
