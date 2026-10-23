@@ -199,11 +199,12 @@ def _generate(
 _MODEL = ("transformer", "text_encoder", "vae")
 
 
-# A VLM is built and fetched on first use: a request that skips upsampling never pulls one.
+# A VLM is built and fetched on first use: a request that skips upsampling never pulls one. Model
+# parameters are in name order: Runtime refuses a binding set whose paths are not sorted.
 @app.entrypoint(defaults={"model": "fibo-2-dev@0.1.0", "upsampler": "fibo-vlm@0.1.0", "edit_upsampler": "fibo-edit-vlm@0.1.0"},
                 components={"model": _MODEL, "upsampler": ("model",), "edit_upsampler": ("model",)},
                 on_demand=("upsampler", "edit_upsampler"), memoize=Memoize(requires=["seed"]))
-def generate(ctx: Context, payload: GenerateInput, model: Fibo2, upsampler: Captioner, edit_upsampler: Captioner,
+def generate(ctx: Context, payload: GenerateInput, edit_upsampler: Captioner, model: Fibo2, upsampler: Captioner,
              out: Outputs, tel: Telemetry, adj: Adjustments) -> ImageOutput:
     """Fibo 2.0 Dev, 50 steps with CFG 5: text to image, or an edit of up to four ordered references."""
     negative = payload.negative_prompt
@@ -217,7 +218,7 @@ def generate(ctx: Context, payload: GenerateInput, model: Fibo2, upsampler: Capt
                           "edit_upsampler": "fibo-edit-vlm@0.1.0"},
                 components={"model": _MODEL, "upsampler": ("model",), "edit_upsampler": ("model",)},
                 on_demand=("upsampler", "edit_upsampler"), memoize=Memoize(requires=["seed"]))
-def generate_turbo(ctx: Context, payload: TurboInput, model: Fibo2, upsampler: Captioner, edit_upsampler: Captioner,
+def generate_turbo(ctx: Context, payload: TurboInput, edit_upsampler: Captioner, model: Fibo2, upsampler: Captioner,
                    out: Outputs, tel: Telemetry, adj: Adjustments) -> ImageOutput:
     """Fibo 2.0 Edit Turbo, 4 steps without guidance: text to image, or an edit of up to four ordered references."""
     return _generate(ctx, payload, model, upsampler, edit_upsampler, out, tel, adj,
