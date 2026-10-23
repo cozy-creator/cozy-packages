@@ -10,12 +10,12 @@ otherwise.
 | `generate_turbo` | the same, with `qwen-image-edit-2511-lightning-lora@0.1.0` | 8 | none |
 
 ```sh
-cozy run fidika/qwen-image-edit/generate prompt='Make him play a violin instead of the guitar' \
+cozy run qwen-image-edit/generate prompt='Make him play a violin instead of the guitar' \
   --asset reference_images.0=guitarist.png seed=42
-cozy run fidika/qwen-image-edit/generate_turbo \
+cozy run qwen-image-edit/generate_turbo \
   prompt='The cat from Picture 1 wearing the space suit from Picture 2' \
   --asset reference_images.0=cat.jpg --asset reference_images.1=astronaut.jpg
-cozy run fidika/qwen-image-edit/generate prompt='A red vintage bicycle against a pastel wall' \
+cozy run qwen-image-edit/generate prompt='A red vintage bicycle against a pastel wall' \
   aspect_ratio=3:2
 ```
 

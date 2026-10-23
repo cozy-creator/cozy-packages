@@ -15,10 +15,10 @@ default to `minimax-h3@1.0.0-rc.6` and `minimax-h3-turbo-lora@1.0.1`. Releases b
 `minimax-h3@1.0.0-rc.4` carry no plans and refuse with `model_asset_missing`.
 
 ```sh
-cozy run fidika/minimax-h3/fl2va_turbo prompt='The camera pulls back from a lighthouse as a storm rolls in.' \
+cozy run minimax-h3/fl2va_turbo prompt='The camera pulls back from a lighthouse as a storm rolls in.' \
   duration_s=6 --asset first=./first.png --asset last=./last.png
-cozy run fidika/minimax-h3/ref2va_turbo --input scene.json
-cozy run fidika/minimax-h3/long_form --input story.json
+cozy run minimax-h3/ref2va_turbo --input scene.json
+cozy run minimax-h3/long_form --input story.json
 ```
 
 `scene.json` names its references, by file path or description, and uses them in the prompt as

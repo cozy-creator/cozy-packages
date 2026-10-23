@@ -16,7 +16,7 @@ on:
       account_index:
         description: Account index the committed locks are bound to (`cozy package lock`)
         type: string
-        default: https://tensorhub.com/v1/index/fidika/simple/
+        default: https://tensorhub.com/v1/index/_/simple/
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
@@ -68,7 +68,7 @@ jobs:
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          scripts/bind-account-index.sh "${{ inputs.account_index || 'https://tensorhub.com/v1/index/fidika/simple/' }}" anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 qwen-image-edit flux-2 flux-3-klein fibo-2
+          scripts/bind-account-index.sh "${{ inputs.account_index || 'https://tensorhub.com/v1/index/_/simple/' }}" anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 qwen-image-edit flux-2 flux-3-klein fibo-2
           for package in anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 qwen-image-edit flux-2 flux-3-klein fibo-2; do
             uv lock --check --project "$package"
           done

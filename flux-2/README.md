@@ -13,13 +13,13 @@ The checkpoint sets the defaults, so any model runs correctly in either function
 8 GB of weights at int8) is the choice for consumer cards:
 
 ```sh
-cozy run fidika/flux-2/generate_turbo model.model=fidika/flux-2-klein-4b \
+cozy run flux-2/generate_turbo model.model=flux-2-klein-4b \
   prompt='A lighthouse on a basalt cliff in a winter storm' aspect_ratio=16:9
-cozy run fidika/flux-2/generate_turbo model.model=fidika/flux-2-klein-9b \
+cozy run flux-2/generate_turbo model.model=flux-2-klein-9b \
   prompt='Make it night, the lamp lit' --asset reference_images.0=lighthouse.png
-cozy run fidika/flux-2/generate model.model=fidika/flux-2-klein-4b-base prompt='...' negative_prompt='blurry'
-cozy run fidika/flux-2/generate prompt='...'          # [dev]
-cozy run fidika/flux-2/generate_turbo prompt='...'    # [dev] Turbo
+cozy run flux-2/generate model.model=flux-2-klein-4b-base prompt='...' negative_prompt='blurry'
+cozy run flux-2/generate prompt='...'          # [dev]
+cozy run flux-2/generate_turbo prompt='...'    # [dev] Turbo
 ```
 
 Fields: `prompt`, `reference_images`, `aspect_ratio` (any `W:H`), `megapixels` (1, 2 or 4; 1024² pixels
@@ -55,12 +55,12 @@ Its first use fetches [dev]'s text encoder.
 Upload each repository as it is, and publish it as lane `bf16`:
 
 ```sh
-cozy model upload hf://black-forest-labs/FLUX.2-dev@26afe3a78bb242c0a8bb181dcc8937bb16e5c66c fidika/flux-2-dev --on <machine>
-cozy model upload hf://fal/FLUX.2-dev-Turbo@9ee51cd87578162cf8d02355a870bc5f4570045c fidika/flux-2-dev-turbo --on <machine>
-cozy model upload hf://black-forest-labs/FLUX.2-klein-9B@92196c8e11f7b6cf2b7493e037d8c5345c559216 fidika/flux-2-klein-9b --on <machine>
-cozy model upload hf://black-forest-labs/FLUX.2-klein-base-9B@32773329fbe7e81a90ef971740e8ba4b0364ecf3 fidika/flux-2-klein-9b-base --on <machine>
-cozy model upload hf://black-forest-labs/FLUX.2-klein-4B@e7b7dc27f91deacad38e78976d1f2b499d76a294 fidika/flux-2-klein-4b --on <machine>
-cozy model upload hf://black-forest-labs/FLUX.2-klein-base-4B@a3b4f4849157f664bdbc776fd7453c2783562f4d fidika/flux-2-klein-4b-base --on <machine>
+cozy model upload hf://black-forest-labs/FLUX.2-dev@26afe3a78bb242c0a8bb181dcc8937bb16e5c66c flux-2-dev --on <machine>
+cozy model upload hf://fal/FLUX.2-dev-Turbo@9ee51cd87578162cf8d02355a870bc5f4570045c flux-2-dev-turbo --on <machine>
+cozy model upload hf://black-forest-labs/FLUX.2-klein-9B@92196c8e11f7b6cf2b7493e037d8c5345c559216 flux-2-klein-9b --on <machine>
+cozy model upload hf://black-forest-labs/FLUX.2-klein-base-9B@32773329fbe7e81a90ef971740e8ba4b0364ecf3 flux-2-klein-9b-base --on <machine>
+cozy model upload hf://black-forest-labs/FLUX.2-klein-4B@e7b7dc27f91deacad38e78976d1f2b499d76a294 flux-2-klein-4b --on <machine>
+cozy model upload hf://black-forest-labs/FLUX.2-klein-base-4B@a3b4f4849157f664bdbc776fd7453c2783562f4d flux-2-klein-4b-base --on <machine>
 ```
 
 The Turbo LoRA stays one separate 16-bit model: Runtime bakes it into [dev]'s resident weights at load.
@@ -74,8 +74,8 @@ DiT blocks in NVFP4, except the double blocks' text attention, beside the same i
 do the VAE and Mistral's vision tower. Each lane is written from the 16-bit upload:
 
 ```sh
-cozy model quantize fidika/flux-2-dev@0.1.0 --int8 --on <machine>
-cozy model quantize fidika/flux-2-dev@0.1.0 --nvfp4 --on <machine>
+cozy model quantize flux-2-dev@0.1.0 --int8 --on <machine>
+cozy model quantize flux-2-dev@0.1.0 --nvfp4 --on <machine>
 ```
 
 Measured on an A40 (int8), seconds per step at 1 MP: [dev] 1.93, [klein] 4B 0.62 (bf16 0.82), [klein] 9B

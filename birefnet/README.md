@@ -6,9 +6,9 @@ input transforms, and Pillow compositing. The image geometry is preserved. Runti
 owns weight loading, placement and residency; the model never fetches a backbone.
 
 ```sh
-cozy model upload hf://ZhengPeng7/BiRefNet@e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4 fidika/birefnet
-cozy model publish fidika/birefnet --release 0.1.0 --lane fp16=sha256:<checkpoint-from-upload>
-cozy run fidika/birefnet/remove_background --asset image=./character.png
+cozy model upload hf://ZhengPeng7/BiRefNet@e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4 birefnet
+cozy model publish birefnet --release 0.1.0 --lane fp16=sha256:<checkpoint-from-upload>
+cozy run birefnet/remove_background --asset image=./character.png
 ```
 
 The callable returns a lossless WebP. Its deterministic result is memoized by the
