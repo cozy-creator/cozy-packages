@@ -100,14 +100,9 @@ reference = file_input(ImageAsset, pngs[1], max_decoded_bytes=1 << 20)
 assert reference.read().getpixel((0, 0)) == (255, 255, 255)
 assert reference.read(mode="RGBA").getpixel((0, 0)) == (255, 0, 0, 0)
 surfaces = {surface.name: surface for surface in describe(app)}
-assert set(surfaces) == {"generate", "generate_turbo", "int8", "w4a8"}, sorted(surfaces)
+assert set(surfaces) == {"generate", "generate_turbo"}, sorted(surfaces)
 for name in ("generate", "generate_turbo"):
     surface = surfaces[name]
     assert not surface.weights_outputs and surface.accelerator
     assert [(b.param, b.weights) for b in surface.model_bindings] == [("model", False)]
-for lane in ("int8", "w4a8"):
-    quantizer = surfaces[lane]
-    assert [o.name for o in quantizer.weights_outputs] == [lane] and not quantizer.accelerator
-    assert [(b.param, b.weights) for b in quantizer.model_bindings] == [("source", True)]
-    assert quantizer.memoize is None
 print("qwen-image-2: any W:H inside the demand, first-reference sizing, seeds, RGB and RGBA PNGs passed")

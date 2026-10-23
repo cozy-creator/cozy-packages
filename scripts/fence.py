@@ -193,6 +193,10 @@ def public_runtime_surface(module: str) -> bool:
 PACKAGE_INTERNALS: dict[tuple[str, str], str] = {}
 
 DRIVER_INTERNALS: dict[tuple[str, str], str] = {
+    ("scripts/lane-plans-proof.py", "cozy_runtime.internal"): (
+        "Read a package's declared recipes as the static describe records them, importing none "
+        "of the package. Retire when describe's recipes have a public reader."
+    ),
     ("scripts/qwen-image-2-model-proof.py", "cozy_runtime.author._activity"): (
         "Observe the executor's cooperative-timing frames around the staged model and its "
         "pipeline progress adapter. Retire when the author surface exposes the observer."

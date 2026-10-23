@@ -19,17 +19,14 @@ from cozy_runtime.author import (
     Outputs,
     Shape,
     Telemetry,
-    WeightsOutput,
 )
 from diffusers.pipelines.qwenimage21.pipeline_qwenimage21 import calculate_dimensions
 from PIL import Image
 
 from .model import QwenImage21Model
-from .quantize import int8, w4a8
+from . import quantize as quantize  # its recipes
 
 app = App()
-app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=24 << 30),), accelerator=False)
-app.entrypoint(w4a8, weights=(WeightsOutput("w4a8", max_new_bytes=24 << 30),), accelerator=False)
 
 
 class Megapixels(IntEnum):

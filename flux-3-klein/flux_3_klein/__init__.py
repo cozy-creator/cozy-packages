@@ -18,7 +18,6 @@ from cozy_runtime.author import (
     Outputs,
     Shape,
     Telemetry,
-    WeightsOutput,
 )
 from PIL import Image, ImageOps
 
@@ -31,14 +30,10 @@ from .klein import (
     prepare_reference,
     reference_canvas,
 )
-from .quantize import drafter_head, int8, nvfp4, w4a8
+from . import quantize as quantize  # its recipes
 from .upsampler import Drafter, Upsampler
 
 app = App()
-app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
-app.entrypoint(nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=12 << 30),), accelerator=False)
-app.entrypoint(w4a8, weights=(WeightsOutput("w4a8", max_new_bytes=12 << 30),), accelerator=False)
-app.entrypoint(drafter_head, weights=(WeightsOutput("bf16", max_new_bytes=1 << 30),), accelerator=False)
 
 
 class Megapixels(IntEnum):

@@ -1,42 +1,44 @@
 # minimax-h3-tools
 
-The H3 producer package. Its conversions are recipes, not functions: each takes one primary model
-input and a destination repository and runs through `cozy model quantize` on the rental that holds
-the source:
+The H3 producer package. Its conversions are functions that take one primary model input and a
+destination repository, run on the rental that holds the source:
 
 ```sh
-cozy model quantize <input model ref> <org/model> --recipe <recipe> --package <org>/minimax-h3-tools --on NAME
+cozy run <org>/minimax-h3-tools/<function> <input model ref> <org/model> --on NAME
 ```
 
 Each declared output becomes a checkpoint named by its slot; publish lanes with
 `cozy model publish <org/model> --release R --lane <slot>=<checkpoint>`. On the rental that
 ingested or already fetched the input, its objects are in the pod Store and nothing moves.
 
-| Recipe | Input (first positional) | Output | Notes |
+| Function | Input (first positional) | Output | Notes |
 |---|---|---|---|
 | `bf16-full` | a full-precision H3 checkpoint: the converted `MiniMaxAI/MiniMax-H3` release or a `bf16-full` lane | `bf16-full` | source-only rows dropped, video VAE decode operands f16 |
 | `bf16-pruned` | same | `bf16` | AdaLN tables replace the 106 modulation rows per DiT; CUDA |
 | `fp8-pruned` | same | `fp8` | tables + both DiTs and the conditioner's 350 decoder linears `fp8.rowwise`; CUDA; every serving rung |
 | `turbo-lora` | the converted `alibaba-pai/MiniMax-H3-Acc-LoRAs` release (one fl2va and one ref2va component) | `pdd8` | `model.base=<full-precision H3>`; reads its modulation weights and heads only |
 | `retable` | an AdaLN-pruned lane | `adaln-pruned`, `tables` | `model.full=<full-precision H3>`; recomputes tables only |
-| `fp8`, `int8` | an AdaLN-pruned lane | `fp8`, `int8` | `cozy model quantize`; H3's recipe: both DiTs and the text conditioner's 350 decoder linears, encoding what is still plain; CPU |
 
-`cozy model quantize <org>/minimax-h3@<release>/<pruned lane> --fp8|--int8 --on NAME` runs
-`fp8`/`int8`. The conditioner keeps `embed_tokens` and its vision tower at bf16
-(`lanes.TEXT_ENCODER_KEEP`); a component already carrying the requested encoding is inherited
-and one carrying the other encoding refuses, so `fp8 --fp8` encodes only the conditioner.
-
-Runtime requires a receipt for every declared weights output, so each lane is its own
-recipe, run on the ingest rental:
+Its quantized lanes are recipes (`FP8`, `INT8`, `NVFP4`, `W4A8` in `h3_tables.job`): code, as a
+`DerivationHook`, since what a lane encodes depends on what the source still holds plain. Both
+DiTs and the text conditioner's 350 decoder linears, encoding what is still plain; CPU:
 
 ```sh
-cozy model quantize fidika/minimax-h3@1.0.0/bf16-full fidika/minimax-h3 --recipe fp8-pruned \
-  --package fidika/minimax-h3-tools --on NAME
-cozy model quantize fidika/minimax-h3-acc-loras@1.0.0/bf16 fidika/minimax-h3-turbo-lora \
-  model.base=fidika/minimax-h3@1.0.0/bf16-full --recipe turbo-lora --package fidika/minimax-h3-tools --on NAME
+cozy model quantize <org>/minimax-h3@<release>/<pruned lane> --fp8 --package <org>/minimax-h3-tools --on NAME
 ```
 
-The lane recipes, `turbo-lora` and `retable` write weights, so they are never memoized; a
+The conditioner keeps `embed_tokens` and its vision tower at bf16 (`lanes.TEXT_ENCODER_KEEP`); a
+component already carrying the requested encoding is inherited and one carrying the other
+encoding refuses, so `fp8 --fp8` encodes only the conditioner. The lane functions run on the
+ingest rental:
+
+```sh
+cozy run fidika/minimax-h3-tools/fp8-pruned fidika/minimax-h3@1.0.0/bf16-full fidika/minimax-h3 --on NAME
+cozy run fidika/minimax-h3-tools/turbo-lora fidika/minimax-h3-acc-loras@1.0.0/bf16 fidika/minimax-h3-turbo-lora \
+  model.base=fidika/minimax-h3@1.0.0/bf16-full --on NAME
+```
+
+The lane functions, `turbo-lora` and `retable` write weights, so they are never memoized; a
 committed derivation replays for the same code and inputs. Tables, heads and quantized
 tensors checkpoint as they complete; a request re-issued with the same inputs on the same
 machine adopts a canceled or failed run's completed work and computes only the remainder. Quantized tensors encode on every available CPU. The metrics
@@ -132,7 +134,7 @@ publishing a release.
 The tools wheel carries the exact model config, full DiT shape contract and construction
 order as immutable importlib resources. Task plans come from source model component assets;
 the Runtime wheel carries the reviewed quantization tensor specifications. The ordinary
-`h3_tables.operations.quantization_plan()` helper binds their exact two-DiT geometry and
+`h3_tables.operations.quantization_plan(encoding)` helper binds their exact two-DiT geometry and
 this package's full/pruned construction-order digests for the single Runtime-owned
 `cozy_runtime.derive.operations.quantize` operation. Its compact plan contains no
 model bytes or executable policy. Noncanonical source order refuses; the lane

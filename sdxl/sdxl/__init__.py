@@ -29,8 +29,8 @@ What it adds over cr-008b's corpus fixture, which it is otherwise faithful to (i
   * AN OUTPUT-INTEGRITY FLOOR. A decode that produced NaNs, or a flat field with no
     picture in it, is a failure this package reports rather than a PNG it publishes.
 
-The `int8` and `fp8` functions state this family's quantization recipes and call
-`cozy_runtime.derive`, which owns the encodings.
+`FP8`, `INT8` and `W4A8` declare this family's quantization recipes; `cozy_runtime` owns the
+encodings and runs them.
 
 Code states CAPABILITY; bindings state SELECTION. Nothing here names a repo, release,
 checkpoint or revision — `package.toml` and the deploy binding do.
@@ -48,8 +48,6 @@ from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Annotated, Any
 
-import cozy_runtime.derive as derive
-from cozy_runtime.derive.operations import EncodingRule, QuantizationPlan, quantize_into
 import msgspec
 import torch
 from cozy_runtime.author import (
@@ -58,21 +56,19 @@ from cozy_runtime.author import (
     AssetBound,
     ConformanceError,
     Context,
+    EncodingRule,
     ImageAsset,
     ImageFrame,
     Loader,
-    MemoDistribution,
     Memoize,
     Model,
-    ModelArtifact,
     ModelDefault,
     OutputError,
     Outputs,
+    QuantizationPlan,
+    Recipe,
     Shape,
     Telemetry,
-    Weights,
-    WeightsOutput,
-    invocable,
     uses_components,
 )
 from diffusers import AutoencoderKL, DDIMScheduler, EulerDiscreteScheduler, UNet2DConditionModel
@@ -224,6 +220,7 @@ class ImageOutput(msgspec.Struct):
 
 def _hidiffusion_unet_type() -> type[Any]:
     """The patched UNet owner, imported only when Runtime constructs the model."""
+
     class HiDiffusionUNet(UNet2DConditionModel):
         """Select and reset the request's denoising implementation before step zero.
 
@@ -302,9 +299,9 @@ class SdxlPipeline:
                 "text_encoder": CLIPTextModel(CLIPTextConfig(**text_encoder)).to(
                     torch.float16  # type: ignore[arg-type]
                 ),
-                "text_encoder_2": CLIPTextModelWithProjection(
-                    CLIPTextConfig(**text_encoder_2)
-                ).to(torch.float16),  # type: ignore[arg-type]
+                "text_encoder_2": CLIPTextModelWithProjection(CLIPTextConfig(**text_encoder_2)).to(
+                    torch.float16
+                ),  # type: ignore[arg-type]
                 "unet": unet_type.from_config(mapping["unet"]).to(torch.float16),
                 "vae": AutoencoderKL.from_config(mapping["vae"]).to(  # type: ignore[no-untyped-call]
                     torch.float16
@@ -420,7 +417,9 @@ class SdxlModel(Model[SdxlPipeline], encoded_leaves="accept"):
         if upcast:
             # The SDXL VAE overflows fp16. bf16 has fp32's range: 48 dB PSNR to fp32 on the
             # 1024px fox (run 1642), ~0.5 s faster on an RTX 4070 Laptop.
-            native_bf16 = latents.is_cuda and torch.cuda.is_bf16_supported(including_emulation=False)
+            native_bf16 = latents.is_cuda and torch.cuda.is_bf16_supported(
+                including_emulation=False
+            )
             wide = torch.bfloat16 if native_bf16 else torch.float32
             vae.to(dtype=wide)
             latents = latents.to(dtype=wide)
@@ -556,7 +555,9 @@ def generate(
     above_native = payload.megapixels is not Megapixels.MP1
     hidiffusion_applied = above_native if payload.hidiffusion is None else payload.hidiffusion
     steps = payload.steps if payload.steps is not None else 30 if hidiffusion_applied else 20
-    guidance = payload.guidance if payload.guidance is not None else 7.5 if hidiffusion_applied else 7.0
+    guidance = (
+        payload.guidance if payload.guidance is not None else 7.5 if hidiffusion_applied else 7.0
+    )
     negative_prompt = _negative_prompt(payload.negative_prompt, hidiffusion_applied)
     warnings: list[str] = []
     if above_native and not hidiffusion_applied:
@@ -597,7 +598,12 @@ def generate(
     )
     latents = (
         torch.randn(
-            1, 4, height // 8, width // 8, generator=generator, device=device,
+            1,
+            4,
+            height // 8,
+            width // 8,
+            generator=generator,
+            device=device,
             dtype=torch.float16,
         )
         * scheduler.init_noise_sigma
@@ -672,88 +678,59 @@ def generate(
 # ------------------------------------------------------------------ quantized lanes
 
 # The SDXL recipes: which weights each lane encodes; every other tensor inherits unchanged.
-# `cozy model quantize <model> --int8|--fp8` runs the function whose weights output is
-# that lane. `cozy_runtime.derive` owns the encodings and the round-trip tripwire.
-_LANE_BYTES = 16 << 30
-_QUANTIZER = (  # the Runtime code and native libraries that decide a lane's bytes
-    "cozy_runtime.derive.facade",
-    "cozy_runtime.derive.quantization",
-    "cozy_runtime.derive.microscale",
-    "cozy_runtime.derive.safetensors_io",
-    "cozy_runtime.weights_store",
-    MemoDistribution("tensorfs"),
-    MemoDistribution("numpy"),
-)
-
+# `cozy model quantize <model> --int8|--fp8|--w4a8 --package <this>` runs the one for that lane.
+# `cozy_runtime.derive` owns the encodings and the round-trip tripwire.
 
 #: The fp8 lane: the UNet's block-aligned rank-2 weights, row-wise.
-FP8 = ("unet",)
-
-
-@invocable(memo_dependencies=_QUANTIZER)
-async def fp8(
-    ctx: Context,
-    *,
-    source: Weights[SdxlModel],
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """Row-wise FP8 UNet weights from one BF16/F16 source; everything else inherits."""
-    plan = derive.plan(FP8, "fp8.rowwise", max_relative_frobenius=max_relative_frobenius)
-    return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output="fp8")
-
-
-#: The int8 lane: every transformer-block linear of the UNet whose input width is a multiple of
-#: 256 (the rotation group), and every linear of both CLIP encoders. The 640-channel levels'
-#: self-attention, cross-attention queries, GEGLU input and projections (input width 640), the
-#: ResNet convolutions, time embeddings and the VAE keep their source bytes.
-_UNET_1280 = ("down_blocks.2", "mid_block", "up_blocks.0")
-INT8 = QuantizationPlan(
-    components=("unet", "text_encoder", "text_encoder_2"),
-    include=(
-        *(
-            f"unet.{level}.attentions.*.{key}"
-            for level in _UNET_1280
-            for key in (
-                "transformer_blocks.*.attn[12].to_[qkv].weight",
-                "transformer_blocks.*.attn[12].to_out.0.weight",
-                "transformer_blocks.*.ff.net.*weight",
-                "proj_[io]*.weight",
-            )
-        ),
-        "unet.*_blocks.1.attentions.*.transformer_blocks.*.attn2.to_[kv].weight",
-        "unet.*_blocks.1.attentions.*.transformer_blocks.*.ff.net.2.weight",
-        "text_encoder.text_model.encoder.layers.*.self_attn.*_proj.weight",
-        "text_encoder.text_model.encoder.layers.*.mlp.fc[12].weight",
-        "text_encoder_2.text_model.encoder.layers.*.self_attn.*_proj.weight",
-        "text_encoder_2.text_model.encoder.layers.*.mlp.fc[12].weight",
-    ),
-    output_precision="preserve",
+FP8 = Recipe(
+    lane="fp8", model=SdxlModel, plan=QuantizationPlan(encoding="fp8.rowwise", components=("unet",))
 )
 
-
-@invocable(memo_version="sdxl-int8/1")
-async def int8(ctx: Context, *, source: Weights[SdxlModel], tel: Telemetry) -> ModelArtifact:
-    """The int8 lane (`int8.convrot`): W8A8 on int8 tensor cores; see `INT8`."""
-    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8.convrot", output="int8")
-
+#: The int8 lane (`int8.convrot`, W8A8 on int8 tensor cores): every transformer-block linear of
+#: the UNet whose input width is a multiple of 256 (the rotation group), and every linear of both
+#: CLIP encoders. The 640-channel levels' self-attention, cross-attention queries, GEGLU input and
+#: projections (input width 640), the ResNet convolutions, time embeddings and the VAE keep their
+#: source bytes.
+_UNET_1280 = ("down_blocks.2", "mid_block", "up_blocks.0")
+INT8 = Recipe(
+    lane="int8",
+    model=SdxlModel,
+    plan=QuantizationPlan(
+        encoding="int8.convrot",
+        components=("unet", "text_encoder", "text_encoder_2"),
+        include=(
+            *(
+                f"unet.{level}.attentions.*.{key}"
+                for level in _UNET_1280
+                for key in (
+                    "transformer_blocks.*.attn[12].to_[qkv].weight",
+                    "transformer_blocks.*.attn[12].to_out.0.weight",
+                    "transformer_blocks.*.ff.net.*weight",
+                    "proj_[io]*.weight",
+                )
+            ),
+            "unet.*_blocks.1.attentions.*.transformer_blocks.*.attn2.to_[kv].weight",
+            "unet.*_blocks.1.attentions.*.transformer_blocks.*.ff.net.2.weight",
+            "text_encoder.text_model.encoder.layers.*.self_attn.*_proj.weight",
+            "text_encoder.text_model.encoder.layers.*.mlp.fc[12].weight",
+            "text_encoder_2.text_model.encoder.layers.*.self_attn.*_proj.weight",
+            "text_encoder_2.text_model.encoder.layers.*.mlp.fc[12].weight",
+        ),
+        output_precision="preserve",
+    ),
+)
 
 #: The 4-bit lane before Blackwell (xs-062): the int8 lane's UNet linears in W4A8
-#: (`w4a8.convrot`, multiplied on the int8 tensor cores); both CLIP encoders stay int8.
-W4A8 = QuantizationPlan(
-    components=INT8.components,
-    include=INT8.include,
-    encodings=(EncodingRule("unet.*", "w4a8.convrot"),),
-    output_precision="preserve",
+#: (`w4a8.convrot`, multiplied on the int8 tensor cores: Ampere, Ada, Hopper); both CLIP
+#: encoders stay int8.
+W4A8 = Recipe(
+    lane="w4a8",
+    model=SdxlModel,
+    plan=QuantizationPlan(
+        encoding="int8.convrot",
+        components=INT8.plan.components,
+        include=INT8.plan.include,
+        encodings=(EncodingRule("unet.*", "w4a8.convrot"),),
+        output_precision="preserve",
+    ),
 )
-
-
-@invocable(memo_version="sdxl-w4a8/1")
-async def w4a8(ctx: Context, *, source: Weights[SdxlModel], tel: Telemetry) -> ModelArtifact:
-    """The w4a8 lane: the UNet's int8 linears as W4A8 (Ampere, Ada, Hopper); see `W4A8`."""
-    return quantize_into(ctx, tel, source=source, plan=W4A8, encoding="int8.convrot", output="w4a8")
-
-
-app.entrypoint(int8, name="int8", weights=(WeightsOutput("int8", max_new_bytes=_LANE_BYTES),), accelerator=False)
-app.entrypoint(w4a8, name="w4a8", weights=(WeightsOutput("w4a8", max_new_bytes=_LANE_BYTES),), accelerator=False)
-app.entrypoint(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)

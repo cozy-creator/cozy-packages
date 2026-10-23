@@ -101,7 +101,7 @@ Hadamard, int8 per output row), served as W8A8 on the int8 tensor cores. Embeddi
 tower, the input/output projections, the modulation and the VAE keep their source bytes.
 
 ```sh
-cozy model quantize fidika/qwen-image-2.1@0.1.0/bf16 --int8 --on YOUR_MACHINE
+cozy model quantize fidika/qwen-image-2.1@0.1.0/bf16 --int8 --package fidika/qwen-image-2 --on YOUR_MACHINE
 cozy model publish fidika/qwen-image-2.1 --release 0.1.0 --lane int8=sha256:CHECKPOINT_DIGEST
 ```
 

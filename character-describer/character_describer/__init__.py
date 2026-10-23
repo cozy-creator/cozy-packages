@@ -18,16 +18,13 @@ from cozy_runtime.author import (
     Context,
     DecodedVideoFrame,
     ImageAsset,
-    ModelArtifact,
+    QuantizationPlan,
+    Recipe,
     Telemetry,
     UnsupportedInput,
     VideoAsset,
     VideoPreparation,
-    Weights,
-    WeightsOutput,
-    invocable,
 )
-from cozy_runtime.derive.operations import QuantizationPlan, quantize_into
 
 from .vlm import Describer
 
@@ -143,28 +140,24 @@ class WriteTextsOutput(msgspec.Struct):
     texts: list[str]
 
 
-#: The int8 lane: every projection of the 32 language layers (gated-delta-net and attention)
-#: and their MLPs. The vision tower, embeddings, the decay/gate projections, norms and the LM
-#: head keep their source bytes.
-INT8 = QuantizationPlan(
-    components=("model",),
-    include=(
-        "model.model.language_model.layers.*.linear_attn.in_proj_[qz]*.weight",
-        "model.model.language_model.layers.*.linear_attn.out_proj.weight",
-        "model.model.language_model.layers.*.self_attn.[qkvo]_proj.weight",
-        "model.model.language_model.layers.*.mlp.*_proj.weight",
+#: The int8 lane (`int8.convrot`, W8A8 on int8 tensor cores): every projection of the 32 language
+#: layers (gated-delta-net and attention) and their MLPs. The vision tower, embeddings, the
+#: decay/gate projections, norms and the LM head keep their source bytes.
+INT8 = Recipe(
+    lane="int8",
+    model=Describer,
+    plan=QuantizationPlan(
+        encoding="int8.convrot",
+        components=("model",),
+        include=(
+            "model.model.language_model.layers.*.linear_attn.in_proj_[qz]*.weight",
+            "model.model.language_model.layers.*.linear_attn.out_proj.weight",
+            "model.model.language_model.layers.*.self_attn.[qkvo]_proj.weight",
+            "model.model.language_model.layers.*.mlp.*_proj.weight",
+        ),
+        output_precision="preserve",
     ),
-    output_precision="preserve",
 )
-
-
-@invocable(memo_version="character-describer-int8/1")
-async def int8(ctx: Context, *, source: Weights[Describer], tel: Telemetry) -> ModelArtifact:
-    """The int8 lane (`int8.convrot`): W8A8 on int8 tensor cores; see `INT8`."""
-    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8.convrot", output="int8")
-
-
-app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=24 << 30),), accelerator=False)
 
 
 @app.entrypoint(
