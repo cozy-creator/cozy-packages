@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import secrets
 from enum import IntEnum
@@ -14,6 +15,7 @@ from cozy_runtime.author import (
     AssetBound,
     Context,
     ImageAsset,
+    InvalidRequest,
     Memoize,
     Outputs,
     Shape,
@@ -32,7 +34,7 @@ from .klein import (
     reference_canvas,
 )
 from .quantize import drafter_head, int8, nvfp4, w4a8
-from .upsampler import Drafter, Upsampler
+from .upsampler import Drafter, Row, Upsampler, canvas_box, is_finished, with_table
 
 app = App()
 app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
@@ -98,6 +100,17 @@ _REFERENCES = Annotated[
     AssetBound(max_bytes=32 << 20, max_decoded_bytes=64 << 20, media_types=("image/png", "image/jpeg", "image/webp")),
     msgspec.Meta(max_length=10),
 ]
+_UNIT = Annotated[float, msgspec.Meta(ge=0.0, le=1.0)]
+#: `[x0, y0, x1, y1]`: corners, 0-1 of the output canvas, origin top-left, x0 < x1, y0 < y1.
+Box = Annotated[list[_UNIT], msgspec.Meta(min_length=4, max_length=4)]
+
+
+class Region(msgspec.Struct, forbid_unknown_fields=True):
+    box: Box
+    #: What goes in the box.
+    prompt: Annotated[str, msgspec.Meta(min_length=1)]
+    #: The literal text to render there.
+    text: Annotated[str, msgspec.Meta(min_length=1)] | None = None
 
 
 class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -108,6 +121,10 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     aspect_ratio: _RATIO | None = None
     #: None: the first reference's pixel count (at most 4 MP), else 1 MP.
     megapixels: Annotated[Megapixels | None, Shape(pixels=_DEMAND)] = None
+    #: One per reference, in order: where it goes in the output, or null for none.
+    reference_boxes: list[Box | None] | None = None
+    #: Elements and rendered text placed by box, described in words.
+    regions: list[Region] | None = None
     steps: Annotated[int, msgspec.Meta(ge=1, le=200)] = 50
     guidance: Annotated[float, msgspec.Meta(ge=1.0, le=20.0)] = 4.0
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
@@ -125,6 +142,10 @@ class TurboInput(msgspec.Struct, forbid_unknown_fields=True):
     aspect_ratio: _RATIO | None = None
     #: None: the first reference's pixel count (at most 4 MP), else 1 MP.
     megapixels: Annotated[Megapixels | None, Shape(pixels=_DEMAND)] = None
+    #: One per reference, in order: where it goes in the output, or null for none.
+    reference_boxes: list[Box | None] | None = None
+    #: Elements and rendered text placed by box, described in words.
+    regions: list[Region] | None = None
     steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 16
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
@@ -161,17 +182,19 @@ def _render(
     size: tuple[int, int],
     crop: tuple[int, int, int, int] | None,
     canvas: str | None,
+    rows: list[Row],
     steps: int,
     guidance: float | None,
     seed: int | None,
 ) -> ImageOutput:
     seed = seed if seed is not None else secrets.randbits(53)
     width, height = size
-    caption = prompt
-    if upsample:
+    caption = with_table(prompt, rows) if rows else prompt
+    if upsample and (rows or not is_finished(prompt)):
+        table = json.dumps(rows, ensure_ascii=False) if rows else ""
         with tel.stage("upsampling prompt", overall_range=(0.0, 0.15)):
             def run() -> str:
-                return upsampler.upsample(prompt, images, canvas)
+                return upsampler.upsample(prompt, images, canvas, table)
             caption = drafter.drafting(run) if draft else run()
         tel.log("upsampled prompt", caption=caption[:2000])
     ctx.raise_if_cancelled()
@@ -200,19 +223,20 @@ def _render(
 
 
 def _layout(
-    adj: Adjustments, ratio: str | None, megapixels: Megapixels | None, images: list[Image.Image]
+    adj: Adjustments, ratio: str | None, megapixels: Megapixels | None, images: list[Image.Image], placed: bool
 ) -> tuple[list[Image.Image], tuple[int, int], tuple[int, int, int, int] | None, str | None]:
     """The prepared references, the output size, the crop after decoding and the upsampler's canvas.
-    No references: the ratio (1:1) at the tier (1 MP). With references, what is not given is the
-    first reference's: given neither, its own size, fitted to the 4 MiP Klein admits and generated
-    on the 16 px grid, then cropped back; given one, its ratio or its pixel count."""
-    if not images:
-        ratio, tier = ratio or "1:1", megapixels or Megapixels.MP1
-        return [], _sized(adj, ratio, tier << 20, _bound(tier)), None, ratio
+    No references, or references placed by box (elements, not the canvas): the ratio (1:1) at the
+    tier (1 MP). Otherwise what is not given is the first reference's: given neither, its own size,
+    fitted to the 4 MiP Klein admits and generated on the 16 px grid, then cropped back; given one,
+    its ratio or its pixel count."""
     if len(images) == 1:
         prepared = [prepare_reference(images[0])[0]]
     else:
         prepared = [prepare_multi_reference(image) for image in images]
+    if not images or placed:
+        ratio, tier = ratio or "1:1", megapixels or Megapixels.MP1
+        return prepared, _sized(adj, ratio, tier << 20, _bound(tier)), None, None if images else ratio
     first = ImageOps.exif_transpose(images[0]).size
     if ratio is None and megapixels is None:
         fit, canvas = reference_canvas(*first)
@@ -231,13 +255,45 @@ def _layout(
     return prepared, _sized(adj, ratio or f"{first[0]}:{first[1]}", pixels, _bound(megapixels)), None, None
 
 
+def _checked(field: str, box: list[float]) -> list[int]:
+    x0, y0, x1, y1 = box
+    if not (x0 < x1 and y0 < y1):
+        raise InvalidRequest(f"a box is [x0, y0, x1, y1] with x0 < x1 and y0 < y1, got {box}",
+                             code="invalid_box", fields=(field,))
+    return canvas_box(box)
+
+
+def layout_rows(payload: GenerateInput | TurboInput) -> list[Row]:
+    """Klein's table rows for the request's boxes: a placed reference is `ref_image_<i>` at its box (the
+    upsampler describes it from the image); a region is a new element, its text quoted in the desc."""
+    boxes, references = payload.reference_boxes, len(payload.reference_images)
+    if boxes is not None and len(boxes) != references:
+        raise InvalidRequest(f"reference_boxes has {len(boxes)} entries for {references} reference_images",
+                             code="reference_boxes_length", fields=("reference_boxes",))
+    rows: list[Row] = []
+    for i, box in enumerate(boxes or ()):
+        if box is not None:
+            target = _checked(f"reference_boxes.{i}", box)
+            rows.append({"id": f"obj_{len(rows) + 1}", "from": f"ref_image_{i}", "src_bbox": None,
+                         "tgt_bbox": target, "desc": ""})
+    for i, region in enumerate(payload.regions or ()):
+        grid = _checked(f"regions.{i}.box", region.box)
+        desc = f'{region.prompt.strip()} "{region.text}"' if region.text else region.prompt.strip()
+        row_id = f"obj_{len(rows) + 1}"
+        rows.append({"id": row_id, "from": "target", "src_bbox": None, "tgt_bbox": grid, "desc": desc}
+                    if references else {"id": row_id, "bbox": grid, "desc": desc})
+    return rows
+
+
 def _generate(ctx: Context, payload: GenerateInput | TurboInput, guidance: float | None, drafter: Drafter,
               model: Klein, upsampler: Upsampler, out: Outputs, tel: Telemetry, adj: Adjustments) -> ImageOutput:
+    rows = layout_rows(payload)
     images = [asset.read() for asset in payload.reference_images]
-    prepared, size, crop, canvas = _layout(adj, payload.aspect_ratio, payload.megapixels, images)
+    placed = any(box is not None for box in payload.reference_boxes or ())
+    prepared, size, crop, canvas = _layout(adj, payload.aspect_ratio, payload.megapixels, images, placed)
     return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
                    draft=payload.prompt_drafting, images=images, prepared=prepared, size=size, crop=crop,
-                   canvas=canvas, steps=payload.steps, guidance=guidance, seed=payload.seed)
+                   canvas=canvas, rows=rows, steps=payload.steps, guidance=guidance, seed=payload.seed)
 
 
 # Qwen3.5-9B's MTP head alone (`drafter_head` makes it): BFL's upsampler checkpoint has none.

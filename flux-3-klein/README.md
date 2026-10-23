@@ -26,6 +26,32 @@ or its pixel count. Sides stay within BFL's 64–4096 px; a size moved to fit is
 adjustment. The result returns the image, its size, the seed and `prompt`: the caption the image was made
 from.
 
+## Layout boxes
+
+Klein places elements by box natively: it is trained on captions that cite each element as `<id>` and
+end with a JSON table of boxes (BFL's `flux3/bbox.py`). A box is `[x0, y0, x1, y1]`, 0–1 of the output,
+origin top-left.
+
+- `reference_boxes`: one entry per reference, in order, where it goes in the output; `null` places none.
+  When any reference is placed, the references are elements, not the canvas: the size defaults to
+  text-to-image's (1:1 at 1 MP).
+- `regions`: `[{box, prompt, text?}]`, elements described in words; `text` is the literal string to render
+  there.
+
+```sh
+cozy run flux-3-klein/generate_turbo prompt='A picnic on a hillside' \
+  'regions:=[{"box": [0.05, 0.55, 0.45, 0.95], "prompt": "a wicker basket"},
+             {"box": [0.1, 0.05, 0.9, 0.2], "prompt": "a hand-painted banner", "text": "SUMMER FAIR"}]'
+cozy run flux-3-klein/generate_turbo prompt='The mug on a desk by a window' \
+  --asset reference_images.0=mug.png 'reference_boxes:=[[0.55, 0.5, 0.85, 0.9]]'
+```
+
+The boxes become table rows on BFL's 0–1000 canvas (`[y_min, x_min, y_max, x_max]`). The upsampler then
+writes the caption around them with BFL's `t2i_bbox`/`i2i_bbox` prompts, adds rows for what else the scene
+holds, and the given boxes are kept exactly. With `prompt_upsampling=false` the rows are appended to the
+prompt as typed. A prompt that already is a layout caption (its whole table cited as `<id>`s) goes to
+Klein as it is. Boxes guide placement and scale; they are not hard masks.
+
 ## Prompt upsampling
 
 BFL's prompt upsampler is a Qwen3.5-9B fine-tune. It turns a short request, plus the references when
