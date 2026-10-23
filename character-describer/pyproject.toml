@@ -4,7 +4,7 @@ version = "0.10.3"
 description = "One-sentence character identity descriptions from supplied reference images"
 requires-python = ">=3.12"
 dependencies = [
-    "cozy-runtime[media]>=0.30,<0.32",
+    "cozy-runtime[media]>=0.31,<0.32",
     "msgspec>=0.19",
     "numpy>=1.26",
     "pillow>=12",

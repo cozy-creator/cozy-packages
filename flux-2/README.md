@@ -73,8 +73,8 @@ DiT blocks in NVFP4, except the double blocks' text attention, beside the same i
 do the VAE and Mistral's vision tower. Each lane is written from the 16-bit upload:
 
 ```sh
-cozy model quantize flux-2-dev@0.1.0 --int8 --on <machine>
-cozy model quantize flux-2-dev@0.1.0 --nvfp4 --on <machine>
+cozy model quantize flux-2-dev@0.1.0 --int8 --package flux-2 --on <machine>
+cozy model quantize flux-2-dev@0.1.0 --nvfp4 --package flux-2 --on <machine>
 ```
 
 Measured on an A40 (int8), seconds per step at 1 MP: [dev] 1.93, [klein] 4B 0.62 (bf16 0.82), [klein] 9B

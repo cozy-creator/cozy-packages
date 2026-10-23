@@ -20,18 +20,15 @@ from cozy_runtime.author import (
     Outputs,
     Shape,
     Telemetry,
-    WeightsOutput,
 )
 from PIL import Image, ImageOps
 
 from .model import MAX_PIXELS, MAX_SIDE, MIN_SIDE, PATCH, TURBO_SIGMAS, Flux2, prepare_references, schedule
-from .quantize import int8, nvfp4
+from . import quantize as quantize  # its recipes
 from .turbo import Flux2TurboLoRA
 from .upsampler import Flux2Upsampler
 
 app = App()
-app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=64 << 30),), accelerator=False)
-app.entrypoint(nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=48 << 30),), accelerator=False)
 
 
 class Megapixels(IntEnum):

@@ -79,8 +79,8 @@ CFG 5 turns W8A8's per-pass error (33–37 dB teacher-forced) into visible grain
 Keeping v, o and down in bf16 was the best of nine measured keep-lists (23/28/36 dB at t 999/702/290).
 
 ```sh
-cozy model quantize <account>/hidream-o1 --recipe bf16 --on <machine>
-cozy model quantize <account>/hidream-o1 --int8 --on <machine>
+cozy model quantize <account>/hidream-o1 --recipe bf16 --package hidream-o1 --on <machine>
+cozy model quantize <account>/hidream-o1 --int8 --package hidream-o1 --on <machine>
 ```
 
 ## Measured (one L40S, 4 MP)

@@ -17,5 +17,5 @@ GPU: any NVIDIA card with 8 GB. The default 8-bit lane is 3.8 GiB (`sdxl@1.0.0`)
 RTX 4090 and 17 s on an 8 GB RTX 4070 Laptop. Without an NVIDIA GPU, add `--on new` to rent
 one.
 
-`fp8` and `int8` write the model's 8-bit lanes; they are for model authors
-(`cozy model quantize`).
+Its recipes write the model's `fp8`, `int8` and `w4a8` lanes, for model authors
+(`cozy model quantize <model> --int8 --package sdxl`).
