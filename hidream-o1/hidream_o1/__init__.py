@@ -14,6 +14,7 @@ from cozy_runtime.author import (
     Context,
     ImageAsset,
     ImagePreparation,
+    InvalidRequest,
     Memoize,
     Outputs,
     Telemetry,
@@ -21,7 +22,7 @@ from cozy_runtime.author import (
 )
 from PIL import Image
 
-from .model import HiDreamO1, Recipe, area_resize, grid_size, reference_size
+from .model import HiDreamO1, Recipe, area_resize, canvas_box, grid_size, placed, reference_size
 from .quantize import bf16, int8
 
 app = App()
@@ -44,6 +45,9 @@ UNCONDITIONAL = " "
 
 _RATIO = Annotated[str, msgspec.Meta(pattern=r"^[1-9][0-9]*:[1-9][0-9]*$")]
 _SEED = Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)]
+_UNIT = Annotated[float, msgspec.Meta(ge=0.0, le=1.0)]
+#: `[x0, y0, x1, y1]`: corners, 0-1 of the output canvas, origin top-left, x0 < x1, y0 < y1.
+Box = Annotated[list[_UNIT], msgspec.Meta(min_length=4, max_length=4)]
 _REFERENCES = Annotated[
     list[ImageAsset],
     AssetBound(max_bytes=32 << 20, max_decoded_bytes=64 << 20, media_types=("image/png", "image/jpeg", "image/webp")),
@@ -56,7 +60,9 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Annotated[str, msgspec.Meta(min_length=1)]
     #: Given, the image edits them, or composes them in order.
     reference_images: _REFERENCES = msgspec.field(default_factory=list)
-    #: Any W:H. None: the first reference's, else 1:1.
+    #: One per reference, in order: where it goes in the output, or null for none.
+    reference_boxes: list[Box | None] | None = None
+    #: Any W:H. None: the first reference's (1:1 when references are placed by box), else 1:1.
     aspect_ratio: _RATIO | None = None
     #: None: the first reference's pixel count, else 4. Held to 3.52-4.
     megapixels: Annotated[float, msgspec.Meta(gt=0)] | None = None
@@ -74,6 +80,7 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
 class TurboInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Annotated[str, msgspec.Meta(min_length=1)]
     reference_images: _REFERENCES = msgspec.field(default_factory=list)
+    reference_boxes: list[Box | None] | None = None
     aspect_ratio: _RATIO | None = None
     megapixels: Annotated[float, msgspec.Meta(gt=0)] | None = None
     #: None: 28, the distilled schedule (the only one).
@@ -109,26 +116,46 @@ def fitted(adj: Adjustments, ratio: tuple[int, int], pixels: int) -> tuple[int, 
 
 
 def layout(
-    adj: Adjustments, ratio: str | None, megapixels: float | None, images: list[Image.Image]
+    adj: Adjustments, ratio: str | None, megapixels: float | None, images: list[Image.Image],
+    boxes: list[list[float] | None] | None = None,
 ) -> tuple[tuple[int, int], list[Image.Image]]:
     """The output size and the prepared references. What is not given is the first reference's
     (ratio, pixel count), else 1:1 at 4 MP; pixels are held to 3.52-4 MP. A lone reference given
     neither is upstream's `keep_original_aspect`: resized to the output's area and the output takes
     its size. Otherwise each is resized to the area of a square on the output's longer side, smaller
-    with more references (upstream's `generate_image`)."""
-    first = images[0].size if images else None
+    with more references (upstream's `generate_image`). References placed by `boxes` are elements,
+    not the canvas: the output is 1:1 at 4 MP unless given, and upstream's layout canvas follows them."""
+    if boxes is not None and len(boxes) != len(images):
+        raise InvalidRequest(f"reference_boxes has {len(boxes)} entries for {len(images)} reference_images",
+                             code="reference_boxes_length", fields=("reference_boxes",))
+    for i, box in enumerate(boxes or ()):
+        if box is not None and not (box[0] < box[2] and box[1] < box[3]):
+            raise InvalidRequest(f"a box is [x0, y0, x1, y1] with x0 < x1 and y0 < y1, got {box}",
+                                 code="invalid_box", fields=(f"reference_boxes.{i}",))
+    place = any(box is not None for box in boxes or ())
+    first = images[0].size if images and not place else None
     pixels = megapixels * MP if megapixels is not None else first[0] * first[1] if first else NATIVE_PIXELS
     held = min(max(pixels, MIN_PIXELS), NATIVE_PIXELS)
     if held != pixels:
         adj.clamp("megapixels", _megapixels(pixels), _megapixels(held), "HiDream-O1's 3.52-4 MP")
-    if len(images) == 1 and ratio is None and megapixels is None:
+    if len(images) == 1 and ratio is None and megapixels is None and not place:
         lone = area_resize(images[0], math.sqrt(held))
         if MIN_SIDE <= min(lone.size) and max(lone.size) <= MAX_SIDE:
             return lone.size, [lone]
     w, h = map(int, ratio.split(":")) if ratio else first or (1, 1)
     width, height = fitted(adj, (w, h), int(held))
-    side = reference_size(max(width, height), len(images))
-    return (width, height), [area_resize(image, side) for image in images]
+    if not place:
+        side = reference_size(max(width, height), len(images))
+        return (width, height), [area_resize(image, side) for image in images]
+    pixel_boxes = [None if box is None else canvas_box(box, width, height) for box in boxes or ()]
+    for i, (box, drawn) in enumerate(zip(boxes or (), pixel_boxes, strict=True)):
+        if box is not None and drawn is None:
+            raise InvalidRequest(f"reference_boxes.{i} is under a pixel on the {width}x{height} output",
+                                 code="invalid_box", fields=(f"reference_boxes.{i}",))
+    if sum(box is not None for box in pixel_boxes) > 5:
+        adj.warn("reference_boxes", "HiDream-O1 draws only the 5 largest boxes, as upstream")
+    side = reference_size(max(width, height), len(images) + 1)
+    return (width, height), placed(images, pixel_boxes, width, height, side)
 
 
 def _generate(
@@ -138,7 +165,8 @@ def _generate(
 ) -> ImageOutput:
     seed = payload.seed if payload.seed is not None else secrets.randbits(53)
     images = [asset.read() for asset in payload.reference_images]
-    (width, height), references = layout(adj, payload.aspect_ratio, payload.megapixels, images)
+    (width, height), references = layout(adj, payload.aspect_ratio, payload.megapixels, images,
+                                         payload.reference_boxes)
     ctx.raise_if_cancelled()
     with tel.stage("generating image", overall_range=(0.0, 0.98)):
         image = model.generate(
@@ -163,7 +191,8 @@ def generate(ctx: Context, payload: GenerateInput, model: HiDreamO1, out: Output
              tel: Telemetry, adj: Adjustments) -> ImageOutput:
     """HiDream-O1-Image: 50 UniPC steps with CFG 5.0 over the first 40. The model HiDream recommends
     for editing."""
-    shift = SUBJECT_SHIFT if len(payload.reference_images) > 1 else FULL_SHIFT
+    boxed = any(box is not None for box in payload.reference_boxes or ())
+    shift = SUBJECT_SHIFT if len(payload.reference_images) > 1 or boxed else FULL_SHIFT
     cfg = payload.guidance > 1.0
     negative = (payload.negative_prompt if payload.negative_prompt is not None else UNCONDITIONAL) if cfg else None
     return _generate(ctx, model, out, tel, adj, payload=payload, recipe=Recipe("unipc", shift),

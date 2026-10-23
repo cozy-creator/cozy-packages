@@ -19,12 +19,27 @@ cozy run fidika/hidream-o1/generate_turbo prompt='A dog holds a sign that says "
 cozy run fidika/hidream-o1/generate prompt='remove the earphones' --asset reference_images.0=photo.jpg
 ```
 
-Fields: `prompt`, `reference_images` (up to 10), `aspect_ratio` (any `W:H`), `megapixels`, `steps`, and
-`seed` (random when omitted, returned). `generate` also takes `guidance`, `negative_prompt` (default:
+Fields: `prompt`, `reference_images` (up to 10), `reference_boxes`, `aspect_ratio` (any `W:H`),
+`megapixels`, `steps`, and `seed` (random when omitted, returned). `generate` also takes `guidance`, `negative_prompt` (default:
 upstream's unconditional caption, a single space) and `guidance_interval` (below). Unknown fields are
 dropped with a warning.
 
 The result has the image, its `width` and `height`, the `seed`, and `prompt`: the caption used.
+
+## Placing references
+
+`reference_boxes` has one entry per reference, in order: `[x0, y0, x1, y1]`, corners from 0 to 1 on the
+output, origin top-left, or `null` for a reference the model places itself. As in upstream's layout
+pipeline (`--layout_bboxes`), each reference is framed in its box's colour, and a black canvas with the
+coloured boxes follows the references as one more. Upstream draws only the five largest boxes. Placed
+references are elements, not the canvas: the output is 1:1 at 4 MP unless `aspect_ratio` or
+`megapixels` says otherwise, and the full model samples at shift 1.
+
+```sh
+cozy run fidika/hidream-o1/generate prompt='City council members pose on a sunlit terrace' \
+  --asset reference_images.0=a.jpg --asset reference_images.1=b.jpg \
+  'reference_boxes:=[[0.205, 0.488, 0.439, 0.742], [0.576, 0.088, 0.801, 0.342]]'
+```
 
 ## Sizes
 
@@ -45,7 +60,8 @@ side, smaller when there are more references (upstream's `generate_image`).
 All recipes are upstream's latest (HiDream-ai/HiDream-O1-Image `main` at 2c2d29f, `inference.py`):
 
 - **`generate`:** Wan's flow UniPC (bh2, order 2) at shift 3, with CFG against a single-space caption.
-  With two or more references it uses shift 1, as upstream's README runs subject-driven generation.
+  With two or more references, or boxes, it uses shift 1, as upstream's README runs subject-driven
+  generation.
   The initial noise is 8 standard normals per pixel. CFG stops for the last 10 of the 50 steps
   (`guidance_interval`, limited-interval guidance; `false` keeps upstream's CFG to the end).
 - **`generate_turbo`:** the 28 fixed Dev timesteps. Text-to-image and two or more references use the
