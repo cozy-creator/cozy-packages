@@ -18,6 +18,7 @@ dependencies or qualifying a worker image.
 | `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
 | `minimax-h3-tools/` | H3 timestep-table and structural precompute functions (cr-071) |
 | `qwen-image-2/` | Qwen-Image-2.1 image generation and reference editing with native Runtime execution (research model licence) |
+| `fibo-2/` | Bria Fibo 2.0 text-to-image and editing, Dev and Edit Turbo (CC BY-NC 4.0 model licence) |
 | `examples/` | private `main()` scripts for conversions, uploads and diagnostics; run directly with `cozy run` |
 | `*/package.toml` | the `[application]` entry point only; it carries no model bindings |
 | `*/pyproject.toml` | release metadata; its one `cozy.application` entry point matches `package.toml` |

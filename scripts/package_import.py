@@ -39,6 +39,7 @@ PACKAGES = {
         "flux_3_klein",
         ("torch", "torchvision", "transformers", "diffusers", "tensorfs"),
     ),
+    "fibo-2": ("fibo_2", ("torch", "torchvision", "transformers", "diffusers", "tensorfs")),
     "qwen-image-2": (
         "qwen_image_2",
         ("torch", "torchvision", "torchvision.ops", "transformers", "diffusers", "tensorfs"),
