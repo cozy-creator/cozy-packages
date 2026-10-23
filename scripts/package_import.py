@@ -34,6 +34,7 @@ PACKAGES = {
         "birefnet",
         ("torch", "torchvision", "torchvision.ops", "transformers", "timm", "kornia", "tensorfs"),
     ),
+    "flux-2": ("flux_2", ("torch", "torchvision", "transformers", "diffusers", "tensorfs")),
     "flux-3-klein": (
         "flux_3_klein",
         ("torch", "torchvision", "transformers", "diffusers", "tensorfs"),
