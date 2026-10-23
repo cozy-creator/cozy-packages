@@ -66,6 +66,9 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     #: None: upstream's unconditional caption, a space.
     negative_prompt: str | None = None
     seed: _SEED | None = None
+    #: CFG over the first 80% of the steps only (limited-interval guidance): with CFG to the end,
+    #: flat areas show a 32 px grid of slightly miscoloured patches. False: CFG on every step, as upstream.
+    guidance_interval: bool = True
 
 
 class TurboInput(msgspec.Struct, forbid_unknown_fields=True):
@@ -131,6 +134,7 @@ def layout(
 def _generate(
     ctx: Context, model: HiDreamO1, out: Outputs, tel: Telemetry, adj: Adjustments, *,
     payload: GenerateInput | TurboInput, recipe: Recipe, steps: int, guidance: float, negative: str | None,
+    interval: bool = False,
 ) -> ImageOutput:
     seed = payload.seed if payload.seed is not None else secrets.randbits(53)
     images = [asset.read() for asset in payload.reference_images]
@@ -139,7 +143,7 @@ def _generate(
     with tel.stage("generating image", overall_range=(0.0, 0.98)):
         image = model.generate(
             payload.prompt, negative, references, width=width, height=height, recipe=recipe, steps=steps,
-            guidance=guidance, seed=seed, cancel=ctx.raise_if_cancelled,
+            guidance=guidance, seed=seed, cancel=ctx.raise_if_cancelled, interval=interval,
             on_step=tel.step_callback(steps, stage="generating image", overall_range=(0.0, 0.98)),
         )
     with tel.stage("saving image", overall_range=(0.98, 1.0)):
@@ -157,12 +161,14 @@ _MEMO = ("hidream_o1", "hidream_o1.model", "hidream_o1.sampling")
                 memo_dependencies=_MEMO)
 def generate(ctx: Context, payload: GenerateInput, model: HiDreamO1, out: Outputs,
              tel: Telemetry, adj: Adjustments) -> ImageOutput:
-    """HiDream-O1-Image: 50 UniPC steps with CFG 5.0. The model HiDream recommends for editing."""
+    """HiDream-O1-Image: 50 UniPC steps with CFG 5.0 over the first 40. The model HiDream recommends
+    for editing."""
     shift = SUBJECT_SHIFT if len(payload.reference_images) > 1 else FULL_SHIFT
     cfg = payload.guidance > 1.0
     negative = (payload.negative_prompt if payload.negative_prompt is not None else UNCONDITIONAL) if cfg else None
     return _generate(ctx, model, out, tel, adj, payload=payload, recipe=Recipe("unipc", shift),
-                     steps=payload.steps or FULL_STEPS, guidance=payload.guidance, negative=negative)
+                     steps=payload.steps or FULL_STEPS, guidance=payload.guidance, negative=negative,
+                     interval=payload.guidance_interval)
 
 
 @app.entrypoint(defaults=_DEV, components=_COMPONENTS, memoize=Memoize(requires=["seed"]),

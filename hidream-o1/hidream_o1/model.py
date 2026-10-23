@@ -44,6 +44,10 @@ NOISE_SCALE = 8.0
 FIX_POINT = 4096
 CONDITION_IMAGE_SIZE = 384
 T_EPS = 1e-3
+#: `generate`'s CFG stops for the last fifth of the steps (limited-interval guidance,
+#: Kynkäänniemi et al. 2024). There each patch's colour settles, and CFG 5 multiplies the pixel
+#: head's small per-patch colour error into a visible 32 px grid (upstream #1).
+GUIDED = 0.8
 BOI, TMS = "<|boi_token|>", "<|tms_token|>"
 
 
@@ -198,12 +202,16 @@ def condition_image(reference: Image.Image, count: int) -> Image.Image:
     return reference.resize((w, h), resample=Image.Resampling.LANCZOS)
 
 
-def patches(image: Image.Image) -> torch.Tensor:
-    """[-1, 1] RGB as rows of 32x32x3 patches, (C, p, p) within a row."""
-    pixels = torch.from_numpy(np.asarray(image.convert("RGB"), dtype=np.uint8).copy()).permute(2, 0, 1)
-    x = pixels.float().mul(1.0 / 255).sub(0.5).div(0.5)  # torchvision's ToDtype(scale) and Normalize
+def to_rows(x: torch.Tensor) -> torch.Tensor:
+    """[3, height, width] as [1, n, 3·32·32] rows of patches, row-major, (C, p, p) within a row."""
     c, h, w = x.shape
-    return x.view(c, h // PATCH, PATCH, w // PATCH, PATCH).permute(1, 3, 0, 2, 4).reshape(-1, c * PATCH * PATCH)
+    return x.view(c, h // PATCH, PATCH, w // PATCH, PATCH).permute(1, 3, 0, 2, 4).reshape(1, -1, c * PATCH * PATCH)
+
+
+def patches(image: Image.Image) -> torch.Tensor:
+    """[-1, 1] RGB as rows of 32x32x3 patches."""
+    pixels = torch.from_numpy(np.asarray(image.convert("RGB"), dtype=np.uint8).copy()).permute(2, 0, 1)
+    return to_rows(pixels.float().mul(1.0 / 255).sub(0.5).div(0.5))[0]  # torchvision's ToDtype(scale), Normalize
 
 
 def unpatch(rows: torch.Tensor, height: int, width: int) -> torch.Tensor:
@@ -414,9 +422,10 @@ class HiDreamO1(Model[O1Graph], encoded_leaves="accept"):
         seed: int,
         on_step: Callable[[int], None],
         cancel: Callable[[], None],
+        interval: bool,
     ) -> Image.Image:
         """Upstream's `generate_image` from prepared references (each on the 32 px grid): CFG
-        against `negative` when it is given."""
+        against `negative` when it is given, over the first `GUIDED` of the steps if `interval`."""
         body = self.body
         image_token = self.processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
         device = next(body.language_model.parameters()).device
@@ -437,8 +446,7 @@ class HiDreamO1(Model[O1Graph], encoded_leaves="accept"):
             refs = (torch.cat([patches(r) for r in references]).to(device, torch.bfloat16)[None]
                     if references else None)
             noise = recipe.noise * torch.randn((1, 3, height, width), generator=torch.Generator().manual_seed(seed + 1))
-            z = noise.to(device, torch.bfloat16)
-            z = z.view(1, 3, rows, PATCH, columns, PATCH).permute(0, 2, 4, 1, 3, 5).reshape(1, n, -1)
+            z = to_rows(noise[0].to(device, torch.bfloat16))
             sampler: Euler | UniPC
             if recipe.sampler == "unipc":
                 sampler = UniPC(steps, recipe.shift)
@@ -447,13 +455,15 @@ class HiDreamO1(Model[O1Graph], encoded_leaves="accept"):
                 sampler = Flash(generator, recipe.noise, recipe.clip)
             else:
                 sampler = Euler()
+            count = len(sampler.timesteps)
             for index, step in enumerate(sampler.timesteps):
                 cancel()
                 t = torch.tensor(float(step), device=device) / 1000.0
                 sigma = t.clamp_min(T_EPS)
                 inputs = z if refs is None else torch.cat([z, refs], dim=1)
+                guided = prefixes if not interval or index < round(GUIDED * count) else prefixes[:1]
                 velocities = [
-                    (_predict(body, prefix, 1.0 - t, inputs, n).float() - z.float()) / sigma for prefix in prefixes
+                    (_predict(body, prefix, 1.0 - t, inputs, n).float() - z.float()) / sigma for prefix in guided
                 ]
                 velocity = velocities[0]
                 if len(velocities) == 2:

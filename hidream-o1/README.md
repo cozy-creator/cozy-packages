@@ -11,7 +11,8 @@ patches attend to everything (tech report arXiv:2605.11061 §3.3).
 | `generate_turbo` | HiDream-O1-Image-Dev (distilled) | 28 (its only schedule) | none |
 
 One function does both jobs: with `reference_images`, it edits them, or composes several in order.
-HiDream recommends the full model, `generate`, for editing.
+HiDream recommends the full model, `generate`, for editing. A pose is one more reference: upstream's
+try-on example passes a face, a background, an OpenPose skeleton and three garments, in that order.
 
 ```sh
 cozy run fidika/hidream-o1/generate_turbo prompt='A dog holds a sign that says "HiDream-O1-Image release."'
@@ -19,8 +20,9 @@ cozy run fidika/hidream-o1/generate prompt='remove the earphones' --asset refere
 ```
 
 Fields: `prompt`, `reference_images` (up to 10), `aspect_ratio` (any `W:H`), `megapixels`, `steps`, and
-`seed` (random when omitted, returned). `generate` also takes `guidance` and `negative_prompt` (default:
-upstream's unconditional caption, a single space). Unknown fields are dropped with a warning.
+`seed` (random when omitted, returned). `generate` also takes `guidance`, `negative_prompt` (default:
+upstream's unconditional caption, a single space) and `guidance_interval` (below). Unknown fields are
+dropped with a warning.
 
 The result has the image, its `width` and `height`, the `seed`, and `prompt`: the caption used.
 
@@ -44,7 +46,8 @@ All recipes are upstream's latest (HiDream-ai/HiDream-O1-Image `main` at 2c2d29f
 
 - **`generate`:** Wan's flow UniPC (bh2, order 2) at shift 3, with CFG against a single-space caption.
   With two or more references it uses shift 1, as upstream's README runs subject-driven generation.
-  The initial noise is 8 standard normals per pixel.
+  The initial noise is 8 standard normals per pixel. CFG stops for the last 10 of the 50 steps
+  (`guidance_interval`, limited-interval guidance; `false` keeps upstream's CFG to the end).
 - **`generate_turbo`:** the 28 fixed Dev timesteps. Text-to-image and two or more references use the
   flash sampler: predict the clean image, then noise it again to the next sigma, at noise scale 7.5
   clipped at 2.5 standard deviations. A one-reference edit uses flow-match Euler, upstream's editing
@@ -94,8 +97,29 @@ details differ) and 21.7 dB on an edit, with no grain visible at 1× or 2×.
 | `generate`, one-reference edit (CFG) | 1.97 | 1.65 |
 | `generate_turbo`, text-to-image | 0.44 | 0.31 (all-projection lane) |
 
-Upstream's own code ran at 1.02 and 0.51. The first step adds 1.4–3.5 s. The model's known issues
-appear in upstream's own images too: a faint 32 px grid (upstream #1) and black dots in some edits (#13).
+Upstream's own code ran at 1.02 and 0.51. The first step adds 1.4–3.5 s. Black dots in some edits
+(upstream #13) appear in upstream's own images too.
+
+## The 32 px grid
+
+With CFG 5 to the last step, the full model's flat areas show a grid of slightly miscoloured 32 px
+patches (upstream #1), in upstream's own images as much as ours. Each patch's pixel-head output
+carries a small colour error, and CFG multiplies it while the colours settle. Without CFG over the last
+fifth, the patch offsets on flat areas fall 4–5× (1.6 to 0.3 levels on white) and the grid is at Dev's
+level, 10% faster. Faces lose the blotches and keep their detail. The edge step over
+the mid-patch step on flat areas, on one 4090 at 4 MP (int8):
+
+| | upstream (CFG to the end) | `guidance_interval` | also rolled half a patch | Dev |
+|---|---|---|---|---|
+| two-reference sheet, white | 1.78 | 1.20 | 1.05 | |
+| text-to-image, white | 1.65 | 1.18 | 1.05 | 1.13 |
+| edit, grey backdrop | 1.70 | 1.25 | 1.07 | |
+
+The last column comes from adding ComfyUI's patch-seam smoothing (`HiDreamO1PatchSeamSmoothing`) on
+top. Over the same last fifth it also predicts on the image rolled 16 px and averages the two. It reaches
+1.05–1.07 at upstream's speed. It is not shipped; it is the stronger option if a case needs the margin.
+ComfyUI's smoothing alone halves the steps but moves half of them to 16 px, and CFG-rescale changes the
+image without removing the grid.
 
 ## Licence
 
