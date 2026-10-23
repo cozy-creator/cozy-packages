@@ -22,11 +22,11 @@ cozy run flux-2/generate prompt='...'          # [dev]
 cozy run flux-2/generate_turbo prompt='...'    # [dev] Turbo
 ```
 
-Fields: `prompt`, `reference_images`, `aspect_ratio` (any `W:H`), `megapixels` (1, 2 or 4; 1024² pixels
-each), `steps` (default as above; Turbo always runs its 8), `seed` (random when omitted, returned),
-`guidance` ([dev]'s embedded guidance, or [klein] Base's CFG scale), `negative_prompt` ([klein] Base) and
-`prompt_upsampling` (default off). Unknown fields are dropped with a warning. The result is `image`,
-`width`, `height`, `seed` and `prompt`, the prompt actually used.
+Inputs are the shared image request, the same in every image package: `prompt`, `reference_images`, `aspect_ratio` (any W:H), `megapixels` (any size, 1024² pixels each), `steps`, `guidance`, `negative_prompt`, `seed` and `prompt_upsampling`. Left out, each is the checkpoint's default: steps as above (Turbo always runs its 8),
+guidance 4 ([dev]'s embedded guidance, 2.5 with Turbo; [klein] Base's CFG scale), no negative prompt
+([klein] Base only), no upsampling, a random seed. Steps 1–100, guidance 1–20; a knob the checkpoint
+has no use for is ignored with a warning, and unknown fields are dropped with one. The result is
+`image`, `width`, `height`, `seed` and `prompt`, the prompt actually used.
 
 Text-to-image defaults to 1:1 at 1 MP (1024×1024). With references and no size, the output takes the first
 reference's ratio and pixel count; `aspect_ratio` or `megapixels` overrides only itself. Sizes snap to

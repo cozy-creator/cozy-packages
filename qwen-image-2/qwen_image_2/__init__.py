@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
-import secrets
-from enum import IntEnum
 from typing import Annotated, Any
 
 import msgspec
 import numpy as np
 from cozy_runtime.author import (
+    MEGAPIXEL,
     Adjustments,
     App,
-    AssetBound,
     Context,
-    ImageAsset,
-    ImagePreparation,
+    ImageRequest,
+    ImageResult,
     Memoize,
     Outputs,
-    Shape,
+    ReferenceImages,
     Telemetry,
+    held,
 )
 from diffusers.pipelines.qwenimage21.pipeline_qwenimage21 import calculate_dimensions
 from PIL import Image
@@ -28,95 +27,46 @@ from . import quantize as quantize  # its recipes
 
 app = App()
 
-
-class Megapixels(IntEnum):
-    """Output area: 1024² pixels per megapixel, as upstream sizes it."""
-
-    MP1 = 1
-    MP2 = 2
-    MP4 = 4
-
-
 #: Upstream's rotary table centres at most 2048 tokens of 16 px on an axis.
 _MAX_SIDE = 2048 * 16
-#: Admission's bound per tier: its area plus 1/16 for upstream's rounding to 32 px. An omitted
-#: tier is decided by the references after admission, so it is bounded at the largest.
-_DEMAND: dict[Megapixels | None, tuple[int, int]] = {
-    tier: (1088 * (tier or Megapixels.MP4), 1024) for tier in (*Megapixels, None)
-}
+#: The pixel counts Qwen serves, in megapixels: upstream's 1 MP default to its native 2K (4 MP), the
+#: default without references.
+_MEGAPIXELS = (1.0, 4.0)
+#: The largest output, 4 MP plus 1/16 for upstream's rounding to 32 px.
+_BOUND = 1088 * 4 * 1024
+#: Steps without a checkpoint schedule (Turbo names its own 8), and the most admitted.
+_STEPS, _MAX_STEPS = 40, 100
 
 
-#: An edit with no tier keeps its first reference's pixel count inside upstream's 1 MP default and
-#: the 4 MP tier.
-_EDIT_PIXELS = (Megapixels.MP1 << 20, Megapixels.MP4 << 20)
-
-
-def _bound(tier: Megapixels | None) -> int:
-    return _DEMAND[tier][0] * _DEMAND[tier][1]
-
-
-def fitted_size(pixels: int, ratio: str, bound: int) -> tuple[int, int, bool]:
+def fitted_size(pixels: float, ratio: tuple[int, int]) -> tuple[int, int, bool]:
     """Upstream's `calculate_dimensions` at `pixels`, held inside the rotary range, 32 px sides and
-    `bound` pixels; True when that moved it off upstream's size."""
-    w, h = map(int, ratio.split(":"))
+    4 MP; True when that moved it off upstream's size."""
+    w, h = ratio
     widest = min(_MAX_SIDE**2 / pixels, pixels / 32**2)
     width, height, _ = calculate_dimensions(pixels, min(max(w / h, 1 / widest), widest))
     width, height = min(max(width, 32), _MAX_SIDE), min(max(height, 32), _MAX_SIDE)
-    while width * height > bound:
+    while width * height > _BOUND:
         width, height = (width - 32, height) if width >= height else (width, height - 32)
     return width, height, (width, height) != calculate_dimensions(pixels, w / h)[:2]
 
 
-def output_size(tier: Megapixels, ratio: str) -> tuple[int, int, bool]:
-    """The tier's area at `W:H`, inside the rotary range and the tier's demand."""
-    return fitted_size(tier << 20, ratio, _bound(tier))
+class GenerateInput(ImageRequest):
+    reference_images: Annotated[ReferenceImages, msgspec.Meta(max_length=10)] = msgspec.field(
+        default_factory=list
+    )
 
 
-class GenerateInput(msgspec.Struct):
-    prompt: str
-    # Any W:H. None: the first reference's ratio, else 1:1.
-    aspect_ratio: Annotated[str, msgspec.Meta(pattern=r"^[1-9][0-9]*:[1-9][0-9]*$")] | None = None
-    # None: the first reference's pixel count (1-4 MP), else 4 MP, the model's native 2K.
-    megapixels: Annotated[Megapixels | None, Shape(pixels=_DEMAND)] = None
-    # None: the checkpoint's own schedule (Turbo's 8 steps), else 40.
-    steps: Annotated[int, msgspec.Meta(ge=1, le=100)] | None = None
-    seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
-    reference_images: Annotated[
-        list[ImageAsset],
-        AssetBound(max_bytes=32 << 20),
-        ImagePreparation(max_pixels=4 << 20),
-        msgspec.Meta(max_length=10),
-    ] = msgspec.field(default_factory=list)
-
-    def resolved_seed(self) -> int:
-        return self.seed if self.seed is not None else secrets.randbits(53)
-
-    def size(self, adj: Adjustments, first: tuple[int, int] | None = None) -> tuple[int, int]:
-        """The output size; `first` is the first reference's displayed size. What is not given is the
-        first reference's: its ratio, and its pixel count inside 1-4 MP. Upstream takes the LAST
-        reference's; every Cozy image package takes the first, the image being edited."""
-        if first is None:
-            ratio, pixels = self.aspect_ratio or "1:1", (self.megapixels or Megapixels.MP4) << 20
-        else:
-            ratio, own = self.aspect_ratio or f"{first[0]}:{first[1]}", first[0] * first[1]
-            pixels = self.megapixels << 20 if self.megapixels else min(max(own, _EDIT_PIXELS[0]), _EDIT_PIXELS[1])
-            if not self.megapixels and pixels != own:
-                adj.clamp("megapixels", f"{own / (1 << 20):.2f}", f"{pixels / (1 << 20):.2f}",
-                          "the first reference's pixel count, inside the 1-4 MP Qwen admits")
-        width, height, held = fitted_size(pixels, ratio, _bound(self.megapixels))
-        if held:
-            adj.clamp("aspect_ratio", ratio, f"{width}:{height}", "nearest size the model admits")
-        return width, height
-
-
-class ImageOutput(msgspec.Struct):
-    image: Annotated[
-        ImageAsset,
-        AssetBound(max_bytes=32 << 20, max_decoded_bytes=20 << 20, media_types=("image/png",)),
-    ]
-    width: int
-    height: int
-    seed: int
+def output_size(adj: Adjustments, payload: ImageRequest, first: tuple[int, int] | None) -> tuple[int, int]:
+    """What is not given is the first reference's (its ratio and pixel count), else 1:1 at 4 MP;
+    the pixel count held to 1-4 MP. Upstream takes the LAST reference's; every Cozy image package
+    takes the first, the image being edited."""
+    target = payload.target(first, megapixels=_MEGAPIXELS[1])
+    megapixels = held(adj, "megapixels", target.pixels / MEGAPIXEL, *_MEGAPIXELS, "the 1-4 MP Qwen-Image serves")
+    width, height, moved = fitted_size(megapixels * MEGAPIXEL, target.ratio)
+    if moved:
+        ratio = f"{target.ratio[0]}:{target.ratio[1]}"
+        adj.clamp("aspect_ratio", ratio, f"{width}:{height}", "nearest size the model admits")
+    return width, height
 
 
 #: The decoder's alpha never quite reaches 0 or 255: a transparent background sits at 1–4 and an
@@ -147,13 +97,18 @@ def _generate(
     out: Outputs,
     tel: Telemetry,
     adj: Adjustments,
-) -> ImageOutput:
+) -> ImageResult:
     """Both functions' body: the checkpoint decides the schedule."""
+    payload.ignored(adj, "guidance", "negative_prompt", "prompt_upsampling",
+                    reason="Qwen-Image-2.1 samples without CFG and has no prompt upsampler")
     sigmas = model.sample_sigmas
-    steps = len(sigmas) if sigmas else payload.steps or 40
-    if sigmas and payload.steps not in (None, steps):
-        adj.clamp("steps", payload.steps, steps, "the checkpoint's own schedule")
-    seed = payload.resolved_seed()
+    if sigmas:
+        steps = len(sigmas)
+        if payload.steps not in (None, steps):
+            adj.clamp("steps", payload.steps, steps, "the checkpoint's own schedule")
+    else:
+        steps = held(adj, "steps", payload.steps or _STEPS, 1, _MAX_STEPS)
+    seed = payload.drawn_seed()
     ctx.raise_if_cancelled()
     reference_images, reference_latents, image_pad_mask = None, None, None
     if payload.reference_images:
@@ -162,7 +117,7 @@ def _generate(
             reference_images = [asset.read(mode="RGBA") for asset in payload.reference_images]
             conditioning_images, reference_latents = model.encode_reference_images(reference_images)
         ctx.raise_if_cancelled()
-    width, height = payload.size(adj, reference_images[0].size if reference_images else None)
+    width, height = output_size(adj, payload, reference_images[0].size if reference_images else None)
     with tel.stage("encoding prompt", overall_range=(0.08 if reference_images else 0.0, 0.1)):
         if reference_images is None:
             embeds, mask = model.encode(payload.prompt)
@@ -190,7 +145,7 @@ def _generate(
         image = decoded_image(decoded)
     with tel.stage("saving image", overall_range=(0.98, 1.0)):
         asset = out.save_image(image, format="png")
-    return ImageOutput(asset, width, height, seed)
+    return ImageResult(asset, width, height, seed, payload.prompt)
 
 
 _MEMO = ("qwen_image_2", "qwen_image_2.model")
@@ -208,7 +163,7 @@ def generate(
     out: Outputs,
     tel: Telemetry,
     adj: Adjustments,
-) -> ImageOutput:
+) -> ImageResult:
     """Qwen-Image-2.1, the 40-step base model."""
     return _generate(ctx, payload, model, out, tel, adj)
 
@@ -225,6 +180,6 @@ def generate_turbo(
     out: Outputs,
     tel: Telemetry,
     adj: Adjustments,
-) -> ImageOutput:
+) -> ImageResult:
     """Qwen-Image-2.1-Turbo: the same inputs, on its checkpoint's 8-step schedule."""
     return _generate(ctx, payload, model, out, tel, adj)
