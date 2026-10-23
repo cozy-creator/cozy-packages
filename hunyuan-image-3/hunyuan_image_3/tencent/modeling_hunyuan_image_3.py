@@ -10,74 +10,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# Modified for Cozy (packages se-079): no Transformers model/generation/cache classes, no
+# flashinfer/Taylor-cache/distributed paths; MoE dispatch sorts tokens by expert; the token and
+# denoising loops live at the end of this file. Every change is in the git history of this file.
 
 import math
 import random
-import re
-import time
 import warnings
 from dataclasses import dataclass
-from typing import List, Union, Optional, Dict, Any, Tuple, Callable, TYPE_CHECKING
-from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-import torch.utils.checkpoint
-from PIL import Image
 from einops import rearrange
-from torch import Tensor
+from PIL import Image
 from torch import nn
-from torch.cuda import nvtx
-
 from transformers.activations import ACT2FN
-from transformers.cache_utils import Cache, StaticCache
-from transformers.generation.logits_process import LogitsProcessor, LogitsProcessorList
-from transformers.generation.stopping_criteria import StoppingCriteriaList
-from transformers.generation.streamers import TextStreamer
-from transformers.generation.utils import GenerationMixin, GenerationConfig, ALL_CACHE_NAMES
-from transformers.modeling_outputs import (
-    BaseModelOutputWithPast,
-    CausalLMOutputWithPast,
-)
-from transformers.modeling_utils import PreTrainedModel
-from transformers.utils import (
-    ModelOutput,
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
-    is_flash_attn_2_available,
-    logging,
+from transformers.generation.logits_process import (
+    LogitsProcessor,
+    LogitsProcessorList,
+    TemperatureLogitsWarper,
+    TopKLogitsWarper,
+    TopPLogitsWarper,
 )
 
-try:
-    import flashinfer
-except Exception as e:
-    flashinfer = None
-
-#from .autoencoder_kl_3d import AutoencoderKLConv3D
-from .autoencoder_kl_3d import AutoencoderKLConv3D_Dist, AutoencoderKLConv3D
+from .autoencoder_kl_3d import AutoencoderKLConv3D
 from .configuration_hunyuan_image_3 import HunyuanImage3Config
-from .hunyuan_image_3_pipeline import HunyuanImage3Text2ImagePipeline, FlowMatchDiscreteScheduler
+from .hunyuan_image_3_pipeline import FlowMatchDiscreteScheduler
 from .image_processor import HunyuanImage3ImageProcessor
-from .siglip2 import Siglip2VisionTransformer, LightProjector
-from .tokenization_hunyuan_image_3 import HunyuanImage3TokenizerFast, ImageInfo, ImageTensor, CondImage
-from .system_prompt import get_system_prompt
-
-from .cache_utils import TaylorCacheContainer, CacheWithFreqsContainer
-
-if TYPE_CHECKING:
-    from transformers.generation.streamers import BaseStreamer
-
-logger = logging.get_logger(__name__)
-
-
-if is_flash_attn_2_available():
-    from flash_attn import flash_attn_func
+from .siglip2 import LightProjector, Siglip2VisionTransformer
+from .tokenization_hunyuan_image_3 import CondImage, HunyuanImage3TokenizerFast, ImageInfo, ImageTensor
 
 # Type aliases
 BatchRaggedImages = Union[torch.Tensor, List[Union[torch.Tensor, List[torch.Tensor]]]]
 BatchRaggedTensor = Union[torch.Tensor, List[torch.Tensor]]
 InputImage = Optional[Union[Image.Image, str, bytes]]
-
 
 def get_device(tensor: BatchRaggedImages):
     if isinstance(tensor, torch.Tensor):
@@ -227,115 +194,6 @@ def normalization(channels, **kwargs):
     :return: a nn.Module for normalization.
     """
     return nn.GroupNorm(32, channels, **kwargs)
-
-
-def topkgating(
-        logits: Tensor,
-        topk: int,
-        group_limited_greedy: bool = False,
-        n_group: int = None,
-        topk_group: int = None,
-        norm_topk_prob: bool = True,
-        routed_scaling_factor: float = 1.0,
-        capacity_factor: float = 1.0,
-        drop_tokens: bool = False,
-):
-    logits = logits.float()
-    gates = F.softmax(logits, dim=1)
-
-    if group_limited_greedy:
-        group_shape = list(gates.shape[:-1]) + [n_group, gates.shape[-1] // n_group]
-        group_scores = (
-            gates.reshape(group_shape).max(dim=-1).values
-        )  # [n, n_group]
-        group_idx = torch.topk(
-            group_scores, topk_group, dim=-1, sorted=False
-        )[
-            1
-        ]  # [n, top_k_group]
-        group_mask = torch.zeros_like(group_scores)  # [n, n_group]
-        group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
-        score_mask = (
-            group_mask.unsqueeze(-1)
-            .expand(
-                group_shape
-            )
-            .reshape(list(gates.shape))
-        )  # [n, e]
-        gates = gates.masked_fill(~score_mask.bool(), 0.0)
-
-    num_experts = int(gates.shape[1])
-    # Top-k router probability and corresponding expert indices for each token.
-    # Shape: [tokens_per_group, num_selected_experts].
-    expert_gate, expert_index = torch.topk(gates, topk)
-    expert_mask = F.one_hot(expert_index, num_experts)
-    # For a given token, determine if it was routed to a given expert.
-    # Shape: [tokens_per_group, num_experts]
-    expert_mask_aux = expert_mask.max(dim=-2)[0]
-    tokens_per_group_and_expert = torch.mean(expert_mask_aux.float(), dim=-2)
-    router_prob_per_group_and_expert = torch.mean(gates.float(), dim=-2)
-    l_aux = num_experts ** 2 * torch.mean(tokens_per_group_and_expert * router_prob_per_group_and_expert)
-
-    if drop_tokens:
-        expert_capacity = int(max(topk, topk * gates.shape[0] // gates.shape[1]) * capacity_factor)
-    else:
-        expert_index_flat = expert_index.flatten()
-        tokens_per_expert = torch.bincount(expert_index_flat, minlength=num_experts)
-        expert_capacity = torch.max(tokens_per_expert).item()
-
-    if norm_topk_prob and topk > 1:
-        gates_s = torch.clamp(
-            torch.matmul(expert_mask.float(), gates.unsqueeze(-1)).sum(dim=1), min=torch.finfo(gates.dtype).eps
-        )
-        router_probs = gates / gates_s
-    else:
-        router_probs = gates * routed_scaling_factor
-    # Make num_selected_experts the leading axis to ensure that top-1 choices
-    # have priority over top-2 choices, which have priority over top-3 choices,
-    # etc.
-    expert_index = torch.transpose(expert_index, 0, 1)
-    # Shape: [num_selected_experts * tokens_per_group]
-    expert_index = expert_index.reshape(-1)
-
-    # Create mask out of indices.
-    # Shape: [tokens_per_group * num_selected_experts, num_experts].
-    expert_mask = F.one_hot(expert_index, num_experts).to(torch.int32)
-    exp_counts = torch.sum(expert_mask, dim=0).detach()
-
-    # Experts have a fixed capacity that we cannot exceed. A token's priority
-    # within the expert's buffer is given by the masked, cumulative capacity of
-    # its target expert.
-    # Shape: [tokens_per_group * num_selected_experts, num_experts].
-    token_priority = torch.cumsum(expert_mask, dim=0) * expert_mask - 1
-    # Shape: [num_selected_experts, tokens_per_group, num_experts].
-    token_priority = token_priority.reshape((topk, -1, num_experts))
-    # Shape: [tokens_per_group, num_selected_experts, num_experts].
-    token_priority = torch.transpose(token_priority, 0, 1)
-    # For each token, across all selected experts, select the only non-negative
-    # (unmasked) priority. Now, for group G routing to expert E, token T has
-    # non-negative priority (i.e. token_priority[G,T,E] >= 0) if and only if E
-    # is its targeted expert.
-    # Shape: [tokens_per_group, num_experts].
-    token_priority = torch.max(token_priority, dim=1)[0]
-
-    # Token T can only be routed to expert E if its priority is positive and
-    # less than the expert capacity. One-hot matrix will ignore indices outside
-    # the range [0, expert_capacity).
-    # Shape: [tokens_per_group, num_experts, expert_capacity].
-    valid_mask = torch.logical_and(token_priority >= 0, token_priority < expert_capacity)
-    token_priority = torch.masked_fill(token_priority, ~valid_mask, 0)
-    dispatch_mask = F.one_hot(token_priority, expert_capacity).to(torch.bool)
-    valid_mask = valid_mask.unsqueeze(-1).expand(-1, -1, expert_capacity)
-    dispatch_mask = torch.masked_fill(dispatch_mask, ~valid_mask, 0)
-
-    # The combine array will be used for combining expert outputs, scaled by the
-    # router probabilities. Shape: [num_groups, tokens_per_group, num_experts,
-    # expert_capacity].
-    combine_weights = torch.einsum("...te,...tec->...tec", router_probs, dispatch_mask)
-    exp_counts_capacity = torch.sum(dispatch_mask)
-    exp_capacity_rate = exp_counts_capacity / (logits.shape[0] * topk)
-
-    return [l_aux, exp_capacity_rate], combine_weights, dispatch_mask, exp_counts
 
 
 # =======================================================
@@ -887,21 +745,25 @@ class UNetUp(nn.Module):
 #     Modules for Transformer Backbone
 # =======================================================
 
+
 @dataclass
-class CausalMMOutputWithPast(CausalLMOutputWithPast):
+class CausalMMOutputWithPast:
+    logits: Optional[torch.Tensor] = None
+    past_key_values: Optional["HunyuanStaticCache"] = None
     diffusion_prediction: Optional[torch.Tensor] = None
 
 
-class HunyuanStaticCache(StaticCache):
-    """
-    A custom static cache for multi-modal models that supports dynamic extension of the cache
-    and inplace updates of the cache.
+class HunyuanStaticCache:
+    """Upstream's cache without Transformers' `StaticCache`: one zero-initialized
+    [batch, kv heads, max_cache_len, head dim] buffer per layer, allocated at the first write and
+    written in place at `cache_position`; `dynamic` returns only the written prefix (text decoding)."""
 
-    This cache supports batch cache_position updates.
-    """
-    def __init__(self, *args, **kwargs):
-        self.dynamic = kwargs.pop("dynamic", False)
-        super().__init__(*args, **kwargs)
+    def __init__(self, config, max_batch_size: int, max_cache_len: int, dtype=None, dynamic: bool = False):
+        # Like Transformers 4.57's StaticCache, the buffers take the dtype of the first keys written.
+        self.max_cache_len = max_cache_len
+        self.dynamic = dynamic
+        self.keys: list[Optional[torch.Tensor]] = [None] * config.num_hidden_layers
+        self.values: list[Optional[torch.Tensor]] = [None] * config.num_hidden_layers
 
     def update(
         self,
@@ -910,37 +772,19 @@ class HunyuanStaticCache(StaticCache):
         layer_idx: int,
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Updates the cache with the new `key_states` and `value_states` for the layer `layer_idx`.
-        It is VERY important to index using a tensor, otherwise you introduce a copy to the device.
-
-        Parameters:
-            key_states (`torch.Tensor`):
-                The new key states to cache.
-            value_states (`torch.Tensor`):
-                The new value states to cache.
-            layer_idx (`int`):
-                The index of the layer to cache the states for.
-            cache_kwargs (`Dict[str, Any]`, `optional`):
-                Additional arguments for the cache subclass. The `StaticCache` needs the `cache_position` input
-                to know how where to write in the cache.
-
-        Return:
-            A tuple containing the updated key and value states.
-        """
         cache_position = cache_kwargs.get("cache_position")
-        if self.layers[layer_idx].keys is None:
-            self.layers[layer_idx].lazy_initialization(key_states)
-        k_out = self.layers[layer_idx].keys
-        v_out = self.layers[layer_idx].values
+        if self.keys[layer_idx] is None:
+            batch, heads, _, head_dim = key_states.shape
+            shape = (batch, heads, self.max_cache_len, head_dim)
+            self.keys[layer_idx] = torch.zeros(shape, dtype=key_states.dtype, device=key_states.device)
+            self.values[layer_idx] = torch.zeros(shape, dtype=value_states.dtype, device=value_states.device)
+        k_out = self.keys[layer_idx]
+        v_out = self.values[layer_idx]
 
         if cache_position is None:
             k_out.copy_(key_states)
             v_out.copy_(value_states)
         else:
-            # Note: here we use `tensor.index_copy_(dim, index, tensor)` that is equivalent to
-            # `tensor[:, :, index] = tensor`, but the first one is compile-friendly and it does explicitly an in-place
-            # operation, that avoids copies and uses less memory.
             if cache_position.dim() == 1:
                 k_out.index_copy_(2, cache_position, key_states)
                 v_out.index_copy_(2, cache_position, value_states)
@@ -1108,25 +952,15 @@ class HunyuanTopKGate(nn.Module):
         self.norm_topk_prob = config.norm_topk_prob
         self.group_limited_greedy = config.group_limited_greedy
 
-    def forward(self, hidden_states, topk_impl='default'):
+    def forward(self, hidden_states, topk_impl='easy'):
         bsz, seq_len, hidden_size = hidden_states.shape
         hidden_states = hidden_states.reshape(-1, hidden_size)
         if self.wg.weight.dtype == torch.float32:
             hidden_states = hidden_states.float()
         logits = self.wg(hidden_states)
-        if topk_impl == 'default':
-            gate_output = topkgating(logits, self.moe_topk, group_limited_greedy=self.group_limited_greedy,
-                                     n_group=self.n_group, topk_group=self.topk_group,
-                                     norm_topk_prob=self.norm_topk_prob,
-                                     routed_scaling_factor=self.routed_scaling_factor,
-                                     capacity_factor=self.config.capacity_factor,
-                                     drop_tokens=self.drop_tokens)
-        elif topk_impl == 'easy':
-            gate_output = self.easy_topk(logits, self.moe_topk)
-        else:
+        if topk_impl != 'easy':
             raise ValueError(f"Unsupported topk_impl: {topk_impl}")
-
-        return gate_output
+        return self.easy_topk(logits, self.moe_topk)
 
     @staticmethod
     def easy_topk(logits, moe_topk):
@@ -1153,76 +987,39 @@ class HunyuanMoE(nn.Module):
             [HunyuanMLP(config, layer_idx=layer_idx, is_shared_mlp=False, is_moe=True) for _ in range(self.num_experts)]
         )
 
-        self._moe_impl = config.moe_impl
-        # For FlashInfer
-        self.moe_weight = None
-        self.moe_weight_2 = None
-        self._weights_initialized = False
-
-    @property
-    def moe_impl(self):
-        return self._moe_impl
-
-    @moe_impl.setter
-    def moe_impl(self, value):
-        self._moe_impl = value
-        if self._moe_impl == "flashinfer":
-            assert flashinfer is not None, "When using fused_moe, flashinfer must be installed."
 
     def forward(self, hidden_states):
-        torch.cuda.set_device(hidden_states.device.index)
         bsz, seq_len, hidden_size = hidden_states.shape
         input_hidden_states = hidden_states
 
         if self.config.use_mixed_mlp_moe:
             hidden_states_mlp = self.shared_mlp(hidden_states)
 
-        reshaped_input = hidden_states.reshape(-1, hidden_size) # [bsz*seq_len, hidden_size]
+        # Upstream's "eager" (DeepSeekMoE) routing and combine, with each expert's rows gathered by
+        # one stable sort instead of a boolean mask per expert: every expert multiplies the same
+        # rows in the same order, and the host waits once per layer, not once per expert.
+        with torch.autocast('cuda', enabled=False):
+            topk_weights, topk_idx = self.gate(hidden_states, topk_impl='easy')
+        topk_weights = topk_weights.to(hidden_states.dtype)
 
-        with nvtx.range("MoE"):
-            if self._moe_impl == "flashinfer":
-                # Get expert weights
-                if not self._weights_initialized:
-                    self._initialize_weights_on_device(hidden_states.device)
-                topk_weight, topk_index = self.gate(hidden_states, topk_impl='easy')
+        flat_topk_idx = topk_idx.view(-1)
+        hidden_states_flat = input_hidden_states.view(-1, hidden_size)    # (bsz * seq_len, hidden_size)
+        order = torch.argsort(flat_topk_idx, stable=True)
+        counts = torch.bincount(flat_topk_idx, minlength=self.num_experts).tolist()
+        selected = hidden_states_flat[order // self.moe_topk]
+        outputs = []
+        start = 0
+        for i, count in enumerate(counts):
+            if count:
+                outputs.append(self.experts[i](selected[start:start + count]))
+            start += count
+        expert_outputs = torch.empty_like(selected, dtype=outputs[0].dtype)
+        expert_outputs[order] = torch.cat(outputs)
 
-                combined_output = torch.zeros_like(reshaped_input)
-                _ = flashinfer.fused_moe.cutlass_fused_moe(     # noqa
-                    reshaped_input.contiguous(),
-                    topk_index.to(torch.int).contiguous(),
-                    topk_weight.to(torch.float).contiguous(),
-                    self.moe_weight,
-                    self.moe_weight_2,
-                    torch.bfloat16,
-                    output=combined_output,
-                    quant_scales=None,
-                )
-                combined_output = combined_output.reshape(bsz, seq_len, hidden_size)
-            else:
-                # DeepSeekMoE implementation
-                # Reference: https://huggingface.co/deepseek-ai/deepseek-moe-16b-chat/blob/main/modeling_deepseek.py#L375
-                with torch.autocast('cuda', enabled=False):
-                    topk_weights, topk_idx = self.gate(hidden_states, topk_impl='easy')
-                # Cast back to the input dtype
-                topk_weights = topk_weights.to(hidden_states.dtype)
-
-                # Flatten for easier indexing
-                flat_topk_idx = topk_idx.view(-1)
-                hidden_states_flat = input_hidden_states.view(-1, hidden_size)    # (bsz * seq_len, hidden_size)
-                hidden_states_repeated = hidden_states_flat.repeat_interleave(self.moe_topk, dim=0)  # (bsz * seq_len * k, hidden_size)
-
-                # Forward through experts
-                expert_outputs = torch.zeros_like(hidden_states_repeated, dtype=hidden_states_repeated.dtype, device=hidden_states_repeated.device)
-                for i in range(self.num_experts):
-                    expert_mask = (flat_topk_idx == i)
-                    selected_inputs = hidden_states_repeated[expert_mask]
-                    expert_output = self.experts[i](selected_inputs)    # compatible with zero tensor
-                    expert_outputs[expert_mask] = expert_output
-
-                # Weighted sum of expert outputs
-                combined_output = (expert_outputs.view(
-                    bsz * seq_len, self.moe_topk, hidden_size) * topk_weights.unsqueeze(-1)).sum(dim=1)  # (bsz * seq_len, hidden_size)
-                combined_output = combined_output.to(hidden_states.dtype).view(bsz, seq_len, hidden_size)
+        # Weighted sum of expert outputs
+        combined_output = (expert_outputs.view(
+            bsz * seq_len, self.moe_topk, hidden_size) * topk_weights.unsqueeze(-1)).sum(dim=1)
+        combined_output = combined_output.to(hidden_states.dtype).view(bsz, seq_len, hidden_size)
 
         if self.config.use_mixed_mlp_moe:
             output = hidden_states_mlp + combined_output    # noqa
@@ -1230,28 +1027,6 @@ class HunyuanMoE(nn.Module):
             output = combined_output
 
         return output
-
-    def _initialize_weights_on_device(self, device):
-        expert_weights_gate_up = []
-        expert_weights_down = []
-
-        for expert in self.experts:
-            expert.to(device)
-            expert_weights_gate_up.append(expert.gate_and_up_proj.weight.to(device))
-            expert_weights_down.append(expert.down_proj.weight.to(device))
-
-        self.moe_weight = torch.stack(expert_weights_gate_up).contiguous()
-        self.moe_weight_2 = torch.stack(expert_weights_down).contiguous()
-        # empty the expert weights
-        for expert in self.experts:
-            expert.gate_and_up_proj.weight.data = torch.empty(0, device=device)
-            if expert.gate_and_up_proj.bias is not None:
-                expert.gate_and_up_proj.bias.data = torch.empty(0, device=device)
-            expert.down_proj.weight.data = torch.empty(0, device=device)
-            if expert.down_proj.bias is not None:
-                expert.down_proj.bias.data = torch.empty(0, device=device)
-
-        self._weights_initialized = True
 
 
 class HunyuanImage3SDPAAttention(nn.Module):
@@ -1309,12 +1084,12 @@ class HunyuanImage3SDPAAttention(nn.Module):
             hidden_states: torch.Tensor,
             attention_mask: Optional[torch.Tensor] = None,
             position_ids: Optional[torch.LongTensor] = None,
-            past_key_value: Optional[Cache] = None,
+            past_key_value: Optional[HunyuanStaticCache] = None,
             output_attentions: bool = False,
             use_cache: Optional[bool] = False,
             custom_pos_emb: Optional[Tuple[torch.FloatTensor]] = None,
             **kwargs,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Cache]]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[HunyuanStaticCache]]:
         if output_attentions:
             raise NotImplementedError(
                 'HunyuanImage3Model is using HunyuanImage3SDPAAttention,'
@@ -1370,23 +1145,13 @@ class HunyuanImage3SDPAAttention(nn.Module):
         return attn_output, None, past_key_value
 
 
-Hunyuan_ATTENTION_CLASSES = {
-    "eager": HunyuanImage3SDPAAttention,
-    "sdpa": HunyuanImage3SDPAAttention,
-}
-
-
 class HunyuanImage3DecoderLayer(nn.Module):
     def __init__(self, config: HunyuanImage3Config, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.layer_idx = layer_idx
 
-        attn_impl = config._attn_implementation     # noqa
-        if attn_impl in Hunyuan_ATTENTION_CLASSES:
-            self.self_attn = Hunyuan_ATTENTION_CLASSES[attn_impl](config=config, layer_idx=layer_idx)
-        else:
-            raise ValueError(f"Unsupported attention implementation: {attn_impl}")
+        self.self_attn = HunyuanImage3SDPAAttention(config=config, layer_idx=layer_idx)
 
         if ((isinstance(config.num_experts, int) and config.num_experts > 1) or (
                 isinstance(config.num_experts, list) and max(
@@ -1468,320 +1233,103 @@ class HunyuanImage3DecoderLayer(nn.Module):
         return outputs
 
 
-@add_start_docstrings(
-    "The bare Hunyuan Image 3 Model outputting raw hidden-states without any specific head on top.",
-    Hunyuan_START_DOCSTRING,
-)
-class HunyuanImage3PreTrainedModel(PreTrainedModel):
-    config_class = HunyuanImage3Config
-    base_model_prefix = ""
-    supports_gradient_checkpointing = True
-    _no_split_modules = ["HunyuanImage3DecoderLayer"]
-    _skip_keys_device_placement = "past_key_values"
-    _supports_flash_attn_2 = True
-    _supports_sdpa = True
-    _supports_cache_class = True
-
-    def _init_weights(self, module):
-        std = self.config.initializer_range
-        if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.bias is not None:
-                module.bias.data.zero_()
-        elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.padding_idx is not None:
-                module.weight.data[module.padding_idx].zero_()
-
-
-Hunyuan_INPUTS_DOCSTRING = r"""
-    Args:
-        input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
-            Indices of input sequence tokens in the vocabulary. Padding will be ignored by default should you provide
-            it.
-
-            Indices can be obtained using [`AutoTokenizer`]. See [`PreTrainedTokenizer.encode`] and
-            [`PreTrainedTokenizer.__call__`] for details.
-
-            [What are input IDs?](../glossary#input-ids)
-        attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
-            Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
-
-            - 1 for tokens that are **not masked**,
-            - 0 for tokens that are **masked**.
-
-            [What are attention masks?](../glossary#attention-mask)
-
-            Indices can be obtained using [`AutoTokenizer`]. See [`PreTrainedTokenizer.encode`] and
-            [`PreTrainedTokenizer.__call__`] for details.
-
-            If `past_key_values` is used, optionally only the last `input_ids` have to be input (see
-            `past_key_values`).
-
-            If you want to change padding behavior, you should read [`modeling_opt._prepare_decoder_attention_mask`]
-            and modify to your needs. See diagram 1 in [the paper](https://arxiv.org/abs/1910.13461) for more
-            information on the default strategy.
-
-            - 1 indicates the head is **not masked**,
-            - 0 indicates the head is **masked**.
-        position_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-            Indices of positions of each input sequence tokens in the position embeddings. Selected in the range `[0,
-            config.n_positions - 1]`.
-
-            [What are position IDs?](../glossary#position-ids)
-        past_key_values (`Cache` or `tuple(tuple(torch.FloatTensor))`, *optional*):
-            Pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
-            blocks) that can be used to speed up sequential decoding. This typically consists in the `past_key_values`
-            returned by the model at a previous stage of decoding, when `use_cache=True` or `config.use_cache=True`.
-
-            Two formats are allowed:
-            - a [`~cache_utils.Cache`] instance;
-            - Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of
-            shape `(batch_size, num_heads, sequence_length, embed_size_per_head)`). This is also known as the legacy
-            cache format.
-
-            The model will output the same cache format that is fed as input. If no `past_key_values` are passed, the
-            legacy cache format will be returned.
-
-            If `past_key_values` are used, the user can optionally input only the last `input_ids` (those that don't
-            have their past key value states given to this model) of shape `(batch_size, 1)` instead of all `input_ids`
-            of shape `(batch_size, sequence_length)`.
-        inputs_embeds (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
-            Optionally, instead of passing `input_ids` you can choose to directly pass an embedded representation. This
-            is useful if you want more control over how to convert `input_ids` indices into associated vectors than the
-            model's internal embedding lookup matrix.
-        use_cache (`bool`, *optional*):
-            If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding (see
-            `past_key_values`).
-        output_attentions (`bool`, *optional*):
-            Whether or not to return the attentions tensors of all attention layers. See `attentions` under returned
-            tensors for more detail.
-        output_hidden_states (`bool`, *optional*):
-            Whether or not to return the hidden states of all layers. See `hidden_states` under returned tensors for
-            more detail.
-        return_dict (`bool`, *optional*):
-            Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
-"""
-
-
-@add_start_docstrings(
-    "The bare Hunyuan Model outputting raw hidden-states without any specific head on top.",
-    Hunyuan_START_DOCSTRING,
-)
-class HunyuanImage3Model(HunyuanImage3PreTrainedModel):
+class HunyuanImage3Model(nn.Module):
     def __init__(self, config: HunyuanImage3Config):
-        super().__init__(config)
+        super().__init__()
+        self.config = config
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        self.add_classification_head = config.add_classification_head
         self.wte = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList(
             [HunyuanImage3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        if not config.add_classification_head:
-            self.ln_f = HunyuanRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.ln_f = HunyuanRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-        # Initialize weights and apply final processing
-        self.post_init()
-
-        self.shared_tensor = None
-
-    @add_start_docstrings_to_model_forward(Hunyuan_INPUTS_DOCSTRING)
-    def forward(
-            self,
-            input_ids: torch.LongTensor = None,
-            attention_mask: Optional[torch.Tensor] = None,
-            position_ids: Optional[torch.LongTensor] = None,
-            past_key_values: Optional[List[torch.FloatTensor]] = None,
-            inputs_embeds: Optional[torch.FloatTensor] = None,
-            use_cache: Optional[bool] = None,
-            output_attentions: Optional[bool] = None,
-            output_hidden_states: Optional[bool] = None,
-            return_dict: Optional[bool] = None,
-            custom_pos_emb: Optional[Tuple[torch.FloatTensor]] = None,
-            mode: str = "gen_text",
-            first_step: Optional[bool] = None,
-            post_token_len: int = None,
-            num_image_tokens: int = None,
-            gen_timestep_scatter_index: Optional[torch.Tensor] = None,
-            num_special_tokens: int = None,
-    ) -> Union[Tuple, BaseModelOutputWithPast]:
-
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        use_cache = use_cache if use_cache is not None else self.config.use_cache
-
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        if inputs_embeds is None:
-            inputs_embeds = self.wte(input_ids)
-
-        # embed positions
+    def forward(self, inputs_embeds, attention_mask=None, position_ids=None, past_key_values=None,
+                custom_pos_emb=None, mode="gen_text", first_step=None):
         hidden_states = inputs_embeds
-
-        # decoder layers
-        all_hidden_states = () if output_hidden_states else None
-        all_self_attns = () if output_attentions else None
-        next_decoder_cache = None
-
-        for layer_idx, decoder_layer in enumerate(self.layers):
-            if output_hidden_states:
-                all_hidden_states += (hidden_states,)
-
-            layer_outputs = decoder_layer(
+        for decoder_layer in self.layers:
+            hidden_states = decoder_layer(
                 hidden_states,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_value=past_key_values,
-                output_attentions=output_attentions,
-                use_cache=use_cache,
                 custom_pos_emb=custom_pos_emb,
                 mode=mode,
                 first_step=first_step,
-            )
-
-            hidden_states = layer_outputs[0]
-            if use_cache:
-                next_decoder_cache = layer_outputs[2 if output_attentions else 1]
-
-            if output_attentions:
-                all_self_attns += (layer_outputs[1],)
-
-        if not self.add_classification_head:
-            # Do ln_f outside of the model for compatibility with image generation.
-            pass
-            # hidden_states = self.ln_f(hidden_states)
-
-        # add hidden states from the last decoder layer
-        if output_hidden_states:
-            all_hidden_states += (hidden_states,)
-
-        next_cache = None
-        if use_cache:
-            next_cache = next_decoder_cache
-        if not return_dict:
-            return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
-        return BaseModelOutputWithPast(
-            last_hidden_state=hidden_states,
-            past_key_values=next_cache,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
-        )
+            )[0]
+        # ln_f is applied outside of the model, for compatibility with image generation.
+        return hidden_states
 
 
-class HunyuanImage3ForCausalMM(HunyuanImage3PreTrainedModel, GenerationMixin):
-    def __init__(self, config: HunyuanImage3Config, skip_load_module:set[str]={}, use_dist_vae=False, wgt_path=""):
-        """HunyuanImage3ForCausalMM
-
-        Args:
-            config (HunyuanImage3Config): model config to initialize the model
-            skip_load_module (set[str], optional):
-                modules to skip loading, used for vllm inference. Defaults to {}.
-
-        Raises:
-            ValueError: if config is invalid
-        """
-        super().__init__(config)
+class HunyuanImage3ForCausalMM(nn.Module):
+    def __init__(self, config: HunyuanImage3Config):
+        super().__init__()
         self.config = config
         self._tokenizer: Optional[HunyuanImage3TokenizerFast] = None
-
-        #self.generation_config = GenerationConfig.from_model_config(config)
 
         # Initialize image preprocessor (for conditional images)
         self.image_processor = HunyuanImage3ImageProcessor(config)
 
-        if 'all' in skip_load_module:
-            skip_load_module = {
-                'vae',
-                'vit',
-                'timestep_emb',
-                'patch_embed',
-                'time_embed',
-                'final_layer',
-                'time_embed_2',
-                'transformers',
-            }
-        if 'vae' not in skip_load_module:
-            # vae and gen_image pipeline
-            if not use_dist_vae:
-                self.vae = AutoencoderKLConv3D.from_config(config.vae)
-                self.vae_dtype = getattr(torch, config.vae_dtype)
-                self.vae_autocast_dtype = getattr(torch, config.vae_autocast_dtype)
-                self.vae = self.vae.eval()
-                for param in self.vae.parameters():
-                    param.requires_grad = False  #
-            else:
-                self.vae = AutoencoderKLConv3D_Dist.from_config(config.vae)
-                self.vae_dtype = getattr(torch, config.vae_dtype)
-                self.vae_autocast_dtype = getattr(torch, config.vae_autocast_dtype)
-                self.vae.create_dist(wgt_path, config.vae)
-        self._pipeline = None
+        # vae and gen_image pipeline
+        self.vae = AutoencoderKLConv3D.from_config(config.vae)
+        self.vae_dtype = getattr(torch, config.vae_dtype)
+        self.vae_autocast_dtype = getattr(torch, config.vae_autocast_dtype)
+        self.vae = self.vae.eval()
 
-        if 'vit' not in skip_load_module:
-            # vit
-            self.vision_model = Siglip2VisionTransformer(config.vit)
-            self.vision_aligner = LightProjector(config.vit_aligner)
+        # vit
+        self.vision_model = Siglip2VisionTransformer(config.vit)
+        self.vision_aligner = LightProjector(config.vit_aligner)
 
-        if 'timestep_emb' not in skip_load_module:
-            # image generation related
-            self.timestep_emb = TimestepEmbedder(hidden_size=config.hidden_size)
+        # image generation related
+        self.timestep_emb = TimestepEmbedder(hidden_size=config.hidden_size)
 
         if self.config.cfg_distilled:
             self.guidance_emb = TimestepEmbedder(hidden_size=config.hidden_size)
-        if self.config.use_meanflow: 
+        if self.config.use_meanflow:
             self.timestep_r_emb = TimestepEmbedder(hidden_size=config.hidden_size)
 
-        if config.img_proj_type == "unet":
-            if 'patch_embed' not in skip_load_module:
-                self.patch_embed = UNetDown(
-                    patch_size=config.patch_size,
-                    emb_channels=config.hidden_size,
-                    in_channels=config.vae["latent_channels"],
-                    hidden_channels=config.patch_embed_hidden_dim,
-                    out_channels=config.hidden_size,
-                )
-            if 'time_embed' not in skip_load_module:
-                self.time_embed = TimestepEmbedder(hidden_size=config.hidden_size)
-
-            if 'final_layer' not in skip_load_module:
-                self.final_layer = UNetUp(
-                    patch_size=config.patch_size,
-                    emb_channels=config.hidden_size,
-                    in_channels=config.hidden_size,
-                    hidden_channels=config.patch_embed_hidden_dim,
-                    out_channels=config.vae["latent_channels"],
-                    out_norm=True,
-                )
-            if 'time_embed_2' not in skip_load_module:
-                self.time_embed_2 = TimestepEmbedder(hidden_size=config.hidden_size)
-        else:
+        if config.img_proj_type != "unet":
             raise ValueError(f"Unknown img_proj_type {config.img_proj_type}")
+        self.patch_embed = UNetDown(
+            patch_size=config.patch_size,
+            emb_channels=config.hidden_size,
+            in_channels=config.vae["latent_channels"],
+            hidden_channels=config.patch_embed_hidden_dim,
+            out_channels=config.hidden_size,
+        )
+        self.time_embed = TimestepEmbedder(hidden_size=config.hidden_size)
+        self.final_layer = UNetUp(
+            patch_size=config.patch_size,
+            emb_channels=config.hidden_size,
+            in_channels=config.hidden_size,
+            hidden_channels=config.patch_embed_hidden_dim,
+            out_channels=config.vae["latent_channels"],
+            out_norm=True,
+        )
+        self.time_embed_2 = TimestepEmbedder(hidden_size=config.hidden_size)
 
-        if 'transformers' not in skip_load_module:
-            # transformer backbone
-            self.model = HunyuanImage3Model(config)
-            # linear head
-            self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        # transformer backbone
+        self.model = HunyuanImage3Model(config)
+        # linear head
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         self.pad_id = config.pad_id
         self.vocab_size = config.vocab_size
-      
-        # Taylor Cache
-        self.use_taylor_cache = False
 
         self.num_image_tokens = None
         self.num_special_tokens = None
+        self.post_token_len = None
         # Initialize cached rope, supporting automatic cache update
         self.cached_rope = CachedRoPE(config)
 
-        # Initialize weights and apply final processing
-        self.post_init()
+    @property
+    def device(self) -> torch.device:
+        return self.model.wte.weight.device
 
-    @classmethod
-    def from_config(cls, config: HunyuanImage3Config,  skip_load_module:set[str]={}):
-        return cls(config, skip_load_module=skip_load_module)
+    @property
+    def dtype(self) -> torch.dtype:
+        return torch.bfloat16
 
     @property
     def tokenizer(self):
@@ -1789,19 +1337,6 @@ class HunyuanImage3ForCausalMM(HunyuanImage3PreTrainedModel, GenerationMixin):
             raise ValueError("Attribute `tokenizer` has not been initialized yet. Please set it first.")
         return self._tokenizer
 
-    def load_tokenizer(self, tokenizer):
-        self._tokenizer = HunyuanImage3TokenizerFast.from_pretrained(tokenizer, model_version=self.config.model_version)
-
-    @property
-    def pipeline(self):
-        if self._pipeline is None:
-            self.scheduler = FlowMatchDiscreteScheduler(
-                shift=self.generation_config.flow_shift, reverse=True, solver="euler",
-            )
-            self._pipeline = HunyuanImage3Text2ImagePipeline(
-                model=self, scheduler=self.scheduler, vae=self.vae,
-            )
-        return self._pipeline
 
     def instantiate_vae_image_tokens(
             self,
@@ -2094,13 +1629,12 @@ class HunyuanImage3ForCausalMM(HunyuanImage3PreTrainedModel, GenerationMixin):
             for name, item in check_list:
                 assert item is not None, f"`{name}` should be provided when `{target}`."
 
-    @add_start_docstrings_to_model_forward(Hunyuan_INPUTS_DOCSTRING)
+
     def forward(
             self,
             input_ids: Optional[torch.Tensor] = None,  # bsz x seqlen
             attention_mask: Optional[torch.Tensor] = None,  # bsz x 1 x seqlen x seqlen
             rope_image_info: Optional[list[list[tuple[slice, tuple[int, int]]]]] = None,
-            return_dict: bool = True,
             # for gen images
             images: Optional[BatchRaggedImages] = None,  # bsz x c x h x w, or bsz x (n_i x (c x h_ij x w_ij))
             image_mask: Optional[torch.Tensor] = None,  # bsz x seqlen
@@ -2123,15 +1657,9 @@ class HunyuanImage3ForCausalMM(HunyuanImage3PreTrainedModel, GenerationMixin):
             past_key_values: Optional[HunyuanStaticCache] = None,
             mode: Optional[str] = None,
             first_step: Optional[bool] = None,
-            use_cache: Optional[bool] = None,
-            output_attentions: Optional[bool] = None,
-            output_hidden_states: Optional[bool] = None,
-            cache_dic = None,
             gen_timestep_scatter_index: Optional[torch.Tensor] = None,
-    ) -> Union[Tuple, CausalMMOutputWithPast]:
-        
-
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+            **unused,
+    ) -> CausalMMOutputWithPast:
         # Sanity Check of Inputs
         self._check_inputs(mode == "gen_image", "in `gen_image` mode", [
             ("images", images), ("timesteps", timesteps),
@@ -2152,16 +1680,8 @@ class HunyuanImage3ForCausalMM(HunyuanImage3PreTrainedModel, GenerationMixin):
             device = input_ids.device
         else:
             device = get_device(images)
-        if self.training:
-            seqlen = input_ids.size(1)
-        else:
-            # For inference, we always set seqlen to maximum length to simplify the rope cache handling
-            seqlen = self.config.max_position_embeddings
-        assert self.config.max_position_embeddings >= seqlen, (
-            f"Cannot forward sequence of length {seqlen}, "
-            f"max position embeddings is only {self.config.max_position_embeddings}, "
-            f"try set --max-position-embeddings to a larger value."
-        )
+        # For inference, we always set seqlen to maximum length to simplify the rope cache handling
+        seqlen = self.config.max_position_embeddings
 
         # Calculate multimodal 2d rope
         cos, sin = self.cached_rope(
@@ -2172,7 +1692,7 @@ class HunyuanImage3ForCausalMM(HunyuanImage3PreTrainedModel, GenerationMixin):
             hidden_states = self.model.wte(input_ids)  # (bsz, seqlen, n_embd)
         else:
             hidden_states = None  # only for non-first step inference of the image generation
-         
+
         # === Input layers ===
         if images is not None:
             if self.config.cfg_distilled and input_ids is None:
@@ -2202,80 +1722,15 @@ class HunyuanImage3ForCausalMM(HunyuanImage3PreTrainedModel, GenerationMixin):
             hidden_states = self.instantiate_continuous_tokens(hidden_states, cond_timesteps, cond_timesteps_index)
         if mode == "gen_text":
             first_step = True
-        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        if not self.use_taylor_cache:
-            outputs = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                inputs_embeds=hidden_states,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                custom_pos_emb=(cos, sin),
-                mode=mode,
-                first_step=first_step,
-                post_token_len = self.post_token_len,
-                num_image_tokens = self.num_image_tokens,
-                gen_timestep_scatter_index = gen_timestep_scatter_index,
-                num_special_tokens = self.num_special_tokens,
-            )
-            hidden_states = outputs[0]
-        else:
-            if not hasattr(self.model, "taylor_cache"):
-                self.model.taylor_cache = CacheWithFreqsContainer(cache_dic['max_order'])
-            if not hasattr(self.model, "counter"):
-                self.model.counter = 0
-
-            full_computation = (cache_dic['current_step'] == 0) \
-                or (self.model.counter == cache_dic['cache_interval'] -1) \
-                or (cache_dic['enable_first_enhance'] and cache_dic['current_step'] < cache_dic['first_enhance_steps']) \
-                or (cache_dic['enable_tailing_enhance'] and cache_dic['current_step'] >= cache_dic['num_steps'] - cache_dic['tailing_enhance_steps'])
-            if not hasattr(self.model, "last_full_computation_step"):
-                self.model.last_full_computation_step = 0
-            if full_computation:
-                self.model.counter = 0
-                outputs = self.model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_values=past_key_values,
-                    inputs_embeds=hidden_states,
-                    use_cache=use_cache,
-                    output_attentions=output_attentions,
-                    output_hidden_states=output_hidden_states,
-                    return_dict=return_dict,
-                    custom_pos_emb=(cos, sin),
-                    mode=mode,
-                    first_step=first_step,
-                    post_token_len = self.post_token_len,
-                    num_image_tokens = self.num_image_tokens,
-                    gen_timestep_scatter_index = gen_timestep_scatter_index,
-                    num_special_tokens = self.num_special_tokens,
-                )
-                hidden_states = outputs[0]
-
-                if cache_dic['enable_first_enhance'] and (cache_dic['current_step'] < (cache_dic['first_enhance_steps']-1)):
-                    pass
-                else:
-                    self.model.taylor_cache.derivatives_computation(hidden_states, distance = cache_dic['current_step'] - self.model.last_full_computation_step, low_freqs_order=cache_dic['low_freqs_order'], high_freqs_order=cache_dic['high_freqs_order'])
-
-                self.model.last_full_computation_step = cache_dic['current_step']
-                self.model.taylor_cache.last_past_key_values = outputs.past_key_values  
-            else:
-                self.model.counter += 1
-                hidden_states = self.model.taylor_cache.taylor_formula(distance = self.model.counter)
-                outputs = BaseModelOutputWithPast(
-                    last_hidden_state=hidden_states,
-                    past_key_values=self.model.taylor_cache.last_past_key_values,
-                    hidden_states=None,
-                    attentions=None,
-                ) 
-            if cache_dic['current_step'] == cache_dic['num_steps'] - 1:
-                self.model.taylor_cache.clear_derivatives()
-
+        hidden_states = self.model(
+            inputs_embeds=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            custom_pos_emb=(cos, sin),
+            mode=mode,
+            first_step=first_step,
+        )
 
         # === Output layers ===
         # -- image tokens
@@ -2286,22 +1741,19 @@ class HunyuanImage3ForCausalMM(HunyuanImage3PreTrainedModel, GenerationMixin):
                 hidden_states, image_mask, timesteps, token_h, token_w, first_step)
         else:
             diff_pred = None
-        # -- text tokens
+        # -- text tokens: the next token's logits only (upstream projects every position and the
+        # sampler reads the last one).
         if input_ids is None or mode == "gen_image":
             logits = None
         else:
-            hidden_states = self.model.ln_f(hidden_states)
-            logits = self.lm_head(hidden_states)  # (bsz, seqlen, vocab_size)
-        # -- for inference
-        if not return_dict:
-            return (logits.float(),) + outputs[1:] + (diff_pred,)
+            hidden_states = self.model.ln_f(hidden_states[:, -1:])
+            logits = self.lm_head(hidden_states).float()  # (bsz, 1, vocab_size)
         return CausalMMOutputWithPast(
-            logits=logits.float() if logits is not None else None,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+            logits=logits,
+            past_key_values=past_key_values,
             diffusion_prediction=diff_pred,
         )
+
 
     @staticmethod
     def check_inputs(prompt=None, image=None, message_list=None):
@@ -2859,7 +2311,7 @@ class HunyuanImage3ForCausalMM(HunyuanImage3PreTrainedModel, GenerationMixin):
     def _prepare_attention_mask_for_generation(
             self,
             inputs_tensor: torch.Tensor,
-            generation_config: GenerationConfig,
+            generation_config: Any,
             model_kwargs: dict[str, Any],
     ) -> Optional[torch.Tensor]:
         # create `4d` bool attention mask (b, 1, seqlen, seqlen) using this implementation to bypass the 2d requirement
@@ -2930,7 +2382,7 @@ class HunyuanImage3ForCausalMM(HunyuanImage3PreTrainedModel, GenerationMixin):
 
     def _update_model_kwargs_for_generation(
             self,
-            outputs: ModelOutput,
+            outputs: CausalMMOutputWithPast,
             model_kwargs: dict[str, Any],
             is_encoder_decoder: bool = False,
             num_new_tokens: int = 1,
@@ -2944,16 +2396,7 @@ class HunyuanImage3ForCausalMM(HunyuanImage3PreTrainedModel, GenerationMixin):
             "rope_image_info": model_kwargs["rope_image_info"],
         }
 
-        # update past_key_values keeping its naming used in model code
-        for possible_cache_name in ALL_CACHE_NAMES:
-            if possible_cache_name in outputs:
-                # TODO (joao): remove output/input mismatch when these old models (xlnet, reformer) are deprecated
-                if possible_cache_name in ("past_buckets_states", "mems"):
-                    cache_name = "past_key_values"
-                else:
-                    cache_name = possible_cache_name
-                updated_model_kwargs[cache_name] = getattr(outputs, possible_cache_name)
-                break
+        updated_model_kwargs["past_key_values"] = outputs.past_key_values
 
         if "tokenizer_output" in model_kwargs:
             # After prefill step
@@ -3084,334 +2527,190 @@ class HunyuanImage3ForCausalMM(HunyuanImage3PreTrainedModel, GenerationMixin):
             raise ValueError(f"ratio_index {ratio_index} out of range for vae_reso_group")
         return ratio_index
 
-    @torch.no_grad()
-    def generate(
-            self,
-            inputs: Optional[torch.Tensor] = None,
-            generation_config: Optional[GenerationConfig] = None,
-            logits_processor: Optional[LogitsProcessorList] = None,
-            stopping_criteria: Optional[StoppingCriteriaList] = None,
-            prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor], list[int]]] = None,
-            synced_gpus: Optional[bool] = None,
-            assistant_model: Optional["PreTrainedModel"] = None,
-            streamer: Optional["BaseStreamer"] = None,
-            negative_prompt_ids: Optional[torch.Tensor] = None,
-            negative_prompt_attention_mask: Optional[torch.Tensor] = None,
-            use_model_defaults: Optional[bool] = None,
-            generator: Optional[list[torch.Generator]] = None,
-            decode_text: bool = False,
-            verbose: int = 0,
-            stage_transitions: Optional[list[tuple[int, list[int]]]] = None,
-            final_stop_tokens: Optional[list[int]] = None,
-            **kwargs,
-    ):
-        gen_config = default(generation_config, self.generation_config)
-        mode = kwargs.get("mode", "gen_text")
-        output = kwargs["tokenizer_output"]
-        indices = torch.where(output.tokens[0] == self._tokenizer.encode("<img>")[0])[0]
-        if indices.shape[0] > 0:
-            last_idx = indices[-1]
-            self.post_token_len = int(output.tokens[0].shape[0] - 1 - last_idx)
-        else:
-            self.post_token_len = None
-        # Log info
-        if verbose >= 1:
-            context = self._tokenizer.decode(output.tokens[0], skip_special_tokens=False)
-            # Replace <img><img>...<img> with [<img>]{number}
-            img_token = self._tokenizer.get_img_token()
-            context = re.sub(f"({img_token})+", lambda m: f"[{img_token}]{{{len(m.group(0)) // 5}}}", context)
-            info_list = [
-                ("token shape", output.tokens.shape),
-                ("context[0]", context),
-            ]
-            if mode == "gen_image":
-                if generator is not None:
-                    info_list.extend([
-                        ("seed", [g.initial_seed() for g in generator]),
-                    ])
-                info_list.extend([
-                    ("image_size",
-                     [f"{info.image_height}x{info.image_width}" for info in kwargs["batch_gen_image_info"]]),
-                    ("infer_steps", gen_config.diff_infer_steps),
-                    ("guidance_scale", gen_config.diff_guidance_scale),
-                    ("flow_shift", gen_config.flow_shift),
-                ])
-            else:
-                info_list.extend([
-                    ("do_sample", kwargs.get("do_sample", gen_config.do_sample)),
-                    ("max_new_tokens", kwargs.get("max_new_tokens", gen_config.max_new_tokens)),
-                    ("top_k", kwargs.get("top_k", gen_config.top_k)),
-                    ("top_p", kwargs.get("top_p", gen_config.top_p)),
-                    ("temperature", kwargs.get("temperature", gen_config.temperature)),
-                    ("repetition_penalty", kwargs.get("repetition_penalty", gen_config.repetition_penalty)),
-                ])
-            max_key_len = max(len(k) for k, _ in info_list)
-            info_str = "=" * 50 + \
-                       "\nModel input info:\n" + \
-                       "\n".join([f"    {k.rjust(max_key_len)}: {v}" for k, v in info_list]) + \
-                       "\n--------------------------------------------------"
-            print(info_str, flush=True)
-            start_time = time.time()
-
-        if mode == "gen_text":
-            if verbose >= 2 and streamer is None:
-                streamer = TextStreamer(self._tokenizer, skip_prompt=True, skip_special_tokens=False)   # noqa
-
-            with torch.autocast(device_type="cuda", dtype=self.dtype, enabled=self.dtype != torch.float32):
-                if stage_transitions is not None:
-                    if final_stop_tokens is None:
-                        raise ValueError("`final_stop_tokens` must be provided when `stage_transitions` is set.")
-                    if logits_processor is None:
-                        logits_processor = LogitsProcessorList()
-                    elif not isinstance(logits_processor, LogitsProcessorList):
-                        logits_processor = LogitsProcessorList(logits_processor)
-                    input_ids = kwargs.get("input_ids")
-                    if input_ids is None:
-                        raise ValueError("`input_ids` must be provided for multi-stage generation.")
-                    logits_processor.append(
-                        self._StageTransitionLogitsProcessor(stage_transitions, input_ids.shape[0])
-                    )
-                    kwargs["eos_token_id"] = final_stop_tokens
-
-                samples = super().generate(
-                    inputs=inputs,
-                    generation_config=gen_config,
-                    logits_processor=logits_processor,
-                    stopping_criteria=stopping_criteria,
-                    prefix_allowed_tokens_fn=prefix_allowed_tokens_fn,
-                    synced_gpus=synced_gpus,
-                    assistant_model=assistant_model,
-                    streamer=streamer,
-                    negative_prompt_ids=negative_prompt_ids,
-                    negative_prompt_attention_mask=negative_prompt_attention_mask,
-                    use_model_defaults=use_model_defaults,
-                    **kwargs,
-                )
-                if decode_text:
-                    samples = self.decode_text(samples, input_length=kwargs["input_ids"].shape[1])
-
-        elif mode == "gen_image":
-            batch_gen_image_info: list[ImageInfo] = kwargs.get("batch_gen_image_info")
-            if batch_gen_image_info is None:
-                raise ValueError("`batch_gen_image_info` should be provided when `mode` is `gen_image`.")
-            self.num_image_tokens = (batch_gen_image_info[0].image_token_length) 
-            #                       + (1 if batch_gen_image_info[0].add_timestep_token else 0)
-            #                       + (1 if batch_gen_image_info[0].add_guidance_token else 0) )
-            self.num_special_tokens = ((1 if batch_gen_image_info[0].add_timestep_token else 0) + 
-                                       (1 if batch_gen_image_info[0].add_guidance_token else 0) +
-                                       (1 if batch_gen_image_info[0].add_timestep_r_token else 0) )
-            results = self.pipeline(
-                batch_size=len(batch_gen_image_info),
-                image_size=[batch_gen_image_info[0].image_height, batch_gen_image_info[0].image_width],
-                num_inference_steps=gen_config.diff_infer_steps,
-                guidance_scale=gen_config.diff_guidance_scale,
-                generator=generator,
-                meanflow=self.config.use_meanflow,
-                model_kwargs=kwargs,
-                cfg_distilled = self.config.cfg_distilled,
-            )
-            samples = results[0]
-
-        else:
-            raise ValueError(f"Unknown mode {mode}, only `gen_text` and `gen_image` are supported.")
-
-        if verbose >= 1:
-            end_time = time.time()
-            print(f"Generation completed in {end_time - start_time:.2f} seconds.", flush=True)  # noqa
-
-        return samples
-
-    def decode_text(self, output: torch.Tensor, input_length: int = None):
-        if output.ndim == 2:
-            assert output.size(0) == 1, "Batch decoding is not supported yet."
-            return [self.decode_text(output_i, input_length) for output_i in output]
-        elif output.ndim == 1:
-            if input_length is not None:
-                output = output[input_length:]
-            text = self._tokenizer.decode(output)
-            return text
-        else:
-            raise ValueError(f"output should be 1D or 2D tensor, but got {output.ndim}D tensor.")
+    # =======================================================
+    #     Cozy: the token and denoising loops
+    # =======================================================
+    # Upstream drives the text stages through Transformers' `GenerationMixin.generate` and the image
+    # through `HunyuanImage3Text2ImagePipeline`. These are the same steps over the same inputs:
+    # `prepare_model_inputs`, the 4-D attention mask, `prepare_inputs_for_generation` and
+    # `_update_model_kwargs_for_generation`, the logits processors (stage transitions, then
+    # temperature, top-k, top-p as Transformers orders them), the Euler flow-match schedule and CFG.
+    # The differences: the sampler draws from `generator` (upstream: the global RNG, unseeded), and
+    # `on_token(n)` / `on_step(i)` (0-based) and `cancel()` are called once per token and per step.
 
     @torch.no_grad()
-    def generate_image(
+    def generate_cot(
             self,
-            prompt=None,
-            image=None,
-            message_list=None,
-            seed=None,
-            image_size="auto",
-            use_system_prompt=None,
-            system_prompt=None,
-            bot_task=None,
-            infer_align_image_size=False,
-            use_taylor_cache=False,
-            taylor_cache_interval=None,
-            taylor_cache_order=None,
-            taylor_cache_enable_first_enhance=None,
-            taylor_cache_first_enhance_steps=None,
-            taylor_cache_enable_tailing_enhance=None,
-            taylor_cache_tailing_enhance_steps=None,
-            taylor_cache_low_freqs_order=None,
-            taylor_cache_high_freqs_order=None,
-            **kwargs,
-    ):
-        max_new_tokens = kwargs.pop("max_new_tokens", 2048)
-        cot_text = kwargs.pop("cot_text", None)
-
-        use_system_prompt = default(use_system_prompt, self.generation_config.use_system_prompt)
-        bot_task = default(bot_task, self.generation_config.bot_task)
-        system_prompt = get_system_prompt(use_system_prompt, bot_task, system_prompt)
-        system_prompt = system_prompt.strip() if system_prompt is not None else ""
-
-        self.taylor_cache_interval = taylor_cache_interval
-        self.taylor_cache_order = taylor_cache_order
-        self.taylor_cache_enable_first_enhance = taylor_cache_enable_first_enhance
-        self.taylor_cache_first_enhance_steps = taylor_cache_first_enhance_steps
-        self.taylor_cache_enable_tailing_enhance = taylor_cache_enable_tailing_enhance
-        self.taylor_cache_tailing_enhance_steps = taylor_cache_tailing_enhance_steps
-        self.taylor_cache_low_freqs_order = taylor_cache_low_freqs_order 
-        self.taylor_cache_high_freqs_order = taylor_cache_high_freqs_order
-        self.use_taylor_cache = False
-
-        batch_cond_images_cache = None
+            prompt: str,
+            batch_cond_images,
+            system_prompt: str,
+            bot_task: str,
+            *,
+            seed: int,
+            generator: torch.Generator,
+            on_token: Callable[[int], None] = lambda n: None,
+            cancel: Callable[[], None] = lambda: None,
+    ) -> str:
+        """Upstream `generate_image`'s text stage for an explicit image size: think and/or recaption.
+        Returns the cot text upstream feeds the image stage (`<think>…` or `<recaption>…`)."""
         tkw = self._tokenizer
-        need_ratio = image_size == "auto" or bot_task == "img_ratio"
-        if bot_task in ["think", "recaption", "think_recaption"]:
-            first_bot_task = bot_task.split("_")[0]
-            stage_transitions = []
-
-            if first_bot_task == "think" and "recaption" in bot_task:
-                stage_transitions.append(
-                    (tkw.end_of_think_token_id, [tkw.convert_tokens_to_ids(tkw.recaption_token)])
-                )
-
-            if need_ratio:
-                answer_prefix_tokens = []
-                if getattr(self.generation_config, "sequence_template", "pretrain") == "instruct":
-                    answer_prefix_tokens = [tkw.convert_tokens_to_ids(tkw.answer_token)]
-                image_base_size = self.image_processor.vae_reso_group.base_size
-                if "recaption" in bot_task:
-                    transition_id = tkw.end_of_recaption_token_id
-                else:
-                    transition_id = tkw.end_of_think_token_id
-                stage_transitions.append(
-                    (transition_id, answer_prefix_tokens + [tkw.boi_token_id, tkw.size_token_id(image_base_size)])
-                )
-                final_stop_tokens = list(range(tkw.start_ratio_token_id, tkw.end_ratio_token_id + 1))
-                for start, end in getattr(tkw, "ratio_token_other_slices", []):
-                    final_stop_tokens.extend(range(start, end))
-            else:
-                if "recaption" in bot_task:
-                    final_stop_tokens = [tkw.end_of_recaption_token_id]
-                else:
-                    final_stop_tokens = [tkw.end_of_think_token_id, tkw.end_of_recaption_token_id]
-                    
-            model_inputs = self.prepare_model_inputs(
-                prompt=prompt, image=image, message_list=message_list, system_prompt=system_prompt,
-                max_new_tokens=max_new_tokens, mode="gen_text", bot_task=first_bot_task,
-                batch_cond_images=batch_cond_images_cache, infer_align_image_size=infer_align_image_size,
+        generation_config = self.generation_config
+        first_bot_task = bot_task.split("_")[0]
+        stage_transitions = []
+        if first_bot_task == "think" and "recaption" in bot_task:
+            stage_transitions.append(
+                (tkw.end_of_think_token_id, [tkw.convert_tokens_to_ids(tkw.recaption_token)])
             )
-            batch_cond_images_cache = model_inputs['batch_cond_images']
-            logits_processor = None
-            if need_ratio:
-                image_base_size = self.image_processor.vae_reso_group.base_size
-                logits_processor = LogitsProcessorList([
-                    self._ConditionalSliceVocabLogitsProcessor(
-                        trigger_token_ids=[tkw.size_token_id(image_base_size)],
-                        vocab_start=tkw.start_ratio_token_id,
-                        vocab_end=tkw.end_ratio_token_id + 1,
-                        other_slices=getattr(tkw, "ratio_token_other_slices", []),
-                        force_greedy=True,
-                    )
-                ])
+        if "recaption" in bot_task:
+            final_stop_tokens = [tkw.end_of_recaption_token_id]
+        else:
+            final_stop_tokens = [tkw.end_of_think_token_id, tkw.end_of_recaption_token_id]
 
-            input_length = model_inputs["input_ids"].shape[1]
-            if stage_transitions:
-                outputs = self.generate(
-                    **model_inputs,
-                    decode_text=False,
-                    stage_transitions=stage_transitions,
-                    final_stop_tokens=final_stop_tokens,
-                    logits_processor=logits_processor,
-                    **kwargs,
+        max_new_tokens = generation_config.max_new_tokens
+        model_kwargs = self.prepare_model_inputs(
+            prompt=prompt, system_prompt=system_prompt, max_new_tokens=max_new_tokens, mode="gen_text",
+            bot_task=first_bot_task, batch_cond_images=batch_cond_images, infer_align_image_size=True,
+            seed=seed,
+        )
+        input_ids = model_kwargs.pop("input_ids")
+        input_length = input_ids.shape[1]
+        model_kwargs["attention_mask"] = self._prepare_attention_mask_for_generation(
+            input_ids, None, model_kwargs=model_kwargs)
+        processors = LogitsProcessorList()
+        if stage_transitions:
+            processors.append(self._StageTransitionLogitsProcessor(stage_transitions, input_ids.shape[0]))
+        processors.append(TemperatureLogitsWarper(generation_config.temperature))
+        processors.append(TopKLogitsWarper(top_k=generation_config.top_k, min_tokens_to_keep=1))
+        processors.append(TopPLogitsWarper(top_p=generation_config.top_p, min_tokens_to_keep=1))
+        stops = torch.tensor(final_stop_tokens, device=input_ids.device)
+
+        for n in range(max_new_tokens):
+            cancel()
+            model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
+            with torch.autocast(device_type="cuda", dtype=self.dtype, enabled=input_ids.is_cuda):
+                outputs = self(**model_inputs)
+            model_kwargs = self._update_model_kwargs_for_generation(outputs, model_kwargs)
+            scores = processors(input_ids, outputs.logits[:, -1, :].to(copy=True, dtype=torch.float32))
+            probs = F.softmax(scores, dim=-1)
+            next_tokens = torch.multinomial(probs, num_samples=1, generator=generator)
+            input_ids = torch.cat([input_ids, next_tokens], dim=-1)
+            on_token(n)
+            if bool(torch.isin(next_tokens, stops).all()):
+                break
+
+        generated_tokens = input_ids[:, input_length:]
+        if "recaption" in bot_task:
+            end_token_id = tkw.end_of_recaption_token_id
+        else:
+            end_token_id = tkw.end_of_think_token_id
+        end_positions = (generated_tokens[0] == end_token_id).nonzero(as_tuple=False)
+        if end_positions.numel() > 0:
+            cot_tokens = generated_tokens[0, :end_positions[0].item() + 1]
+        else:
+            cot_tokens = generated_tokens[0]
+        cot_text_gen = tkw.decode(cot_tokens)
+        if first_bot_task == "think":
+            return tkw.think_token + cot_text_gen
+        return tkw.recaption_token + cot_text_gen
+
+    @torch.no_grad()
+    def denoise(
+            self,
+            prompt: str,
+            batch_cond_images,
+            system_prompt: str,
+            cot_text: Optional[str],
+            *,
+            image_size: str,
+            steps: int,
+            guidance_scale: float,
+            seed: int,
+            on_step: Callable[[int], None] = lambda n: None,
+            cancel: Callable[[], None] = lambda: None,
+    ) -> torch.Tensor:
+        """Upstream `generate_image`'s image stage and `HunyuanImage3Text2ImagePipeline.__call__`
+        (Euler, flow shift, CFG or the distilled guidance/meanflow tokens), returning the final latents."""
+        model_kwargs = self.prepare_model_inputs(
+            prompt=prompt, cot_text=[cot_text] if cot_text is not None else None,
+            system_prompt=system_prompt, seed=seed, image_size=image_size, mode="gen_image",
+            batch_cond_images=batch_cond_images, infer_align_image_size=True,
+        )
+        batch_gen_image_info: list[ImageInfo] = model_kwargs["batch_gen_image_info"]
+        info = batch_gen_image_info[0]
+        self.num_image_tokens = info.image_token_length
+        self.num_special_tokens = ((1 if info.add_timestep_token else 0)
+                                   + (1 if info.add_guidance_token else 0)
+                                   + (1 if info.add_timestep_r_token else 0))
+        generator = model_kwargs["generator"]
+        device = self.device
+        cfg_distilled = bool(self.config.cfg_distilled)
+        do_cfg = guidance_scale > 1.0
+        cfg_factor = 1 if cfg_distilled else 1 + do_cfg
+        scheduler = FlowMatchDiscreteScheduler(shift=self.generation_config.flow_shift, reverse=True, solver="euler")
+        scheduler.set_timesteps(steps, device=device)
+        timesteps = scheduler.timesteps
+
+        latents_shape = (len(batch_gen_image_info), self.config.vae["latent_channels"],
+                         info.image_height // self.config.vae_downsample_factor[0],
+                         info.image_width // self.config.vae_downsample_factor[1])
+        # diffusers' `randn_tensor` for a list of generators: one draw per sample, on the generators' device.
+        latents = torch.cat([
+            torch.randn((1, *latents_shape[1:]), generator=g, device=g.device, dtype=torch.bfloat16)
+            for g in generator
+        ]).to(device)
+
+        input_ids = model_kwargs.pop("input_ids")
+        model_kwargs["attention_mask"] = self._prepare_attention_mask_for_generation(
+            input_ids, None, model_kwargs=model_kwargs).to(latents.device)
+
+        for i, t in enumerate(timesteps):
+            cancel()
+            latent_model_input = torch.cat([latents] * cfg_factor)
+            if self.config.use_meanflow:
+                r = scheduler.get_timestep_r(t)
+                model_kwargs["timesteps_r"] = r.repeat(latent_model_input.shape[0])
+            else:
+                model_kwargs["timesteps_r"] = None
+            t_expand = t.repeat(latent_model_input.shape[0])
+            if cfg_distilled:
+                model_kwargs["guidance"] = torch.tensor(
+                    [1000.0 * guidance_scale], device=device, dtype=torch.bfloat16
                 )
-            else:
-                outputs = self.generate(**model_inputs, decode_text=False, logits_processor=logits_processor, **kwargs)
-             
-            generated_tokens = outputs[:, input_length:]
-            if "recaption" in bot_task:
-                end_token_id = tkw.end_of_recaption_token_id
-            else:
-                end_token_id = tkw.end_of_think_token_id
-            end_positions = (generated_tokens[0] == end_token_id).nonzero(as_tuple=False)
-            if end_positions.numel() > 0:
-                end_pos = end_positions[0].item()
-                cot_tokens = generated_tokens[0, :end_pos + 1]
-            else:
-                cot_tokens = generated_tokens[0]
-            cot_text_gen = self._tokenizer.decode(cot_tokens)
-
-            if first_bot_task == "think":
-                cot_text = [tkw.think_token + cot_text_gen]
-            else:
-                cot_text = [tkw.recaption_token + cot_text_gen]
-
-            if self.generation_config.drop_think and tkw.think_token in cot_text[0]:
-                if tkw.recaption_token in cot_text[0]:
-                    recaption_part = cot_text[0].split(tkw.recaption_token)[1]
-                    if tkw.end_of_recaption_token in recaption_part:
-                        recaption_part = recaption_part.split(tkw.end_of_recaption_token)[0]
-                    cot_text = [tkw.recaption_token + recaption_part + tkw.end_of_recaption_token]
-
-                    if system_prompt:
-                        system_prompt = get_system_prompt("en_recaption", bot_task)
-
-            if need_ratio:
-                ratio_token_id = outputs[0, -1].item()  # get the original ratio index from the generated tokens
-                ratio_index = self._get_ratio_index_from_token(ratio_token_id, tkw)
-                reso = self.image_processor.vae_reso_group[ratio_index]
-                image_size = reso.height, reso.width
-
-        elif need_ratio:
-            self.image_processor.build_img_ratio_slice_logits_proc(self.tokenizer)
-            model_inputs = self.prepare_model_inputs(
-                prompt=prompt, image=image, cot_text=cot_text, message_list=message_list, max_new_tokens=1,
-                system_prompt=system_prompt, seed=seed, mode="gen_text", bot_task="img_ratio",
-                batch_cond_images=batch_cond_images_cache, infer_align_image_size=infer_align_image_size,
+            model_inputs = self.prepare_inputs_for_generation(
+                input_ids, images=latent_model_input, timesteps=t_expand, **model_kwargs,
             )
-            batch_cond_images_cache = model_inputs['batch_cond_images']
-            outputs = self.generate(**model_inputs, do_sample=False, logits_processor=self.image_processor.img_ratio_slice_logits_processor, **kwargs)
-            ratio_index = outputs[0, -1].item()
-            reso = self.image_processor.vae_reso_group[ratio_index]
-            image_size = reso.height, reso.width
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=latents.is_cuda):
+                model_output = self(**model_inputs, first_step=(i == 0))
+                pred = model_output.diffusion_prediction
+            pred = pred.to(dtype=torch.float32)
+            if do_cfg and not cfg_distilled:
+                pred_cond, pred_uncond = pred.chunk(2)
+                pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
+            latents = scheduler.step(pred, t, latents, return_dict=False)[0]
+            if i != len(timesteps) - 1:
+                model_kwargs = self._update_model_kwargs_for_generation(model_output, model_kwargs)
+                input_ids = None
+            on_step(i)
+        return latents
 
-        # Generate image
-        self.use_taylor_cache = use_taylor_cache
-        model_inputs = self.prepare_model_inputs(
-            prompt=prompt, image=image, cot_text=cot_text, message_list=message_list, system_prompt=system_prompt,
-            seed=seed, image_size=image_size, mode="gen_image", batch_cond_images=batch_cond_images_cache,
-            infer_align_image_size=infer_align_image_size,
-        )
-        batch_cond_images_cache = model_inputs['batch_cond_images']
-        outputs = self.generate(**model_inputs, **kwargs)
-        self.image_processor.postprocess_outputs(
-            outputs,
-            batch_cond_images=batch_cond_images_cache,
-            infer_align_image_size=infer_align_image_size,
-        )
-        return cot_text, outputs
+    @torch.no_grad()
+    def decode_latents(self, latents: torch.Tensor, generator=None) -> Image.Image:
+        """The pipeline's VAE decode and PIL conversion."""
+        vae_config = self.vae.config
+        if getattr(vae_config, "scaling_factor", None):
+            latents = latents / vae_config.scaling_factor
+        if getattr(vae_config, "shift_factor", None):
+            latents = latents + vae_config.shift_factor
+        if hasattr(self.vae, "ffactor_temporal"):
+            latents = latents.unsqueeze(2)
+        with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=latents.is_cuda):
+            image = self.vae.decode(latents, return_dict=False, generator=generator)[0]
+        if hasattr(self.vae, "ffactor_temporal"):
+            assert image.shape[2] == 1, "image should have shape [B, C, T, H, W] and T should be 1"
+            image = image.squeeze(2)
+        image = (image / 2 + 0.5).clamp(0, 1)
+        array = image.cpu().permute(0, 2, 3, 1).float().numpy()[0]
+        return Image.fromarray((array * 255).round().astype("uint8"))
 
 
-__all__ = [
-    "HunyuanImage3ForCausalMM",
-    "HunyuanImage3Model",
-    "HunyuanImage3PreTrainedModel",
-    "TimestepEmbedder",
-    "UNetDown",
-    "UNetUp"
-    "CachedRoPE",
-    "apply_rotary_pos_emb",
-    "build_batch_2d_rope",
-]
-
+__all__ = ["HunyuanImage3ForCausalMM", "HunyuanImage3Model"]

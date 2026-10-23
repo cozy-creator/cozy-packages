@@ -10,6 +10,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# Modified for Cozy (packages se-079): diffusers' BaseOutput is replaced by an equivalent class.
 
 import random
 from collections import defaultdict
@@ -22,9 +23,43 @@ from typing import Optional, Union, Any
 import numpy as np
 import torch
 import torch.nn.functional as F
-from diffusers.utils import BaseOutput
 
 from transformers.tokenization_utils_fast import PreTrainedTokenizerFast
+
+from collections import OrderedDict
+from dataclasses import fields
+
+
+class BaseOutput(OrderedDict):
+    """diffusers' `BaseOutput` (0.35), the part this module uses: a dataclass that is also an ordered
+    dict of its non-None fields (or of the one dict it is built from), readable by key or attribute."""
+
+    def __post_init__(self) -> None:
+        class_fields = fields(self)
+        first_field = getattr(self, class_fields[0].name)
+        other_fields_are_none = all(getattr(self, field.name) is None for field in class_fields[1:])
+        if other_fields_are_none and isinstance(first_field, dict):
+            for key, value in first_field.items():
+                self[key] = value
+        else:
+            for field in class_fields:
+                v = getattr(self, field.name)
+                if v is not None:
+                    self[field.name] = v
+
+    def __getitem__(self, k: Any) -> Any:
+        if isinstance(k, str):
+            return dict(self.items())[k]
+        return tuple(self[key] for key in self.keys())[k]
+
+    def __setattr__(self, name: Any, value: Any) -> None:
+        if name in self.keys() and value is not None:
+            super().__setitem__(name, value)
+        super().__setattr__(name, value)
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        super().__setattr__(key, value)
 
 
 def default(value, default_value):
