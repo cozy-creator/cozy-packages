@@ -1676,14 +1676,15 @@ def _overlay_spec(
         raise ConformanceError("missing PDD metadata", code="artifact_config")
     extension = dict(extension)
     layout = TableLayout.parse(extension.pop("table_keys", None))
+    pdd_steps, pdd_block = 32, 4
     expected: dict[str, object] = {
         "task": trunk,
         "modulation": "adaln-pruned",
         "distillation": _DISTILLATION,
         "lora_rank": 64,
         "lora_alpha": 64.0,
-        "pdd_num_steps": 32,
-        "pdd_block_size": 4,
+        "pdd_num_steps": pdd_steps,
+        "pdd_block_size": pdd_block,
     }
     if not section or extension != expected:
         raise ConformanceError(
@@ -1692,7 +1693,7 @@ def _overlay_spec(
             fields=[component, "cozy_h3"],
         )
     _validate_plan(plan, trunk, layout)
-    if plan.steps != (int(expected["pdd_num_steps"]) // int(expected["pdd_block_size"]),):
+    if plan.steps != (pdd_steps // pdd_block,):
         raise ConformanceError(
             "the PDD overlay's timestep plan must hold its one distilled schedule",
             code="artifact_config",

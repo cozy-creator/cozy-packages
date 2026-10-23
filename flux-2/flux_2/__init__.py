@@ -126,7 +126,7 @@ def _generate(ctx: Context, payload: GenerateInput, model: Flux2, turbo: Flux2Tu
     guidance = None if model.distilled else payload.guidance if payload.guidance is not None else 2.5 if turbo else 4.0
     if payload.guidance is not None and model.distilled:
         adj.warn("guidance", "FLUX.2 [klein] distilled takes no guidance; ignored")
-    cfg = not model.dev and not model.distilled and guidance > 1
+    cfg = not model.dev and guidance is not None and guidance > 1  # distilled: no guidance
     if payload.negative_prompt and not cfg:
         adj.warn("negative_prompt", "only FLUX.2 [klein] Base runs CFG; ignored")
     prompt = payload.prompt

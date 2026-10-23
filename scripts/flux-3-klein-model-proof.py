@@ -217,7 +217,7 @@ def constants() -> None:
               if isinstance(cls, type) and issubclass(cls, msgspec.Struct) and "steps" in cls.__struct_fields__]
     assert inputs
     for cls in inputs:
-        defaults = dict(zip(cls.__struct_fields__[-len(cls.__struct_defaults__):], cls.__struct_defaults__))
+        defaults = dict(zip(cls.__struct_fields__[-len(cls.__struct_defaults__):], cls.__struct_defaults__, strict=True))
         expected = bfl_pipeline.MODELS["base" if "guidance" in defaults else "distilled"]
         assert defaults["steps"] == expected["steps"], (cls.__name__, defaults["steps"])
         assert defaults.get("guidance") == expected["guidance"], (cls.__name__, defaults.get("guidance"))
