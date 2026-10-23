@@ -327,7 +327,9 @@ def _layer(
     k = _rotate(attention.k_norm(attention.k_proj(x).view(shape)).transpose(1, 2), cos, sin)
     v = attention.v_proj(x).view(shape).transpose(1, 2)
     keys, values = (k, v) if past is None else (torch.cat([past[0], k], 2), torch.cat([past[1], v], 2))
-    out = F.scaled_dot_product_attention(q, keys, values, is_causal=past is None, enable_gqa=True)
+    groups = q.shape[1] // keys.shape[1]  # grouped-query heads, repeated so any SDPA backend serves them
+    keys, values = keys.repeat_interleave(groups, dim=1), values.repeat_interleave(groups, dim=1)
+    out = F.scaled_dot_product_attention(q, keys, values, is_causal=past is None)
     h = h + attention.o_proj(out.transpose(1, 2).reshape(*x.shape[:-1], -1))
     return h + layer.mlp(layer.post_attention_layernorm(h)), k, v
 

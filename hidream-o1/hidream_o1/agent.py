@@ -152,7 +152,7 @@ def caption(reply: str, request: str) -> str:
     return request + FALLBACK_SUFFIX
 
 
-class PromptAgent(Model[AgentGraph], encoded_leaves="accept", min_bits=4, phase="decode"):
+class PromptAgent(Model[AgentGraph], encoded_leaves="accept", phase="decode"):
     """Rewrites a request into the dense English prompt HiDream-O1 was trained on."""
 
     graph: AgentGraph
