@@ -48,6 +48,16 @@ NVFP4 = QuantizationPlan(
 )
 
 
+#: The 4-bit lane before Blackwell (xs-062): the int8 lane's weights with the DiT blocks in W4A8
+#: (`w4a8.convrot`: 4-bit codes in int8.convrot's basis, multiplied on the int8 tensor
+#: cores), everything else as the int8 lane has it.
+W4A8 = QuantizationPlan(
+    components=INT8.components,
+    include=INT8.include,
+    encodings=(EncodingRule("transformer.*blocks.*", "w4a8.convrot"),),
+    output_precision="preserve",
+)
+
 _LM = "model.model.language_model.layers.*"
 
 #: The upsampler's (Qwen3.5-9B) language linears and its LM head: the bytes each decoded token reads.
@@ -96,6 +106,15 @@ async def nvfp4(ctx: Context, *, source: Weights[Klein], tel: Telemetry) -> Mode
     the int8 lane has it."""
     return quantize_into(
         ctx, tel, source=source, plan=NVFP4, encoding="int8.convrot", output="nvfp4"
+    )
+
+
+@invocable(memo_version="flux-3-klein-w4a8/1")
+async def w4a8(ctx: Context, *, source: Weights[Klein], tel: Telemetry) -> ModelArtifact:
+    """The w4a8 lane: the DiT blocks as W4A8 on int8 tensor cores (Ampere, Ada, Hopper),
+    everything else as the int8 lane has it."""
+    return quantize_into(
+        ctx, tel, source=source, plan=W4A8, encoding="int8.convrot", output="w4a8"
     )
 
 

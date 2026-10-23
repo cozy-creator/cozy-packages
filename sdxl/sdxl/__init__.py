@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import cozy_runtime.derive as derive
-from cozy_runtime.derive.operations import QuantizationPlan, quantize_into
+from cozy_runtime.derive.operations import EncodingRule, QuantizationPlan, quantize_into
 import msgspec
 import torch
 from cozy_runtime.author import (
@@ -738,5 +738,22 @@ async def int8(ctx: Context, *, source: Weights[SdxlModel], tel: Telemetry) -> M
     return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8.convrot", output="int8")
 
 
+#: The 4-bit lane before Blackwell (xs-062): the int8 lane's UNet linears in W4A8
+#: (`w4a8.convrot`, multiplied on the int8 tensor cores); both CLIP encoders stay int8.
+W4A8 = QuantizationPlan(
+    components=INT8.components,
+    include=INT8.include,
+    encodings=(EncodingRule("unet.*", "w4a8.convrot"),),
+    output_precision="preserve",
+)
+
+
+@invocable(memo_version="sdxl-w4a8/1")
+async def w4a8(ctx: Context, *, source: Weights[SdxlModel], tel: Telemetry) -> ModelArtifact:
+    """The w4a8 lane: the UNet's int8 linears as W4A8 (Ampere, Ada, Hopper); see `W4A8`."""
+    return quantize_into(ctx, tel, source=source, plan=W4A8, encoding="int8.convrot", output="w4a8")
+
+
 app.entrypoint(int8, name="int8", weights=(WeightsOutput("int8", max_new_bytes=_LANE_BYTES),), accelerator=False)
+app.entrypoint(w4a8, name="w4a8", weights=(WeightsOutput("w4a8", max_new_bytes=_LANE_BYTES),), accelerator=False)
 app.entrypoint(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
