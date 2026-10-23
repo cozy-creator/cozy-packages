@@ -84,6 +84,10 @@ PortConfig: Any = importlib.import_module("hunyuan_port.configuration_hunyuan_im
 get_system_prompt: Any = importlib.import_module("hunyuan_port.system_prompt").get_system_prompt
 PortTokenizer: Any = importlib.import_module("hunyuan_port.tokenization_hunyuan_image_3").HunyuanImage3TokenizerFast
 GenerationConfig: Any = importlib.import_module("transformers").GenerationConfig
+_routing_spec = importlib.util.spec_from_file_location("hunyuan_routing", PORT.parent / "routing.py")
+assert _routing_spec is not None and _routing_spec.loader is not None
+routing_module = importlib.util.module_from_spec(_routing_spec)
+_routing_spec.loader.exec_module(routing_module)
 
 FULL = json.loads((FILES / "config.json").read_text())
 GENERATION = json.loads((FILES / "generation_config.json").read_text())
@@ -209,10 +213,83 @@ def case(name: str, reference: Any, port: Any, *, images: list[Image.Image], bot
           f"[{time.monotonic() - started:.0f}s]", flush=True)
 
 
+def brute_lru(sequence: list[int], size: int) -> int:
+    cache: list[int] = []
+    hits = 0
+    for key in sequence:
+        if key in cache:
+            hits += 1
+            cache.remove(key)
+        elif len(cache) == size:
+            cache.pop(0)
+        cache.append(key)
+    return hits
+
+
+def brute_min(sequence: list[int], size: int) -> int:
+    cache: set[int] = set()
+    hits = 0
+    for i, key in enumerate(sequence):
+        if key in cache:
+            hits += 1
+            continue
+        if len(cache) == size:
+            uses = {k: next((j for j in range(i + 1, len(sequence)) if sequence[j] == k), len(sequence)) for k in cache}
+            cache.remove(max(sorted(cache), key=uses.__getitem__))
+        cache.add(key)
+    return hits
+
+
+def routing_replay(port: Any) -> None:
+    """The routing record against the experts' own calls: forward hooks see every expert a forward runs and its
+    rows; the record must match them, and its LRU and MIN replays must match brute-force ones."""
+    experts = port.config.num_experts
+    calls: list[tuple[int, int, int]] = []
+    hooks = [expert.register_forward_hook(
+        lambda module, inputs, output, layer=layer, index=index: calls.append((layer, index, inputs[0].shape[0])))
+        for layer, decoder in enumerate(port.model.layers) for index, expert in enumerate(decoder.mlp.experts)]
+    forwards = [0]
+    hooks.append(port.register_forward_pre_hook(lambda module, args, kwargs: forwards.__setitem__(0, forwards[0] + 1),
+                                                with_kwargs=True))
+    caches = (2, 3, 5)
+    try:
+        for stage in ("denoise", "think"):
+            calls.clear()
+            forwards[0] = 0
+            record = routing_module.Routing(experts=experts, caches=caches)
+            for decoder in port.model.layers:
+                decoder.mlp.trace = record
+            prompt = f"A lantern festival on a river, routing replay {stage}"
+            if stage == "denoise":
+                port.denoise(prompt, None, get_system_prompt("en_unified", "image").strip(), None,
+                             image_size="256x256", steps=3, guidance_scale=2.5, seed=21)
+            else:
+                port.generation_config.max_new_tokens = 12
+                port.generate_cot(prompt, None, get_system_prompt("en_unified", "think_recaption").strip(),
+                                  "think_recaption", seed=22, generator=torch.Generator().manual_seed(23))
+            for decoder in port.model.layers:
+                decoder.mlp.trace = None
+            sequence = [layer * experts + index for layer, index, _ in calls]
+            assert list(record.sequence) == sequence, stage
+            assert list(record.tokens_per_hit) == [rows for _, _, rows in calls], stage
+            assert record.forwards == forwards[0], (record.forwards, forwards[0])
+            summary = record.summary()
+            for size in caches:
+                assert round(brute_lru(sequence, size) / len(sequence), 4) == summary[f"lru_{size}_hit_rate"], size
+                assert round(brute_min(sequence, size) / len(sequence), 4) == summary[f"min_{size}_hit_rate"], size
+            print(f"routing replay {stage}: {summary}", flush=True)
+    finally:
+        for hook in hooks:
+            hook.remove()
+
+
 def main() -> None:
     torch.set_num_threads(4)
     if (FILES / "model.safetensors.index.json").exists():
         full_tree_keys()
+    if "--routing" in sys.argv:
+        routing_replay(build(True)[1])
+        return
     for distilled in (False, True):
         reference, port = build(distilled)
         label = "distil" if distilled else "instruct"
