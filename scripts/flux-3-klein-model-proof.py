@@ -11,13 +11,16 @@ Run with the package's own interpreter.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import inspect
 import json
 import sys
 import tempfile
 import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import msgspec
@@ -25,12 +28,15 @@ import numpy as np
 import torch
 from cozy_runtime.author import Config, ModelAssets
 from cozy_runtime.author.fakes import granted_input, invoke_with_fakes
+from cozy_runtime.internal.derive import Observations, serving_substrate
 from diffusers.models.transformers.transformer_flux3 import (
     Flux3ModeTransformerBlock,
     Flux3SingleTransformerBlock,
 )
 from diffusers.modular_pipelines import Flux3AutoBlocks, Flux3DistilledAutoBlocks
 from PIL import Image
+from tensorfs.varena.torch import Placeholder
+from tensorfs.varena.torch import _bound as varena_bound
 from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
@@ -109,8 +115,8 @@ def assets() -> ModelAssets:
     return ModelAssets({f"text_encoder/{k}": v for k, v in files.items()}, lambda _operation: None)
 
 
-def graph(flow_map: bool, transformer: dict[str, object] | None = None) -> KleinGraph:
-    config = {
+def _config(flow_map: bool, transformer: dict[str, object] | None = None) -> dict[str, object]:
+    return {
         "transformer": transformer or dict(
             in_channels=8, cond_in_channels=8, num_layers=1, num_single_layers=1, attention_head_dim=16,
             num_attention_heads=2, joint_attention_dim=16 * len(TEXT_LAYERS), timestep_channels=16,
@@ -129,8 +135,11 @@ def graph(flow_map: bool, transformer: dict[str, object] | None = None) -> Klein
             tie_word_embeddings=True,
         ),
     }
+
+
+def graph(flow_map: bool, transformer: dict[str, object] | None = None) -> KleinGraph:
     torch.manual_seed(7)
-    built = KleinGraph(Config(config))
+    built = KleinGraph(Config(_config(flow_map, transformer)))
     for root in built.components.values():
         for p in root.parameters():
             with torch.no_grad():
@@ -200,6 +209,66 @@ def proof(function: str, references: list[Path], root: Path) -> None:
     print(f"{function} references={len(references)} {fit[0]}x{fit[1]}: mean |Δ| = {difference:.4f}")
     # Matching is 0.002 here; the same base model without CFG is 0.005 off, so this tells them apart.
     assert difference < 0.0035, difference
+
+
+class _Pager:
+    """varena's pager on the CPU: every weight of a component built through Runtime's serving
+    substrate is a `Placeholder`, and an op on one binds them all for that op (`Memory._reading`),
+    the stored bytes made into tensors by varena's own `_bound`, under the caller's inference mode."""
+
+    def __init__(self, module: torch.nn.Module, stored: dict[str, torch.Tensor]) -> None:
+        self.model = SimpleNamespace(memory=self, name="vae")  # what a placeholder's block reaches
+        self.sites: list[tuple[SimpleNamespace, torch.Tensor, torch.Tensor, torch.Tensor]] = []
+        for path, sub in module.named_modules():
+            for table, parameter in ((sub._parameters, True), (sub._buffers, False)):
+                for attr, value in list(table.items()):
+                    if value is None or not value.is_meta:
+                        continue
+                    key = f"{path}.{attr}" if path else attr
+                    site = SimpleNamespace(table=table, attr=attr, parameter=parameter)
+                    held = Placeholder(value.shape, value.dtype, torch.device("cpu"), self, site)
+                    table[attr] = torch.nn.Parameter(held, False) if parameter else held
+                    page = stored[key].contiguous().reshape(-1).view(torch.uint8)
+                    self.sites.append((site, table[attr], page, stored[key]))
+
+    def parts(self, region: int, base: torch.Tensor) -> dict[str, dict[str, torch.Tensor]]:
+        value = self.sites[region][3]
+        return {"value": {"value": base.view(value.dtype).view(value.shape)}}
+
+    @contextlib.contextmanager
+    def _reading(self, _blocks: object) -> Iterator[None]:
+        try:
+            for region, (site, _, page, _) in enumerate(self.sites):
+                view = varena_bound(self, region, page)[1]["value"]["value"]
+                site.table[site.attr] = torch.nn.Parameter(view, False) if site.parameter else view
+            yield
+        finally:
+            for site, held, _, _ in self.sites:
+                site.table[site.attr] = held
+
+
+def served_vae() -> None:
+    """Klein's reference encode and decode on a VAE served as Runtime serves it: built through the
+    serving substrate (its weights and persistent buffers, the batch norm's statistics, on meta)
+    and read through varena placeholders outside any forward, under `inference_mode`. The tokens
+    and the image are the ones the same VAE's plain tensors give (runs 14398-14403, 14701)."""
+    reference = graph(True)
+    vae = reference.components["vae"]
+    vae.bn.running_mean.normal_(0, 1)
+    vae.bn.running_var.uniform_(2, 6)
+    stored = {key: value.detach().clone() for key, value in vae.state_dict().items()}
+    with serving_substrate("cpu", Observations()):
+        served = KleinGraph(Config(_config(True)))
+    _Pager(served.components["vae"], stored)
+    processor = build_processor(assets())
+    plain, placed = (Klein.for_test(graph=g, processor=processor) for g in (reference, served))
+    picture = Image.fromarray(np.random.default_rng(9).integers(0, 255, (64, 96, 3), dtype=np.uint8))
+    expected, actual = plain.encode_references([picture]), placed.encode_references([picture])
+    assert torch.equal(expected[0], actual[0]), float((expected[0].float() - actual[0].float()).abs().max())
+    want = np.asarray(plain.decode(expected[0], width=96, height=64))
+    got = np.asarray(placed.decode(actual[0], width=96, height=64))
+    assert np.array_equal(want, got), int(np.abs(want.astype(int) - got.astype(int)).max())
+    print("served VAE through varena placeholders: reference tokens and decoded image exact")
 
 
 def constants() -> None:
@@ -348,6 +417,7 @@ def sizing(root: Path) -> None:
 if __name__ == "__main__":
     constants()
     bfl_parity()
+    served_vae()
     sizes()
     with tempfile.TemporaryDirectory() as scratch:
         root = Path(scratch)
