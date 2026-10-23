@@ -19,17 +19,14 @@ from cozy_runtime.author import (
     Outputs,
     Telemetry,
     UnsupportedInput,
-    WeightsOutput,
 )
 from PIL import Image
 
 from .model import Fibo2
-from .quantize import int8, nvfp4
+from . import quantize as quantize  # its recipes
 from .upsampler import Captioner
 
 app = App()
-app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=16 << 30),), accelerator=False)
-app.entrypoint(nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=16 << 30),), accelerator=False)
 
 #: The area Fibo 2.0 was trained at (model card: "multiples of 16 at about one megapixel").
 AREA = 1024 * 1024
