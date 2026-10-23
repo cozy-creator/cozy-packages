@@ -29,6 +29,7 @@ import torch
 from cozy_runtime.author import Config, ModelAssets
 from cozy_runtime.author.fakes import granted_input, invoke_with_fakes
 from cozy_runtime.internal.derive import Observations, serving_substrate
+from cozy_runtime.internal.weights import _weightless_buffers
 from diffusers.models.transformers.transformer_flux3 import (
     Flux3ModeTransformerBlock,
     Flux3SingleTransformerBlock,
@@ -249,7 +250,8 @@ class _Pager:
 
 def served_vae() -> None:
     """Klein's reference encode and decode on a VAE served as Runtime serves it: built through the
-    serving substrate (its weights and persistent buffers, the batch norm's statistics, on meta)
+    serving substrate and materialized (its weights and stored buffers, the batch norm's statistics,
+    on meta)
     and read through varena placeholders outside any forward, under `inference_mode`. The tokens
     and the image are the ones the same VAE's plain tensors give (runs 14398-14403, 14701)."""
     reference = graph(True)
@@ -259,6 +261,8 @@ def served_vae() -> None:
     stored = {key: value.detach().clone() for key, value in vae.state_dict().items()}
     with serving_substrate("cpu", Observations()):
         served = KleinGraph(Config(_config(True)))
+    # Runtime's materialize: the persistent buffers the checkpoint stores go to meta, as weights.
+    _weightless_buffers(served.components["vae"], "vae", {f"vae.{key}" for key in stored})
     _Pager(served.components["vae"], stored)
     processor = build_processor(assets())
     plain, placed = (Klein.for_test(graph=g, processor=processor) for g in (reference, served))
