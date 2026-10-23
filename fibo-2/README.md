@@ -54,7 +54,10 @@ from the seed on the CPU. Dev runs CFG 5 at 50 steps (the model card; Diffusers'
 the card's text-to-image negative prompt, or the empty caption the model was trained with for edits.
 Turbo runs 4 steps at guidance 1. The caption's text is also drawn and shown to Qwen3-VL, in the fonts
 training used (`fibo_2/fonts`). `scripts/fibo-2-model-proof.py` checks that the package makes
-Diffusers' image on tiny real modules.
+Diffusers' image on tiny real modules. On an L40S, its 16-bit images are 37–54 dB PSNR from Diffusers'
+own bf16 pipeline (same caption, seed and size, five cases: runs 14911–14923 against 14925/14926); the
+int8 lane's are 22.6–27.6 dB from them, the same pictures by eye (14929–14951). The VAE's BatchNorm
+statistics need Runtime ≥ 0.30.16 (cozy-runtime #1700).
 
 ## Prepare the models
 
@@ -62,8 +65,8 @@ Upload each repository as it is, and publish each as lane `bf16`. The Fibo repos
 accept Bria's licence on Hugging Face first.
 
 ```sh
-cozy model upload hf://briaai/Fibo-2.0-dev@<rev> <account>/fibo-2-dev --on <machine>
-cozy model upload hf://briaai/Fibo-2.0-edit-turbo@<rev> <account>/fibo-2-edit-turbo --on <machine>
+cozy model upload hf://briaai/Fibo-2.0-dev@fb2b781f9e9e5572a6c348a5af7a4d155a2b1ed0 <account>/fibo-2-dev --on <machine>
+cozy model upload hf://briaai/Fibo-2.0-edit-turbo@901c02672d969ed21e44ff58f1a0872c7581ddb0 <account>/fibo-2-edit-turbo --on <machine>
 cozy model upload hf://briaai/FIBO-vlm@bd13da5e0b73c808014d6260963e311c8cdf0d8b <account>/fibo-vlm --on <machine>
 cozy model upload hf://briaai/FIBO-edit-vlm@61d852ebd380ac79e04ec171552f5d7cca1a04cc <account>/fibo-edit-vlm --on <machine>
 ```
@@ -74,8 +77,10 @@ cozy model upload hf://briaai/FIBO-edit-vlm@61d852ebd380ac79e04ec171552f5d7cca1a
 projections (blocks, noise refiner, Perceiver) and Qwen3-VL's language linears as `int8.convrot`, W8A8
 on the int8 tensor cores. The FFN down projections (9,536 columns, not a multiple of ConvRot's 256),
 adaLN modulation, embedders, final layer, vision tower and VAE keep their bytes. For a VLM it takes the
-language linears. `nvfp4` puts the DiT's 44 blocks, down projections included, in NVFP4 (Blackwell),
-and a VLM's linears in NVFP4 (W4A16 decode).
+language linears, 0.86–1.04% each from bf16. Every linear both quantize has the error of Comfy-Org's
+`fibo2_dev_int8_convrot` and `qwen3vl_4b_int8_convrot` to 1e-8 (same encoding; se-075 run 14879). Comfy
+also pads the FFN to 9,728 to quantize its down projection (xs-070). `nvfp4` puts the DiT's 44 blocks, down projections
+included, in NVFP4 (Blackwell), and a VLM's linears in NVFP4 (W4A16 decode).
 
 ```sh
 cozy model quantize <account>/fibo-2-dev@0.1.0/bf16 --int8 --on <machine>
