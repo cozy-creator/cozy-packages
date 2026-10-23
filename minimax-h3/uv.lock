@@ -581,7 +581,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.45.4"
+version = "1.45.5"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },
@@ -618,7 +618,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pydantic-core", specifier = ">=2.46.4" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "qwen-image-2", specifier = ">=0.10.3", index = "https://tensorhub.com/v1/index/fidika/simple/" },
+    { name = "qwen-image-2", specifier = ">=0.11.0", index = "https://tensorhub.com/v1/index/fidika/simple/" },
     { name = "regex", specifier = ">=2026.7.19" },
     { name = "safetensors", specifier = ">=0.8.0" },
     { name = "seedvr2", specifier = ">=0.7.1", index = "https://tensorhub.com/v1/index/fidika/simple/" },
@@ -1043,7 +1043,7 @@ wheels = [
 
 [[package]]
 name = "qwen-image-2"
-version = "0.10.3"
+version = "0.11.0"
 source = { registry = "https://tensorhub.com/v1/index/fidika/simple/" }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -1057,7 +1057,7 @@ dependencies = [
     { name = "transformers" },
 ]
 wheels = [
-    { url = "https://tensorhub.com/v1/index/fidika/qwen-image-2/0.10.3/qwen_image_2-0.10.3-py3-none-any.whl", hash = "sha256:02d401767fa2990c8e067f107d8015b79f1d50cf272ba55a6bc94c62f135d604" },
+    { url = "https://tensorhub.com/v1/index/fidika/qwen-image-2/0.11.0/qwen_image_2-0.11.0-py3-none-any.whl", hash = "sha256:4fe1fef0d151bc51d5bf0757b864e8224a6104154e3cbc6c8afd987d5738c58b" },
 ]
 
 [[package]]

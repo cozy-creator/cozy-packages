@@ -96,7 +96,7 @@ from minimax_h3.official import (
 )
 from qwen_image_2 import ImageOutput as ReferenceImageOutput
 from qwen_image_2 import Megapixels as ReferenceMegapixels
-from qwen_image_2 import generate_image as generate_reference
+from qwen_image_2 import generate as generate_reference
 from birefnet import RemoveBackgroundOutput
 from birefnet import remove_background
 from character_describer import (
