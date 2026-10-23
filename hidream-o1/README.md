@@ -15,14 +15,15 @@ HiDream recommends the full model, `generate`, for editing. A pose is one more r
 try-on example passes a face, a background, an OpenPose skeleton and three garments, in that order.
 
 ```sh
-cozy run fidika/hidream-o1/generate_turbo prompt='A dog holds a sign that says "HiDream-O1-Image release."'
-cozy run fidika/hidream-o1/generate prompt='remove the earphones' --asset reference_images.0=photo.jpg
+cozy run hidream-o1/generate_turbo prompt='A dog holds a sign that says "HiDream-O1-Image release."'
+cozy run hidream-o1/generate prompt='remove the earphones' --asset reference_images.0=photo.jpg
 ```
 
-Fields: `prompt`, `reference_images` (up to 10), `aspect_ratio` (any `W:H`), `megapixels`, `steps`, and
-`seed` (random when omitted, returned). `generate` also takes `guidance`, `negative_prompt` (default:
-upstream's unconditional caption, a single space) and `guidance_interval` (below). Unknown fields are
-dropped with a warning.
+Inputs are the shared image request, the same in every image package: `prompt`, `reference_images`, `aspect_ratio` (any W:H), `megapixels` (any size, 1024² pixels each), `steps`, `guidance`, `negative_prompt`, `seed` and `prompt_upsampling`. `reference_images` are up to 10; HiDream-O1 adds `guidance_interval` (below). Left out, each
+is the model's default: 50 steps (1–200) at guidance 5.0 (1–20) for `generate`, upstream's unconditional
+caption (a single space) as the negative prompt, and a random seed. `generate_turbo` runs its 28 distilled
+steps and ignores `guidance`, `negative_prompt` and `guidance_interval` with a warning; neither has a prompt
+upsampler. Unknown fields are dropped with a warning.
 
 The result has the image, its `width` and `height`, the `seed`, and `prompt`: the caption used.
 

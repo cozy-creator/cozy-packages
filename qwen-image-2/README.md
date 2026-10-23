@@ -9,16 +9,14 @@ Runtime owns construction, memory residency and component execution.
 transparent, and is RGB otherwise; alpha within 4 levels of 0 or 255 (the decoder's noise) snaps
 to it. `seed` is optional and the chosen seed is
 returned. Seeds range from 0 through 9007199254740991 (the interoperable 53-bit
-integer range); omitting one chooses a random seed in that range. Steps default to 40; a checkpoint
-that names its own schedule (Turbo's `sample_sigmas`, 8 steps) runs it, and a different `steps` is
-reported as a `clamp` adjustment.
-Unknown fields, such as the removed width/height inputs, are ignored with a warning.
+integer range); omitting one chooses a random seed in that range. Inputs are the shared image request, the same in every image package: `prompt`, `reference_images`, `aspect_ratio` (any W:H), `megapixels` (any size, 1024² pixels each), `steps`, `guidance`, `negative_prompt`, `seed` and `prompt_upsampling`. Steps default to 40 (1–100); a checkpoint that names its own schedule (Turbo's
+`sample_sigmas`, 8 steps) runs it, and a different `steps` is reported as a `clamp` adjustment. Qwen
+runs no CFG and has no upsampler, so `guidance`, `negative_prompt` and `prompt_upsampling` are ignored
+with a warning, as are unknown fields. The result is `image`, `width`, `height`, `seed` and `prompt`.
 
-`aspect_ratio` is any `W:H` and `megapixels` is 1, 2 or 4 (1024² pixels each). The size is
-upstream's `calculate_dimensions` at that area, in multiples of 32 px; text-to-image defaults to
-`1:1` at 4 MP, the model's native 2048×2048. A ratio past the model's rotary range (a 32768 px
-side) or its tier's area is served at the nearest size it admits, reported as a `clamp`
-adjustment. Width and height are output fields only.
+The size is upstream's `calculate_dimensions` at `megapixels` (held to 1–4 MP), in multiples of 32 px;
+text-to-image defaults to `1:1` at 4 MP, the model's native 2048×2048. A ratio past the model's rotary
+range (a 32768 px side) is served at the nearest size it admits, reported as a `clamp` adjustment.
 
 ## Transparent images
 
@@ -51,7 +49,7 @@ cozy run qwen-image-2/generate \
 References are ordered. Each is any image Runtime decodes, up to 32 MiB encoded, read upright
 (EXIF orientation) with its alpha and scaled down to 4 MP when larger. As upstream, the VAE reads
 the alpha and the vision encoder a copy composited over white. Each reference is resized to the
-upstream 1 MP conditioning area independently of the output's `megapixels` tier.
+upstream 1 MP conditioning area independently of the output's `megapixels`.
 
 With references, what is not given is the FIRST reference's (the image being edited): an omitted
 `aspect_ratio` takes its exact ratio and an omitted `megapixels` its pixel count, held inside 1–4 MP
@@ -125,12 +123,12 @@ for the command's Hub and account, so lock with `cozy package lock`, not raw
 managed caller:
 
 ```python
-from qwen_image_2 import Megapixels, generate
+from qwen_image_2 import generate
 
 image = await generate(
     prompt="An explorer in a blue coat",
     aspect_ratio="3:4",
-    megapixels=Megapixels.MP1,
+    megapixels=1.0,
 )
 ```
 

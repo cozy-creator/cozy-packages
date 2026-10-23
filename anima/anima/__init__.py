@@ -2,29 +2,27 @@
 
 from __future__ import annotations
 
-import hashlib
 import math
-import secrets
-from enum import IntEnum
 from typing import Annotated
 
 import msgspec
 import torch
 from cozy_runtime.author import (
+    MEGAPIXEL,
     Adjustments,
     App,
-    AssetBound,
     Context,
-    ImageAsset,
     ImageFrame,
+    ImageRequest,
+    ImageResult,
     Memoize,
-    ModelDefault,
     Outputs,
     QuantizationPlan,
     Recipe,
-    Shape,
+    ReferenceImages,
     Telemetry,
     UnsupportedInput,
+    held,
 )
 
 from .model import _SAVE, AnimaModel, _Phases
@@ -32,42 +30,32 @@ from .model import _SAVE, AnimaModel, _Phases
 app = App()
 
 
-class Megapixels(IntEnum):
-    """Anima's native resolution classes (se-024): tier 1 is the ~1 MP training set (1024²),
-    tier 2 the 1536 class (~2.4 MP) the model is meant to run at and this package's default.
-    Denoise attention is full (no windowing), so time and VRAM scale roughly linearly with area."""
-
-    MP1 = 1
-    MP2 = 2
-
-
-#: Each tier's square side; tier 2 scales tier 1 by exactly 1.5.
-_SIDE = {Megapixels.MP1: 1024, Megapixels.MP2: 1536}
+#: Anima's native resolution classes (se-024): the ~1 MP training set (1024²) to the 1536 class
+#: (1536², 2.25 MiP) the model is meant to run at, this package's default. Denoise attention is full
+#: (no windowing), so time and VRAM scale roughly linearly with area.
+_MEGAPIXELS = (1.0, 2.25)
 #: The Cosmos rotary table holds 128 patches of 16 px on an axis.
 _MAX_SIDE = 128 * 16
-#: Admission's bound per tier: its area plus 1/16 for rounding to 32 px.
-_DEMAND = {tier: (side * 17 // 16, side) for tier, side in _SIDE.items()}
+#: Steps (default, range) and CFG scale (default, range): the model card's.
+_STEPS, _GUIDANCE = (30, 8, 50), (4.5, 1.0, 10.0)
 
 
-def _rounded(area: int, ratio: float) -> tuple[int, int]:
+def _rounded(area: float, ratio: float) -> tuple[int, int]:
     """Qwen-Image's `calculate_dimensions`: the area at that ratio, each side rounded to 32 px."""
     width = math.sqrt(area * ratio)
     return round(width / 32) * 32, round(width / ratio / 32) * 32
 
 
-def output_size(tier: Megapixels, ratio: str) -> tuple[int, int, bool]:
-    """The tier's area at `W:H`, held inside the rotary range, 32 px sides and the tier's
-    demand; True when that moved it off the rounded size."""
-    area, (w, h) = _SIDE[tier] ** 2, map(int, ratio.split(":"))
-    widest = min(_MAX_SIDE**2 / area, area / 32**2)
-    width, height = _rounded(area, min(max(w / h, 1 / widest), widest))
+def fitted_size(pixels: float, ratio: tuple[int, int]) -> tuple[int, int, bool]:
+    """`pixels` at `W:H`, held inside the rotary range, 32 px sides and 1/16 over `pixels`; True when
+    that moved it off the rounded size."""
+    w, h = ratio
+    widest = min(_MAX_SIDE**2 / pixels, pixels / 32**2)
+    width, height = _rounded(pixels, min(max(w / h, 1 / widest), widest))
     width, height = min(max(width, 32), _MAX_SIDE), min(max(height, 32), _MAX_SIDE)
-    while width * height > _DEMAND[tier][0] * _DEMAND[tier][1]:
+    while width * height > pixels * 17 / 16:
         width, height = (width - 32, height) if width >= height else (width, height - 32)
-    return width, height, (width, height) != _rounded(area, w / h)
-
-
-_WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
+    return width, height, (width, height) != _rounded(pixels, w / h)
 
 
 #: The official Anima model card's negative prompt, verbatim (se-026). Owner-labelled bank
@@ -85,13 +73,11 @@ CARD_NEGATIVE = (
 )
 
 
-class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: str
-    negative_prompt: str = CARD_NEGATIVE
-    aspect_ratio: Annotated[str, msgspec.Meta(pattern=r"^[1-9][0-9]*:[1-9][0-9]*$")] = "1:1"
-    megapixels: Annotated[Megapixels, Shape(pixels=_DEMAND)] = Megapixels.MP2
-    steps: Annotated[ModelDefault[int], msgspec.Meta(ge=8, le=50)] = 30
-    guidance: Annotated[ModelDefault[float], msgspec.Meta(ge=1.0, le=10.0)] = 4.5
+class GenerateInput(ImageRequest):
+    #: Anima makes images from text only.
+    reference_images: Annotated[ReferenceImages, msgspec.Meta(max_length=0)] = msgspec.field(
+        default_factory=list
+    )
     #: CFG interval (cr-086 arm 1, Kynkäänniemi et al., NeurIPS 2024): guidance helps only
     #: in a middle band of the noise schedule, so the uncond forward is skipped outside
     #: [start, stop) of the step fraction. (0, 1) is full-range CFG. The banked default is
@@ -114,19 +100,6 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     #: It survives only when `cfg_interval` happens to be narrowing the live cache states,
     #: and a default that works only because another default masks it is not a default.
     first_block_cache: Annotated[float, msgspec.Meta(ge=0.0, le=1.0)] = 0.0
-    #: Given, the request is memoized; omitted, the package draws one and reports it.
-    seed: int | None = None
-
-
-class ImageOutput(msgspec.Struct):
-    image: Annotated[ImageAsset, _WEBP_OUTPUT]
-    width: int
-    height: int
-    steps: int
-    guidance: float
-    digest: str
-    seed: int
-    """The request's seed, else the one drawn for it."""
 
 
 def warmup() -> None:
@@ -142,30 +115,37 @@ def generate(
     out: Outputs,
     tel: Telemetry,
     adj: Adjustments,
-) -> ImageOutput:
+) -> ImageResult:
     """Generate one native-resolution Anima image."""
-    width, height, held = output_size(payload.megapixels, payload.aspect_ratio)
-    if held:
-        size = f"{width}:{height}"
-        adj.clamp("aspect_ratio", payload.aspect_ratio, size, "nearest size the model admits")
-    steps = payload.steps
-    seed = payload.seed if payload.seed is not None else secrets.randbits(53)
+    payload.ignored(adj, "prompt_upsampling", reason="Anima has no prompt upsampler")
+    target = payload.target(None, megapixels=_MEGAPIXELS[1])
+    megapixels = held(adj, "megapixels", target.pixels / MEGAPIXEL, *_MEGAPIXELS,
+                      "Anima's 1 MP training size to its 1536 class")
+    width, height, moved = fitted_size(megapixels * MEGAPIXEL, target.ratio)
+    if moved:
+        ratio = f"{target.ratio[0]}:{target.ratio[1]}"
+        adj.clamp("aspect_ratio", ratio, f"{width}:{height}", "nearest size the model admits")
+    steps = held(adj, "steps", payload.steps or _STEPS[0], *_STEPS[1:])
+    guidance = held(adj, "guidance", _GUIDANCE[0] if payload.guidance is None else payload.guidance,
+                    *_GUIDANCE[1:])
+    negative = CARD_NEGATIVE if payload.negative_prompt is None else payload.negative_prompt
+    seed = payload.drawn_seed()
     if payload.cfg_interval_start > payload.cfg_interval_stop:
         raise UnsupportedInput(
             "cfg_interval_start must not exceed cfg_interval_stop", code="cfg_interval"
         )
     # Both CFG conditions in one forward: short of memory, the Runtime cuts its rows. FBCache
     # keeps a cache per condition, so it runs them apart.
-    guided = payload.guidance > 1.0 and payload.cfg_interval_start < payload.cfg_interval_stop
+    guided = guidance > 1.0 and payload.cfg_interval_start < payload.cfg_interval_stop
     batched = guided and payload.first_block_cache <= 0.0
     with _Phases(tel) as phases:
         images = model.render(
             payload.prompt,
-            payload.negative_prompt,
+            negative,
             width,
             height,
             steps,
-            payload.guidance,
+            guidance,
             (payload.cfg_interval_start, payload.cfg_interval_stop),
             payload.first_block_cache,
             seed,
@@ -182,9 +162,7 @@ def generate(
         rgb = bytes(pixels.numpy().tobytes())
         phases.enter(_SAVE)
         asset = out.save_image(ImageFrame(width, height, rgb), format="webp")
-    return ImageOutput(
-        asset, width, height, steps, payload.guidance, hashlib.sha256(rgb).hexdigest(), seed
-    )
+    return ImageResult(asset, width, height, seed, payload.prompt)
 
 
 # ------------------------------------------------------------------ quantized lanes
