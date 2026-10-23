@@ -43,8 +43,7 @@ It follows BFL's reference code (`black-forest-labs/flux2` 50fe516): the text en
 schedule (linear times shifted by the token count's empirical mu); [klein] Base's CFG against
 `negative_prompt` (BFL's is empty). Turbo runs fal's card as written: its sigmas
 `1, 0.6509, … 0.00031` through Diffusers' `Flux2Pipeline`, which shifts them by mu as well, at guidance
-2.5. The modules are Diffusers' (main 7ecb1e1b). `scripts/flux-2-model-proof.py` checks every checkpoint
-kind against Diffusers' pipelines on tiny real modules.
+2.5. The modules are Diffusers' (main 7ecb1e1b).
 
 `prompt_upsampling` is BFL's local upsampler: [dev]'s Mistral-Small-3.2 as the full vision-language model,
 with BFL's system prompts, used for [klein] too. It decodes greedily (BFL samples at temperature 0.15).

@@ -17,8 +17,7 @@ selects, so they are measured, never assumed. Measured 2026-09-07 at the release
 geometry: the batched decode differs from the sequential one by at most ONE ULP of the
 compute dtype at the output's peak magnitude — fp32 on CPU (1.5e-8, 157 dB) and fp16
 autocast on an RTX 4070 (1.2e-4, 85-91 dB at every batch from 2 to 28); the H100 verdict
-is banked on the tracker issue (h3a-017). `scripts/h3-conform.py` (`vae-tiles` arm) holds
-that bound on CPU with a red arm. Tile geometry, autocast and precision are untouched —
+is banked on the tracker issue (h3a-017). Tile geometry, autocast and precision are untouched —
 h3a-006 owns the lossy decode variants.
 """
 

@@ -44,9 +44,7 @@ prediction's norm. References are read upright, with any transparency composited
 `generate_turbo` binds lightx2v's Lightning 8-step LoRA (V1.0, fp32) in its own slot, `turbo_lora`, at
 the file's `alpha / rank` (8/64), and samples at
 lightx2v's constant shift of 3. Runtime bakes the LoRA into the weights of whichever lane serves the
-base model; the merged weights exist only on the GPU. `scripts/qwen-image-edit-model-proof.py` checks
-the package against Diffusers on tiny real modules: the same pixels for editing with and without
-CFG, and Diffusers' own reading of a Lightning-format LoRA.
+base model; the merged weights exist only on the GPU.
 
 ## Quality and speed (A40, warm)
 

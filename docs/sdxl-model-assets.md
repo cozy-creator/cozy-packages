@@ -29,7 +29,3 @@ Both sources feed the same in-memory tokenizer constructor. Loading reads files
 or verified model bytes without network access or filesystem writes, including
 inside Runtime's admission sandbox. The constructed tokenizers remain attached
 to the loaded model and are reused by warmup and every request.
-
-`scripts/tokenizer-assets-proof.py` exercises the real Runtime read-only sandbox,
-fallback and override behavior, partial and corrupt overrides, and Anima's
-bundled tokenizers. Pass built wheels with `--wheel` to verify their package data.

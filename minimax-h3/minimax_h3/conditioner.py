@@ -147,9 +147,7 @@ def _validate_census(model: Any, language: Any, torch: Any) -> None:
     Not a tensor census. Counting state_dict entries (902 total, 351 vision, 551
     language) and sweeping every dtype pinned a number that a transformers patch bump can
     change without changing behaviour — one rotary buffer becoming persistent would make
-    every H3 worker refuse to load. `scripts/h3-conform.py:arm_text_conditioner` already
-    checks the exact census against the exact locked wheel, in CI, where a count change is
-    a red build rather than an outage.
+    every H3 worker refuse to load.
     """
     bad = [
         name

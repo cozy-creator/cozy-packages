@@ -169,7 +169,7 @@ def _text2image_pipeline(device: Any, phases: _Phases, batched: bool, fused: boo
     `ModularPipeline.blocks` is a property returning a DEEPCOPY, so a hook installed through
     it is thrown away and the meter never moves — the whole of the frozen `conditioning 0%`
     defect (se-026). `blocks=` hands the pipeline the object it keeps, and the identity is
-    the fix: `scripts/anima-conform.py` executes Diffusers' own loop driver against it.
+    the fix.
     """
     class Announce(ModularPipelineBlocks):
         """A weightless block whose only effect is to advance the meter."""

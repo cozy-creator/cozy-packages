@@ -12,6 +12,4 @@ and restores the caller's `attention_kwargs` in `finally`. Separate requests the
 cannot retain one another's overlay selection, while repeated steps in one request reuse
 the same loaded adapter/tables/heads.
 
-`scripts/h3-conform.py`'s turbo arms cover prepared-variant reuse and request-state
-restoration on CPU. GPU quality and latency remain separate qualification work; this path
-intentionally keeps the specialized per-forward activation semantics.
+This path intentionally keeps the specialized per-forward activation semantics.
