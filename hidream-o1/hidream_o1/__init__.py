@@ -17,16 +17,13 @@ from cozy_runtime.author import (
     Memoize,
     Outputs,
     Telemetry,
-    WeightsOutput,
 )
 from PIL import Image
 
 from .model import HiDreamO1, Recipe, area_resize, grid_size, reference_size
-from .quantize import bf16, int8
+from . import quantize as quantize  # its recipes
 
 app = App()
-app.entrypoint(bf16, weights=(WeightsOutput("bf16", max_new_bytes=20 << 30),), accelerator=False)
-app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=16 << 30),), accelerator=False)
 
 #: 1 MP is 1024² pixels. The model was refined at 2048² (tech report §4.1) and upstream serves only
 #: about 4 MP: 2560x1440 (3.52 MP) to 2048² (4). At 1024² and below it falls apart (upstream #9).
