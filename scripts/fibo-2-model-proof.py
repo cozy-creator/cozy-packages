@@ -127,7 +127,7 @@ def proof(prompt: str, images: list[Image.Image], guidance: float, negative: str
 
 
 def functions(root: Path) -> None:
-    """Both functions through the real kernel on real PNGs: sizes, clamps and the upsampling skip."""
+    """Both functions through the real kernel on real PNGs: sizes, clamps, ignored knobs and the upsampling skip."""
     model = Fibo2.for_test(graph=graph(), processor=build_processor(assets(), {}))
     # `prompt_upsampling=False` never calls a VLM: unloaded stand-ins.
     vlms = {"upsampler": Captioner.for_test(), "edit_upsampler": Captioner.for_test()}
@@ -137,6 +137,7 @@ def functions(root: Path) -> None:
         path = root / f"reference-{index}.png"
         Image.fromarray(rng.integers(0, 255, (size[1], size[0], 3), dtype=np.uint8)).save(path)
         paths.append(path)
+    #: function, references, request, size, the fields a `clamp` or `warn` row names
     cases: list[tuple[str, list[Path], dict[str, object], tuple[int, int], set[str]]] = [
         ("generate", [], {}, (1024, 1024), set()),
         ("generate_turbo", [], {"megapixels": 0.25}, (512, 512), set()),
@@ -147,6 +148,10 @@ def functions(root: Path) -> None:
         ("generate_turbo", [paths[0]], {"aspect_ratio": "1:1"}, (512, 512), {"megapixels"}),
         ("generate_turbo", [paths[2]], {"megapixels": 0.3}, (800, 400), set()),
         ("generate_turbo", [paths[2]], {"megapixels": 2}, (1456, 720), {"megapixels"}),
+        ("generate", [], {"megapixels": 0.25, "guidance": 50.0}, (512, 512), {"guidance"}),
+        # Turbo samples without guidance: a guidance or negative prompt is a warning, never a refusal.
+        ("generate_turbo", [], {"megapixels": 0.25, "guidance": 3.0, "negative_prompt": "blur"}, (512, 512),
+         {"guidance", "negative_prompt"}),
     ]
     for index, (function, references, given, expected, clamped) in enumerate(cases):
         grants = {
@@ -160,7 +165,7 @@ def functions(root: Path) -> None:
                                    models={"model": model, **vlms}, assets=grants)
         assert (result.result.width, result.result.height) == expected, (function, given, result.result)
         assert result.result.prompt == "a red fox" and result.result.seed == 3
-        fields = {row.field for row in result.adjustments if row.kind == "clamp"}
+        fields = {row.field for row in result.adjustments if row.kind in ("clamp", "warn")}
         assert fields == clamped, (function, given, fields)
         with Image.open(spool / "image-0001") as png:
             assert png.size == expected, png.size
