@@ -109,7 +109,7 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     #: None: the first reference's pixel count (at most 4 MP), else 1 MP.
     megapixels: Annotated[Megapixels | None, Shape(pixels=_DEMAND)] = None
     steps: Annotated[int, msgspec.Meta(ge=1, le=200)] = 50
-    guidance: Annotated[float, msgspec.Meta(ge=1.0, le=20.0)] = 3.5
+    guidance: Annotated[float, msgspec.Meta(ge=1.0, le=20.0)] = 4.0
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
     #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
@@ -258,7 +258,7 @@ _ON_DEMAND = ("upsampler", "drafter")
                 memoize=Memoize(requires=["seed"]))
 def generate(ctx: Context, payload: GenerateInput, drafter: Drafter, model: Klein, upsampler: Upsampler,
              out: Outputs, tel: Telemetry, adj: Adjustments) -> ImageOutput:
-    """Klein Base, 50 steps with CFG 3.5: text to image, or an edit of up to ten ordered references."""
+    """Klein Base, 50 steps with CFG 4: text to image, or an edit of up to ten ordered references."""
     return _generate(ctx, payload, payload.guidance, drafter, model, upsampler, out, tel, adj)
 
 
