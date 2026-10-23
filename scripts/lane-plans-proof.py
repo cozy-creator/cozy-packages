@@ -24,7 +24,8 @@ from cozy_runtime.derive.quantization import column_block, prepare_source_quanti
 ROOT = Path(__file__).resolve().parent.parent
 
 #: package -> module, then (header, plan attribute, lane encoding, tensors per scheme). A tuple
-#: plan is a whole-component lane, a SelectionPlan keeps tensors, a set names components.
+#: plan is a whole-component lane, a SelectionPlan keeps tensors, a set names components. A
+#: lowercase name is a lane the module's `lane_plan` chooses by the header's components.
 LANES = {
     "sdxl": ("sdxl", [
         ("sdxl", "FP8", "fp8.rowwise", {"fp8.rowwise": 743}),
@@ -42,10 +43,10 @@ LANES = {
         ("qwen3.5-9b", "INT8", "int8.convrot", {"int8.convrot": 200}),
     ]),
     "flux-3-klein": ("flux_3_klein.quantize", [
-        ("flux-3-klein", "INT8", "int8.convrot", {"int8.convrot": 490}),
-        ("flux-3-klein", "NVFP4", "int8.convrot", {"int8.convrot": 232, "nvfp4": 258}),
-        ("flux-3-klein-upsampler", "UPSAMPLER_INT8", "int8.convrot", {"int8.convrot": 201}),
-        ("flux-3-klein-upsampler", "UPSAMPLER_NVFP4", "nvfp4", {"nvfp4": 284}),
+        ("flux-3-klein", "int8", "int8.convrot", {"int8.convrot": 490}),
+        ("flux-3-klein", "nvfp4", "int8.convrot", {"int8.convrot": 232, "nvfp4": 258}),
+        ("flux-3-klein-upsampler", "int8", "int8.convrot", {"int8.convrot": 201}),
+        ("flux-3-klein-upsampler", "nvfp4", "nvfp4", {"nvfp4": 284}),
         ("qwen3.5-9b", "DRAFTER_HEAD", "", {"": 15}),
     ]),
     "minimax-h3": ("minimax_h3.official", [
@@ -55,8 +56,13 @@ LANES = {
 }
 
 
-def resolve(header: str, plan: object, encoding: str) -> Counter[str]:
+def resolve(header: str, plans: object, name: str, encoding: str) -> Counter[str]:
     ck = tensorfs.open(ROOT / "scripts" / "lane-headers" / f"{header}.cozytensors", local_files_only=True)
+    if name.islower():
+        plan, chosen = plans.lane_plan(name, ck.components)  # type: ignore[attr-defined]
+        assert chosen == encoding, f"{name} on {header} encodes {chosen}, not {encoding}"
+    else:
+        plan = getattr(plans, name)
     if isinstance(plan, QuantizationPlan):
         return Counter(t.encoding or encoding for t in _selection(ck, plan, encoding).tensors)
     if isinstance(plan, tuple):
@@ -79,7 +85,7 @@ def main(package: str) -> None:
     module, lanes = LANES[package]
     plans = importlib.import_module(module)
     for header, name, encoding, want in lanes:
-        got = resolve(header, getattr(plans, name), encoding)
+        got = resolve(header, plans, name, encoding)
         assert got == Counter(want), f"{package} {name} on {header}: {dict(got)} != {want}"
         print(f"{package} {name} on {header}: {dict(got)}")
     print(f"{package} lane plans PASS")

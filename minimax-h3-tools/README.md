@@ -1,17 +1,18 @@
 # minimax-h3-tools
 
-The H3 producer package. Every conversion is an ordinary package function with one primary
-model input and a destination repository, run on the rental that holds the source:
+The H3 producer package. Its conversions are recipes, not functions: each takes one primary model
+input and a destination repository and runs through `cozy model quantize` on the rental that holds
+the source:
 
 ```sh
-cozy run <org>/minimax-h3-tools/<function> <input model ref> <org/model> --on NAME
+cozy model quantize <input model ref> <org/model> --recipe <recipe> --package <org>/minimax-h3-tools --on NAME
 ```
 
 Each declared output becomes a checkpoint named by its slot; publish lanes with
 `cozy model publish <org/model> --release R --lane <slot>=<checkpoint>`. On the rental that
 ingested or already fetched the input, its objects are in the pod Store and nothing moves.
 
-| Function | Input (first positional) | Output | Notes |
+| Recipe | Input (first positional) | Output | Notes |
 |---|---|---|---|
 | `bf16-full` | a full-precision H3 checkpoint: the converted `MiniMaxAI/MiniMax-H3` release or a `bf16-full` lane | `bf16-full` | source-only rows dropped, video VAE decode operands f16 |
 | `bf16-pruned` | same | `bf16` | AdaLN tables replace the 106 modulation rows per DiT; CUDA |
@@ -26,22 +27,22 @@ ingested or already fetched the input, its objects are in the pod Store and noth
 and one carrying the other encoding refuses, so `fp8 --fp8` encodes only the conditioner.
 
 Runtime requires a receipt for every declared weights output, so each lane is its own
-function, run on the ingest rental:
+recipe, run on the ingest rental:
 
 ```sh
-cozy run fidika/minimax-h3-tools/fp8-pruned fidika/minimax-h3@1.0.0/bf16-full fidika/minimax-h3 \
-  --on NAME
-cozy run fidika/minimax-h3-tools/turbo-lora fidika/minimax-h3-acc-loras@1.0.0/bf16 \
-  fidika/minimax-h3-turbo-lora model.base=fidika/minimax-h3@1.0.0/bf16-full --on NAME
+cozy model quantize fidika/minimax-h3@1.0.0/bf16-full fidika/minimax-h3 --recipe fp8-pruned \
+  --package fidika/minimax-h3-tools --on NAME
+cozy model quantize fidika/minimax-h3-acc-loras@1.0.0/bf16 fidika/minimax-h3-turbo-lora \
+  model.base=fidika/minimax-h3@1.0.0/bf16-full --recipe turbo-lora --package fidika/minimax-h3-tools --on NAME
 ```
 
-The lane functions, `turbo-lora` and `retable` write weights, so they are never memoized; a
+The lane recipes, `turbo-lora` and `retable` write weights, so they are never memoized; a
 committed derivation replays for the same code and inputs. Tables, heads and quantized
 tensors checkpoint as they complete; a request re-issued with the same inputs on the same
 machine adopts a canceled or failed run's completed work and computes only the remainder. Quantized tensors encode on every available CPU. The metrics
 `h3.reused_tensors`/`h3.computed_tensors` (`h3.turbo.*` for the LoRA) report the split.
 
-The lane functions read the granted checkpoint's structure once and drop only source-only
+The lane recipes read the granted checkpoint's structure once and drop only source-only
 rows still present (the native `rope.inv_freq` buffer and the text model's layers 50–63,
 final norm and head), so the converted upstream release and `bf16-full` produce the same
 lanes. It does not accept a pruned or quantized checkpoint as a substitute for the full source.

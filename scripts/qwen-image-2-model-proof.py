@@ -50,23 +50,26 @@ def photo(path: Path, size: tuple[int, int], orientation: int = 1) -> Path:
 
 
 def shapes(model: QwenImage21Model, tmp_path: Path) -> None:
-    """generate_image through the real kernel on real JPEGs: an omitted aspect ratio takes the
-    last reference's, an omitted tier the one nearest its pixels, and explicit values win."""
+    """generate through the real kernel on real JPEGs: what is not given is the FIRST reference's,
+    its ratio and its pixel count inside 1-4 MP (a clamp row when held), and explicit values win."""
     square = photo(tmp_path / "square.jpg", (512, 512))
-    cases: list[tuple[list[Path], dict[str, object], tuple[int, int]]] = [
-        ([square, photo(tmp_path / "3x2.jpg", (1200, 800))], {}, (1248, 832)),
+    landscape = photo(tmp_path / "3x2.jpg", (1200, 800))
+    cases: list[tuple[list[Path], dict[str, object], tuple[int, int], list[str]]] = [
+        ([square, landscape], {}, (1024, 1024), ["megapixels"]),
+        ([landscape, square], {}, (1248, 832), ["megapixels"]),
         # Stored landscape, EXIF-rotated upright: the output follows the displayed 9:16.
-        ([photo(tmp_path / "9x16.jpg", (1280, 720), orientation=6)], {}, (768, 1376)),
-        ([photo(tmp_path / "small.jpg", (640, 480))], {}, (1184, 896)),
-        ([photo(tmp_path / "12mp.jpg", (4000, 3000))], {}, (2368, 1760)),
-        ([tmp_path / "3x2.jpg"], {"megapixels": 2}, (1760, 1184)),
-        ([tmp_path / "3x2.jpg"], {"aspect_ratio": "1:1", "megapixels": 2}, (1440, 1440)),
-        ([], {"aspect_ratio": "7:3", "megapixels": 1}, (1568, 672)),
+        ([photo(tmp_path / "9x16.jpg", (1280, 720), orientation=6)], {}, (768, 1376), ["megapixels"]),
+        ([photo(tmp_path / "2mp.jpg", (1600, 1200))], {}, (1600, 1216), []),
+        ([tmp_path / "2mp.jpg"], {"aspect_ratio": "16:9"}, (1856, 1024), []),
+        ([photo(tmp_path / "12mp.jpg", (4000, 3000))], {}, (2368, 1760), []),
+        ([landscape], {"megapixels": 2}, (1760, 1184), []),
+        ([landscape], {"aspect_ratio": "1:1", "megapixels": 2}, (1440, 1440), []),
+        ([], {"aspect_ratio": "7:3", "megapixels": 1}, (1568, 672), []),
         # Past the rotary range: the nearest admitted size, reported as a clamp.
-        ([], {"aspect_ratio": "5000:1", "megapixels": 1}, (32768, 32)),
-        ([], {}, (2048, 2048)),
+        ([], {"aspect_ratio": "5000:1", "megapixels": 1}, (32768, 32), ["aspect_ratio"]),
+        ([], {}, (2048, 2048), []),
     ]
-    for index, (paths, given, expected) in enumerate(cases):
+    for index, (paths, given, expected, clamped) in enumerate(cases):
         grants = {
             f"reference_images.{n}": granted_input(path, input_id=f"reference_images.{n}", order=n)
             for n, path in enumerate(paths)
@@ -74,7 +77,7 @@ def shapes(model: QwenImage21Model, tmp_path: Path) -> None:
         wire = {"prompt": "a person", "steps": 1, "seed": 7, **given}
         wire["reference_images"] = [grant.digest for grant in grants.values()]
         result = invoke_with_fakes(
-            app.get("generate_image"),
+            app.get("generate"),
             wire,
             request_id=f"shape-{index}",
             spool=tmp_path / f"shape-{index}",
@@ -85,8 +88,8 @@ def shapes(model: QwenImage21Model, tmp_path: Path) -> None:
         assert (image.width, image.height) == expected, (paths, given, image)
         with Image.open(tmp_path / f"shape-{index}" / "image-0001") as png:
             assert (png.format, png.size) == ("PNG", expected), (png.format, png.size)
-        clamps = [(row.kind, row.field, row.requested) for row in result.adjustments]
-        assert clamps == ([("clamp", "aspect_ratio", "5000:1")] if expected == (32768, 32) else [])
+        assert [(row.kind, row.field) for row in result.adjustments] == [("clamp", f) for f in clamped], (
+            paths, given, result.adjustments)
 
 
 def staged(tmp_path: Path) -> None:
@@ -339,9 +342,9 @@ def staged(tmp_path: Path) -> None:
     assert {x.dtype for x in graph.components["vae"].parameters()} == {torch.float32}
     assert {x.dtype for x in graph.components["transformer"].parameters()} == {torch.bfloat16}
     shapes(model, tmp_path)
-    # `generate_image_turbo` through the real kernel: the checkpoint's schedule wins over `steps`.
+    # `generate_turbo` through the real kernel: the checkpoint's schedule wins over `steps`.
     turbo_run = invoke_with_fakes(
-        app.get("generate_image_turbo"),
+        app.get("generate_turbo"),
         {"prompt": "a person", "megapixels": 1, "steps": 5, "seed": 7},
         request_id="turbo",
         spool=tmp_path / "turbo",

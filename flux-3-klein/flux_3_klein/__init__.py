@@ -20,18 +20,24 @@ from cozy_runtime.author import (
     Telemetry,
     WeightsOutput,
 )
-from PIL import Image
+from PIL import Image, ImageOps
 
-from .klein import MAX_SIDE, MIN_SIDE, Klein, prepare_multi_reference, prepare_reference
-from .quantize import drafter_head, int8, nvfp4, upsampler_int8, upsampler_nvfp4, w4a8
+from .klein import (
+    MATCH_MAX_PIXELS,
+    MAX_SIDE,
+    MIN_SIDE,
+    Klein,
+    prepare_multi_reference,
+    prepare_reference,
+    reference_canvas,
+)
+from .quantize import drafter_head, int8, nvfp4, w4a8
 from .upsampler import Drafter, Upsampler
 
 app = App()
 app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
 app.entrypoint(nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=12 << 30),), accelerator=False)
 app.entrypoint(w4a8, weights=(WeightsOutput("w4a8", max_new_bytes=12 << 30),), accelerator=False)
-app.entrypoint(upsampler_int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
-app.entrypoint(upsampler_nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=8 << 30),), accelerator=False)
 app.entrypoint(drafter_head, weights=(WeightsOutput("bf16", max_new_bytes=1 << 30),), accelerator=False)
 
 
@@ -41,8 +47,8 @@ class Megapixels(IntEnum):
     MP4 = 4
 
 
-#: Admission's bound per tier: its area (1024² per megapixel) plus 1/16 for rounding to 32 px. An
-#: edit with no size takes its first reference's, at most 4 MiP, so it is bounded at the largest.
+#: Admission's bound per tier: its area (1024² per megapixel) plus 1/16 for rounding to 32 px. No
+#: tier is decided after admission (by the references, at most 4 MiP), so it is bounded at the largest.
 _DEMAND: dict[Megapixels | None, tuple[int, int]] = {
     tier: (1088 * (tier or Megapixels.MP4), 1024) for tier in (*Megapixels, None)
 }
@@ -55,84 +61,71 @@ def _rounded(area: int, ratio: float) -> tuple[int, int]:
     return round(width / 32) * 32, round(width / ratio / 32) * 32
 
 
-def output_size(megapixels: Megapixels, ratio: str) -> tuple[int, int, bool]:
-    """The tier's area at `W:H`, held inside BFL's 64-4096 px sides and the tier's demand; True
-    when that moved it off the rounded size."""
-    area, (w, h) = megapixels * 1024 * 1024, map(int, ratio.split(":"))
-    widest = min(MAX_SIDE**2 / area, area / MIN_SIDE**2)
-    width, height = _rounded(area, min(max(w / h, 1 / widest), widest))
+def _bound(tier: Megapixels | None) -> int:
+    return _DEMAND[tier][0] * _DEMAND[tier][1]
+
+
+def fitted_size(pixels: int, ratio: str, bound: int) -> tuple[int, int, bool]:
+    """`pixels` at `W:H`, held inside BFL's 64-4096 px sides and `bound` pixels; True when that moved
+    it off the rounded size."""
+    w, h = map(int, ratio.split(":"))
+    widest = min(MAX_SIDE**2 / pixels, pixels / MIN_SIDE**2)
+    width, height = _rounded(pixels, min(max(w / h, 1 / widest), widest))
     width, height = min(max(width, MIN_SIDE), MAX_SIDE), min(max(height, MIN_SIDE), MAX_SIDE)
-    while width * height > _DEMAND[megapixels][0] * _DEMAND[megapixels][1]:
+    while width * height > bound:
         width, height = (width - 32, height) if width >= height else (width, height - 32)
-    return width, height, (width, height) != _rounded(area, w / h)
+    return width, height, (width, height) != _rounded(pixels, w / h)
 
 
-def _nearest_tier(pixels: int) -> Megapixels:
-    return min(Megapixels, key=lambda tier: abs(tier * 1024 * 1024 - pixels))
+def output_size(megapixels: Megapixels, ratio: str) -> tuple[int, int, bool]:
+    """The tier's area at `W:H`, inside BFL's sides and the tier's demand."""
+    return fitted_size(megapixels << 20, ratio, _bound(megapixels))
 
 
-def _sized(adj: Adjustments, ratio: str, megapixels: Megapixels) -> tuple[int, int]:
-    width, height, held = output_size(megapixels, ratio)
+def _sized(adj: Adjustments, ratio: str, pixels: int, bound: int) -> tuple[int, int]:
+    width, height, held = fitted_size(pixels, ratio, bound)
     if held:
         adj.clamp("aspect_ratio", ratio, f"{width}:{height}", "nearest size the model admits")
     return width, height
 
 
+def _megapixels(pixels: int) -> str:
+    return f"{pixels / (1 << 20):.2f}"
+
+
+_REFERENCES = Annotated[
+    list[ImageAsset],
+    AssetBound(max_bytes=32 << 20, max_decoded_bytes=64 << 20, media_types=("image/png", "image/jpeg", "image/webp")),
+    msgspec.Meta(max_length=10),
+]
+
+
 class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Annotated[str, msgspec.Meta(min_length=1)]
-    aspect_ratio: _RATIO = "1:1"
-    megapixels: Annotated[Megapixels, Shape(pixels=_DEMAND)] = Megapixels.MP1
-    steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 16
-    seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
-    prompt_upsampling: bool = True
-    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
-    #: its first use downloads the 0.5 GB head.
-    prompt_drafting: bool = True
-
-
-class GenerateBaseInput(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: Annotated[str, msgspec.Meta(min_length=1)]
-    aspect_ratio: _RATIO = "1:1"
-    megapixels: Annotated[Megapixels, Shape(pixels=_DEMAND)] = Megapixels.MP1
-    steps: Annotated[int, msgspec.Meta(ge=1, le=200)] = 50
-    guidance: Annotated[float, msgspec.Meta(ge=1.0, le=20.0)] = 3.5
-    seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
-    prompt_upsampling: bool = True
-    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
-    #: its first use downloads the 0.5 GB head.
-    prompt_drafting: bool = True
-
-
-class EditInput(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: Annotated[str, msgspec.Meta(min_length=1)]
-    reference_images: Annotated[
-        list[ImageAsset],
-        AssetBound(max_bytes=32 << 20, max_decoded_bytes=64 << 20,
-                   media_types=("image/png", "image/jpeg", "image/webp")),
-        msgspec.Meta(min_length=1, max_length=10),
-    ]
+    #: Given, the image edits or composes them, in order.
+    reference_images: _REFERENCES = msgspec.field(default_factory=list)
+    #: Any W:H. None: the first reference's, else 1:1.
     aspect_ratio: _RATIO | None = None
-    megapixels: Annotated[Megapixels | None, Shape(pixels=_DEMAND)] = None
-    steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 16
-    seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
-    prompt_upsampling: bool = True
-    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
-    #: its first use downloads the 0.5 GB head.
-    prompt_drafting: bool = True
-
-
-class EditBaseInput(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: Annotated[str, msgspec.Meta(min_length=1)]
-    reference_images: Annotated[
-        list[ImageAsset],
-        AssetBound(max_bytes=32 << 20, max_decoded_bytes=64 << 20,
-                   media_types=("image/png", "image/jpeg", "image/webp")),
-        msgspec.Meta(min_length=1, max_length=10),
-    ]
-    aspect_ratio: _RATIO | None = None
+    #: None: the first reference's pixel count (at most 4 MP), else 1 MP.
     megapixels: Annotated[Megapixels | None, Shape(pixels=_DEMAND)] = None
     steps: Annotated[int, msgspec.Meta(ge=1, le=200)] = 50
     guidance: Annotated[float, msgspec.Meta(ge=1.0, le=20.0)] = 3.5
+    seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
+    prompt_upsampling: bool = True
+    #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
+    #: its first use downloads the 0.5 GB head.
+    prompt_drafting: bool = True
+
+
+class TurboInput(msgspec.Struct, forbid_unknown_fields=True):
+    prompt: Annotated[str, msgspec.Meta(min_length=1)]
+    #: Given, the image edits or composes them, in order.
+    reference_images: _REFERENCES = msgspec.field(default_factory=list)
+    #: Any W:H. None: the first reference's, else 1:1.
+    aspect_ratio: _RATIO | None = None
+    #: None: the first reference's pixel count (at most 4 MP), else 1 MP.
+    megapixels: Annotated[Megapixels | None, Shape(pixels=_DEMAND)] = None
+    steps: Annotated[int, msgspec.Meta(ge=1, le=100)] = 16
     seed: Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)] | None = None
     prompt_upsampling: bool = True
     #: Upsample with Qwen3.5-9B's MTP head drafting tokens (1.1-1.2× faster a caption on a 4090);
@@ -206,23 +199,45 @@ def _render(
     return ImageOutput(asset, image.width, image.height, seed, caption)
 
 
-def _references(
+def _layout(
     adj: Adjustments, ratio: str | None, megapixels: Megapixels | None, images: list[Image.Image]
-) -> tuple[list[Image.Image], tuple[int, int], tuple[int, int, int, int] | None]:
-    """The prepared references, the output size and the crop after decoding. Given neither size
-    input, BFL's default: the first prepared reference's own size, a lone one's padding cropped
-    off. Otherwise the ratio (else the first reference's) at the tier (else the one nearest it)."""
-    box = None
+) -> tuple[list[Image.Image], tuple[int, int], tuple[int, int, int, int] | None, str | None]:
+    """The prepared references, the output size, the crop after decoding and the upsampler's canvas.
+    No references: the ratio (1:1) at the tier (1 MP). With references, what is not given is the
+    first reference's: given neither, its own size, fitted to the 4 MiP Klein admits and generated
+    on the 16 px grid, then cropped back; given one, its ratio or its pixel count."""
+    if not images:
+        ratio, tier = ratio or "1:1", megapixels or Megapixels.MP1
+        return [], _sized(adj, ratio, tier << 20, _bound(tier)), None, ratio
     if len(images) == 1:
-        lone, box = prepare_reference(images[0])
-        prepared = [lone]
+        prepared = [prepare_reference(images[0])[0]]
     else:
         prepared = [prepare_multi_reference(image) for image in images]
+    first = ImageOps.exif_transpose(images[0]).size
     if ratio is None and megapixels is None:
-        return prepared, prepared[0].size, box
-    first = images[0]
-    tier = megapixels or _nearest_tier(first.width * first.height)
-    return prepared, _sized(adj, ratio or f"{first.width}:{first.height}", tier), None
+        fit, canvas = reference_canvas(*first)
+        if fit != first:
+            adj.clamp("megapixels", _megapixels(first[0] * first[1]), _megapixels(fit[0] * fit[1]),
+                      "the first reference's size, fitted to the 4 MiP and 4096 px sides Klein admits")
+        left, top = (canvas[0] - fit[0]) // 2, (canvas[1] - fit[1]) // 2
+        return prepared, canvas, None if fit == canvas else (left, top, left + fit[0], top + fit[1]), None
+    if megapixels is None:
+        pixels = min(max(first[0] * first[1], MIN_SIDE**2), MATCH_MAX_PIXELS)
+        if pixels != first[0] * first[1]:
+            adj.clamp("megapixels", _megapixels(first[0] * first[1]), _megapixels(pixels),
+                      "the first reference's pixel count, inside the sizes Klein admits")
+    else:
+        pixels = megapixels << 20
+    return prepared, _sized(adj, ratio or f"{first[0]}:{first[1]}", pixels, _bound(megapixels)), None, None
+
+
+def _generate(ctx: Context, payload: GenerateInput | TurboInput, guidance: float | None, drafter: Drafter,
+              model: Klein, upsampler: Upsampler, out: Outputs, tel: Telemetry, adj: Adjustments) -> ImageOutput:
+    images = [asset.read() for asset in payload.reference_images]
+    prepared, size, crop, canvas = _layout(adj, payload.aspect_ratio, payload.megapixels, images)
+    return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
+                   draft=payload.prompt_drafting, images=images, prepared=prepared, size=size, crop=crop,
+                   canvas=canvas, steps=payload.steps, guidance=guidance, seed=payload.seed)
 
 
 # Qwen3.5-9B's MTP head alone (`drafter_head` makes it): BFL's upsampler checkpoint has none.
@@ -239,50 +254,17 @@ _COMPONENTS = {
 _ON_DEMAND = ("upsampler", "drafter")
 
 
-@app.entrypoint(defaults=_DISTILLED, components=_COMPONENTS, on_demand=_ON_DEMAND,
+@app.entrypoint(defaults=_BASE, components=_COMPONENTS, on_demand=_ON_DEMAND,
                 memoize=Memoize(requires=["seed"]))
 def generate(ctx: Context, payload: GenerateInput, drafter: Drafter, model: Klein, upsampler: Upsampler,
              out: Outputs, tel: Telemetry, adj: Adjustments) -> ImageOutput:
-    """Text to image with the distilled Klein: 16 steps, no guidance."""
-    return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
-                   draft=payload.prompt_drafting,
-                   images=[], prepared=[], size=_sized(adj, payload.aspect_ratio, payload.megapixels), crop=None,
-                   canvas=payload.aspect_ratio, steps=payload.steps, guidance=None, seed=payload.seed)
-
-
-@app.entrypoint(defaults=_BASE, components=_COMPONENTS, on_demand=_ON_DEMAND,
-                memoize=Memoize(requires=["seed"]))
-def generate_base(ctx: Context, payload: GenerateBaseInput, drafter: Drafter, model: Klein, upsampler: Upsampler,
-                  out: Outputs, tel: Telemetry, adj: Adjustments) -> ImageOutput:
-    """Text to image with Klein Base: 50 steps, CFG 3.5."""
-    return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
-                   draft=payload.prompt_drafting,
-                   images=[], prepared=[], size=_sized(adj, payload.aspect_ratio, payload.megapixels), crop=None,
-                   canvas=payload.aspect_ratio, steps=payload.steps, guidance=payload.guidance,
-                   seed=payload.seed)
+    """Klein Base, 50 steps with CFG 3.5: text to image, or an edit of up to ten ordered references."""
+    return _generate(ctx, payload, payload.guidance, drafter, model, upsampler, out, tel, adj)
 
 
 @app.entrypoint(defaults=_DISTILLED, components=_COMPONENTS, on_demand=_ON_DEMAND,
                 memoize=Memoize(requires=["seed"]))
-def edit(ctx: Context, payload: EditInput, drafter: Drafter, model: Klein, upsampler: Upsampler, out: Outputs,
-         tel: Telemetry, adj: Adjustments) -> ImageOutput:
-    """Edit or compose one to ten ordered reference images with the distilled Klein."""
-    images = [asset.read() for asset in payload.reference_images]
-    prepared, size, crop = _references(adj, payload.aspect_ratio, payload.megapixels, images)
-    return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
-                   draft=payload.prompt_drafting,
-                   images=images, prepared=prepared, size=size, crop=crop,
-                   canvas=None, steps=payload.steps, guidance=None, seed=payload.seed)
-
-
-@app.entrypoint(defaults=_BASE, components=_COMPONENTS, on_demand=_ON_DEMAND,
-                memoize=Memoize(requires=["seed"]))
-def edit_base(ctx: Context, payload: EditBaseInput, drafter: Drafter, model: Klein, upsampler: Upsampler, out: Outputs,
-              tel: Telemetry, adj: Adjustments) -> ImageOutput:
-    """Edit or compose one to ten ordered reference images with Klein Base."""
-    images = [asset.read() for asset in payload.reference_images]
-    prepared, size, crop = _references(adj, payload.aspect_ratio, payload.megapixels, images)
-    return _render(ctx, model, upsampler, drafter, out, tel, prompt=payload.prompt, upsample=payload.prompt_upsampling,
-                   draft=payload.prompt_drafting,
-                   images=images, prepared=prepared, size=size, crop=crop,
-                   canvas=None, steps=payload.steps, guidance=payload.guidance, seed=payload.seed)
+def generate_turbo(ctx: Context, payload: TurboInput, drafter: Drafter, model: Klein, upsampler: Upsampler,
+                   out: Outputs, tel: Telemetry, adj: Adjustments) -> ImageOutput:
+    """The distilled Klein, 16 steps, no guidance: text to image, or an edit of up to ten ordered references."""
+    return _generate(ctx, payload, None, drafter, model, upsampler, out, tel, adj)

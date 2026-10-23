@@ -96,9 +96,10 @@ async def fp8(ctx: Context, *, source: Weights[SdxlModel], max_relative_frobeniu
 app.entrypoint(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=16 << 30),), accelerator=False)
 ```
 
-`cozy model quantize <model> --int8` (or `--fp8`) finds that function by its output name and runs
-it on the machine holding the checkpoint; `cozy run <package>/fp8 <model> <org/model>` is the
-same run. SDXL encodes the UNet's block-aligned rank-2 weights, Anima its transformer's; every
+`cozy model quantize <model> --int8` (or `--fp8`) finds that recipe by its output name and runs
+it on the machine holding the checkpoint; `--recipe <name>` runs one by name. A recipe is not a
+function: one per lane, applied to whichever of the package's models it is given, and `cozy run`
+refuses it. SDXL encodes the UNet's block-aligned rank-2 weights, Anima its transformer's; every
 other component inherits unchanged. H3 uses `h3_tables.operations.quantize`, which binds its
 reviewed geometry and canonical order and preserves source precision. Native checkpoints let
 an interrupted run resume from its completed tensor groups.

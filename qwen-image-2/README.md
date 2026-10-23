@@ -1,6 +1,6 @@
 # Qwen Image 2
 
-`generate_image` creates or edits one PNG using Qwen-Image-2.1, and `generate_image_turbo` does
+`generate` creates or edits one PNG using Qwen-Image-2.1, and `generate_turbo` does
 the same with Qwen-Image-2.1-Turbo. Both take the same inputs. The model checkpoint is selected
 independently from the package. TensorFS owns model downloads and bytes;
 Runtime owns construction, memory residency and component execution.
@@ -26,7 +26,7 @@ Qwen-Image-2.1 generates RGBA natively when the prompt asks for it in the wordin
 recommends; "on a transparent background" alone draws a white one:
 
 ```sh
-cozy run fidika/qwen-image-2/generate_image seed=42 \
+cozy run fidika/qwen-image-2/generate seed=42 \
   prompt='This is an RGBA image with transparency. A cute cartoon dragon sticker. The image has alpha channel and the background is transparent.'
 ```
 
@@ -38,11 +38,11 @@ Qwen-Image-2.1 checkpoint handles both modes; editing runs its complete instruct
 sampling schedule, with no image-to-image strength parameter.
 
 ```sh
-cozy run fidika/qwen-image-2/generate_image \
+cozy run fidika/qwen-image-2/generate \
   prompt='Change the background to a sunset beach; preserve the person and clothing.' \
   --asset reference_images.0=portrait.png seed=42
 
-cozy run fidika/qwen-image-2/generate_image \
+cozy run fidika/qwen-image-2/generate \
   prompt='Place the person from image 1 in the room from image 2.' \
   --asset reference_images.0=person.png --asset reference_images.1=room.png \
   seed=42
@@ -53,7 +53,10 @@ References are ordered. Each is any image Runtime decodes, up to 32 MiB encoded,
 the alpha and the vision encoder a copy composited over white. Each reference is resized to the
 upstream 1 MP conditioning area independently of the output's `megapixels` tier.
 
-With references, an omitted `aspect_ratio` takes the last reference's exact ratio (as upstream) and an omitted `megapixels` the tier nearest its pixel count.
+With references, what is not given is the FIRST reference's (the image being edited): an omitted
+`aspect_ratio` takes its exact ratio and an omitted `megapixels` its pixel count, held inside 1–4 MP
+(reported as a `clamp` adjustment when held). Upstream takes the LAST reference's; every Cozy image
+package takes the first.
 
 Reference VAE encoding and multimodal prompt encoding each run once before
 denoising, in separate component residency leases. Denoising reuses their tensors
@@ -122,9 +125,9 @@ for the command's Hub and account, so lock with `cozy package lock`, not raw
 managed caller:
 
 ```python
-from qwen_image_2 import Megapixels, generate_image
+from qwen_image_2 import Megapixels, generate
 
-image = await generate_image(
+image = await generate(
     prompt="An explorer in a blue coat",
     aspect_ratio="3:4",
     megapixels=Megapixels.MP1,
@@ -132,8 +135,8 @@ image = await generate_image(
 ```
 
 The Hub package is `<account>/qwen-image-2`, e.g. `paul/qwen-image-2` on the local
-Hub and `fidika/qwen-image-2` on tensorhub.com; its callables are `generate_image` and
-`generate_image_turbo`. Their default models are the org-relative `qwen-image-2.1@0.1.0` and
+Hub and `fidika/qwen-image-2` on tensorhub.com; its callables are `generate` and
+`generate_turbo`. Their default models are the org-relative `qwen-image-2.1@0.1.0` and
 `qwen-image-2.1-turbo@0.1.0`: the publishing account's models.
 Installing the wheel alone does not turn GPU execution into an in-process call;
 Cozy supplies the managed caller when composing package functions.
