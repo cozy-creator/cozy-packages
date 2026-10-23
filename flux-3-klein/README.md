@@ -5,7 +5,7 @@ to ten reference images. Its text encoder is Qwen3-VL-4B.
 
 | function | checkpoint | default steps | guidance |
 | --- | --- | --- | --- |
-| `generate` | Klein Base | 50 | `guidance` 3.5 (CFG) |
+| `generate` | Klein Base | 50 | `guidance` 4 (CFG) |
 | `generate_turbo` | Klein (distilled flow map) | 16 | none |
 
 Each makes an image from the prompt, or edits and composes up to ten ordered `reference_images`.
@@ -37,13 +37,16 @@ the prompt as typed, which then should be a full scene caption. Its token loop d
 
 ## Sampling
 
-The sampling follows BFL's reference code (`black-forest-labs/flux-3-image-klein` at `45e57c9`): Euler
-steps with a constant shift of 6.93, and noise from the seed in bf16 with an fp32 state across steps.
+The sampling follows BFL's reference code (`black-forest-labs/flux-3-image-klein` at `bfc8889`): Euler
+steps with a constant shift (alpha) of 16, CFG 4 for the base model, and noise from the seed in bf16
+with an fp32 state across steps. BFL raised alpha from the release's 6.93 and CFG from 3.5 on
+2026-10-17; Diffusers and ComfyUI still default to 6.93.
 The distilled model also embeds the timestep each step jumps to. The base model runs CFG with an empty
 negative prompt. A lone reference is padded to the 16-pixel grid at up to 4 MP, with no upscaling.
 With several references, each is cropped to the grid at up to 1 MP. The modules are Diffusers'
 (main `7ecb1e1b`; Flux3 is in no release yet). `scripts/flux-3-klein-model-proof.py` checks the
-package against Diffusers' Flux3 modular pipelines on tiny real modules.
+package's constants and denoised tokens against BFL's code, and its images against Diffusers' Flux3
+modular pipelines, on tiny real modules.
 
 ## Prepare the models
 

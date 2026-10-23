@@ -46,11 +46,11 @@ from transformers import (
 from transformers import initialization as transformer_init
 
 #: BFL's constant timestep shift, the image RoPE scale and Qwen3-VL's conditioning layers.
-ALPHA = 6.93
+ALPHA = 16.0
 IMAGE_ROPE_SCALE = 0.5
 TEXT_LAYERS = (4, 8, 12, 16, 20, 24, 28, 32)
 PAD_MULTIPLE = 80
-MAX_TOKENS = 8192
+MAX_TOKENS = 4096
 #: Pixels per latent token: the VAE's 8x, then 2x2 packing.
 PATCH = 16
 MATCH_MAX_PIXELS = 4 * 1024 * 1024

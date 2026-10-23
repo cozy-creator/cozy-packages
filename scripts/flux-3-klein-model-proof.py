@@ -1,7 +1,10 @@
 #!/usr/bin/env python
 """Real tiny Klein modules on CPU: each function makes the image Diffusers' Flux3 modular pipeline
 for its checkpoint makes, `generate` Klein Base's with CFG and `generate_turbo` the distilled flow
-map's, text to image and with one or two references, through the Runtime test harness.
+map's, text to image and with one or two references, through the Runtime test harness. BFL's
+`flux3` package is read at `BFL_COMMIT`: its sampling constants are the package's, and its DiT and
+samplers, on the weights Diffusers' converter maps into the package's modules, denoise to the
+package's tokens.
 
 Run with the package's own interpreter.
 """
@@ -9,12 +12,15 @@ Run with the package's own interpreter.
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import sys
 import tempfile
+import urllib.request
 from pathlib import Path
 from typing import Any
 
+import msgspec
 import numpy as np
 import torch
 from cozy_runtime.author import Config, ModelAssets
@@ -31,17 +37,46 @@ from transformers import PreTrainedTokenizerFast
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "flux-3-klein"))
 
+#: BFL's reference code (black-forest-labs/flux-3-image-klein), its current inference parameters.
+BFL_COMMIT = "bfc8889a4497f846416f253a3972a1941ac698b9"
+BFL_FILES = ("__init__", "autoencoder", "checkpoint", "dit", "fp8", "nvfp4", "pipeline", "sampling", "text_encoder")
+
+
+def _fetch_bfl() -> Path:
+    root = Path(tempfile.mkdtemp(prefix="bfl-flux3-"))
+    (root / "flux3").mkdir()
+    for name in BFL_FILES:
+        url = f"https://raw.githubusercontent.com/black-forest-labs/flux-3-image-klein/{BFL_COMMIT}/src/flux3/{name}.py"
+        with urllib.request.urlopen(url, timeout=60) as response:
+            (root / "flux3" / f"{name}.py").write_bytes(response.read())
+    return root
+
+
+sys.path.insert(0, str(_fetch_bfl()))
+
+import flux_3_klein  # noqa: E402
+from diffusers import ClassifierFreeGuidance, FlowMatchEulerDiscreteScheduler  # noqa: E402
+from diffusers.loaders.single_file_utils import convert_flux3_transformer_checkpoint_to_diffusers  # noqa: E402
+from flux3 import autoencoder as bfl_autoencoder  # noqa: E402
+from flux3 import dit as bfl_dit  # noqa: E402
+from flux3 import pipeline as bfl_pipeline  # noqa: E402
+from flux3 import sampling as bfl_sampling  # noqa: E402
+from flux3 import text_encoder as bfl_text  # noqa: E402
 from flux_3_klein import _BASE, _DEMAND, _DISTILLED, Megapixels, app, output_size  # noqa: E402
+from flux_3_klein import klein  # noqa: E402
 from flux_3_klein.upsampler import Drafter, Upsampler  # noqa: E402
 from flux_3_klein.klein import (  # noqa: E402
+    ALPHA,
     PATCH,
     TEXT_LAYERS,
     Klein,
     KleinGraph,
     build_processor,
+    image_ids,
     prepare_multi_reference,
     prepare_reference,
     reference_canvas,
+    text_ids,
 )
 
 #: Each function's checkpoint: Klein Base (CFG) or the distilled flow map.
@@ -74,11 +109,12 @@ def assets() -> ModelAssets:
     return ModelAssets({f"text_encoder/{k}": v for k, v in files.items()}, lambda _operation: None)
 
 
-def graph(flow_map: bool) -> KleinGraph:
+def graph(flow_map: bool, transformer: dict[str, object] | None = None) -> KleinGraph:
     config = {
-        "transformer": dict(in_channels=8, cond_in_channels=8, num_layers=1, num_single_layers=1,
-                            attention_head_dim=16, num_attention_heads=2, joint_attention_dim=16 * len(TEXT_LAYERS),
-                            timestep_channels=16, axes_dims_rope=[4, 4, 4, 4], flow_map=flow_map),
+        "transformer": transformer or dict(
+            in_channels=8, cond_in_channels=8, num_layers=1, num_single_layers=1, attention_head_dim=16,
+            num_attention_heads=2, joint_attention_dim=16 * len(TEXT_LAYERS), timestep_channels=16,
+            axes_dims_rope=[4, 4, 4, 4], flow_map=flow_map),
         "vae": dict(block_out_channels=[8, 8, 8, 8], down_block_types=["DownEncoderBlock2D"] * 4,
                     up_block_types=["UpDecoderBlock2D"] * 4, latent_channels=2, layers_per_block=1,
                     norm_num_groups=4, patch_size=[2, 2]),
@@ -145,7 +181,10 @@ def proof(function: str, references: list[Path], root: Path) -> None:
         block.__class__ = Flux3SingleTransformerBlock
     for block in (*reference.txt_mode_blocks, *(b for m in reference.mode_blocks.values() for b in m)):
         block.__class__ = Flux3ModeTransformerBlock
-    pipe.update_components(**{**built.components, "transformer": reference}, tokenizer=model.processor)
+    # Diffusers' blocks at BFL's current alpha and CFG (they default to the release's 6.93 and 3.5).
+    guidance = {} if flow_map else {"guider": ClassifierFreeGuidance(guidance_scale=bfl_pipeline.MODELS["base"]["guidance"])}
+    pipe.update_components(**{**built.components, "transformer": reference}, tokenizer=model.processor,
+                           scheduler=FlowMatchEulerDiscreteScheduler(shift=ALPHA), **guidance)
     # An edit generates on the first reference's 16 px canvas (64 px sides at least) and crops back.
     fit, (width, height) = reference_canvas(*pictures[0].size) if pictures else ((width, height),) * 2
     left, top = (width - fit[0]) // 2, (height - fit[1]) // 2
@@ -161,6 +200,98 @@ def proof(function: str, references: list[Path], root: Path) -> None:
     print(f"{function} references={len(references)} {fit[0]}x{fit[1]}: mean |Δ| = {difference:.4f}")
     # Matching is 0.002 here; the same base model without CFG is 0.005 off, so this tells them apart.
     assert difference < 0.0035, difference
+
+
+def constants() -> None:
+    """BFL's sampling, text and reference parameters are the package's, and each function's defaults
+    are its checkpoint's (`MODELS`: steps, and CFG for the base model)."""
+    assert ALPHA == inspect.signature(bfl_pipeline.Pipeline.generate).parameters["alpha"].default, ALPHA
+    assert klein.IMAGE_ROPE_SCALE == bfl_pipeline.IMAGE_ROPE_SCALE
+    assert klein.MATCH_MAX_PIXELS == bfl_pipeline.MATCH_MAX_PIXELS
+    assert klein.MULTI_REFERENCE_MAX_PIXELS == bfl_pipeline.MULTI_REFERENCE_MAX_PIXELS
+    assert (klein.MIN_SIDE, klein.MAX_SIDE) == (bfl_pipeline.MIN_SIDE, bfl_pipeline.MAX_SIDE)
+    assert PATCH == bfl_autoencoder.DOWNSAMPLING_RATIO
+    assert TEXT_LAYERS == bfl_text.OUTPUT_LAYERS
+    assert (klein.PAD_MULTIPLE, klein.MAX_TOKENS) == (bfl_text.PAD_MULTIPLE, bfl_text.MAX_LENGTH)
+    inputs = [cls for cls in vars(flux_3_klein).values()
+              if isinstance(cls, type) and issubclass(cls, msgspec.Struct) and "steps" in cls.__struct_fields__]
+    assert inputs
+    for cls in inputs:
+        defaults = dict(zip(cls.__struct_fields__[-len(cls.__struct_defaults__):], cls.__struct_defaults__))
+        expected = bfl_pipeline.MODELS["base" if "guidance" in defaults else "distilled"]
+        assert defaults["steps"] == expected["steps"], (cls.__name__, defaults["steps"])
+        assert defaults.get("guidance") == expected["guidance"], (cls.__name__, defaults.get("guidance"))
+
+
+def _bfl_dit(flow_map: bool) -> bfl_dit.DiT:
+    """BFL's DiT at a tiny size (its module constants are its architecture)."""
+    bfl_dit.HIDDEN, bfl_dit.HEADS, bfl_dit.DEPTH, bfl_dit.DEPTH_SINGLE = 32, 2, 1, 2
+    bfl_dit.AXES_DIM = (4, 4, 4, 4)
+    bfl_dit.IN_CHANNELS.update(image=8, image_cond=8, text=16)
+    torch.manual_seed(13)
+    dit = bfl_dit.DiT(flow_map)
+    for parameter in dit.parameters():
+        with torch.no_grad():
+            parameter.normal_(0, 0.3)
+    return dit.to(torch.bfloat16).eval()
+
+
+def bfl(flow_map: bool, refs: int, guidance: float | None = None) -> float:
+    """The package's denoise against BFL's sampler and DiT on the same converted weights: the mean
+    relative difference of the denoised tokens."""
+    reference_dit = _bfl_dit(flow_map)
+    built = graph(flow_map, dict(in_channels=8, cond_in_channels=8, num_layers=1, num_single_layers=2,
+                                 attention_head_dim=16, num_attention_heads=2, joint_attention_dim=16,
+                                 timestep_channels=256, axes_dims_rope=[4, 4, 4, 4], mlp_ratio=3.0,
+                                 flow_map=flow_map))
+    state = convert_flux3_transformer_checkpoint_to_diffusers(dict(reference_dit.state_dict()))
+    built.components["transformer"].load_state_dict(state, strict=True)
+    model = Klein.for_test(graph=built, processor=build_processor(assets()))
+
+    rows, columns, steps, seed = 3, 4, 4, 11
+    generator = torch.Generator().manual_seed(5)
+    texts = [torch.randn((8, 16), generator=generator).to(torch.bfloat16) for _ in range(2)]
+    ids = bfl_pipeline.scaled_ids(bfl_autoencoder.latent_ids(rows, columns))
+    assert torch.equal(ids, image_ids(rows, columns))
+    cond, ref_ids = None, None
+    if refs:
+        ref_ids = torch.cat([image_ids(2, 3, -(1 + n)) for n in range(refs)])
+        cond = (torch.randn((len(ref_ids), 8), generator=generator).to(torch.bfloat16), ref_ids)
+    noise = torch.randn((rows * columns, 8), generator=torch.Generator().manual_seed(seed))
+    image = (noise.to(torch.bfloat16).float(), ids)
+    text = [(t, text_ids(len(t))) for t in texts]
+    schedule = bfl_sampling.timesteps(steps, inspect.signature(bfl_pipeline.Pipeline.generate).parameters["alpha"].default)
+    with torch.autocast("cpu", dtype=torch.bfloat16):  # BFL samples under bf16 autocast (on CUDA)
+        if flow_map:
+            expected = bfl_sampling.denoise_flow_map(reference_dit, bfl_pipeline.pack([[text[1], cond, image]]), schedule)
+        else:
+            packed = bfl_pipeline.pack([[text[0], cond, image], [text[1], cond, image]])
+            expected = bfl_sampling.denoise(reference_dit, packed, schedule, guidance)
+    references = None if cond is None else (cond[0][None], ref_ids)
+    actual = model.denoise(texts[1][None], None if flow_map else texts[0][None], references,
+                           width=columns * PATCH, height=rows * PATCH, steps=steps, guidance=guidance, seed=seed,
+                           on_step=lambda _: None, cancel=lambda: None)[0]
+    return float((actual - expected.float()).abs().mean() / expected.float().abs().mean())
+
+
+def bfl_parity() -> None:
+    """Each pass agrees to bf16's rounding; CFG scales that by its guidance (|Δ| grows with it)."""
+    cases = [(True, None, 0.02), (False, 0.0, 0.02), (False, 1.0, 0.02),
+             (False, bfl_pipeline.MODELS["base"]["guidance"], 0.05)]
+    for flow_map, guidance, bound in cases:
+        for refs in (0, 2):
+            difference = bfl(flow_map, refs, guidance)
+            print(f"BFL flow_map={flow_map} guidance={guidance} references={refs}: mean relative |Δ| = "
+                  f"{difference:.4f}")
+            assert difference < bound, difference
+    # A schedule off BFL's alpha is caught.
+    klein.ALPHA = 6.93 if ALPHA != 6.93 else 16.0
+    try:
+        off = bfl(True, 0)
+    finally:
+        klein.ALPHA = ALPHA
+    print(f"BFL flow_map=True at alpha {6.93 if ALPHA != 6.93 else 16.0}: mean relative |Δ| = {off:.4f}")
+    assert off > 0.1, off
 
 
 def sizes() -> None:
@@ -215,6 +346,8 @@ def sizing(root: Path) -> None:
 
 
 if __name__ == "__main__":
+    constants()
+    bfl_parity()
     sizes()
     with tempfile.TemporaryDirectory() as scratch:
         root = Path(scratch)
