@@ -1,11 +1,12 @@
-"""A Transformers image-text model served from its as-is upload: the construction config is the
-repository's `config.json`, and the tokenizer, processor and chat template are the checkpoint's assets."""
+"""Qwen3.5 served from its as-is upload: the construction config is the repository's `config.json`,
+and the tokenizer, processor and chat template are the checkpoint's assets."""
 
 from __future__ import annotations
 
 import json
 import sys
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 import torch
@@ -84,8 +85,26 @@ class Pipeline:
         self.components: dict[str, torch.nn.Module] = {COMPONENT: model}
 
 
-class Describer(Model[Pipeline], encoded_leaves="accept", min_bits=4, phase="decode"):
-    """One greedy reply about one image. Runtime may serve encoded lanes' linears natively."""
+@dataclass(frozen=True)
+class Watched:
+    """A video as the model watches it: its frames and the second each shows."""
+
+    frames: list[Image]
+    seconds: list[float]
+
+
+@dataclass(frozen=True)
+class Question:
+    """One single-turn question: its text after its images and videos."""
+
+    text: str
+    images: list[Image] = field(default_factory=list)
+    videos: list[Watched] = field(default_factory=list)
+
+
+class Qwen35(Model[Pipeline], encoded_leaves="accept", min_bits=4, phase="decode"):
+    """Qwen3.5 answering questions about text, images and videos, greedily. Runtime may serve
+    encoded lanes' linears natively."""
 
     pipe: Pipeline
     processor: Any
@@ -104,38 +123,42 @@ class Describer(Model[Pipeline], encoded_leaves="accept", min_bits=4, phase="dec
         del self.pipe
 
     @uses_components(COMPONENT)
-    def describe(self, images: list[Image], prompts: list[str], *, max_new_tokens: int) -> list[str]:
-        """One greedy reply per image and its prompt, all at once: one prefill over the rows,
-        left-padded, and one decode of them together."""
-        texts = [self._chat(_messages(self.processor, prompt)) for prompt in prompts]
-        replies = self._generate(self._inputs(text=texts, images=images), max_new_tokens)
-        return [" ".join(reply.split()) for reply in replies]
+    def ask(
+        self, questions: list[Question], *, system: str, max_tokens: int, presence_penalty: float, stop: list[str]
+    ) -> list[str]:
+        """One greedy answer per question, all at once: one prefill over the rows, left-padded,
+        and one decode of them together. Each video's blocks are stamped with their
+        `<t seconds>` as the processor writes them. An answer ends before its first `stop`."""
+        texts = [self._chat(question, system) for question in questions]
+        images = [image for question in questions for image in question.images]
+        videos = [video for question in questions for video in question.videos]
+        kwargs: dict[str, Any] = {"images": images} if images else {}
+        if videos:
+            # The processor stamps a block with frame index / fps: millisecond indices keep the seconds.
+            kwargs |= {
+                "videos": [video.frames for video in videos],
+                "video_metadata": [
+                    VideoMetadata(
+                        total_num_frames=len(video.frames), fps=1000.0,
+                        frames_indices=[round(t * 1000) for t in video.seconds],
+                    )
+                    for video in videos
+                ],
+                "do_sample_frames": False,
+            }
+        replies = self._generate(self._inputs(text=texts, **kwargs), max_tokens, presence_penalty, stop)
+        return [_cut(reply, stop).strip() for reply in replies]
 
-    @uses_components(COMPONENT)
-    def describe_video(self, frames: list[Image], seconds: list[float], prompt: str, *, max_new_tokens: int) -> str:
-        """One greedy reply about frames watched as one video, each block stamped with its
-        `<t seconds>` as the processor writes them. Line breaks are kept."""
-        content = [{"type": "video"}, {"type": "text", "text": prompt}]
-        # The processor stamps a block with frame index / fps: millisecond indices keep the seconds.
-        metadata = VideoMetadata(
-            total_num_frames=len(frames), fps=1000.0, frames_indices=[round(t * 1000) for t in seconds]
-        )
-        inputs = self._inputs(
-            text=[self._chat([{"role": "user", "content": content}])], videos=[frames],
-            video_metadata=[metadata], do_sample_frames=False,
-        )
-        (reply,) = self._generate(inputs, max_new_tokens)
-        return reply.strip()
-
-    @uses_components(COMPONENT)
-    def write(self, prompts: list[str], *, max_new_tokens: int) -> list[str]:
-        """One greedy reply per text prompt, all at once. Line breaks are kept."""
-        texts = [self._chat([{"role": "user", "content": [{"type": "text", "text": p}]}]) for p in prompts]
-        return [reply.strip() for reply in self._generate(self._inputs(text=texts), max_new_tokens)]
-
-    def _chat(self, messages: list[dict[str, Any]]) -> str:
+    def _chat(self, question: Question, system: str) -> str:
+        content = [
+            *({"type": "image"} for _ in question.images),
+            *({"type": "video"} for _ in question.videos),
+            {"type": "text", "text": question.text},
+        ]
+        messages = [{"role": "system", "content": system}] if system else []
         text: str = self.processor.apply_chat_template(
-            messages, add_generation_prompt=True, tokenize=False, enable_thinking=False
+            [*messages, {"role": "user", "content": content}],
+            add_generation_prompt=True, tokenize=False, enable_thinking=False,
         )
         return text
 
@@ -148,22 +171,20 @@ class Describer(Model[Pipeline], encoded_leaves="accept", min_bits=4, phase="dec
                 inputs[name] = inputs[name].to(model.dtype)
         return inputs
 
-    def _generate(self, inputs: Any, max_new_tokens: int) -> list[str]:
-        model, processor = self.pipe.components[COMPONENT], self.processor
+    def _generate(self, inputs: Any, max_tokens: int, presence_penalty: float, stop: list[str]) -> list[str]:
+        """Decoded answers. A stop string that is one token also ends its row's decode."""
+        model, tokenizer = self.pipe.components[COMPONENT], self.processor.tokenizer
         configured = model.generation_config.eos_token_id
-        stops = [*(configured if isinstance(configured, list) else [configured]), processor.tokenizer.eos_token_id]
-        stop = [token for token in dict.fromkeys(stops) if token is not None]
+        single = [ids[0] for ids in (tokenizer.encode(s, add_special_tokens=False) for s in stop) if len(ids) == 1]
+        stops = [*(configured if isinstance(configured, list) else [configured]), tokenizer.eos_token_id, *single]
+        tokens = [token for token in dict.fromkeys(stops) if token is not None]
         out = lm.generate(
-            model, inputs, max_new_tokens=max_new_tokens, stop=stop,
-            pad=processor.tokenizer.pad_token_id or stop[0], draft=self.pipe.draft,
+            model, inputs, max_new_tokens=max_tokens, stop=tokens, pad=tokenizer.pad_token_id or tokens[0],
+            presence_penalty=presence_penalty, draft=self.pipe.draft,
         )
-        return [str(reply) for reply in processor.batch_decode(out, skip_special_tokens=True)]
+        return [str(reply) for reply in self.processor.batch_decode(out, skip_special_tokens=True)]
 
 
-def _messages(processor: Any, prompt: str) -> list[dict[str, Any]]:
-    if type(processor).__name__ == "LlavaProcessor":
-        return [
-            {"role": "system", "content": "You are a helpful image captioner."},
-            {"role": "user", "content": prompt},
-        ]
-    return [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
+def _cut(text: str, stop: list[str]) -> str:
+    """`text` before the first of the `stop` strings in it."""
+    return text[: min((at for s in stop if (at := text.find(s)) >= 0), default=len(text))]
