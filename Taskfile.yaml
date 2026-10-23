@@ -30,6 +30,7 @@ tasks:
           minimax-h3-tools) for s in lane table-metadata; do PYTHONPATH=$p/src $py "$p/scripts/$s-proof.py"; done ;;
         esac
         $py scripts/lane-plans-proof.py "$p"
+        $py scripts/coverage-proof.py "$p"
         uv build -q --project "$p" --wheel --out-dir dist; uv pip install -q --python "$py" --no-deps dist/*.whl
         $py -P scripts/package_import.py "$p" --installed
         if [ "$p" = minimax-h3-tools ]; then $py -P scripts/h3-adaln-interface-proof.py; fi

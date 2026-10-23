@@ -245,7 +245,12 @@ _ENCODER_CODE = (
 )
 
 
-class QwenImage21Model(Model[QwenImage21Graph], encoded_leaves="accept"):
+class QwenImage21Model(
+    Model[QwenImage21Graph],
+    encoded_leaves="accept",
+    # Qwen2.5-VL's LM head (1 GB): the pipeline reads hidden states, never logits.
+    unloaded=("text_encoder.lm_head.weight",),
+):
     graph: QwenImage21Graph
     processor: Any
 

@@ -84,7 +84,14 @@ class Pipeline:
         self.components: dict[str, torch.nn.Module] = {COMPONENT: model}
 
 
-class Describer(Model[Pipeline], encoded_leaves="accept", min_bits=4, phase="decode"):
+class Describer(
+    Model[Pipeline],
+    encoded_leaves="accept",
+    min_bits=4,
+    phase="decode",
+    # Qwen3.5-9B's MTP head (0.5 GB): the drafter loads it from its own lane.
+    unloaded=("model.mtp.*",),
+):
     """One greedy reply about one image. Runtime may serve encoded lanes' linears natively."""
 
     pipe: Pipeline
