@@ -20,6 +20,7 @@ tasks:
         case $p in
           anima) $py scripts/anima-conform.py ;;
           qwen-image-2) $py scripts/qwen-image-2-conform.py; $py scripts/qwen-image-2-model-proof.py ;;
+          flux-2) $py scripts/flux-2-model-proof.py ;;
           flux-3-klein) $py scripts/flux-3-klein-model-proof.py ;;
           seedvr2) $py scripts/seedvr2-model-proof.py ;;
           sdxl) $py scripts/sdxl-model-proof.py ;;

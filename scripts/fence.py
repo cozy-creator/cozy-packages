@@ -958,6 +958,7 @@ def fence_step_progress() -> Fence:
     required: dict[str, set[str]] = {
         "sdxl/sdxl/__init__.py": {"denoise"},
         "qwen-image-2/qwen_image_2/__init__.py": {"generating image"},
+        "flux-2/flux_2/__init__.py": {"generating image"},
         "flux-3-klein/flux_3_klein/__init__.py": {"generating image"},
         "minimax-h3/h3.py": {"denoise"},
     }
@@ -1049,7 +1050,7 @@ def fence_interface_format() -> Fence:
 
 def fence_publication_metadata() -> Fence:
     bad: list[str] = []
-    expected_projects = {"anima", "birefnet", "character-describer", "flux-3-klein", "seedvr2", "sdxl", "minimax-h3", "minimax-h3-tools", "qwen-image-2"}
+    expected_projects = {"anima", "birefnet", "character-describer", "flux-2", "flux-3-klein", "seedvr2", "sdxl", "minimax-h3", "minimax-h3-tools", "qwen-image-2"}
     actual_projects = {
         rel(path.parent)
         for path in ROOT.rglob("package.toml")
