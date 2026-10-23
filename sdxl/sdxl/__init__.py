@@ -11,17 +11,11 @@ the answer.
 What it adds over cr-008b's corpus fixture, which it is otherwise faithful to (its banked
 1024px pixel digest reproduces here, byte for byte):
 
-  * ASPECT x MEGAPIXEL BUCKETS (se-024). SDXL fine-tunes are trained on fixed
-    resolutions, not free geometry, so the request names a ratio and a pixel-count tier
-    and `_BUCKETS` maps the pair to one native bucket; `Shape(pixels=...)` on the tier is
-    how the demand axes are derived from a preset the runtime cannot otherwise measure
-    (§1.2). A pair this package does not offer is unspellable, not rounded. Tiers above
-    1 ride HiDiffusion — base SDXL duplicates subjects past its training resolution.
-    Tier 1 is base SDXL unless the caller opts in.
-  * `ModelDefault` steps/guidance, and the TWO-LAYER CLAMP. Layer 1 is the field's own
-    `Meta` bound, which REJECTS what the caller actually sent. Layer 2 is a deployment's
-    visible `Clamp`, which lowers it and says so in the adjustments envelope. A silent
-    clamp is the failure both layers exist to prevent.
+  * THE SHARED IMAGE REQUEST (cr-219). Any W:H at any size, on SDXL's 64 px latent stride:
+    1 MP is base SDXL (its training buckets), above it HiDiffusion, to 8 MP (16 MP at 1:1, the
+    4096² flagship). Outside that range the request is held, with a `clamp` adjustment, never
+    refused. Steps and guidance stay `ModelDefault`; a deployment's visible `Clamp` still
+    lowers them in the adjustments envelope.
   * VALUE-PLANE CFG GATING. `guidance <= 1.0` skips the negative branch entirely — the
     turbo/lightning execution shape follows from the RESOLVED VALUE alone, with zero
     adapter awareness in this file. When the adapter runtime (cr-010) lands, a turbo
@@ -39,36 +33,35 @@ checkpoint or revision — `package.toml` and the deploy binding do.
 from __future__ import annotations
 
 import functools
-import hashlib
 import json
 import math
 import random
-import secrets
-from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Annotated, Any
 
 import msgspec
 import torch
 from cozy_runtime.author import (
+    MEGAPIXEL,
     AdapterCompatibility,
+    Adjustments,
     App,
-    AssetBound,
     ConformanceError,
     Context,
     EncodingRule,
-    ImageAsset,
     ImageFrame,
+    ImageRequest,
+    ImageResult,
     Loader,
     Memoize,
     Model,
-    ModelDefault,
     OutputError,
     Outputs,
     QuantizationPlan,
     Recipe,
-    Shape,
+    ReferenceImages,
     Telemetry,
+    held,
     uses_components,
 )
 from diffusers import AutoencoderKL, DDIMScheduler, EulerDiscreteScheduler, UNet2DConditionModel
@@ -87,132 +80,42 @@ from transformers import initialization as transformer_init
 app = App()
 
 
-class AspectRatio(Enum):
-    """The offered buckets. A ratio absent here does not round — it refuses at decode."""
-
-    SQUARE = "1:1"
-    LANDSCAPE = "4:3"
-    WIDE = "16:9"
-    PORTRAIT = "3:4"
-    TALL = "9:16"
-
-
-class Megapixels(IntEnum):
-    """The offered pixel-count tiers, in nominal megapixels.
-
-    Tier 1 is SDXL's native training resolution; every higher tier rides HiDiffusion
-    (RAU-Net + windowed attention), whose published recipes cover the 2048-class through
-    ~8MP and the 4096² flagship. VRAM, fp16, CFG on (weights 6.5 GiB total, staged per
-    method — denoise holds the 4.8 GiB UNet, decode holds the 0.16 GiB VAE):
-
-        1   ~1.0 MP  the launch envelope — serves on 8 GiB
-        2   ~2.1 MP  denoise ~6 GiB, whole-frame fp32 decode ~4 GiB — a 12 GiB card
-        4   ~4.2 MP  denoise ~8 GiB, whole-frame fp32 decode ~8 GiB — 12 GiB at its edge
-        8   ~8.3 MP  denoise ~12 GiB — a 24 GiB card
-        16  ~16.8 MP denoise ~15-19 GiB, 1:1 only — the top of 24 GiB
-    """
-
-    MP1 = 1
-    MP2 = 2
-    MP4 = 4
-    MP8 = 8
-    MP16 = 16
+#: SDXL's latent stride: 8 px per latent and 64-px buckets.
+_STRIDE = 64
+#: Pixel counts, in megapixels: SDXL's 1 MP training size up to HiDiffusion's 8 MP class, and its
+#: 4096² flagship at 1:1 only (its 4096-class recipe needs both latent sides at 512).
+_MEGAPIXELS, _SQUARE_MAX = (1.0, 8.0), 16.0
+#: The widest ratio SDXL's training buckets reach (512x2048), and the longest side.
+_WIDEST, _MAX_SIDE = 4.0, 4096
+#: Above this, a request rides HiDiffusion unless it opts out: base SDXL duplicates subjects past
+#: its training size.
+_NATIVE = 1.5
 
 
-#: (aspect, tier) -> (width, height). Tier 1 is SDXL's own training buckets; a higher
-#: tier scales them by sqrt(tier) and snaps to the 64-px stride the latent grid requires.
-#: Tier 16 offers only 1:1: HiDiffusion's 4096-class recipe engages when BOTH latent
-#: sides reach 512, which no non-square 16 MP bucket satisfies — those pairs are absent,
-#: not rounded.
-_BUCKETS: dict[tuple[AspectRatio, Megapixels], tuple[int, int]] = {
-    (AspectRatio.SQUARE, Megapixels.MP1): (1024, 1024),
-    (AspectRatio.LANDSCAPE, Megapixels.MP1): (1152, 896),
-    (AspectRatio.WIDE, Megapixels.MP1): (1344, 768),
-    (AspectRatio.PORTRAIT, Megapixels.MP1): (896, 1152),
-    (AspectRatio.TALL, Megapixels.MP1): (768, 1344),
-    (AspectRatio.SQUARE, Megapixels.MP2): (1472, 1472),
-    (AspectRatio.LANDSCAPE, Megapixels.MP2): (1600, 1280),
-    (AspectRatio.WIDE, Megapixels.MP2): (1920, 1088),
-    (AspectRatio.PORTRAIT, Megapixels.MP2): (1280, 1600),
-    (AspectRatio.TALL, Megapixels.MP2): (1088, 1920),
-    (AspectRatio.SQUARE, Megapixels.MP4): (2048, 2048),
-    (AspectRatio.LANDSCAPE, Megapixels.MP4): (2304, 1792),
-    (AspectRatio.WIDE, Megapixels.MP4): (2688, 1536),
-    (AspectRatio.PORTRAIT, Megapixels.MP4): (1792, 2304),
-    (AspectRatio.TALL, Megapixels.MP4): (1536, 2688),
-    (AspectRatio.SQUARE, Megapixels.MP8): (2880, 2880),
-    (AspectRatio.LANDSCAPE, Megapixels.MP8): (3264, 2560),
-    (AspectRatio.WIDE, Megapixels.MP8): (3776, 2176),
-    (AspectRatio.PORTRAIT, Megapixels.MP8): (2560, 3264),
-    (AspectRatio.TALL, Megapixels.MP8): (2176, 3776),
-    (AspectRatio.SQUARE, Megapixels.MP16): (4096, 4096),
-}
+def output_size(pixels: float, ratio: tuple[int, int]) -> tuple[int, int, bool]:
+    """`pixels` at `W:H` on the 64 px stride, held to SDXL's 1:4-4:1 and 4096 px sides; True when
+    that moved it off the requested ratio's own size."""
+    w, h = ratio
+    widest = min(_WIDEST, _MAX_SIDE**2 / pixels)
+    kept = min(max(w / h, 1 / widest), widest)
 
-#: The demand table `Shape` reads. The runtime derives (width, height, pixels) from ONE
-#: field, so the tier carries its largest bucket: pixel count is the axis that moves VRAM
-#: (attention and decode scale with area; aspect at equal area does not), and the largest
-#: bucket keeps the derived demand an upper bound over the tier.
-_TIER_DEMAND: dict[Megapixels, tuple[int, int]] = {
-    tier: max(
-        (size for (_, t), size in _BUCKETS.items() if t is tier),
-        key=lambda size: size[0] * size[1],
+    def snapped(r: float) -> tuple[int, int]:
+        return (max(_STRIDE, round(math.sqrt(pixels * r) / _STRIDE) * _STRIDE),
+                max(_STRIDE, round(math.sqrt(pixels / r) / _STRIDE) * _STRIDE))
+
+    width, height = snapped(kept)
+    width, height = min(width, _MAX_SIDE), min(height, _MAX_SIDE)
+    return width, height, (width, height) != snapped(w / h)
+
+
+class GenerateInput(ImageRequest):
+    #: SDXL makes images from text only.
+    reference_images: Annotated[ReferenceImages, msgspec.Meta(max_length=0)] = msgspec.field(
+        default_factory=list
     )
-    for tier in Megapixels
-}
-
-_WEBP_OUTPUT = AssetBound(max_bytes=64 << 20, media_types=("image/webp",))
-
-
-class Txt2ImgInput(msgspec.Struct):
-    prompt: str
-    negative_prompt: str = ""
-    aspect_ratio: AspectRatio = AspectRatio.SQUARE
-    megapixels: Annotated[Megapixels, Shape(pixels=_TIER_DEMAND)] = Megapixels.MP1
-    #: None runs HiDiffusion where base SDXL cannot go: above tier 1. An explicit choice
-    #: always runs, and the result warns where it is known to hurt.
+    #: None runs HiDiffusion where base SDXL cannot go: above 1 MP. An explicit choice always
+    #: runs, and the run warns where it is known to hurt.
     hidiffusion: bool | None = None
-    #: LAYER 1 of the two-layer clamp. These bounds REJECT; they never quietly clip.
-    #: `ModelDefault` lets a checkpoint or adapter recipe supply an omitted value.
-    #: None, from the wire or a recipe: HiDiffusion's recipe (30 steps, guidance 7.5) when it
-    #: runs, else 20 steps at 7.0.
-    steps: ModelDefault[Annotated[int, msgspec.Meta(ge=1, le=50)] | None] = None
-    guidance: ModelDefault[Annotated[float, msgspec.Meta(ge=0.0, le=20.0)] | None] = None
-    #: Given, the request is memoized; omitted, the package draws one and reports it.
-    seed: int | None = None
-
-    def __post_init__(self) -> None:
-        if (self.aspect_ratio, self.megapixels) not in _BUCKETS:
-            offered = ", ".join(
-                aspect.value for aspect, tier in _BUCKETS if tier is self.megapixels
-            )
-            raise ValueError(
-                f"no {self.megapixels.value}-megapixel bucket for aspect "
-                f"{self.aspect_ratio.value}; this tier offers: {offered}"
-            )
-
-
-class ImageOutput(msgspec.Struct):
-    image: Annotated[ImageAsset, _WEBP_OUTPUT]
-    width: int
-    height: int
-    steps: int
-    guidance: float
-    sampler: str
-    """`ddim eta=1.0` (HiDiffusion's recipe) or `euler`."""
-    negative_prompt: str
-    """The negative prompt that ran."""
-    classifier_free: bool
-    """Whether the negative branch ran. Value-plane gating, made observable: a caller can
-    see that `guidance <= 1.0` bought it a one-pass step rather than having to trust it."""
-    hidiffusion_applied: bool
-    """Whether this request used HiDiffusion."""
-    digest: str
-    """sha256 of the decoded RGB pixel bytes — the determinism fence over the WHOLE loop,
-    not over one step."""
-    warnings: list[str]
-    """Explicit choices that ran although they are known to hurt the picture."""
-    seed: int
-    """The request's seed, else the one drawn for it."""
 
 
 # ------------------------------------------------------------------ the model
@@ -542,28 +445,35 @@ def _request_generator(torch: Any, source: object, *, device: Any) -> Any:
 @app.entrypoint(defaults={"model": "sdxl@1.0.0"}, memoize=Memoize(requires=["seed"]))
 def generate(
     ctx: Context,
-    payload: Txt2ImgInput,
+    payload: GenerateInput,
     model: SdxlModel,
     out: Outputs,
     tel: Telemetry,
-) -> ImageOutput:
-    """One text-to-image generation: tokenize, encode, denoise, decode, encode a PNG."""
+    adj: Adjustments,
+) -> ImageResult:
+    """One text-to-image generation: tokenize, encode, denoise, decode, encode a WebP."""
     ctx.plan({"text_encoder", "text_encoder_2"}, "unet", "vae")
-    seed = payload.seed if payload.seed is not None else secrets.randbits(53)
+    payload.ignored(adj, "prompt_upsampling", reason="SDXL has no prompt upsampler")
+    seed = payload.drawn_seed()
     view = model.for_request(ctx, seed=seed)
-    width, height = _BUCKETS[(payload.aspect_ratio, payload.megapixels)]
-    above_native = payload.megapixels is not Megapixels.MP1
+    target = payload.target(None, megapixels=_MEGAPIXELS[0])
+    most = _SQUARE_MAX if target.ratio[0] == target.ratio[1] else _MEGAPIXELS[1]
+    megapixels = held(adj, "megapixels", target.pixels / MEGAPIXEL, _MEGAPIXELS[0], most,
+                      "SDXL's 1 MP training size to HiDiffusion's 8 MP (16 MP at 1:1)")
+    width, height, moved = output_size(megapixels * MEGAPIXEL, target.ratio)
+    if moved:
+        ratio = f"{target.ratio[0]}:{target.ratio[1]}"
+        adj.clamp("aspect_ratio", ratio, f"{width}:{height}", "nearest size SDXL admits")
+    above_native = width * height > _NATIVE * MEGAPIXEL
     hidiffusion_applied = above_native if payload.hidiffusion is None else payload.hidiffusion
-    steps = payload.steps if payload.steps is not None else 30 if hidiffusion_applied else 20
-    guidance = (
-        payload.guidance if payload.guidance is not None else 7.5 if hidiffusion_applied else 7.0
-    )
-    negative_prompt = _negative_prompt(payload.negative_prompt, hidiffusion_applied)
-    warnings: list[str] = []
+    default_steps, default_guidance = (30, 7.5) if hidiffusion_applied else (20, 7.0)
+    steps = held(adj, "steps", payload.steps or default_steps, 1, 50)
+    guidance = held(adj, "guidance", default_guidance if payload.guidance is None else payload.guidance, 0.0, 20.0)
+    negative_prompt = _negative_prompt(payload.negative_prompt or "", hidiffusion_applied)
     if above_native and not hidiffusion_applied:
-        warnings.append("HiDiffusion off above 1 MP: expect duplicated or tiled subjects")
+        adj.warn("hidiffusion", "HiDiffusion off above 1 MP: expect duplicated or tiled subjects")
     if hidiffusion_applied and not above_native:
-        warnings.append("HiDiffusion at 1 MP composes at half resolution: expect simpler scenes")
+        adj.warn("hidiffusion", "HiDiffusion at 1 MP composes at half resolution: expect simpler scenes")
     # The value plane, and the only branch in this file that reads a request number: above
     # 1.0 the negative branch is worth its second forward pass, at or below it is not.
     classifier_free = guidance > 1.0
@@ -659,20 +569,9 @@ def generate(
     tel.metric("decoded_pixels", float(decoded_w * decoded_h))
     with tel.stage("encode_webp", overall_range=(0.98, 1.00)):
         asset = out.save_image(ImageFrame(decoded_w, decoded_h, rgb), format="webp")
-    return ImageOutput(
-        image=asset,
-        width=decoded_w,
-        height=decoded_h,
-        steps=steps,
-        guidance=guidance,
-        sampler="ddim eta=1.0" if hidiffusion_applied else "euler",
-        negative_prompt=negative_prompt if classifier_free else "",
-        classifier_free=classifier_free,
-        hidiffusion_applied=hidiffusion_applied,
-        digest=hashlib.sha256(rgb).hexdigest(),
-        warnings=warnings,
-        seed=seed,
-    )
+    tel.log("sampled", sampler="ddim eta=1.0" if hidiffusion_applied else "euler", steps=steps,
+            guidance=guidance, classifier_free=classifier_free, hidiffusion=hidiffusion_applied)
+    return ImageResult(asset, decoded_w, decoded_h, seed, payload.prompt)
 
 
 # ------------------------------------------------------------------ quantized lanes
