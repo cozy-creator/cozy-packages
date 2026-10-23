@@ -12,12 +12,15 @@ from .model import HiDreamO1
 
 _LAYERS = "model.model.language_model.layers.*"
 
-#: The attention and MLP projections of the 36 decoder layers: 6.9B of the 8.2B weights the model
-#: builds, read every step by every token. The patch embedder, timestep MLP, pixel head, token
-#: embeddings and vision tower keep 16 bits.
+#: The q/k, gate and up projections of the 36 decoder layers: 63% of the decoder's linear weights.
+#: v_proj, o_proj and down_proj keep 16 bits: with every projection int8, CFG 5 multiplies W8A8's
+#: per-pass error into visible grain (teacher-forced CFG x0 17-24 dB vs bf16 at t 999/702/290); keeping
+#: these three is the best measured trade (23-36 dB). The patch embedder, timestep MLP, pixel head,
+#: embeddings and vision tower keep 16 bits too.
 LINEARS = QuantizationPlan(
     components=("model",),
-    include=(f"{_LAYERS}.self_attn.*_proj.weight", f"{_LAYERS}.mlp.*_proj.weight"),
+    include=(f"{_LAYERS}.self_attn.[qk]_proj.weight", f"{_LAYERS}.mlp.gate_proj.weight",
+             f"{_LAYERS}.mlp.up_proj.weight"),
 )
 
 
@@ -27,7 +30,7 @@ async def bf16(ctx: Context, *, source: Weights[HiDreamO1], tel: Telemetry) -> M
     return derive.quantize_artifact(source, derive.plan(), ctx=ctx, tel=tel, output="bf16")
 
 
-@invocable(memo_version="hidream-o1-int8/1")
+@invocable(memo_version="hidream-o1-int8/2")
 async def int8(ctx: Context, *, source: Weights[HiDreamO1], tel: Telemetry) -> ModelArtifact:
     """The int8 lane (`int8.convrot`), W8A8 on int8 tensor cores: the default lane."""
     return quantize_into(ctx, tel, source=source, plan=LINEARS, encoding="int8.convrot", output="int8")
