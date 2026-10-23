@@ -17,7 +17,7 @@ cozy run fidika/hunyuan-image-3/generate prompt='Put the cat in a tiny astronaut
   --asset reference_images.0=cat.png
 ```
 
-Fields: `prompt`, `reference_images` (0–3, in order), `aspect_ratio` (any `W:H`), `megapixels`, `steps`
+Fields: `prompt`, `reference_images` (0–3, in order), `aspect_ratio` (any `W:H`; unset, the model picks), `megapixels`, `steps`
 (omitted: the default above), `guidance`, `seed` (random when omitted, returned) and `prompt_upsampling`
 (default `true`). The result is the `image`, its `width` and `height`, the `seed`, and `prompt`: the caption the
 image was made from, which is the model's rewrite when `prompt_upsampling` is on. There is no negative prompt:
@@ -26,11 +26,12 @@ the model's unconditional branch is the prompt dropped.
 ## Sizes
 
 The model makes about 1 MP, at Tencent's sizes for `image_base_size` 1024: 33 ratios from 1:4 to 4:1 on a
-64 px step (width + height = 2048), plus 1024×768, 1280×720 and their portraits. A request gets the size
-nearest its ratio (Tencent's `get_target_size`): the `aspect_ratio` given, else the first reference's, else 1:1.
-A ratio past 1:4 or 4:1, or a pixel count (`megapixels`, else the first reference's) more than 10% off the size
-made, is reported as a `clamp` adjustment. Tencent's edit postprocess, which resizes the output to the
-reference's exact ratio, is not applied: the output is the model's own size.
+64 px step (width + height = 2048), plus 1024×768, 1280×720 and their portraits. With no `aspect_ratio` the
+model picks the size itself, as Tencent's `image_size="auto"`: after its recaption when `prompt_upsampling` is
+on, else in one greedy step over its size tokens.
+An `aspect_ratio` is served at the nearest size (Tencent's `get_target_size`); one past 1:4 or 4:1, or a
+`megapixels` more than 10% off the size made, is reported as a `clamp` adjustment. Tencent's edit postprocess,
+which resizes the output to the reference's exact ratio, is not applied: the output is the model's own size.
 
 ## Prompt upsampling
 

@@ -39,11 +39,35 @@ def load_package(name: str, path: Path):
     return module
 
 
-# Tencent's eager MoE pins the CUDA device and marks NVTX ranges; its VAE allocates an empty CUDA tensor.
+# Tencent's eager MoE pins the CUDA device and marks NVTX ranges.
 torch.cuda.set_device = lambda *a, **k: None
 torch.cuda.nvtx.range = lambda *a, **k: contextlib.nullcontext()
-_empty = torch.empty
-torch.empty = lambda *a, **k: _empty(*a, **{**k, "device": "cpu"} if k.get("device") == "cuda" else k)
+
+
+class CpuAutocast(torch.autocast):
+    """Both models wrap their forwards in `torch.autocast("cuda", ...)`; on this CPU the same regions
+    autocast on the CPU, so the bfloat16 modules take float32 latents as they do on a GPU. The VAE's float16
+    regions run in bfloat16: CPU group norm takes no float16 input beside bfloat16 weights."""
+
+    def __init__(self, device_type, dtype=None, *args, **kwargs):
+        if device_type == "cuda":
+            device_type, dtype = "cpu", torch.bfloat16 if dtype == torch.float16 else dtype
+        super().__init__(device_type, dtype, *args, **kwargs)
+
+
+torch.autocast = CpuAutocast
+
+
+@contextlib.contextmanager
+def cpu_empty():
+    """Tencent's VAE allocates an empty CUDA tensor in its constructor; build it on CPU instead. Only
+    for that construction: `torch.device("meta")` recognizes the real `torch.empty` only."""
+    empty = torch.empty
+    torch.empty = lambda *a, **k: empty(*a, **{**k, "device": "cpu"} if k.get("device") == "cuda" else k)
+    try:
+        yield
+    finally:
+        torch.empty = empty
 
 sys.path.insert(0, str(UPSTREAM))
 load_package("tencent_upstream", UPSTREAM / "hunyuan_image_3")
@@ -79,10 +103,21 @@ def build(distilled: bool) -> tuple[Reference, Port]:
     torch.manual_seed(0)
     config = HunyuanImage3Config(**tiny(distilled))
     config._attn_implementation = "sdpa"
-    reference = Reference(config).eval()
+    with cpu_empty():
+        reference = Reference(config).eval()
     reference.load_tokenizer(str(FILES))
     reference.generation_config = GenerationConfig(**GENERATION)
     port = Port(PortConfig(**tiny(distilled))).eval()
+    # The served dtypes, as `from_pretrained(torch_dtype="auto")` and the package's Graph make them:
+    # bfloat16 throughout but the float32 expert routers.
+    for model in (reference, port):
+        model.to(torch.bfloat16)
+        for layer in model.model.layers:
+            layer.mlp.gate.wg.float()
+        # CPU autocast has no float32 rule for group norm, so the VAE keeps float32 weights here (on a GPU it
+        # is bfloat16). Tencent's `dtype` is its first parameter's, the VAE's: report the backbone's as served.
+        model.vae.float()
+    type(reference).dtype = property(lambda self: self.model.wte.weight.dtype)
     port.load_state_dict(reference.state_dict(), strict=True)
     tokenizer_config = json.loads((FILES / "tokenizer_config.json").read_text())
     tokenizer_config.pop("tokenizer_class")
@@ -108,9 +143,30 @@ def picture(seed: int, size: tuple[int, int]) -> Image.Image:
     return Image.fromarray(rng.integers(0, 255, (size[1], size[0], 3), dtype=np.uint8))
 
 
+@contextlib.contextmanager
+def biased_ends(*models: torch.nn.Module):
+    """With random weights a thought never ends: make `</think>` and `</recaption>` the likely tokens, alike in
+    both models, so the stage transitions and the size pick after the recaption run."""
+    tokenizer = models[1]._tokenizer
+    ends = [tokenizer.end_of_think_token_id, tokenizer.end_of_recaption_token_id]
+
+    def hook(module, inputs, output):
+        output = output.clone()
+        output[..., ends] += 1e4
+        return output
+
+    handles = [model.lm_head.register_forward_hook(hook) for model in models]
+    try:
+        yield
+    finally:
+        for handle in handles:
+            handle.remove()
+
+
 def case(name: str, reference: Reference, port: Port, *, images: list[Image.Image], bot_task: str,
-         image_size: str, steps: int, seed: int) -> None:
+         image_size: str, steps: int, seed: int, ends: bool = False) -> None:
     started = time.monotonic()
+    prompt = f"A red fox in fresh snow, case {name}"
     reference.generation_config.diff_infer_steps = steps
     port.generation_config.max_new_tokens = 48
     random.seed(seed)
@@ -118,47 +174,59 @@ def case(name: str, reference: Reference, port: Port, *, images: list[Image.Imag
     # Tencent's postprocess resizes an edit's output to its reference's exact ratio; the package keeps
     # the model's own size (the lead's ruling), so the comparison is before that resize.
     reference.image_processor.postprocess_outputs = lambda outputs, **_: outputs
-    cot_ref, (image_ref,) = reference.generate_image(
-        prompt="A red fox in fresh snow", image=images or None, seed=seed, image_size=image_size,
-        use_system_prompt="en_unified", bot_task=bot_task, infer_align_image_size=True, max_new_tokens=48,
-    )
-    random.seed(seed)
-    text_seed = random.randint(0, 10_000_000) if bot_task != "image" else None
-    system_prompt = get_system_prompt("en_unified", bot_task).strip()
-    cond = [port.image_processor.build_cond_images(image_list=images, infer_align_image_size=True)] if images else None
-    cot = None
-    if bot_task != "image":
-        generator = torch.Generator().manual_seed(seed + 1)
-        cot = port.generate_cot("A red fox in fresh snow", cond, system_prompt, bot_task,
-                                seed=text_seed, generator=generator)
-        assert [cot] == cot_ref, (cot[:200], cot_ref[0][:200] if cot_ref else None)
-    latents = port.denoise("A red fox in fresh snow", cond, system_prompt, cot, image_size=image_size,
+    with biased_ends(reference, port) if ends else contextlib.nullcontext():
+        cot_ref, (image_ref,) = reference.generate_image(
+            prompt=prompt, image=images or None, seed=seed, image_size=image_size,
+            use_system_prompt="en_unified", bot_task=bot_task, infer_align_image_size=True, max_new_tokens=48,
+        )
+        random.seed(seed)
+        text_seed = random.randint(0, 10_000_000) if bot_task != "image" else None
+        system_prompt = get_system_prompt("en_unified", bot_task).strip()
+        cond = [port.image_processor.build_cond_images(image_list=images, infer_align_image_size=True)] if images else None
+        cot, ratio = None, None
+        if bot_task != "image":
+            generator = torch.Generator().manual_seed(seed + 1)
+            cot, ratio = port.generate_cot(prompt, cond, system_prompt, bot_task, seed=text_seed,
+                                           generator=generator, need_ratio=image_size == "auto")
+            assert [cot] == cot_ref, (cot[:200], cot_ref[0][:200] if cot_ref else None)
+        elif image_size == "auto":
+            ratio = port.predict_ratio(prompt, cond, system_prompt, seed=seed)
+    if ratio is not None:
+        size = port.image_processor.vae_reso_group[ratio]
+        image_size = f"{size.height}x{size.width}"
+    latents = port.denoise(prompt, cond, system_prompt, cot, image_size=image_size,
                            steps=steps, guidance_scale=GENERATION["diff_guidance_scale"], seed=seed)
     image = port.decode_latents(latents)
     assert image.size == image_ref.size, (image.size, image_ref.size)
     diff = np.abs(np.asarray(image, dtype=np.int16) - np.asarray(image_ref, dtype=np.int16)).max()
     assert diff <= 1, f"{name}: max pixel difference {diff}"
-    print(f"{name}: cot {len(cot or '')} chars identical, image {image.size} max |Δ| {diff} "
-          f"[{time.monotonic() - started:.0f}s]")
+    picked = f", picked {image_size}" if ratio is not None else ""
+    print(f"{name}: cot {len(cot or '')} chars identical{picked}, image {image.size} max |Δ| {diff} "
+          f"[{time.monotonic() - started:.0f}s]", flush=True)
 
 
 def main() -> None:
-    torch.set_num_threads(1)
+    torch.set_num_threads(4)
     if (FILES / "model.safetensors.index.json").exists():
         full_tree_keys()
     for distilled in (False, True):
         reference, port = build(distilled)
         label = "distil" if distilled else "instruct"
-        case(f"{label} t2i", reference, port, images=[], bot_task="image", image_size="256x256", steps=3, seed=7)
-        case(f"{label} t2i 2:1", reference, port, images=[], bot_task="image", image_size="352x176", steps=2, seed=8)
+        case(f"{label} t2i 2:1", reference, port, images=[], bot_task="image", image_size="352x176", steps=3,
+             seed=8)
         case(f"{label} edit", reference, port, images=[picture(1, (300, 200))], bot_task="image",
              image_size="304x208", steps=2, seed=9)
-        case(f"{label} fusion", reference, port, images=[picture(2, (256, 256)), picture(3, (200, 320))],
-             bot_task="image", image_size="256x256", steps=2, seed=10)
         case(f"{label} think t2i", reference, port, images=[], bot_task="think_recaption",
              image_size="256x256", steps=2, seed=11)
-        case(f"{label} think edit", reference, port, images=[picture(4, (256, 256))], bot_task="think_recaption",
-             image_size="256x256", steps=2, seed=12)
+        case(f"{label} auto edit", reference, port, images=[picture(5, (320, 192))], bot_task="image",
+             image_size="auto", steps=2, seed=13)
+        if not distilled:
+            case(f"{label} fusion", reference, port, images=[picture(2, (256, 256)), picture(3, (200, 320))],
+                 bot_task="image", image_size="256x256", steps=2, seed=10)
+            case(f"{label} think edit", reference, port, images=[picture(4, (256, 256))],
+                 bot_task="think_recaption", image_size="256x256", steps=2, seed=12)
+            case(f"{label} think auto t2i", reference, port, images=[], bot_task="think_recaption",
+                 image_size="auto", steps=2, seed=14, ends=True)
     print("model proof passed")
 
 

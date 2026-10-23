@@ -18,7 +18,6 @@ from cozy_runtime.author import (
     Telemetry,
     WeightsOutput,
 )
-from PIL import Image, ImageOps
 
 from .model import GENERATION, HunyuanImage3, caption
 from .quantize import int8, nvfp4
@@ -44,30 +43,29 @@ _REFERENCES = Annotated[
 _SEED = Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)]
 
 
-def output_size(adj: Adjustments, ratio: str | None, megapixels: float | None,
-                references: list[Image.Image]) -> tuple[int, int]:
-    """The model size nearest the ratio asked for, else the first reference's, else 1:1 (Tencent's
-    `get_target_size`). A ratio past 1:4 or 4:1, or a pixel count (`megapixels`, else the first
-    reference's) more than 10% off the ~1 MP the model makes, is reported as a `clamp`."""
-    first = ImageOps.exif_transpose(references[0]).size if references else None
-    w, h = map(int, ratio.split(":")) if ratio else (first or (1, 1))
+def requested_size(adj: Adjustments, ratio: str) -> tuple[int, int]:
+    """The model size nearest `W:H` (Tencent's `get_target_size`); a ratio past 1:4 or 4:1 is a `clamp`."""
+    w, h = map(int, ratio.split(":"))
     width, height = SIZES.get_target_size(w, h)
     if not _TALLEST <= w / h <= _WIDEST:
-        adj.clamp("aspect_ratio", ratio or f"{w}:{h}", f"{width}:{height}", "the model's sizes run from 1:4 to 4:1")
-    pixels = megapixels * (1 << 20) if megapixels is not None else (first[0] * first[1] if first else None)
-    if pixels is not None and abs(pixels - width * height) > 0.1 * width * height:
-        adj.clamp("megapixels", round(pixels / (1 << 20), 2), round(width * height / (1 << 20), 2),
-                  "HunyuanImage 3.0 makes about 1 MP")
+        adj.clamp("aspect_ratio", ratio, f"{width}:{height}", "the model's sizes run from 1:4 to 4:1")
     return width, height
+
+
+def check_pixels(adj: Adjustments, megapixels: float | None, size: tuple[int, int]) -> None:
+    """The model makes about 1 MP: `megapixels` more than 10% off the size made is a `clamp`."""
+    made = size[0] * size[1]
+    if megapixels is not None and abs(megapixels * (1 << 20) - made) > 0.1 * made:
+        adj.clamp("megapixels", megapixels, round(made / (1 << 20), 2), "HunyuanImage 3.0 makes about 1 MP")
 
 
 class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Annotated[str, msgspec.Meta(min_length=1)]
     #: Given, the image edits or fuses them, in order.
     reference_images: _REFERENCES = msgspec.field(default_factory=list)
-    #: Any W:H. None: the first reference's, else 1:1.
+    #: Any W:H, served at the model's nearest size. None: the model picks its size.
     aspect_ratio: _RATIO | None = None
-    #: None: the first reference's pixel count, else ~1 MP; the model makes only ~1 MP.
+    #: The model makes ~1 MP only; another value is reported as a clamp.
     megapixels: Annotated[float, msgspec.Meta(gt=0, le=64)] | None = None
     #: None: 50.
     steps: Annotated[int, msgspec.Meta(ge=1, le=200)] | None = None
@@ -82,9 +80,9 @@ class TurboInput(msgspec.Struct, forbid_unknown_fields=True):
     prompt: Annotated[str, msgspec.Meta(min_length=1)]
     #: Given, the image edits or fuses them, in order.
     reference_images: _REFERENCES = msgspec.field(default_factory=list)
-    #: Any W:H. None: the first reference's, else 1:1.
+    #: Any W:H, served at the model's nearest size. None: the model picks its size.
     aspect_ratio: _RATIO | None = None
-    #: None: the first reference's pixel count, else ~1 MP; the model makes only ~1 MP.
+    #: The model makes ~1 MP only; another value is reported as a clamp.
     megapixels: Annotated[float, msgspec.Meta(gt=0, le=64)] | None = None
     #: None: 8.
     steps: Annotated[int, msgspec.Meta(ge=1, le=100)] | None = None
@@ -111,14 +109,22 @@ def _generate(ctx: Context, payload: GenerateInput | TurboInput, steps: int, mod
               tel: Telemetry, adj: Adjustments) -> ImageOutput:
     seed = payload.seed if payload.seed is not None else secrets.randbits(53)
     references = [asset.read() for asset in payload.reference_images]
-    size = output_size(adj, payload.aspect_ratio, payload.megapixels, references)
+    # No aspect ratio: the model picks its size, as Tencent's `image_size="auto"`.
+    size = requested_size(adj, payload.aspect_ratio) if payload.aspect_ratio else None
     cot = None
     if payload.prompt_upsampling:
         with tel.stage("thinking", overall_range=(0.0, 0.3)):
-            cot = model.think(payload.prompt, references, seed=seed, cancel=ctx.raise_if_cancelled,
-                              on_token=tel.step_callback(GENERATION["max_new_tokens"], stage="thinking",
-                                                         overall_range=(0.0, 0.3)))
+            cot, picked = model.think(payload.prompt, references, seed=seed, pick_size=size is None,
+                                      cancel=ctx.raise_if_cancelled,
+                                      on_token=tel.step_callback(GENERATION["max_new_tokens"], stage="thinking",
+                                                                 overall_range=(0.0, 0.3)))
+        size = size or picked
         tel.log("rewritten prompt", caption=caption(cot, payload.prompt)[:2000])
+    elif size is None:
+        with tel.stage("picking size", overall_range=(0.0, 0.05)):
+            size = model.pick_size(payload.prompt, references, seed=seed)
+    assert size is not None
+    check_pixels(adj, payload.megapixels, size)
     with tel.stage("generating image", overall_range=(0.3, 0.97)):
         image = model.paint(payload.prompt, references, cot, size=size, steps=steps, guidance=payload.guidance,
                             seed=seed, cancel=ctx.raise_if_cancelled,

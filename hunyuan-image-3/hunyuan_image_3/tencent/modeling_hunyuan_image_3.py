@@ -1263,6 +1263,9 @@ class HunyuanImage3Model(nn.Module):
 
 
 class HunyuanImage3ForCausalMM(nn.Module):
+    # Upstream's PreTrainedModel attribute; Runtime's weight paging takes these as the blocks it streams.
+    _no_split_modules = ["HunyuanImage3DecoderLayer"]
+
     def __init__(self, config: HunyuanImage3Config):
         super().__init__()
         self.config = config
@@ -1329,7 +1332,7 @@ class HunyuanImage3ForCausalMM(nn.Module):
 
     @property
     def dtype(self) -> torch.dtype:
-        return torch.bfloat16
+        return self.model.wte.weight.dtype
 
     @property
     def tokenizer(self):
@@ -2548,11 +2551,13 @@ class HunyuanImage3ForCausalMM(nn.Module):
             *,
             seed: int,
             generator: torch.Generator,
+            need_ratio: bool = False,
             on_token: Callable[[int], None] = lambda n: None,
             cancel: Callable[[], None] = lambda: None,
-    ) -> str:
-        """Upstream `generate_image`'s text stage for an explicit image size: think and/or recaption.
-        Returns the cot text upstream feeds the image stage (`<think>…` or `<recaption>…`)."""
+    ) -> tuple[str, Optional[int]]:
+        """Upstream `generate_image`'s text stage: think and/or recaption, and with `need_ratio`
+        (`image_size="auto"`) the size the model picks after its recaption. Returns the cot text upstream
+        feeds the image stage (`<think>…` or `<recaption>…`) and the picked index into `vae_reso_group`."""
         tkw = self._tokenizer
         generation_config = self.generation_config
         first_bot_task = bot_task.split("_")[0]
@@ -2561,7 +2566,27 @@ class HunyuanImage3ForCausalMM(nn.Module):
             stage_transitions.append(
                 (tkw.end_of_think_token_id, [tkw.convert_tokens_to_ids(tkw.recaption_token)])
             )
-        if "recaption" in bot_task:
+        processors = LogitsProcessorList()
+        if need_ratio:
+            answer_prefix_tokens = []
+            if getattr(generation_config, "sequence_template", "pretrain") == "instruct":
+                answer_prefix_tokens = [tkw.convert_tokens_to_ids(tkw.answer_token)]
+            image_base_size = self.image_processor.vae_reso_group.base_size
+            transition_id = tkw.end_of_recaption_token_id if "recaption" in bot_task else tkw.end_of_think_token_id
+            stage_transitions.append(
+                (transition_id, answer_prefix_tokens + [tkw.boi_token_id, tkw.size_token_id(image_base_size)])
+            )
+            final_stop_tokens = list(range(tkw.start_ratio_token_id, tkw.end_ratio_token_id + 1))
+            for start, end in getattr(tkw, "ratio_token_other_slices", []):
+                final_stop_tokens.extend(range(start, end))
+            processors.append(self._ConditionalSliceVocabLogitsProcessor(
+                trigger_token_ids=[tkw.size_token_id(image_base_size)],
+                vocab_start=tkw.start_ratio_token_id,
+                vocab_end=tkw.end_ratio_token_id + 1,
+                other_slices=getattr(tkw, "ratio_token_other_slices", []),
+                force_greedy=True,
+            ))
+        elif "recaption" in bot_task:
             final_stop_tokens = [tkw.end_of_recaption_token_id]
         else:
             final_stop_tokens = [tkw.end_of_think_token_id, tkw.end_of_recaption_token_id]
@@ -2576,7 +2601,6 @@ class HunyuanImage3ForCausalMM(nn.Module):
         input_length = input_ids.shape[1]
         model_kwargs["attention_mask"] = self._prepare_attention_mask_for_generation(
             input_ids, None, model_kwargs=model_kwargs)
-        processors = LogitsProcessorList()
         if stage_transitions:
             processors.append(self._StageTransitionLogitsProcessor(stage_transitions, input_ids.shape[0]))
         processors.append(TemperatureLogitsWarper(generation_config.temperature))
@@ -2587,7 +2611,7 @@ class HunyuanImage3ForCausalMM(nn.Module):
         for n in range(max_new_tokens):
             cancel()
             model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
-            with torch.autocast(device_type="cuda", dtype=self.dtype, enabled=input_ids.is_cuda):
+            with torch.autocast(device_type="cuda", dtype=self.dtype, enabled=self.dtype != torch.float32):
                 outputs = self(**model_inputs)
             model_kwargs = self._update_model_kwargs_for_generation(outputs, model_kwargs)
             scores = processors(input_ids, outputs.logits[:, -1, :].to(copy=True, dtype=torch.float32))
@@ -2609,9 +2633,30 @@ class HunyuanImage3ForCausalMM(nn.Module):
         else:
             cot_tokens = generated_tokens[0]
         cot_text_gen = tkw.decode(cot_tokens)
-        if first_bot_task == "think":
-            return tkw.think_token + cot_text_gen
-        return tkw.recaption_token + cot_text_gen
+        cot = (tkw.think_token if first_bot_task == "think" else tkw.recaption_token) + cot_text_gen
+        ratio_index = None
+        if need_ratio:
+            ratio_index = self._get_ratio_index_from_token(input_ids[0, -1].item(), tkw)
+        return cot, ratio_index
+
+    @torch.no_grad()
+    def predict_ratio(self, prompt: str, batch_cond_images, system_prompt: str, *, seed: int) -> int:
+        """Upstream `generate_image`'s `image_size="auto"` without a text stage: one greedy step over the
+        ratio tokens (`bot_task="img_ratio"`). Returns the picked index into `vae_reso_group`."""
+        self.image_processor.build_img_ratio_slice_logits_proc(self._tokenizer)
+        model_kwargs = self.prepare_model_inputs(
+            prompt=prompt, max_new_tokens=1, system_prompt=system_prompt, seed=seed, mode="gen_text",
+            bot_task="img_ratio", batch_cond_images=batch_cond_images, infer_align_image_size=True,
+        )
+        input_ids = model_kwargs.pop("input_ids")
+        model_kwargs["attention_mask"] = self._prepare_attention_mask_for_generation(
+            input_ids, None, model_kwargs=model_kwargs)
+        model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
+        with torch.autocast(device_type="cuda", dtype=self.dtype, enabled=self.dtype != torch.float32):
+            outputs = self(**model_inputs)
+        scores = self.image_processor.img_ratio_slice_logits_processor(
+            input_ids, outputs.logits[:, -1, :].to(copy=True, dtype=torch.float32))
+        return int(torch.argmax(scores, dim=-1)[0].item())
 
     @torch.no_grad()
     def denoise(
@@ -2679,7 +2724,7 @@ class HunyuanImage3ForCausalMM(nn.Module):
             model_inputs = self.prepare_inputs_for_generation(
                 input_ids, images=latent_model_input, timesteps=t_expand, **model_kwargs,
             )
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=latents.is_cuda):
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
                 model_output = self(**model_inputs, first_step=(i == 0))
                 pred = model_output.diffusion_prediction
             pred = pred.to(dtype=torch.float32)
@@ -2703,7 +2748,7 @@ class HunyuanImage3ForCausalMM(nn.Module):
             latents = latents + vae_config.shift_factor
         if hasattr(self.vae, "ffactor_temporal"):
             latents = latents.unsqueeze(2)
-        with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=latents.is_cuda):
+        with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=True):
             image = self.vae.decode(latents, return_dict=False, generator=generator)[0]
         if hasattr(self.vae, "ffactor_temporal"):
             assert image.shape[2] == 1, "image should have shape [B, C, T, H, W] and T should be 1"

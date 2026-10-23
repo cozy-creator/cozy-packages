@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import torch
-from cozy_runtime.author import Config, Loader, Model, uncaptured, uses_components
+from cozy_runtime.author import Config, Loader, Model, uses_components
 from PIL import Image
 from tokenizers import Tokenizer
 
@@ -77,10 +77,9 @@ def caption(cot: str | None, prompt: str) -> str:
     return found.group(1).strip() if found else prompt
 
 
-@uncaptured(COMPONENT)
 class HunyuanImage3(Model[Graph], encoded_leaves="accept"):
     """Text to image, or an edit of up to three ordered references, with the thinking stage optional.
-    Its routing and token loop wait on the host once per layer, so the component is never graph-recorded."""
+    Every forward takes the KV cache object, so Runtime runs it as written and records no CUDA graph."""
 
     graph: Graph
 
@@ -96,15 +95,29 @@ class HunyuanImage3(Model[Graph], encoded_leaves="accept"):
             return None
         return [model.image_processor.build_cond_images(image_list=references, infer_align_image_size=True)]
 
+    def _size(self, ratio_index: int) -> tuple[int, int]:
+        size = self.graph.components[COMPONENT].image_processor.vae_reso_group[ratio_index]
+        return size.width, size.height
+
     @uses_components(COMPONENT)
-    def think(self, prompt: str, references: list[Image.Image], *, seed: int, on_token: Callable[[int], None],
-              cancel: Callable[[], None]) -> str:
-        """Tencent's think-then-recaption stage: the chain of thought and rewritten prompt the image is made from."""
+    def think(self, prompt: str, references: list[Image.Image], *, seed: int, pick_size: bool,
+              on_token: Callable[[int], None], cancel: Callable[[], None]) -> tuple[str, tuple[int, int] | None]:
+        """Tencent's think-then-recaption stage: the chain of thought and rewritten prompt the image is made from,
+        and with `pick_size` the size (width, height) the model then picks (`image_size="auto"`)."""
         model = self.graph.components[COMPONENT]
         with torch.inference_mode():
             generator = torch.Generator(model.device).manual_seed(seed)
-            return model.generate_cot(prompt, self._cond(references), _system(UPSAMPLED), UPSAMPLED, seed=seed,
-                                      generator=generator, on_token=on_token, cancel=cancel)
+            cot, ratio = model.generate_cot(prompt, self._cond(references), _system(UPSAMPLED), UPSAMPLED, seed=seed,
+                                            generator=generator, need_ratio=pick_size, on_token=on_token,
+                                            cancel=cancel)
+        return cot, None if ratio is None else self._size(ratio)
+
+    @uses_components(COMPONENT)
+    def pick_size(self, prompt: str, references: list[Image.Image], *, seed: int) -> tuple[int, int]:
+        """The size (width, height) the model picks for a prompt it draws directly (`image_size="auto"`)."""
+        model = self.graph.components[COMPONENT]
+        with torch.inference_mode():
+            return self._size(model.predict_ratio(prompt, self._cond(references), _system(DIRECT), seed=seed))
 
     @uses_components(COMPONENT)
     def paint(self, prompt: str, references: list[Image.Image], cot: str | None, *, size: tuple[int, int],
