@@ -7,6 +7,7 @@
 python_version = "3.12"
 files = [
     "anima", "birefnet", "character-describer", "seedvr2", "minimax-h3", "sdxl", "qwen-image-2", "flux-3-klein",
+    "hidream-o1",
     "scripts", "examples", "minimax-h3-tools/src",
 ]
 strict = true
@@ -43,7 +44,7 @@ warn_unused_ignores = false
 
 # Model classes subclass Diffusers' and Torch's own, which this light environment does not carry.
 [[tool.mypy.overrides]]
-module = ["qwen_image_2.model", "flux_3_klein.klein", "seedvr2.model"]
+module = ["qwen_image_2.model", "flux_3_klein.klein", "seedvr2.model", "hidream_o1.model"]
 disallow_subclassing_any = false
 warn_unused_ignores = false
 
@@ -61,7 +62,7 @@ ignore_errors = true
 [tool.ruff]
 line-length = 100
 src = [
-    "anima", "minimax-h3", "sdxl", "qwen-image-2", "flux-3-klein", "scripts", "examples",
+    "anima", "minimax-h3", "sdxl", "qwen-image-2", "flux-3-klein", "hidream-o1", "scripts", "examples",
     "minimax-h3-tools",
 ]
 exclude = [".venv", "birefnet/birefnet/upstream", "seedvr2/seedvr2/upstream"]

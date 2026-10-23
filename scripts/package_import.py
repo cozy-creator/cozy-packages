@@ -38,6 +38,10 @@ PACKAGES = {
         "flux_3_klein",
         ("torch", "torchvision", "transformers", "diffusers", "tensorfs"),
     ),
+    "hidream-o1": (
+        "hidream_o1",
+        ("torch", "torchvision", "transformers", "tensorfs"),
+    ),
     "qwen-image-2": (
         "qwen_image_2",
         ("torch", "torchvision", "torchvision.ops", "transformers", "diffusers", "tensorfs"),
