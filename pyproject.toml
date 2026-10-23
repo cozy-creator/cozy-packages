@@ -7,14 +7,14 @@
 python_version = "3.12"
 files = [
     "anima", "birefnet", "character-describer", "seedvr2", "minimax-h3", "sdxl", "qwen-image-2", "qwen-image-edit", "flux-2",
-    "flux-3-klein", "fibo-2", "hidream-o1",
+    "flux-3-klein", "fibo-2", "hidream-o1", "hunyuan-image-3",
     "scripts", "examples", "minimax-h3-tools/src",
 ]
 strict = true
 warn_unreachable = true
 disallow_any_generics = true
 implicit_reexport = false
-exclude = ["^birefnet/birefnet/upstream/", "^seedvr2/seedvr2/upstream/"]
+exclude = ["^birefnet/birefnet/upstream/", "^seedvr2/seedvr2/upstream/", "^hunyuan-image-3/hunyuan_image_3/tencent/"]
 
 # Static checks install the typed Runtime distribution from PyPI. Heavy model libraries remain
 # absent to check the package-facing contracts without their large third-party stub trees.
@@ -57,7 +57,7 @@ disallow_subclassing_any = false
 
 # Attributed upstream architecture is exercised by its real constructor and model proof.
 [[tool.mypy.overrides]]
-module = ["birefnet.upstream.*", "seedvr2.upstream.*"]
+module = ["birefnet.upstream.*", "seedvr2.upstream.*", "hunyuan_image_3.tencent.*"]
 follow_imports = "skip"
 ignore_errors = true
 
@@ -67,7 +67,7 @@ src = [
     "anima", "minimax-h3", "sdxl", "qwen-image-2", "qwen-image-edit", "flux-3-klein", "fibo-2", "scripts", "examples",
     "minimax-h3-tools",
 ]
-exclude = [".venv", "birefnet/birefnet/upstream", "seedvr2/seedvr2/upstream"]
+exclude = [".venv", "birefnet/birefnet/upstream", "seedvr2/seedvr2/upstream", "hunyuan-image-3/hunyuan_image_3/tencent"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
