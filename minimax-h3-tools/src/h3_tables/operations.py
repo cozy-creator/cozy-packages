@@ -8,10 +8,10 @@ from typing import cast
 
 from cozy_runtime.author import (
     ModelArtifact,
+    QuantizationPlan,
     UnsupportedInput,
     canonical_json,
 )
-from cozy_runtime.derive.operations import QuantizationPlan
 from cozy_runtime.derive.operations import quantize as runtime_quantize
 
 from .adaln_operations import (
@@ -27,7 +27,7 @@ from .order import current_order, full_order
 from .quantization import dit_plan
 
 
-def quantization_plan() -> QuantizationPlan:
+def quantization_plan(encoding: Encoding) -> QuantizationPlan:
     """Bind reviewed H3 geometry and canonical order without loading a source model."""
     plan = dit_plan()
     components = tuple(DIT_COMPONENT.values())
@@ -39,6 +39,7 @@ def quantization_plan() -> QuantizationPlan:
     sections = parse_full_config(assets.joinpath("model-config.json").read_bytes())
     full = full_order(sections, pruned.rows)
     return QuantizationPlan(
+        encoding=encoding,
         components=components,
         keys=tuple(key for key, _ in plan),
         selected_schema_digest=canonical_json.digest(selected),
@@ -64,8 +65,7 @@ async def quantize(
     call = cast(Callable[..., Awaitable[ModelArtifact]], runtime_quantize)
     return await call(
         source=source,
-        plan=quantization_plan(),
-        encoding=encoding,
+        plan=quantization_plan(encoding),
         max_relative_frobenius=max_relative_frobenius,
     )
 

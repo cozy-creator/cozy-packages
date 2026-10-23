@@ -100,7 +100,7 @@ the image and joint blocks declare 8-bit attention (`attention_bits`; Runtime's 
 RTX 30/40); the text and reference early blocks, and `--lane 16`, keep exact attention.
 
 ```sh
-cozy model quantize <account>/flux-3-klein@0.1.0/bf16 --int8 --on <machine>
+cozy model quantize <account>/flux-3-klein@0.1.0/bf16 --int8 --package flux-3-klein --on <machine>
 cozy model publish <account>/flux-3-klein --release 0.1.0 --lane int8=sha256:<checkpoint>
 ```
 

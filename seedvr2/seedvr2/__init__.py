@@ -23,16 +23,14 @@ from cozy_runtime.author import (
     Shape,
     Telemetry,
     VideoAsset,
-    WeightsOutput,
 )
 from .color import Correction
 from .frames import extend
 from .model import RestorationModel, restore as restore_window
-from .quantize import int8
+from . import quantize as quantize  # its recipes
 from .upstream.temporal import blend_overlapping_frames
 
 app = App()
-app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
 
 
 class Resolution(StrEnum):

@@ -11,7 +11,10 @@ import torch
 from cozy_runtime.author import (
     App,
     Context,
+    DerivationHook,
+    Model,
     ModelArtifact,
+    Recipe,
     Telemetry,
     UnsupportedInput,
     Weights,
@@ -390,7 +393,7 @@ app.entrypoint(
 )
 
 
-#: `cozy model quantize <H3 checkpoint> --fp8|--int8|--nvfp4|--w4a8`: the quantized lanes' recipe over an
+#: The quantized lanes' recipe (`FP8`, `INT8`, `NVFP4`, `W4A8` below) over an
 #: AdaLN-pruned checkpoint. Both DiTs encode through the reviewed plan and the conditioner's 350
 #: decoder-layer linears through the structural selection minus `TEXT_ENCODER_KEEP`. A recipe
 #: component the source still holds plain is encoded; one already carrying this scheme is
@@ -425,9 +428,6 @@ QUANTIZER_RECIPES: Mapping[str, Mapping[str, _lanes.Treatment]] = {
         "text_encoder": _lanes.Treatment(encode="int8.convrot", keep=_lanes.TEXT_ENCODER_KEEP),
     },
 }
-#: Both DiTs and the conditioner at most (int8: and the video VAE); the output's own accounting is exact.
-MAX_QUANTIZER_BYTES = 2 * MAX_DIT_BYTES + MAX_TEXT_ENCODER_BYTES
-MAX_INT8_QUANTIZER_BYTES = MAX_QUANTIZER_BYTES + MAX_VIDEO_VAE_BYTES
 
 
 def quantizer_selections(source: Checkpoint, encoding: _lanes.Encoding) -> list[Selection]:
@@ -497,79 +497,28 @@ def _quantize_lane(
         return ctx.adopt_model(out)
 
 
-@invocable(memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
-async def fp8(
-    ctx: Context,
-    *,
-    source: Weights[Any],
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """H3's recipe at row-wise FP8 (`fp8.rowwise`): DiTs and text-conditioner linears."""
-    return _quantize_lane(ctx, tel, source, "fp8", "fp8.rowwise", max_relative_frobenius)
+#: Each quantized lane's encoding.
+QUANTIZER_ENCODINGS: Mapping[str, _lanes.Encoding] = {
+    "fp8": "fp8.rowwise",
+    "int8": "int8.convrot",
+    "nvfp4": "nvfp4",
+    "w4a8": "w4a8.convrot",
+}
 
 
-@invocable(memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
-async def nvfp4(
-    ctx: Context,
-    *,
-    source: Weights[Any],
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """H3's recipe at `nvfp4`: W4A4 on Blackwell's FP4 tensor cores, the same weights as int8."""
-    return _quantize_lane(ctx, tel, source, "nvfp4", "nvfp4", max_relative_frobenius)
+def quantize_lane(ctx: Context, tel: Telemetry, source: Weights[Any], output: str) -> ModelArtifact:
+    """H3's recipe for lane `output` (`QUANTIZER_RECIPES`): fp8 row-wise, int8 W8A8 on the int8
+    tensor cores, nvfp4 W4A4 on Blackwell's FP4 tensor cores, w4a8 W4A8 on the int8 tensor cores
+    (Ampere, Ada, Hopper)."""
+    return _quantize_lane(ctx, tel, source, output, QUANTIZER_ENCODINGS[output], None)
 
 
-@invocable(memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
-async def w4a8(
-    ctx: Context,
-    *,
-    source: Weights[Any],
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """H3's recipe at `w4a8.convrot`: W4A8 on the int8 tensor cores (Ampere, Ada,
-    Hopper), the same weights as nvfp4."""
-    return _quantize_lane(ctx, tel, source, "w4a8", "w4a8.convrot", max_relative_frobenius)
-
-
-@invocable(memo_version="h3-quantize/1", memo_dependencies=LANES_MEMO)
-async def int8(
-    ctx: Context,
-    *,
-    source: Weights[Any],
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """H3's recipe at `int8.convrot`: W8A8 on the int8 tensor cores, the same weights as fp8."""
-    return _quantize_lane(ctx, tel, source, "int8", "int8.convrot", max_relative_frobenius)
-
-
-app.entrypoint(
-    fp8,
-    name="fp8",
-    weights=(WeightsOutput("fp8", max_new_bytes=MAX_QUANTIZER_BYTES),),
-    accelerator=False,
-)
-app.entrypoint(
-    int8,
-    name="int8",
-    weights=(WeightsOutput("int8", max_new_bytes=MAX_INT8_QUANTIZER_BYTES),),
-    accelerator=False,
-)
-app.entrypoint(
-    nvfp4,
-    name="nvfp4",
-    weights=(WeightsOutput("nvfp4", max_new_bytes=MAX_QUANTIZER_BYTES),),
-    accelerator=False,
-)
-app.entrypoint(
-    w4a8,
-    name="w4a8",
-    weights=(WeightsOutput("w4a8", max_new_bytes=MAX_QUANTIZER_BYTES),),
-    accelerator=False,
-)
+#: `cozy model quantize <H3 checkpoint> --fp8|--int8|--nvfp4|--w4a8 --package <this>`: code, not a
+#: plan, since what a lane encodes depends on what the source still holds plain.
+FP8 = Recipe(lane="fp8", model=Model, plan=DerivationHook(quantize_lane))
+INT8 = Recipe(lane="int8", model=Model, plan=DerivationHook(quantize_lane))
+NVFP4 = Recipe(lane="nvfp4", model=Model, plan=DerivationHook(quantize_lane))
+W4A8 = Recipe(lane="w4a8", model=Model, plan=DerivationHook(quantize_lane))
 
 
 #: The function that writes each lane: the pruned lanes' functions keep their operation names.
