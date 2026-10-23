@@ -7,7 +7,7 @@
 python_version = "3.12"
 files = [
     "anima", "birefnet", "character-describer", "seedvr2", "minimax-h3", "sdxl", "qwen-image-2", "qwen-image", "flux-2",
-    "flux-3-klein", "fibo-2", "hidream-o1", "hunyuan-image-3",
+    "flux-3-klein", "fibo-2", "hidream-o1", "hunyuan-image-3", "ideogram-4",
     "scripts", "examples", "minimax-h3-tools/src",
 ]
 strict = true
