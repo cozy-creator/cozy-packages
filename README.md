@@ -19,6 +19,7 @@ dependencies or qualifying a worker image.
 | `qwen-image-2/` | Qwen-Image-2.1 image generation and reference editing with native Runtime execution (research model licence) |
 | `qwen-image/` | Qwen-Image-2512 text-to-image and Qwen-Image-Edit-2511 editing on one shared text encoder and VAE (Apache-2.0) |
 | `fibo-2/` | Bria Fibo 2.0 text-to-image and editing, Dev and Edit Turbo (CC BY-NC 4.0 model licence) |
+| `ideogram-4/` | Ideogram 4 text-to-image from JSON captions, with layout regions and rendered text (Ideogram Non-Commercial model licence) |
 | `examples/` | private `main()` scripts for conversions, uploads and diagnostics; run directly with `cozy run` |
 | `*/package.toml` | the `[application]` entry point only; it carries no model bindings |
 | `*/pyproject.toml` | release metadata; its one `cozy.application` entry point matches `package.toml` |
