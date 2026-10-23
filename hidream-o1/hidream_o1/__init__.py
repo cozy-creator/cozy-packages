@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import secrets
-from typing import Annotated
+from typing import Annotated, Literal
 
 import msgspec
 from cozy_runtime.author import (
@@ -62,6 +62,8 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     reference_images: _REFERENCES = msgspec.field(default_factory=list)
     #: One per reference, in order: where it goes in the output, or null for none.
     reference_boxes: list[Box | None] | None = None
+    #: A/B build only: references in the order given, or in their boxes' reading order.
+    box_order: Literal["given", "reading"] = "reading"
     #: Any W:H. None: the first reference's (1:1 when references are placed by box), else 1:1.
     aspect_ratio: _RATIO | None = None
     #: None: the first reference's pixel count, else 4. Held to 3.52-4.
@@ -117,7 +119,7 @@ def fitted(adj: Adjustments, ratio: tuple[int, int], pixels: int) -> tuple[int, 
 
 def layout(
     adj: Adjustments, ratio: str | None, megapixels: float | None, images: list[Image.Image],
-    boxes: list[list[float] | None] | None = None,
+    boxes: list[list[float] | None] | None = None, order: str = "reading",
 ) -> tuple[tuple[int, int], list[Image.Image]]:
     """The output size and the prepared references. What is not given is the first reference's
     (ratio, pixel count), else 1:1 at 4 MP; pixels are held to 3.52-4 MP. A lone reference given
@@ -155,7 +157,16 @@ def layout(
     if sum(box is not None for box in pixel_boxes) > 5:
         adj.warn("reference_boxes", "HiDream-O1 draws only the 5 largest boxes, as upstream")
     side = reference_size(max(width, height), len(images) + 1)
+    if order == "reading":
+        # The model binds references to boxes by their order more than by colour: placed references
+        # go in their boxes' left-to-right order (then top to bottom), unplaced ones after them.
+        ranked = sorted(range(len(images)), key=lambda i: (pixel_boxes[i] is None, *_centre(pixel_boxes[i])))
+        images, pixel_boxes = [images[i] for i in ranked], [pixel_boxes[i] for i in ranked]
     return (width, height), placed(images, pixel_boxes, width, height, side)
+
+
+def _centre(box: tuple[int, int, int, int] | None) -> tuple[float, float]:
+    return ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2) if box else (0.0, 0.0)
 
 
 def _generate(
@@ -166,7 +177,7 @@ def _generate(
     seed = payload.seed if payload.seed is not None else secrets.randbits(53)
     images = [asset.read() for asset in payload.reference_images]
     (width, height), references = layout(adj, payload.aspect_ratio, payload.megapixels, images,
-                                         payload.reference_boxes)
+                                         payload.reference_boxes, getattr(payload, "box_order", "reading"))
     ctx.raise_if_cancelled()
     with tel.stage("generating image", overall_range=(0.0, 0.98)):
         image = model.generate(
