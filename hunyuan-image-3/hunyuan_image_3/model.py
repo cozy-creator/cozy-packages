@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import json
 import re
-import statistics
-from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -23,6 +21,7 @@ from cozy_runtime.author import Config, Loader, Model, uses_components
 from PIL import Image
 from tokenizers import Tokenizer
 
+from .routing import Routing
 from .tencent.configuration_hunyuan_image_3 import HunyuanImage3Config
 from .tencent.modeling_hunyuan_image_3 import HunyuanImage3ForCausalMM
 from .tencent.system_prompt import get_system_prompt
@@ -53,8 +52,6 @@ GENERATION: dict[str, object] = {
 #: `prompt_upsampling` on: Tencent's default stage, think then recaption; off: straight to the image.
 UPSAMPLED, DIRECT = "think_recaption", "image"
 _RECAPTION = re.compile(r"<recaption>(.*?)(?:</recaption>|$)", re.DOTALL)
-#: Expert caches the routing record replays (least recently used), in experts: 256 is ~9.7 GB at int8.
-_CACHES = (256, 512, 1024)
 
 
 class Graph:
@@ -66,54 +63,6 @@ class Graph:
         for layer in model.model.layers:
             layer.mlp.gate.wg.float()
         self.components: dict[str, torch.nn.Module] = {COMPONENT: model}
-
-
-class Routing:
-    """A stage's expert hits: per forward and layer, which of the 64 experts got tokens and how many, and how
-    often an expert cache of each `_CACHES` size would have held the expert a forward needed."""
-
-    def __init__(self) -> None:
-        self.forwards = 0
-        self.hit_per_layer: list[int] = []
-        self.tokens_per_hit: list[int] = []
-        self.touched: set[tuple[int, int]] = set()
-        self.caches = {size: OrderedDict[tuple[int, int], None]() for size in _CACHES}
-        self.cache_hits = dict.fromkeys(_CACHES, 0)
-
-    def __call__(self, layer: int, counts: list[int]) -> None:
-        self.forwards += layer == 0
-        hit = [expert for expert, tokens in enumerate(counts) if tokens]
-        self.hit_per_layer.append(len(hit))
-        self.tokens_per_hit.extend(counts[expert] for expert in hit)
-        for expert in hit:
-            key = (layer, expert)
-            self.touched.add(key)
-            for size, cache in self.caches.items():
-                if key in cache:
-                    cache.move_to_end(key)
-                    self.cache_hits[size] += 1
-                else:
-                    cache[key] = None
-                    if len(cache) > size:
-                        cache.popitem(last=False)
-
-    def summary(self) -> dict[str, float]:
-        """Means over forwards and layers; `working_set` counts distinct (layer, expert) pairs of the stage."""
-        if not self.hit_per_layer:
-            return {}
-        uses = len(self.tokens_per_hit)
-        found: dict[str, float] = {
-            "forwards": self.forwards,
-            "experts_hit_per_layer_mean": round(statistics.fmean(self.hit_per_layer), 2),
-            "experts_hit_per_layer_min": min(self.hit_per_layer),
-            "tokens_per_hit_expert_min": min(self.tokens_per_hit),
-            "tokens_per_hit_expert_median": statistics.median(self.tokens_per_hit),
-            "tokens_per_hit_expert_max": max(self.tokens_per_hit),
-            "working_set": len(self.touched),
-        }
-        for size, hits in self.cache_hits.items():
-            found[f"lru_{size}_hit_rate"] = round(hits / uses, 4)
-        return found
 
 
 def _tokenizer(read: Callable[[str], bytes]) -> HunyuanImage3TokenizerFast:
