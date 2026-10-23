@@ -20,16 +20,13 @@ from cozy_runtime.author import (
     Outputs,
     Shape,
     Telemetry,
-    WeightsOutput,
 )
 from PIL import Image
 
 from .model import PATCH, QwenImageEdit, QwenImageEditLoRA
-from .quantize import int8, nvfp4
+from . import quantize as quantize  # its recipes
 
 app = App()
-app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=40 << 30),), accelerator=False)
-app.entrypoint(nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=32 << 30),), accelerator=False)
 
 
 class Megapixels(IntEnum):

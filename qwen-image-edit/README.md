@@ -75,8 +75,8 @@ cozy model upload hf://Qwen/Qwen-Image-Edit-2511@6f3ccc0b56e431dc6a0c2b2039706d7
   <account>/qwen-image-edit-2511 --on <machine>
 cozy model upload hf://lightx2v/Qwen-Image-Edit-2511-Lightning@107d238d68b8387e32843d0b4a2e24ceb0d3ad86/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors \
   <account>/qwen-image-edit-2511-lightning-lora --on <machine>
-cozy model quantize <account>/qwen-image-edit-2511#<checkpoint> --int8 --on <machine>
-cozy model quantize <account>/qwen-image-edit-2511#<checkpoint> --nvfp4 --on <machine>
+cozy model quantize <account>/qwen-image-edit-2511#<checkpoint> --int8 --package fidika/qwen-image-edit --on <machine>
+cozy model quantize <account>/qwen-image-edit-2511#<checkpoint> --nvfp4 --package fidika/qwen-image-edit --on <machine>
 ```
 
 ## Licence
