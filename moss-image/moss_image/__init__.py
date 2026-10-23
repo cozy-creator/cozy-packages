@@ -15,10 +15,10 @@ from cozy_runtime.author import (
     Context,
     ImageAsset,
     ImagePreparation,
+    InvalidRequest,
     Memoize,
     Outputs,
     Telemetry,
-    UnsupportedInput,
     WeightsOutput,
 )
 
@@ -38,8 +38,9 @@ GUIDANCE = 3.0
 
 _RATIO = Annotated[str, msgspec.Meta(pattern=r"^[1-9][0-9]*:[1-9][0-9]*$")]
 _SEED = Annotated[int, msgspec.Meta(ge=0, le=(1 << 53) - 1)]
-#: `[x0, y0, x1, y1]`: corners normalized 0-1 on the output canvas, origin top-left.
-Box = tuple[float, float, float, float]
+_UNIT = Annotated[float, msgspec.Meta(ge=0.0, le=1.0)]
+#: `[x0, y0, x1, y1]`: corners, 0-1 of the output canvas, origin top-left, x0 < x1, y0 < y1.
+Box = Annotated[list[_UNIT], msgspec.Meta(min_length=4, max_length=4)]
 
 
 class Region(msgspec.Struct):
@@ -58,9 +59,9 @@ class GenerateInput(msgspec.Struct):
         msgspec.Meta(max_length=16),
     ] = msgspec.field(default_factory=list)
     #: Placement of `reference_images`: warned and ignored, as they are.
-    reference_boxes: list[Box | None] = msgspec.field(default_factory=list)
-    #: Objects and text placed in boxes; the prompt then describes the whole image.
-    regions: Annotated[list[Region], msgspec.Meta(max_length=64)] = msgspec.field(default_factory=list)
+    reference_boxes: list[Box | None] | None = None
+    #: Elements and rendered text placed by box, described in words; the prompt describes the whole image.
+    regions: Annotated[list[Region], msgspec.Meta(max_length=64)] | None = None
     #: Any W:H. None: 1:1.
     aspect_ratio: _RATIO | None = None
     #: None: 1. Held to 0.25-4.
@@ -109,18 +110,18 @@ def output_size(adj: Adjustments, ratio: str | None, megapixels: float | None) -
     return width, height
 
 
-def pixel_box(box: Box, width: int, height: int, where: str) -> list[int]:
+def pixel_box(box: list[float], width: int, height: int, field: str) -> list[int]:
     """A normalized `[x0, y0, x1, y1]` as MOSS's `yxyx` pixel box from the canvas centre: left and top
     floored, right and bottom ceiled, as upstream's layout compiler encloses a box."""
     x0, y0, x1, y1 = box
-    if not (all(math.isfinite(v) for v in box) and 0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1):
-        raise UnsupportedInput(f"{where} must be [x0, y0, x1, y1] with 0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1",
-                               code="regions")
+    if not (x0 < x1 and y0 < y1):
+        raise InvalidRequest(f"a box is [x0, y0, x1, y1] with x0 < x1 and y0 < y1, got {box}",
+                             code="invalid_box", fields=(field,))
     return [math.floor(round(y0 * height, 9)) - height // 2, math.floor(round(x0 * width, 9)) - width // 2,
             math.ceil(round(y1 * height, 9)) - height // 2, math.ceil(round(x1 * width, 9)) - width // 2]
 
 
-def layout_prompt(prompt: str, regions: list[Region], width: int, height: int) -> str:
+def layout_prompt(prompt: str, regions: list[Region] | None, width: int, height: int) -> str:
     """The prompt as given, or with regions MOSS's layout JSON: the prompt is the scene's caption, each
     region an item (`text` when it renders text, else `object`), compact as upstream compiles it."""
     if not regions:
@@ -130,7 +131,7 @@ def layout_prompt(prompt: str, regions: list[Region], width: int, height: int) -
         item: dict[str, object] = {"label": "object" if region.text is None else "text", "caption": region.prompt}
         if region.text is not None:
             item["text"] = region.text
-        item["bbox"] = pixel_box(region.box, width, height, f"regions[{index}].box")
+        item["bbox"] = pixel_box(region.box, width, height, f"regions.{index}.box")
         items.append(item)
     layout = {"summary": {"caption": prompt.strip()}, "items": items, "bbox_coord_space": "abs_centralized",
               "bbox_format": "yxyx"}
