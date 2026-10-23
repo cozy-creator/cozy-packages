@@ -1,25 +1,25 @@
-"""Tencent's HunyuanImage 3.0 Instruct: text to image, or an edit or fusion of up to three ordered references,
-with the model's own think-and-rewrite stage. `generate` is Instruct, `generate_turbo` Instruct-Distil."""
+"""Tencent's HunyuanImage 3.0: text to image, or an edit or fusion of up to three ordered references, with the
+model's own think-and-rewrite stage. `generate_turbo` is Instruct-Distil (8 steps), `generate` Instruct (50)."""
 
 from __future__ import annotations
 
-import secrets
 from typing import Annotated
 
 import msgspec
 from cozy_runtime.author import (
     Adjustments,
     App,
-    AssetBound,
     Context,
-    ImageAsset,
+    ImageRequest,
+    ImageResult,
     Memoize,
     Outputs,
+    ReferenceImages,
     Telemetry,
     WeightsOutput,
 )
 
-from .model import MAX_NEW_TOKENS, HunyuanImage3, caption
+from .model import GUIDANCE, MAX_NEW_TOKENS, HunyuanImage3, caption
 from .quantize import int8, nvfp4
 from .tencent.tokenization_hunyuan_image_3 import Resolution, ResolutionGroup
 
@@ -34,13 +34,18 @@ SIZES = ResolutionGroup(base_size=1024, align=16, extra_resolutions=[
 ])
 _WIDEST = max(r.w / r.h for r in SIZES.data)
 _TALLEST = min(r.w / r.h for r in SIZES.data)
-_RATIO = Annotated[str, msgspec.Meta(pattern=r"^[1-9][0-9]*:[1-9][0-9]*$")]
-_REFERENCES = Annotated[
-    list[ImageAsset],
-    AssetBound(max_bytes=32 << 20, max_decoded_bytes=64 << 20, media_types=("image/png", "image/jpeg", "image/webp")),
-    msgspec.Meta(max_length=3),
-]
-_SEED = Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)]
+_UNIT = Annotated[float, msgspec.Meta(ge=0, le=1)]
+#: `[x0, y0, x1, y1]`, 0-1 against the output canvas (se-081).
+Box = Annotated[list[_UNIT], msgspec.Meta(min_length=4, max_length=4)]
+
+
+class HunyuanRequest(ImageRequest, forbid_unknown_fields=True):
+    """The shared image request. With no `aspect_ratio` the model picks its size, as Tencent's
+    `image_size="auto"`; it makes about 1 MP whatever `megapixels` asks."""
+
+    reference_images: Annotated[ReferenceImages, msgspec.Meta(max_length=3)] = msgspec.field(default_factory=list)
+    #: Placement per reference (se-081): HunyuanImage 3.0 has no layout control, so it warns and is ignored.
+    reference_boxes: list[Box | None] | None = None
 
 
 def requested_size(adj: Adjustments, ratio: str) -> tuple[int, int]:
@@ -59,95 +64,55 @@ def check_pixels(adj: Adjustments, megapixels: float | None, size: tuple[int, in
         adj.clamp("megapixels", megapixels, round(made / (1 << 20), 2), "HunyuanImage 3.0 makes about 1 MP")
 
 
-class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: Annotated[str, msgspec.Meta(min_length=1)]
-    #: Given, the image edits or fuses them, in order.
-    reference_images: _REFERENCES = msgspec.field(default_factory=list)
-    #: Any W:H, served at the model's nearest size. None: the model picks its size.
-    aspect_ratio: _RATIO | None = None
-    #: The model makes ~1 MP only; another value is reported as a clamp.
-    megapixels: Annotated[float, msgspec.Meta(gt=0, le=64)] | None = None
-    #: None: 50.
-    steps: Annotated[int, msgspec.Meta(ge=1, le=200)] | None = None
-    #: Classifier-free guidance; the conditional and unconditional halves always run together.
-    guidance: Annotated[float, msgspec.Meta(gt=1.0, le=20.0)] = 2.5
-    seed: _SEED | None = None
-    #: The model thinks, then rewrites the prompt, before it draws.
-    prompt_upsampling: bool = True
-
-
-class TurboInput(msgspec.Struct, forbid_unknown_fields=True):
-    prompt: Annotated[str, msgspec.Meta(min_length=1)]
-    #: Given, the image edits or fuses them, in order.
-    reference_images: _REFERENCES = msgspec.field(default_factory=list)
-    #: Any W:H, served at the model's nearest size. None: the model picks its size.
-    aspect_ratio: _RATIO | None = None
-    #: The model makes ~1 MP only; another value is reported as a clamp.
-    megapixels: Annotated[float, msgspec.Meta(gt=0, le=64)] | None = None
-    #: None: 8.
-    steps: Annotated[int, msgspec.Meta(ge=1, le=100)] | None = None
-    #: The guidance the distilled model is conditioned on.
-    guidance: Annotated[float, msgspec.Meta(ge=1.0, le=20.0)] = 2.5
-    seed: _SEED | None = None
-    #: The model thinks, then rewrites the prompt, before it draws.
-    prompt_upsampling: bool = True
-
-
-class ImageOutput(msgspec.Struct):
-    image: Annotated[
-        ImageAsset,
-        AssetBound(max_bytes=64 << 20, max_decoded_bytes=64 << 20, media_types=("image/png",)),
-    ]
-    width: int
-    height: int
-    seed: int
-    #: The caption the image was generated from: the model's rewrite when `prompt_upsampling` is on.
-    prompt: str
-
-
-def _generate(ctx: Context, payload: GenerateInput | TurboInput, steps: int, model: HunyuanImage3, out: Outputs,
-              tel: Telemetry, adj: Adjustments) -> ImageOutput:
-    seed = payload.seed if payload.seed is not None else secrets.randbits(53)
+def _generate(ctx: Context, payload: HunyuanRequest, steps: int, model: HunyuanImage3, out: Outputs,
+              tel: Telemetry, adj: Adjustments) -> ImageResult:
+    payload.ignored(adj, "negative_prompt", reason="HunyuanImage 3.0's unconditional branch is the prompt dropped")
+    payload.ignored(adj, "reference_boxes", reason="HunyuanImage 3.0 has no layout control")
+    seed = payload.drawn_seed()
     references = [asset.read() for asset in payload.reference_images]
+    guidance = payload.guidance if payload.guidance is not None else GUIDANCE
     # No aspect ratio: the model picks its size, as Tencent's `image_size="auto"`.
     size = requested_size(adj, payload.aspect_ratio) if payload.aspect_ratio else None
     cot = None
-    if payload.prompt_upsampling:
+    if payload.prompt_upsampling is not False:
         with tel.stage("thinking", overall_range=(0.0, 0.3)):
-            cot, picked = model.think(payload.prompt, references, seed=seed, pick_size=size is None,
-                                      cancel=ctx.raise_if_cancelled,
-                                      on_token=tel.step_callback(MAX_NEW_TOKENS, stage="thinking",
-                                                                 overall_range=(0.0, 0.3)))
-        size = size or picked
+            cot, picked, routing = model.think(
+                payload.prompt, references, seed=seed, pick_size=size is None, cancel=ctx.raise_if_cancelled,
+                on_token=tel.step_callback(MAX_NEW_TOKENS, stage="thinking", overall_range=(0.0, 0.3)))
+        tel.log("thinking routing", **routing)
         tel.log("rewritten prompt", caption=caption(cot, payload.prompt)[:2000])
-    elif size is None:
+        size = size or picked
+    if size is None:
         with tel.stage("picking size", overall_range=(0.0, 0.05)):
             size = model.pick_size(payload.prompt, references, seed=seed)
-    assert size is not None
     check_pixels(adj, payload.megapixels, size)
     with tel.stage("generating image", overall_range=(0.3, 0.97)):
-        image = model.paint(payload.prompt, references, cot, size=size, steps=steps, guidance=payload.guidance,
-                            seed=seed, cancel=ctx.raise_if_cancelled,
-                            on_step=tel.step_callback(steps, stage="generating image", overall_range=(0.3, 0.95)))
+        image, routing = model.paint(
+            payload.prompt, references, cot, size=size, steps=steps, guidance=guidance, seed=seed,
+            cancel=ctx.raise_if_cancelled,
+            on_step=tel.step_callback(steps, stage="generating image", overall_range=(0.3, 0.95)))
+    tel.log("denoising routing", **routing)
     with tel.stage("saving image", overall_range=(0.97, 1.0)):
         asset = out.save_image(image, format="png")
-    return ImageOutput(asset, image.width, image.height, seed, caption(cot, payload.prompt))
+    return ImageResult(asset, image.width, image.height, seed, caption(cot, payload.prompt))
 
 
 _COMPONENTS = {"model": ("model",)}
 
 
-@app.entrypoint(defaults={"model": "hunyuan-image-3-instruct@0.1.0"}, components=_COMPONENTS,
-                memoize=Memoize(requires=["seed"]))
-def generate(ctx: Context, payload: GenerateInput, model: HunyuanImage3, out: Outputs, tel: Telemetry,
-             adj: Adjustments) -> ImageOutput:
-    """HunyuanImage 3.0 Instruct, 50 steps with CFG 2.5: text to image, or an edit of up to three references."""
-    return _generate(ctx, payload, payload.steps or 50, model, out, tel, adj)
-
-
 @app.entrypoint(defaults={"model": "hunyuan-image-3-instruct-distil@0.1.0"}, components=_COMPONENTS,
                 memoize=Memoize(requires=["seed"]))
-def generate_turbo(ctx: Context, payload: TurboInput, model: HunyuanImage3, out: Outputs, tel: Telemetry,
-                   adj: Adjustments) -> ImageOutput:
-    """HunyuanImage 3.0 Instruct-Distil, 8 steps: text to image, or an edit of up to three references."""
+def generate_turbo(ctx: Context, payload: HunyuanRequest, model: HunyuanImage3, out: Outputs, tel: Telemetry,
+                   adj: Adjustments) -> ImageResult:
+    """HunyuanImage 3.0 Instruct-Distil, 8 steps, guidance 2.5 (distilled): text to image, or an edit of up to
+    three references; the model thinks and rewrites the prompt first unless `prompt_upsampling` is false."""
     return _generate(ctx, payload, payload.steps or 8, model, out, tel, adj)
+
+
+@app.entrypoint(defaults={"model": "hunyuan-image-3-instruct@0.1.0"}, components=_COMPONENTS,
+                memoize=Memoize(requires=["seed"]))
+def generate(ctx: Context, payload: HunyuanRequest, model: HunyuanImage3, out: Outputs, tel: Telemetry,
+             adj: Adjustments) -> ImageResult:
+    """HunyuanImage 3.0 Instruct, 50 steps with CFG 2.5: text to image, or an edit of up to three references;
+    the model thinks and rewrites the prompt first unless `prompt_upsampling` is false."""
+    return _generate(ctx, payload, payload.steps or 50, model, out, tel, adj)

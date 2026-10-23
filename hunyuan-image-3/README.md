@@ -4,24 +4,24 @@ Tencent's HunyuanImage 3.0 Instruct: one 80B mixture-of-experts transformer (32 
 routed per token plus one shared, about 13B active) that reads text and images and makes images. It first
 writes its chain of thought and a rewritten prompt token by token, then denoises the image (flow matching on
 32-channel VAE latents) in the same transformer. One function makes images from text, or edits and fuses up to
-three ordered reference images.
+three ordered reference images. Use `generate_turbo`.
 
-| function | checkpoint | default `steps` | `guidance` |
+| function | checkpoint | default `steps` | `guidance` (default 2.5) |
 | --- | --- | --- | --- |
-| `generate` | Instruct | 50 | 2.5, classifier-free (both halves run every step) |
-| `generate_turbo` | Instruct-Distil | 8 | 2.5, the value the distilled model is conditioned on |
+| `generate_turbo` | Instruct-Distil | 8 | the value the distilled model is conditioned on |
+| `generate` | Instruct | 50 | classifier-free (both halves run every step) |
 
 ```sh
-cozy run fidika/hunyuan-image-3/generate_turbo prompt='A paper boat sailing down a rain gutter at dusk' seed=7
-cozy run fidika/hunyuan-image-3/generate prompt='Put the cat in a tiny astronaut suit' \
+cozy run hunyuan-image-3/generate_turbo prompt='A paper boat sailing down a rain gutter at dusk' seed=7
+cozy run hunyuan-image-3/generate_turbo prompt='Put the cat in a tiny astronaut suit' \
   --asset reference_images.0=cat.png
 ```
 
-Fields: `prompt`, `reference_images` (0–3, in order), `aspect_ratio` (any `W:H`; unset, the model picks), `megapixels`, `steps`
-(omitted: the default above), `guidance`, `seed` (random when omitted, returned) and `prompt_upsampling`
-(default `true`). The result is the `image`, its `width` and `height`, the `seed`, and `prompt`: the caption the
-image was made from, which is the model's rewrite when `prompt_upsampling` is on. There is no negative prompt:
-the model's unconditional branch is the prompt dropped.
+The request and result are the shared image interface (`ImageRequest`, `ImageResult`): `prompt`,
+`reference_images` (0–3, in order), `aspect_ratio` (any `W:H`; unset, the model picks), `megapixels`, `steps`,
+`guidance`, `seed` (random when omitted, returned) and `prompt_upsampling` (unset: on). `negative_prompt` and
+`reference_boxes` warn and are ignored: the model's unconditional branch is the prompt dropped, and it has no
+layout control. The result's `prompt` is the caption the image was made from: the model's rewrite when it thought.
 
 ## Sizes
 
@@ -41,38 +41,47 @@ samples as Tencent's `generation_config.json` says (temperature 0.6, top-k 1024,
 tokens), from a generator seeded with `seed`, so a seed repeats the same thought. Off (`bot_task="image"`), the
 prompt goes straight to the image stage.
 
+## Memory
+
+Each of the 2,048 routed experts (37.7M parameters, 37.8 MB at int8, 93% of the model) is its own block for
+Runtime's weight paging, resident or paged on its own; attention, the shared expert, routers, embeddings and the
+image layers stay resident (about 8 GB at int8). Denoising sends 4,096 image tokens through every layer, so
+nearly every expert is used every step; the thinking stage uses 8 of 64 per layer per token. Every run logs both
+stages' routing: experts hit per layer, tokens per expert, and how often an expert cache would have held them.
+
 ## Implementation
 
 `hunyuan_image_3/tencent/` is Tencent's code (`Tencent-Hunyuan/HunyuanImage-3.0` at `6e9113a6`, the same as the
 checkpoints' remote code), vendored because it is not importable as a package (its `__init__` imports a
 top-level `utils`, and its requirements pin Gradio). The changes are in its git history: no Transformers
 model/generation/cache classes, the token and denoising loops written out over Tencent's own input preparation
-and logits processors, the next token's logits only, and expert routing that gathers each expert's rows with
-one sort instead of a mask per expert. As Tencent's `from_pretrained(torch_dtype="auto")` builds it, every module
-runs in bfloat16, the VAE included, except the expert routers (float32). `scripts/hunyuan-image-3-model-proof.py`
-checks the port against Tencent's code on CPU with a small random-weight model.
+and logits processors, the next token's logits only, routed experts as their own class (the paging blocks),
+and routing that gathers each expert's rows with one sort instead of a mask per expert. As Tencent's
+`from_pretrained(torch_dtype="auto")` builds it, every module runs in bfloat16, the VAE included, except the
+expert routers (float32). `scripts/hunyuan-image-3-model-proof.py` checks the port against Tencent's code on CPU
+with a small random-weight model: images bit-identical, the same thought and the same picked size.
 
 ## Prepare the models
 
 Upload each checkpoint as it is (168.5 GB each; neither repository is gated):
 
 ```sh
-cozy model upload hf://tencent/HunyuanImage-3.0-Instruct@2ec2c78bee7d4b94157341fba86c4c2c7b1858b2 \
-  <account>/hunyuan-image-3-instruct --on <machine>
 cozy model upload hf://tencent/HunyuanImage-3.0-Instruct-Distil@c8ffd07206f1b843697606968196e8f59f8ff38c \
   <account>/hunyuan-image-3-instruct-distil --on <machine>
+cozy model upload hf://tencent/HunyuanImage-3.0-Instruct@2ec2c78bee7d4b94157341fba86c4c2c7b1858b2 \
+  <account>/hunyuan-image-3-instruct --on <machine>
 ```
 
 ## Lanes
 
 `int8` writes the default lane from the 16-bit checkpoint: every linear of the 32 decoder layers (attention, the
-shared and the 64 routed experts: 99% of the parameters) and the LM head as `int8.convrot`, about 83 GB. `nvfp4`
-puts the routed experts in NVFP4 (Blackwell), about 45 GB. The routers, embedding, vision tower, VAE and image
-layers keep their source bytes.
+shared and the 64 routed experts: 99% of the parameters) and the LM head as `int8.convrot`, about 85 GB in all.
+`nvfp4` puts the routed experts in NVFP4, 43.5 GB of experts instead of 77.3. The routers, embedding, vision
+tower, VAE and image layers keep their source bytes.
 
 ```sh
-cozy model quantize <account>/hunyuan-image-3-instruct@0.1.0/bf16 --int8 --on <machine>
-cozy model quantize <account>/hunyuan-image-3-instruct@0.1.0/bf16 --nvfp4 --on <machine>
+cozy run ./hunyuan-image-3/int8 <account>/hunyuan-image-3-instruct-distil#<checkpoint> <account>/hunyuan-image-3-instruct-distil --on <machine>
+cozy run ./hunyuan-image-3/nvfp4 <account>/hunyuan-image-3-instruct-distil#<checkpoint> <account>/hunyuan-image-3-instruct-distil --on <machine>
 ```
 
 ## Licence

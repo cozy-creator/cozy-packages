@@ -956,7 +956,15 @@ class HunyuanTopKGate(nn.Module):
         return topk_weight, expert_index
 
 
+class HunyuanExpert(HunyuanMLP):
+    """A routed expert: its own class so Runtime's weight paging takes each one as a block (`_no_split_modules`),
+    resident or paged on its own; the shared expert stays with the layer's always-resident weights."""
+
+
 class HunyuanMoE(nn.Module):
+    #: Set to `trace(layer_idx, counts)` to observe routing: tokens per expert, every forward.
+    trace: Optional[Callable[[int, list[int]], None]] = None
+
     def __init__(self, config: HunyuanImage3Config, layer_idx: Optional[int] = None):
         super().__init__()
         self.config = config
@@ -967,7 +975,7 @@ class HunyuanMoE(nn.Module):
             self.shared_mlp = HunyuanMLP(config, layer_idx=layer_idx, is_shared_mlp=True)
         self.gate = HunyuanTopKGate(config, layer_idx=layer_idx)
         self.experts = nn.ModuleList(
-            [HunyuanMLP(config, layer_idx=layer_idx, is_shared_mlp=False, is_moe=True) for _ in range(self.num_experts)]
+            [HunyuanExpert(config, layer_idx=layer_idx, is_shared_mlp=False, is_moe=True) for _ in range(self.num_experts)]
         )
 
 
@@ -989,6 +997,8 @@ class HunyuanMoE(nn.Module):
         hidden_states_flat = input_hidden_states.view(-1, hidden_size)    # (bsz * seq_len, hidden_size)
         order = torch.argsort(flat_topk_idx, stable=True)
         counts = torch.bincount(flat_topk_idx, minlength=self.num_experts).tolist()
+        if self.trace is not None:
+            self.trace(self.layer_idx, counts)
         selected = hidden_states_flat[order // self.moe_topk]
         outputs = []
         start = 0
@@ -1246,8 +1256,10 @@ class HunyuanImage3Model(nn.Module):
 
 
 class HunyuanImage3ForCausalMM(nn.Module):
-    # Upstream's PreTrainedModel attribute; Runtime's weight paging takes these as the blocks it streams.
-    _no_split_modules = ["HunyuanImage3DecoderLayer"]
+    # Runtime's weight paging takes these as its blocks: each routed expert is one, so it is resident or paged on
+    # its own; attention, the shared expert, the router, norms and the image layers stay resident (upstream's
+    # PreTrainedModel names HunyuanImage3DecoderLayer here, for accelerate's device maps).
+    _no_split_modules = ["HunyuanExpert"]
 
     def __init__(self, config: HunyuanImage3Config):
         super().__init__()
@@ -2672,8 +2684,9 @@ class HunyuanImage3ForCausalMM(nn.Module):
         generator = model_kwargs["generator"]
         device = self.device
         cfg_distilled = bool(self.config.cfg_distilled)
-        do_cfg = guidance_scale > 1.0
-        cfg_factor = 1 if cfg_distilled else 1 + do_cfg
+        # Upstream skips CFG at guidance <= 1, but its inputs always hold both halves (a batch mismatch it does
+        # not reach at its default 2.5); the halves always run here, so any guidance is the formula's.
+        cfg_factor = 1 if cfg_distilled else 2
         scheduler = FlowMatchDiscreteScheduler(shift=self.generation_config.flow_shift, reverse=True, solver="euler")
         scheduler.set_timesteps(steps, device=device)
         timesteps = scheduler.timesteps
@@ -2711,7 +2724,7 @@ class HunyuanImage3ForCausalMM(nn.Module):
                 model_output = self(**model_inputs, first_step=(i == 0))
                 pred = model_output.diffusion_prediction
             pred = pred.to(dtype=torch.float32)
-            if do_cfg and not cfg_distilled:
+            if not cfg_distilled:
                 pred_cond, pred_uncond = pred.chunk(2)
                 pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
             latents = scheduler.step(pred, t, latents, return_dict=False)[0]
