@@ -35,7 +35,7 @@ tasks:
         if [ "$p" = minimax-h3-tools ]; then $py -P scripts/h3-adaln-interface-proof.py; fi
         echo "$p conforms"
 
-  # Locks pin same-account callees exactly, so each release of X is followed by one of every package
+  # First-party packages publish at the root namespace (`--root`, Hub admins). Locks pin first-party callees exactly, so each release of X is followed by one of every package
   # whose lock holds X: relocked to it, patch-bumped, conformed, pushed to master, then published.
   publish:
     desc: "Conform and publish packages from master to every hub, then cascade to their in-repo dependents: task publish -- qwen-image-2"
@@ -58,7 +58,7 @@ tasks:
           i=$(grep -om1 'https\?://[^"]*/v1/index/[^/]*/simple/' "$1/uv.lock"); a=${i%/simple/}
           cozy package info "${a##*/}/$1" --tensorhub "${i%%/v1/*}" --json | jq -e --arg v "$(ver "$1")" 'any(.releases[]; .release == $v)' >/dev/null
         }
-        ship() { for h in {{.HUBS}}; do rm -rf "${work:?}/$1"; git archive HEAD "$1" | tar -x -C "$work"; (cd "$work/$1" && cozy package publish --tensorhub "$h"); done; }
+        ship() { for h in {{.HUBS}}; do rm -rf "${work:?}/$1"; git archive HEAD "$1" | tar -x -C "$work"; (cd "$work/$1" && cozy package publish --root --tensorhub "$h"); done; }
         release() {
           task conform -- "$1" || { echo "REFUSED: $1 $(ver "$1") fails conformance; nothing of it was committed or published" >&2; exit 1; }
           if ! git diff --quiet HEAD; then
@@ -80,7 +80,7 @@ tasks:
           published "$p" || { echo "$p $(ver "$p") on master is unpublished; release it first: task publish -- $p" >&2; exit 1; }
           if pinned "$p"; then ship "$p"; continue; fi
           uv version -q --bump patch --frozen --project "$p"
-          (cd "$p" && cozy package lock --tensorhub {{.LOCK_HUB}} $(printf ' --upgrade-package=%s' $up $(raised "$p")))
+          (cd "$p" && cozy package lock --root --tensorhub {{.LOCK_HUB}} $(printf ' --upgrade-package=%s' $up $(raised "$p")))
           pinned "$p" || { echo "$p: the relock did not take $up at their released versions" >&2; exit 1; }
           release "$p"
         done

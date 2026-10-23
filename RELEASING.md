@@ -20,30 +20,28 @@ Complete the [dependency qualification checklist](DEPENDENCIES.md) first. Worker
 are OS/CUDA/PyTorch bases named by tag; the CLI updates the machine, Runtime and TensorFS
 at runtime, so a package never waits on an image.
 
-## One source, every Hub and account
+## One source, every Hub
 
-Package source names no account. A package publishes into the namespace of the
-account that runs `cozy package publish` on the command's Tensorhub: `paul` on
-the local `127.0.0.1:8819` Hub, `fidika` on tensorhub.com. Default releases for the
-publisher's own models omit the org (`minimax-h3@1.0.0-rc.4`); Creator
-writes the account into the published interface. Same-account package dependencies
-name the `tensorhub` index (`qwen-image-2 = { index = "tensorhub" }`).
+First-party packages publish at the root namespace, with no owner (`sdxl`, `minimax-h3`): `task publish`
+runs `cozy package publish --root` on each Hub, which only Hub admins may do. A model default with no
+org names a first-party model (`minimax-h3@1.0.0-rc.4`). First-party package dependencies name the
+`tensorhub` index (`qwen-image-2 = { index = "tensorhub" }`), which is the root's (`/v1/index/_/simple/`).
 
-Commit locks bound to production. After changing dependencies, run as `fidika`:
+Commit locks bound to production. After changing dependencies, as a tensorhub.com admin:
 
 ```sh
-cozy package lock --tensorhub https://tensorhub.com
+cozy package lock --root --tensorhub https://tensorhub.com
 ```
 
 A published release runs exactly the dependency versions in its `uv.lock`, including
-same-account callees such as qwen-image-2, so each callee release needs a dependent
+first-party callees such as qwen-image-2, so each callee release needs a dependent
 release; `task publish` makes it. The exception is `cozy-runtime` and `tensorfs`: every
 package runs on its machine's Runtime, so the package only declares the minimum its
 `cozy-runtime>=` bound admits.
 
 `scripts/bind-account-index.sh` writes the same index for the CI lock checks. Each
-publication rebinds the committed lock to its target: `cozy package publish` to the
-local Hub as `paul` relocks a private copy against `paul`'s index there and refuses
+publication rebinds the committed lock to its target: `cozy package publish --root` to the
+local Hub relocks a private copy against the root's index there and refuses
 (`account_index_lock_drift`) unless every locked version exists unchanged, which is
 why `task publish` releases dependencies before dependents on each Hub.
 
@@ -70,5 +68,5 @@ private rental may need `cozy machine update <name>` before using such an API.
 Ordinary dependency updates belong to the package environment and do not require
 updating the worker's global Python environment.
 
-Publish the same frozen H3 source to each Hub; each account's dependency index must
-resolve the committed versions.
+Publish the same frozen H3 source to each Hub; each Hub's root index must resolve the
+committed versions.
