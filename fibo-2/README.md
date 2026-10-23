@@ -15,8 +15,8 @@ Both generate from text, or edit when `reference_images` are given (up to four, 
 Bria ships Edit Turbo for editing; it also renders text-to-image.
 
 ```sh
-cozy run fidika/fibo-2/generate prompt='An origami whale swimming through paper clouds' aspect_ratio=16:9 seed=7
-cozy run fidika/fibo-2/generate_turbo prompt='Replace the jacket with a red leather one' \
+cozy run fibo-2/generate prompt='An origami whale swimming through paper clouds' aspect_ratio=16:9 seed=7
+cozy run fibo-2/generate_turbo prompt='Replace the jacket with a red leather one' \
   --asset reference_images.0=photo.jpg
 ```
 
