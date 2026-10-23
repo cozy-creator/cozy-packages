@@ -85,42 +85,24 @@ def processor(assets: ModelAssets) -> PixtralProcessor:
                             chat_template=_read(assets, "chat_template.jinja").decode(), **folder)
 
 
-class _Nested(nn.Module):
-    """Mistral3's language model one level down. [dev]'s encoder is stored as Transformers 4 named it
-    (`language_model.model.*`), which Runtime binds through Transformers' renaming to
-    `model.language_model.model.*`; Transformers 5 builds `model.language_model.*`."""
-
-    def __init__(self, inner: nn.Module) -> None:
-        super().__init__()
-        self.model = inner
-
-    def forward(self, *args: Any, **kwargs: Any) -> Any:
-        return self.model(*args, **kwargs)
-
-    def __getattr__(self, name: str) -> Any:
-        try:
-            return super().__getattr__(name)
-        except AttributeError:
-            return getattr(super().__getattr__("model"), name)
-
-
 def text_encoder(config: Mapping[str, Any]) -> nn.Module:
     """A FLUX.2 text encoder, as the whole model: Mistral-Small-3.2 for [dev], Qwen3 for [klein]."""
-    if config["model_type"] != "mistral3":
-        return AutoModelForCausalLM.from_config(AutoConfig.for_model(**config), dtype=torch.bfloat16)
-    encoder = AutoModelForImageTextToText.from_config(AutoConfig.for_model(**config), dtype=torch.bfloat16)
-    encoder.model.language_model = _Nested(encoder.model.language_model)
-    return encoder
+    built = AutoModelForImageTextToText if config["model_type"] == "mistral3" else AutoModelForCausalLM
+    return built.from_config(AutoConfig.for_model(**config), dtype=torch.bfloat16)
 
 
 def _conditioning_only(encoder: Any, depth: int) -> None:
-    """[klein] reads Qwen3's hidden states up to `depth`: the later layers, the final norm and the head
-    are never run, so they are not built (their stored bytes are skipped). With the norm an identity,
-    hidden state `depth` stays the pre-norm output. [dev]'s Mistral is built whole: Runtime cannot yet
-    skip a stored tensor it binds through Transformers' renaming."""
-    encoder.model.layers = nn.ModuleList(list(encoder.model.layers)[:depth])
-    encoder.model.norm = nn.Identity()
+    """FLUX.2 reads its text encoder's hidden states up to `depth`: the later layers, the final norm
+    and the head are never run, so they are not built (their stored bytes are skipped). With the norm
+    an identity, hidden state `depth` stays the pre-norm output. [dev]'s prompts are text only, so
+    Mistral3's vision tower and projector are not built either."""
+    inner = encoder.model
+    language = inner.language_model if hasattr(inner, "language_model") else inner
+    language.layers = nn.ModuleList(list(language.layers)[:depth])
+    language.norm = nn.Identity()
     encoder.lm_head = nn.Identity()
+    if language is not inner:
+        inner.vision_tower = inner.multi_modal_projector = None
 
 
 class LoRAHook:
@@ -163,8 +145,7 @@ class Flux2Graph:
             transformer = Flux2Transformer2DModel.from_config(section(mapping, "transformer"))
             encoder = text_encoder(text)
             vae = AutoencoderKLFlux2.from_config(section(mapping, "vae"))
-        if family == "qwen3":
-            _conditioning_only(encoder, max(TEXT_LAYERS[family]))
+        _conditioning_only(encoder, max(TEXT_LAYERS[family]))
         if transformer.config.guidance_embeds:  # [dev]: its Turbo LoRA's sites
             transformer._cozy_turbo = None
             for path, module in transformer.named_modules():
