@@ -171,7 +171,8 @@ class Flux2Graph:
                 if isinstance(module, nn.Linear):
                     module.register_forward_hook(LoRAHook(transformer, path))
         self.family = family
-        self.distilled = bool(mapping.get("model_index", {}).get("is_distilled", False))
+        index = mapping.get("model_index")
+        self.distilled = isinstance(index, Mapping) and bool(index.get("is_distilled", False))
         # The VAE runs in its stored precision: bf16 in Diffusers' repositories, f32 in BFL's `ae`.
         stored = config.tensor_dtype("vae.encoder.conv_in.weight", default="f32")
         self.components: dict[str, nn.Module] = {
@@ -186,7 +187,7 @@ def schedule(steps: int, tokens: int, sigmas: Sequence[float] | None = None) -> 
     empirical mu of the image's token count, ending at 0."""
     mu = compute_empirical_mu(tokens, steps)
     t = torch.linspace(1, 0, steps + 1) if sigmas is None else torch.tensor([*sigmas, 0.0])
-    return (math.exp(mu) / (math.exp(mu) + (1 / t - 1))).tolist()
+    return [float(v) for v in (math.exp(mu) / (math.exp(mu) + (1 / t - 1))).tolist()]
 
 
 def prepare_references(images: Sequence[Image.Image]) -> list[Image.Image]:

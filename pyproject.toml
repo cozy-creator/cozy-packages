@@ -6,7 +6,8 @@
 [tool.mypy]
 python_version = "3.12"
 files = [
-    "anima", "birefnet", "character-describer", "seedvr2", "minimax-h3", "sdxl", "qwen-image-2", "flux-3-klein",
+    "anima", "birefnet", "character-describer", "seedvr2", "minimax-h3", "sdxl", "qwen-image-2", "flux-2",
+    "flux-3-klein",
     "scripts", "examples", "minimax-h3-tools/src",
 ]
 strict = true
@@ -23,6 +24,8 @@ module = [
     "torch.*", "torchvision.*", "transformers.*", "tokenizers.*", "numpy.*", "PIL.*",
     "safetensors.*", "diffusers.*", "tfsbench", "tensorfs", "tensorfs.*", "cozy_eval.*",
     "av", "av.*", "omegaconf", "omegaconf.*", "triton", "triton.*",
+    # BFL's reference code, fetched by its model proof at run time.
+    "flux3", "flux3.*",
 ]
 ignore_missing_imports = true
 
@@ -43,7 +46,7 @@ warn_unused_ignores = false
 
 # Model classes subclass Diffusers' and Torch's own, which this light environment does not carry.
 [[tool.mypy.overrides]]
-module = ["qwen_image_2.model", "flux_3_klein.klein", "seedvr2.model"]
+module = ["qwen_image_2.model", "flux_3_klein.klein", "seedvr2.model", "flux_2.model", "flux_2.turbo"]
 disallow_subclassing_any = false
 warn_unused_ignores = false
 

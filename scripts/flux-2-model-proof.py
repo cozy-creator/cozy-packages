@@ -203,7 +203,7 @@ def edits(root: Path) -> None:
         path = root / f"reference-{index}.png"
         Image.fromarray(rng.integers(0, 255, (size[1], size[0], 3), dtype=np.uint8)).save(path)
         paths.append(path)
-    cases = [
+    cases: list[tuple[str, Flux2, list[Path], dict[str, object], tuple[int, int]]] = [
         ("generate", dev, [], {}, (1024, 1024)),
         ("generate", dev, [], {"aspect_ratio": "16:9"}, (1360, 768)),
         ("generate_turbo", klein, [paths[0]], {}, (400, 240)),
