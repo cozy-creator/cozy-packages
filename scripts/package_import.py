@@ -43,6 +43,10 @@ PACKAGES = {
         "qwen_image_2",
         ("torch", "torchvision", "torchvision.ops", "transformers", "diffusers", "tensorfs"),
     ),
+    "qwen-image-edit": (
+        "qwen_image_edit",
+        ("torch", "torchvision", "torchvision.ops", "transformers", "diffusers", "tensorfs"),
+    ),
     "anima": (
         "anima",
         (
