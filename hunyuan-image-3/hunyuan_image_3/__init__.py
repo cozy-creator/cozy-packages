@@ -16,16 +16,13 @@ from cozy_runtime.author import (
     Outputs,
     ReferenceImages,
     Telemetry,
-    WeightsOutput,
 )
 
 from .model import GUIDANCE, MAX_NEW_TOKENS, HunyuanImage3, caption
-from .quantize import int8, nvfp4
+from . import quantize as quantize  # its recipes
 from .tencent.tokenization_hunyuan_image_3 import Resolution, ResolutionGroup
 
 app = App()
-app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=96 << 30),), accelerator=False)
-app.entrypoint(nvfp4, weights=(WeightsOutput("nvfp4", max_new_bytes=64 << 30),), accelerator=False)
 
 #: The model's sizes, as Tencent's image processor builds them (`image_base_size` 1024): 33 ratios from
 #: 1:4 to 4:1 on a 64 px step with width + height = 2048, plus four common ones; all about 1 MP.

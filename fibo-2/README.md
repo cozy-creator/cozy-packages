@@ -82,7 +82,7 @@ also pads the FFN to 9,728 to quantize its down projection (xs-070). `nvfp4` put
 included, in NVFP4 (Blackwell), and a VLM's linears in NVFP4 (W4A16 decode).
 
 ```sh
-cozy model quantize <account>/fibo-2-dev@0.1.0/bf16 --int8 --package fidika/fibo-2 --on <machine>
+cozy model quantize <account>/fibo-2-dev@0.1.0/bf16 --int8 --package fibo-2 --on <machine>
 cozy model publish <account>/fibo-2-dev --release 0.1.0 --commit sha256:<commit>
 ```
 
