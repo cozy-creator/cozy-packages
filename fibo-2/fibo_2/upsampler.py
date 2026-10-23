@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from cozy_runtime import lm
 from cozy_runtime.author import Config, Loader, Model, ModelAssets, UnsupportedInput, uses_components
 from PIL import Image
@@ -36,12 +37,27 @@ IMAGE_PIXELS = {"shortest_edge": 4 * 28 * 28, "longest_edge": 1280 * 28 * 28}
 STOP_TOKENS = ("<|im_end|>", "<|endoftext|>")
 
 
+class TiedHead(torch.nn.Module):
+    """The language head of a tied checkpoint (`tie_word_embeddings`): logits from the input
+    embedding's weight, which the checkpoint stores once. Holding the embedding outside the module
+    tree keeps that weight under its one stored name, so Runtime fills it once."""
+
+    def __init__(self, embedding: torch.nn.Embedding) -> None:
+        super().__init__()
+        object.__setattr__(self, "embedding", embedding)
+        self.out_features = embedding.num_embeddings
+
+    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
+        return F.linear(hidden, self.embedding.weight)
+
+
 class CaptionerGraph:
     def __init__(self, config: Config) -> None:
         mapping: Mapping[str, Any] = config.mapping()
         with no_init_weights():
             model = AutoModelForImageTextToText.from_config(AutoConfig.for_model(**mapping), dtype=torch.bfloat16)
-        model.tie_weights()
+        if model.config.get_text_config().tie_word_embeddings:
+            model.lm_head = TiedHead(model.get_input_embeddings())
         self.components: dict[str, torch.nn.Module] = {COMPONENT: model.eval()}
 
 

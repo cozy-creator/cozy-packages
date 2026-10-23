@@ -150,7 +150,9 @@ def _caption(
         adj.warn("prompt_upsampling", "Bria's edit VLM reads one image: with several, the instruction goes as typed")
         return prompt
     caption = json.loads(edit_upsampler.caption(prompt, images[0]))
-    caption.setdefault("edit_instruction", prompt)
+    # FIBO-edit-vlm restates the request as `reworded_prompt`, which Bria's cleaning drops; Fibo 2.0
+    # reads the request as `edit_instruction`.
+    caption["edit_instruction"] = caption.pop("reworded_prompt", None) or caption.get("edit_instruction") or prompt
     return json.dumps(caption, separators=(",", ":"), ensure_ascii=False)
 
 

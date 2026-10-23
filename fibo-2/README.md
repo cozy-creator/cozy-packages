@@ -37,8 +37,8 @@ A JSON `prompt` is used as given; an edit's needs an `edit_instruction`. Otherwi
 points to (Bria's own API path, `bria-vgl`, calls Gemini):
 
 - text-to-image: `briaai/FIBO-vlm` (`<generate>`);
-- one reference: `briaai/FIBO-edit-vlm` (`<edit>`, the image thumbnailed to 1024 px), which adds the
-  edit's `edit_instruction`;
+- one reference: `briaai/FIBO-edit-vlm` (`<edit>`, the image thumbnailed to 1024 px), whose restated
+  request (`reworded_prompt`) becomes the caption's `edit_instruction`;
 - several references: neither VLM reads more than one image, so the instruction goes as typed, with a
   warning.
 
