@@ -34,6 +34,7 @@ from transformers import initialization as transformer_init
 from cozy_runtime import fusion
 from cozy_runtime.author import (
     Config,
+    ConformanceError,
     Loader,
     MemoDistribution,
     Model,
@@ -108,6 +109,23 @@ def _section(value: object, name: str) -> dict[str, Any]:
     return dict(value)
 
 
+_DTYPES = {"f32": torch.float32, "bf16": torch.bfloat16, "f16": torch.float16}
+
+
+def _stored(config: Config, component: str, module: torch.nn.Module) -> torch.dtype:
+    """The one dtype the checkpoint stores `component`'s parameters in; f32 built from config alone.
+    Qwen-Image-2.1 stores its VAE in f32, Turbo in bf16."""
+    stored = {config.tensor_dtype(f"{component}.{name}", default="f32") for name, _ in module.named_parameters()}
+    dtype = _DTYPES.get(next(iter(stored))) if len(stored) == 1 else None
+    if dtype is None:
+        raise ConformanceError(
+            f"{component} stores {sorted(stored)}; Qwen Image builds it in one of {sorted(_DTYPES)}",
+            code="artifact_dtype",
+            fields=[component],
+        )
+    return dtype
+
+
 class QwenImage21Graph:
     """One native construction census, with source checkpoint precision preserved."""
 
@@ -124,10 +142,10 @@ class QwenImage21Graph:
                     Qwen3VLConfig(**_section(mapping["text_encoder"], "text_encoder")),
                     dtype=torch.bfloat16,
                 ),
-                "vae": AutoencoderKLQwenImage21.from_config(_section(mapping["vae"], "vae")).to(
-                    dtype=torch.float32
-                ),
+                "vae": AutoencoderKLQwenImage21.from_config(_section(mapping["vae"], "vae")),
             }
+        vae = self.components["vae"]
+        vae.to(dtype=_stored(config, "vae", vae))
         # The pipeline reads hidden states only, so the 1.24 GB language-model head is not
         # built; Runtime skips its stored weight.
         self.components["text_encoder"].lm_head = torch.nn.Identity()
