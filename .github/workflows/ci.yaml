@@ -58,7 +58,7 @@ jobs:
       - name: Lint
         run: >-
           uv run --no-project ruff check --select E9,F,B --ignore F401
-          anima/ birefnet/ character-describer/ seedvr2/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ qwen-image-2/ flux-2/ flux-3-klein/ examples/
+          anima/ birefnet/ character-describer/ seedvr2/ minimax-h3/ scripts/ sdxl/ minimax-h3-tools/ qwen-image-2/ qwen-image-edit/ flux-2/ flux-3-klein/ examples/
 
       - name: Types
         run: uv run --no-project mypy
@@ -68,15 +68,15 @@ jobs:
       # belongs in the cheap static job, not only in the heavy per-package ones.
       - name: Every package has a current lock
         run: |
-          scripts/bind-account-index.sh "${{ inputs.account_index || 'https://tensorhub.com/v1/index/fidika/simple/' }}" anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 flux-2 flux-3-klein
-          for package in anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 flux-2 flux-3-klein; do
+          scripts/bind-account-index.sh "${{ inputs.account_index || 'https://tensorhub.com/v1/index/fidika/simple/' }}" anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 qwen-image-edit flux-2 flux-3-klein
+          for package in anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 qwen-image-edit flux-2 flux-3-klein; do
             uv lock --check --project "$package"
           done
 
       - name: Every package builds a wheel
         run: |
           mkdir -p dist/packages
-          for package in anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 flux-2 flux-3-klein; do
+          for package in anima birefnet character-describer seedvr2 minimax-h3 sdxl minimax-h3-tools qwen-image-2 qwen-image-edit flux-2 flux-3-klein; do
             mkdir "dist/packages/$package"
             uv build --project "$package" --wheel --out-dir "dist/packages/$package"
           done

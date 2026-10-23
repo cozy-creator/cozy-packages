@@ -197,6 +197,10 @@ DRIVER_INTERNALS: dict[tuple[str, str], str] = {
         "Observe the executor's cooperative-timing frames around the staged model and its "
         "pipeline progress adapter. Retire when the author surface exposes the observer."
     ),
+    ("scripts/qwen-image-edit-model-proof.py", "cozy_runtime.internal.weights"): (
+        "Check the package's LoRA hooks are the weight plane's `LoRASource`, which Runtime bakes "
+        "through. Retire when the author surface exports the protocol."
+    ),
     ("scripts/h3-conform.py", "cozy_runtime.author._attention_scope"): (
         "Read the actual active context in real CPU DiT hooks to verify scope lifetime "
         "and exception restoration. No package serving code reads this private context."
@@ -959,6 +963,7 @@ def fence_step_progress() -> Fence:
         "sdxl/sdxl/__init__.py": {"denoise"},
         "qwen-image-2/qwen_image_2/__init__.py": {"generating image"},
         "flux-2/flux_2/__init__.py": {"generating image"},
+        "qwen-image-edit/qwen_image_edit/__init__.py": {"generating image"},
         "flux-3-klein/flux_3_klein/__init__.py": {"generating image"},
         "minimax-h3/h3.py": {"denoise"},
     }
@@ -1050,7 +1055,7 @@ def fence_interface_format() -> Fence:
 
 def fence_publication_metadata() -> Fence:
     bad: list[str] = []
-    expected_projects = {"anima", "birefnet", "character-describer", "flux-2", "flux-3-klein", "seedvr2", "sdxl", "minimax-h3", "minimax-h3-tools", "qwen-image-2"}
+    expected_projects = {"anima", "birefnet", "character-describer", "flux-2", "flux-3-klein", "seedvr2", "sdxl", "minimax-h3", "minimax-h3-tools", "qwen-image-2", "qwen-image-edit"}
     actual_projects = {
         rel(path.parent)
         for path in ROOT.rglob("package.toml")
