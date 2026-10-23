@@ -81,7 +81,7 @@ cozy model quantize fidika/flux-2-dev@0.1.0 --nvfp4 --on <machine>
 Measured on an A40 (int8 W8A8), seconds per step at 1 MP: [dev] 1.93, [klein] 4B 0.82 (bf16) → 0.62,
 [klein] 9B Base with CFG 1.20. Against Diffusers' own bf16 pipeline on the same weights and noise, this
 package's bf16 is 40.6 dB (4B edit) and 30.9 dB (9B, two references), int8 31.6 and 27.0 dB: the same
-images. A 4-step [klein] text-to-image differs more (21 dB, a lower-contrast copy of one composition):
+images. A 4-step [klein] text-to-image differs more (21 dB: the same composition, slightly shifted):
 it embeds the timestep as BFL does, in bf16, where Diffusers rounds `t·1000` first.
 
 ## Licence
