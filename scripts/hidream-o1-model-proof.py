@@ -166,20 +166,20 @@ class Adjust:
 
 
 def sizes() -> None:
-    """Text-to-image: 1:1 at 4 MP; any W:H; 1-4 MP and 256-4096 px sides, clamped. With references,
+    """Text-to-image: 1:1 at 4 MP; any W:H; 3.52-4 MP and 256-4096 px sides, clamped. With references,
     what is not given is the first's; a lone one given neither is upstream's keep_original_aspect."""
     cases = [
         ([], None, None, (2048, 2048), []),
         ([], "16:9", None, (2720, 1536), []),
-        ([], "1:1", 1, (1024, 1024), []),
+        ([], "1:1", 3.6, (1920, 1920), []),
         ([], "1:1", 8, (2048, 2048), ["megapixels"]),
-        ([], "1:1", 0.25, (1024, 1024), ["megapixels"]),
+        ([], "1:1", 1, (1920, 1920), ["megapixels"]),
         ([], "20:1", None, (4096, 1024), ["aspect_ratio"]),
         ([(3000, 2000)], None, None, (2496, 1664), ["megapixels"]),
-        ([(1200, 900)], None, None, (1184, 896), []),
-        ([(400, 300)], None, None, (1152, 864), ["megapixels"]),
+        ([(1792, 2304)], None, None, (1792, 2304), []),
+        ([(1200, 900)], None, None, (2208, 1632), ["megapixels"]),
         ([(3000, 2000)], "1:1", None, (2048, 2048), ["megapixels"]),
-        ([(1200, 900), (500, 500)], None, None, (1184, 896), []),
+        ([(1200, 900), (500, 500)], None, None, (2208, 1632), ["megapixels"]),
     ]
     for shapes, ratio, megapixels, want, clamped in cases:
         images = [Image.new("RGB", s) for s in shapes]
@@ -205,10 +205,11 @@ def functions(root: Path) -> None:
         Image.fromarray(rng.integers(0, 255, (size[1], size[0], 3), dtype=np.uint8)).save(path)
         paths.append(path)
     cases: list[tuple[str, list[Path], dict[str, object], tuple[int, int], set[str]]] = [
-        ("generate", [], {"megapixels": 1, "steps": 2}, (1024, 1024), set()),
-        ("generate", paths[:1], {"steps": 2}, (1248, 832), {"megapixels"}),
-        ("generate", paths, {"steps": 1, "guidance": 1.0, "aspect_ratio": "2:1", "megapixels": 1}, (1440, 704), set()),
-        ("generate_turbo", paths[:1], {"steps": 4}, (1248, 832), {"megapixels", "steps"}),
+        ("generate", [], {"aspect_ratio": "16:9", "steps": 2}, (2720, 1536), set()),
+        ("generate", paths[:1], {"steps": 2}, (2336, 1568), {"megapixels"}),
+        ("generate", paths, {"steps": 1, "guidance": 1.0, "aspect_ratio": "2:1", "megapixels": 1}, (2688, 1344),
+         {"megapixels"}),
+        ("generate_turbo", paths[:1], {"steps": 4}, (2336, 1568), {"megapixels", "steps"}),
     ]
     for index, (function, references, given, expected, adjusted) in enumerate(cases):
         grants = {f"reference_images.{n}": granted_input(path, input_id=f"reference_images.{n}", order=n)

@@ -26,10 +26,11 @@ The result has the image, its `width` and `height`, the `seed`, and `prompt`: th
 
 ## Sizes
 
-The model was refined at 2048² (report §4.1), and all of upstream's sizes are about 4 MP. Text-to-image
-defaults to 1:1 at 4 MP, 2048×2048. `megapixels` is held to 1–4, where 1 MP is 1024² pixels and the
-earlier pre-training stage ran at that size. Sides are 32 px multiples from 256 to 4096, and a ratio
-past that is clamped. Each clamp is reported as an adjustment.
+The model was refined at 2048² (report §4.1), and upstream serves only about 4 MP, from 2560×1440 to
+2048². Text-to-image defaults to 1:1 at 4 MP, 2048×2048. `megapixels` (1 MP = 1024² pixels) is held to
+3.52–4: at 1024² and below the model falls apart (upstream issue #9 shows pure noise at 800²). Sides
+are 32 px multiples from 256 to 4096, and a ratio past that is clamped. Each clamp is reported as an
+adjustment.
 
 With references, any size input you leave out comes from the first reference: its ratio, its pixel
 count, or both. With one reference and neither input, the output takes the reference's own size on the

@@ -28,10 +28,10 @@ app = App()
 app.entrypoint(bf16, weights=(WeightsOutput("bf16", max_new_bytes=20 << 30),), accelerator=False)
 app.entrypoint(int8, weights=(WeightsOutput("int8", max_new_bytes=12 << 30),), accelerator=False)
 
-#: 1 MP is 1024² pixels. The model was refined at 2048² (tech report §4.1); upstream's sizes are all
-#: about 4 MP, its last pre-training stage was 1024², and both stages kept aspect ratios.
+#: 1 MP is 1024² pixels. The model was refined at 2048² (tech report §4.1) and upstream serves only
+#: about 4 MP: 2560x1440 (3.52 MP) to 2048² (4). At 1024² and below it falls apart (upstream #9).
 MP = 1 << 20
-MIN_PIXELS, NATIVE_PIXELS = 1 * MP, 4 * MP
+MIN_PIXELS, NATIVE_PIXELS = 2560 * 1440, 4 * MP
 MIN_SIDE, MAX_SIDE = 256, 4096
 FULL_STEPS, DEV_STEPS = 50, 28
 GUIDANCE = 5.0
@@ -58,7 +58,7 @@ class GenerateInput(msgspec.Struct, forbid_unknown_fields=True):
     reference_images: _REFERENCES = msgspec.field(default_factory=list)
     #: Any W:H. None: the first reference's, else 1:1.
     aspect_ratio: _RATIO | None = None
-    #: None: the first reference's pixel count, else 4. Held to 1-4.
+    #: None: the first reference's pixel count, else 4. Held to 3.52-4.
     megapixels: Annotated[float, msgspec.Meta(gt=0)] | None = None
     #: None: 50.
     steps: Annotated[int, msgspec.Meta(ge=1, le=200)] | None = None
@@ -109,7 +109,7 @@ def layout(
     adj: Adjustments, ratio: str | None, megapixels: float | None, images: list[Image.Image]
 ) -> tuple[tuple[int, int], list[Image.Image]]:
     """The output size and the prepared references. What is not given is the first reference's
-    (ratio, pixel count), else 1:1 at 4 MP; pixels are held to 1-4 MP. A lone reference given
+    (ratio, pixel count), else 1:1 at 4 MP; pixels are held to 3.52-4 MP. A lone reference given
     neither is upstream's `keep_original_aspect`: resized to the output's area and the output takes
     its size. Otherwise each is resized to the area of a square on the output's longer side, smaller
     with more references (upstream's `generate_image`)."""
@@ -117,7 +117,7 @@ def layout(
     pixels = megapixels * MP if megapixels is not None else first[0] * first[1] if first else NATIVE_PIXELS
     held = min(max(pixels, MIN_PIXELS), NATIVE_PIXELS)
     if held != pixels:
-        adj.clamp("megapixels", _megapixels(pixels), _megapixels(held), "HiDream-O1's 1-4 MP")
+        adj.clamp("megapixels", _megapixels(pixels), _megapixels(held), "HiDream-O1's 3.52-4 MP")
     if len(images) == 1 and ratio is None and megapixels is None:
         lone = area_resize(images[0], math.sqrt(held))
         if MIN_SIDE <= min(lone.size) and max(lone.size) <= MAX_SIDE:
