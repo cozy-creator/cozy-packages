@@ -62,7 +62,7 @@ package declares only its tolerances, as `Model` class keywords:
 
 - `min_bits=` (16, 8 or 4; default 8): the fewest bits the machine may pick by itself. A slot at
   4 takes `nvfp4` when it decodes; memory never lowers a lane.
-- `phase="decode"` for an LM's token loop (the describer's and Klein's upsampler's Qwen3.5-9B).
+- `phase="decode"` for an LM's token loop (qwen3.5's and Klein's upsampler's).
 - `attention_bits=` (16, 8 or 4, or a mapping from a component-qualified module prefix to one;
   default 16): the fewest bits attention may run at. H3 declares 4 on its DiTs, Klein 8 on its
   image and joint blocks. `AttentionLayout.exact_paths` holds sites at 16.

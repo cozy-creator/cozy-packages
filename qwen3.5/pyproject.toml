@@ -1,7 +1,7 @@
 [project]
-name = "character-describer"
-version = "0.10.3"
-description = "One-sentence character identity descriptions from supplied reference images"
+name = "qwen3.5"
+version = "0.1.0"
+description = "Qwen3.5: single-turn questions about text, images and videos"
 requires-python = ">=3.12"
 dependencies = [
     "cozy-runtime[media]>=0.31,<0.32",
@@ -16,14 +16,14 @@ dependencies = [
 ]
 
 [project.entry-points."cozy.application"]
-default = "character_describer:app"
+default = "qwen3_5:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["character_describer"]
+packages = ["qwen3_5"]
 
 [tool.uv]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'", "sys_platform == 'linux' and platform_machine == 'aarch64'"]
