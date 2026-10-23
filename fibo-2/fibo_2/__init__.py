@@ -4,21 +4,22 @@ from __future__ import annotations
 
 import json
 import math
-import secrets
 from typing import Annotated
 
 import msgspec
 from cozy_runtime.author import (
+    MEGAPIXEL,
     Adjustments,
     App,
-    AssetBound,
     Context,
-    ImageAsset,
-    ImagePreparation,
+    ImageRequest,
+    ImageResult,
     Memoize,
     Outputs,
+    ReferenceImages,
     Telemetry,
     UnsupportedInput,
+    held,
 )
 from PIL import Image
 
@@ -28,14 +29,12 @@ from .upsampler import Captioner
 
 app = App()
 
-#: The area Fibo 2.0 was trained at (model card: "multiples of 16 at about one megapixel").
-AREA = 1024 * 1024
-MIN_PIXELS = AREA // 4
+#: Fibo 2.0 was trained at about 1 MP (model card: "multiples of 16 at about one megapixel").
 GRID = 16
 #: Diffusers' smallest side (4 latent patches), and the RoPE table's 512 positions an axis.
 MIN_SIDE, MAX_SIDE = 4 * GRID, 512 * GRID
-DEV_STEPS = 50
-TURBO_STEPS = 4
+#: Each function's steps when none is given, and the most it admits; Dev's CFG scale (the card's 5.0).
+_STEPS = {"generate": (50, 200), "generate_turbo": (4, 50)}
 GUIDANCE = 5.0
 #: The model card's text-to-image negative: away from soft, featureless, artifact-laden images.
 #: Edits take Diffusers' default, the empty caption the model was trained with.
@@ -51,69 +50,22 @@ NEGATIVE_T2I = (
     '"artistic_style":""}'
 )
 
-_RATIO = Annotated[str, msgspec.Meta(pattern=r"^[1-9][0-9]*:[1-9][0-9]*$")]
-#: References are prepared to at most 4 MP: the output takes at most 1.
-_IMAGES = AssetBound(max_bytes=32 << 20, media_types=("image/png", "image/jpeg", "image/webp"))
-_PREPARED = ImagePreparation(max_pixels=4 << 20)
-_SEED = Annotated[int, msgspec.Meta(ge=0, le=9007199254740991)]
-
-
-class GenerateInput(msgspec.Struct):
-    prompt: Annotated[str, msgspec.Meta(min_length=1)]
-    #: Given, the image edits or composes them, in order (`<image_1>` ... `<image_4>`).
-    reference_images: Annotated[list[ImageAsset], _IMAGES, _PREPARED, msgspec.Meta(max_length=4)] = msgspec.field(
+class GenerateInput(ImageRequest):
+    reference_images: Annotated[ReferenceImages, msgspec.Meta(max_length=4)] = msgspec.field(
         default_factory=list
     )
-    #: Any W:H. None: the first reference's, else 1:1.
-    aspect_ratio: _RATIO | None = None
-    #: None: the first reference's pixel count, else 1. Held to 0.25-1.
-    megapixels: Annotated[float, msgspec.Meta(gt=0)] | None = None
-    #: None: 50.
-    steps: Annotated[int, msgspec.Meta(ge=1, le=200)] | None = None
-    guidance: Annotated[float, msgspec.Meta(ge=1.0, le=20.0)] = GUIDANCE
-    #: None: Bria's (the model card's for text-to-image, the empty caption for edits).
-    negative_prompt: str | None = None
-    seed: _SEED | None = None
-    prompt_upsampling: bool = True
 
 
-class TurboInput(msgspec.Struct):
-    prompt: Annotated[str, msgspec.Meta(min_length=1)]
-    #: Given, the image edits or composes them, in order (`<image_1>` ... `<image_4>`).
-    reference_images: Annotated[list[ImageAsset], _IMAGES, _PREPARED, msgspec.Meta(max_length=4)] = msgspec.field(
-        default_factory=list
-    )
-    aspect_ratio: _RATIO | None = None
-    megapixels: Annotated[float, msgspec.Meta(gt=0)] | None = None
-    #: None: 4.
-    steps: Annotated[int, msgspec.Meta(ge=1, le=50)] | None = None
-    seed: _SEED | None = None
-    prompt_upsampling: bool = True
-
-
-class ImageOutput(msgspec.Struct):
-    image: Annotated[ImageAsset, AssetBound(max_bytes=64 << 20, max_decoded_bytes=64 << 20, media_types=("image/png",))]
-    width: int
-    height: int
-    seed: int
-    #: The prompt the image was generated from: the VLM's structured caption when `prompt_upsampling` ran.
-    prompt: str
-
-
-def output_size(
-    adj: Adjustments, ratio: str | None, megapixels: float | None, first: tuple[int, int] | None
-) -> tuple[int, int]:
+def output_size(adj: Adjustments, payload: GenerateInput, first: tuple[int, int] | None) -> tuple[int, int]:
     """The ratio (else the first reference's, else 1:1) at the pixel count (else the first
     reference's, else 1 MP), held to 0.25-1 MP and 64-8192 px sides, on the 16 px grid."""
-    w, h = map(int, ratio.split(":")) if ratio else first or (1, 1)
-    pixels = megapixels * AREA if megapixels is not None else (first[0] * first[1] if first else AREA)
-    held = min(max(pixels, MIN_PIXELS), AREA)
-    if held != pixels:
-        adj.clamp("megapixels", round(pixels / AREA, 3), round(held / AREA, 3), "Fibo 2.0's 0.25-1 MP")
-    widest = min(MAX_SIDE**2 / held, held / MIN_SIDE**2)
+    target = payload.target(first, megapixels=1.0)
+    pixels = held(adj, "megapixels", target.pixels / MEGAPIXEL, 0.25, 1.0, "Fibo 2.0's 0.25-1 MP") * MEGAPIXEL
+    w, h = target.ratio
+    widest = min(MAX_SIDE**2 / pixels, pixels / MIN_SIDE**2)
     aspect = min(max(w / h, 1 / widest), widest)
-    width = min(max(round(math.sqrt(held * aspect) / GRID) * GRID, MIN_SIDE), MAX_SIDE)
-    height = min(max(round(math.sqrt(held / aspect) / GRID) * GRID, MIN_SIDE), MAX_SIDE)
+    width = min(max(round(math.sqrt(pixels * aspect) / GRID) * GRID, MIN_SIDE), MAX_SIDE)
+    height = min(max(round(math.sqrt(pixels / aspect) / GRID) * GRID, MIN_SIDE), MAX_SIDE)
     if aspect != w / h:
         adj.clamp("aspect_ratio", f"{w}:{h}", f"{width}:{height}", "Fibo 2.0's 64-8192 px sides")
     return width, height
@@ -155,23 +107,29 @@ def _caption(
 
 def _generate(
     ctx: Context,
-    payload: GenerateInput | TurboInput,
+    function: str,
+    payload: GenerateInput,
     model: Fibo2,
     upsampler: Captioner,
     edit_upsampler: Captioner,
     out: Outputs,
     tel: Telemetry,
     adj: Adjustments,
-    *,
-    steps: int,
-    guidance: float,
-    negative: str | None,
-) -> ImageOutput:
-    seed = payload.seed if payload.seed is not None else secrets.randbits(53)
+) -> ImageResult:
+    default, most = _STEPS[function]
+    steps = held(adj, "steps", payload.steps or default, 1, most)
     images = [asset.read() for asset in payload.reference_images]
-    width, height = output_size(adj, payload.aspect_ratio, payload.megapixels, images[0].size if images else None)
+    if function == "generate":
+        guidance = held(adj, "guidance", GUIDANCE if payload.guidance is None else payload.guidance, 1.0, 20.0)
+        negative = payload.negative_prompt or (None if images else NEGATIVE_T2I)
+    else:
+        guidance, negative = 1.0, None
+        payload.ignored(adj, "guidance", "negative_prompt", reason="Edit Turbo is distilled to sample without guidance")
+    seed = payload.drawn_seed()
+    width, height = output_size(adj, payload, images[0].size if images else None)
+    upsample = True if payload.prompt_upsampling is None else payload.prompt_upsampling
     with tel.stage("upsampling prompt", overall_range=(0.0, 0.15)):
-        caption = _caption(payload.prompt, images, payload.prompt_upsampling, upsampler, edit_upsampler, adj)
+        caption = _caption(payload.prompt, images, upsample, upsampler, edit_upsampler, adj)
     if caption != payload.prompt:
         tel.log("upsampled prompt", caption=caption[:2000])
     ctx.raise_if_cancelled()
@@ -192,7 +150,7 @@ def _generate(
         image = model.decode(tokens)
     with tel.stage("saving image", overall_range=(0.99, 1.0)):
         asset = out.save_image(image, format="png")
-    return ImageOutput(asset, image.width, image.height, seed, caption)
+    return ImageResult(asset, image.width, image.height, seed, caption)
 
 
 _MODEL = ("transformer", "text_encoder", "vae")
@@ -204,21 +162,16 @@ _MODEL = ("transformer", "text_encoder", "vae")
                 components={"model": _MODEL, "upsampler": ("model",), "edit_upsampler": ("model",)},
                 on_demand=("upsampler", "edit_upsampler"), memoize=Memoize(requires=["seed"]))
 def generate(ctx: Context, payload: GenerateInput, edit_upsampler: Captioner, model: Fibo2, upsampler: Captioner,
-             out: Outputs, tel: Telemetry, adj: Adjustments) -> ImageOutput:
+             out: Outputs, tel: Telemetry, adj: Adjustments) -> ImageResult:
     """Fibo 2.0 Dev, 50 steps with CFG 5: text to image, or an edit of up to four ordered references."""
-    negative = payload.negative_prompt
-    if negative is None and not payload.reference_images:
-        negative = NEGATIVE_T2I
-    return _generate(ctx, payload, model, upsampler, edit_upsampler, out, tel, adj,
-                     steps=payload.steps or DEV_STEPS, guidance=payload.guidance, negative=negative)
+    return _generate(ctx, "generate", payload, model, upsampler, edit_upsampler, out, tel, adj)
 
 
 @app.entrypoint(defaults={"model": "fibo-2-edit-turbo@0.1.0", "upsampler": "fibo-vlm@0.1.0",
                           "edit_upsampler": "fibo-edit-vlm@0.1.0"},
                 components={"model": _MODEL, "upsampler": ("model",), "edit_upsampler": ("model",)},
                 on_demand=("upsampler", "edit_upsampler"), memoize=Memoize(requires=["seed"]))
-def generate_turbo(ctx: Context, payload: TurboInput, edit_upsampler: Captioner, model: Fibo2, upsampler: Captioner,
-                   out: Outputs, tel: Telemetry, adj: Adjustments) -> ImageOutput:
+def generate_turbo(ctx: Context, payload: GenerateInput, edit_upsampler: Captioner, model: Fibo2,
+                   upsampler: Captioner, out: Outputs, tel: Telemetry, adj: Adjustments) -> ImageResult:
     """Fibo 2.0 Edit Turbo, 4 steps without guidance: text to image, or an edit of up to four ordered references."""
-    return _generate(ctx, payload, model, upsampler, edit_upsampler, out, tel, adj,
-                     steps=payload.steps or TURBO_STEPS, guidance=1.0, negative=None)
+    return _generate(ctx, "generate_turbo", payload, model, upsampler, edit_upsampler, out, tel, adj)
