@@ -9,7 +9,7 @@ on all of the run's GPUs at once. MiniMax-H3 uses it to fill a supplied characte
 description.
 
 ```sh
-cozy run fidika/character-describer/describe_character --asset image=./character.png
+cozy run character-describer/describe_character --asset image=./character.png
 ```
 
 The default model is Qwen3.5-9B (`qwen3.5-9b@0.2.0`), chosen over Qwen3.5-4B,
@@ -30,7 +30,7 @@ all in one pass. Every entrypoint is memoized: the same file and instruction ret
 answer without running the model.
 
 ```sh
-cozy run fidika/character-describer/describe_clip --asset video=./fight.mp4
+cozy run character-describer/describe_clip --asset video=./fight.mp4
 ```
 
 ## Model preparation

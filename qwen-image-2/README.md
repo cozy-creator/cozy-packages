@@ -26,7 +26,7 @@ Qwen-Image-2.1 generates RGBA natively when the prompt asks for it in the wordin
 recommends; "on a transparent background" alone draws a white one:
 
 ```sh
-cozy run fidika/qwen-image-2/generate seed=42 \
+cozy run qwen-image-2/generate seed=42 \
   prompt='This is an RGBA image with transparency. A cute cartoon dragon sticker. The image has alpha channel and the background is transparent.'
 ```
 
@@ -38,11 +38,11 @@ Qwen-Image-2.1 checkpoint handles both modes; editing runs its complete instruct
 sampling schedule, with no image-to-image strength parameter.
 
 ```sh
-cozy run fidika/qwen-image-2/generate \
+cozy run qwen-image-2/generate \
   prompt='Change the background to a sunset beach; preserve the person and clothing.' \
   --asset reference_images.0=portrait.png seed=42
 
-cozy run fidika/qwen-image-2/generate \
+cozy run qwen-image-2/generate \
   prompt='Place the person from image 1 in the room from image 2.' \
   --asset reference_images.0=person.png --asset reference_images.1=room.png \
   seed=42
@@ -78,13 +78,13 @@ processor configs) as assets; the package builds its processor from them:
 ```sh
 cozy model upload \
   hf://Qwen/Qwen-Image-2.1@790c92633540aa0cb11d9abf19eb46d861714758 \
-  fidika/qwen-image-2.1 --on YOUR_MACHINE
-cozy model publish fidika/qwen-image-2.1 --release 0.1.0 \
+  qwen-image-2.1 --on YOUR_MACHINE
+cozy model publish qwen-image-2.1 --release 0.1.0 \
   --lane bf16=sha256:CHECKPOINT_DIGEST
 cozy model upload \
   hf://Qwen/Qwen-Image-2.1-Turbo@fc13ba1986fcb905854dc8de2f52eee395f49b5b \
-  fidika/qwen-image-2.1-turbo --on YOUR_MACHINE
-cozy model publish fidika/qwen-image-2.1-turbo --release 0.1.0 \
+  qwen-image-2.1-turbo --on YOUR_MACHINE
+cozy model publish qwen-image-2.1-turbo --release 0.1.0 \
   --lane bf16=sha256:CHECKPOINT_DIGEST
 ```
 
@@ -101,8 +101,8 @@ Hadamard, int8 per output row), served as W8A8 on the int8 tensor cores. Embeddi
 tower, the input/output projections, the modulation and the VAE keep their source bytes.
 
 ```sh
-cozy model quantize fidika/qwen-image-2.1@0.1.0/bf16 --int8 --on YOUR_MACHINE
-cozy model publish fidika/qwen-image-2.1 --release 0.1.0 --lane int8=sha256:CHECKPOINT_DIGEST
+cozy model quantize qwen-image-2.1@0.1.0/bf16 --int8 --on YOUR_MACHINE
+cozy model publish qwen-image-2.1 --release 0.1.0 --lane int8=sha256:CHECKPOINT_DIGEST
 ```
 
 ## Python dependency
@@ -134,9 +134,8 @@ image = await generate(
 )
 ```
 
-The Hub package is `<account>/qwen-image-2`, e.g. `paul/qwen-image-2` on the local
-Hub and `fidika/qwen-image-2` on tensorhub.com; its callables are `generate` and
-`generate_turbo`. Their default models are the org-relative `qwen-image-2.1@0.1.0` and
-`qwen-image-2.1-turbo@0.1.0`: the publishing account's models.
+The Hub package is the first-party `qwen-image-2` (no owner); its callables are `generate` and
+`generate_turbo`. Their default models are the first-party `qwen-image-2.1@0.1.0` and
+`qwen-image-2.1-turbo@0.1.0`: a model with no org is the root namespace's.
 Installing the wheel alone does not turn GPU execution into an in-process call;
 Cozy supplies the managed caller when composing package functions.

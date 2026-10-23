@@ -30,10 +30,10 @@ Runtime requires a receipt for every declared weights output, so each lane is it
 recipe, run on the ingest rental:
 
 ```sh
-cozy model quantize fidika/minimax-h3@1.0.0/bf16-full fidika/minimax-h3 --recipe fp8-pruned \
-  --package fidika/minimax-h3-tools --on NAME
-cozy model quantize fidika/minimax-h3-acc-loras@1.0.0/bf16 fidika/minimax-h3-turbo-lora \
-  model.base=fidika/minimax-h3@1.0.0/bf16-full --recipe turbo-lora --package fidika/minimax-h3-tools --on NAME
+cozy model quantize minimax-h3@1.0.0/bf16-full minimax-h3 --recipe fp8-pruned \
+  --package minimax-h3-tools --on NAME
+cozy model quantize minimax-h3-acc-loras@1.0.0/bf16 minimax-h3-turbo-lora \
+  model.base=minimax-h3@1.0.0/bf16-full --recipe turbo-lora --package minimax-h3-tools --on NAME
 ```
 
 The lane recipes, `turbo-lora` and `retable` write weights, so they are never memoized; a

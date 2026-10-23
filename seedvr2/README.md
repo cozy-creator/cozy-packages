@@ -72,7 +72,7 @@ tfs import \
   hf://numz/SeedVR2_comfyUI@09ced71023636e9bc8cdf9cdecfb2625d1e691e8/ema_vae_fp16.safetensors \
   https://raw.githubusercontent.com/ByteDance-Seed/SeedVR/e4de8c24441a67e1b7df56abea10645059bb1185/pos_emb.pt \
   https://raw.githubusercontent.com/ByteDance-Seed/SeedVR/e4de8c24441a67e1b7df56abea10645059bb1185/neg_emb.pt \
-  --name fidika/seedvr2-7b
+  --name seedvr2-7b
 ```
 
 Publish the result as `seedvr2-7b@0.1.0`, lane `bf16`: the package's default release.

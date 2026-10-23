@@ -11,9 +11,9 @@ to ten reference images. Its text encoder is Qwen3-VL-4B.
 Each makes an image from the prompt, or edits and composes up to ten ordered `reference_images`.
 
 ```sh
-cozy run fidika/flux-3-klein/generate_turbo prompt='A lighthouse on a basalt cliff in a winter storm' \
+cozy run flux-3-klein/generate_turbo prompt='A lighthouse on a basalt cliff in a winter storm' \
   aspect_ratio=16:9 seed=7
-cozy run fidika/flux-3-klein/generate prompt='Make it night, the lamp lit' \
+cozy run flux-3-klein/generate prompt='Make it night, the lamp lit' \
   --asset reference_images.0=lighthouse.png
 ```
 
