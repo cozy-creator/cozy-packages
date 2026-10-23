@@ -1060,7 +1060,7 @@ wheels = [
 
 [[package]]
 name = "sdxl"
-version = "2.12.1"
+version = "2.12.2"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["adapters", "media"] },
