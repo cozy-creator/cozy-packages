@@ -341,6 +341,12 @@ def staged(tmp_path: Path) -> None:
 
     assert {x.dtype for x in graph.components["vae"].parameters()} == {torch.float32}
     assert {x.dtype for x in graph.components["transformer"].parameters()} == {torch.bfloat16}
+    # Each checkpoint's VAE is built in the precision it stores: Turbo's bf16 (run 14538 refused an
+    # f32 build of it), the base model's f32.
+    names = [f"vae.{name}" for name, _ in graph.components["vae"].named_parameters()]
+    for stored, dtype in (("bf16", torch.bfloat16), ("f32", torch.float32)):
+        built = build_qwen_image21(Config(config, tensor_dtypes=dict.fromkeys(names, stored)))
+        assert {x.dtype for x in built.components["vae"].parameters()} == {dtype}, stored
     shapes(model, tmp_path)
     # `generate_turbo` through the real kernel: the checkpoint's schedule wins over `steps`.
     turbo_run = invoke_with_fakes(
