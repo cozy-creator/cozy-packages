@@ -69,14 +69,33 @@ cozy model upload hf://HiDream-ai/HiDream-O1-Image-Dev@c0bada0e15c54a9f96a6d1ecc
 ```
 
 Each lane is written from the f32 upload. `bf16` rounds every f32 tensor to bf16. `int8` (the default
-lane, `int8.convrot`, W8A8 on int8 tensor cores) takes the attention and MLP projections of the 36
-decoder layers, 6.9B of the 8.2B weights read per step. The patch embedder, timestep MLP, pixel head,
-embeddings and vision tower stay bf16.
+lane, `int8.convrot`, W8A8 on int8 tensor cores) takes the q, k, gate and up projections of the 36
+decoder layers: 63% of the decoder's linear weights. v, o and down stay bf16, as do the patch embedder,
+timestep MLP, pixel head, embeddings and vision tower. With every projection in int8, the full model's
+CFG 5 turns W8A8's per-pass error (33–37 dB teacher-forced) into visible grain (17–24 dB after CFG).
+Keeping v, o and down in bf16 was the best of nine measured keep-lists (23/28/36 dB at t 999/702/290).
 
 ```sh
 cozy model quantize <account>/hidream-o1 --recipe bf16 --on <machine>
 cozy model quantize <account>/hidream-o1 --int8 --on <machine>
 ```
+
+## Measured (one L40S, 4 MP)
+
+Against HiDream's own code at the same seed (bf16), both edits match: 38.6 dB full, 33.9 dB Dev.
+Text-to-image keeps the same image, but details drift: 29.9 dB full, 22.1 dB Dev. In a single
+teacher-forced pass the full model matches upstream at 45–57 dB, so CFG and Dev's 28 re-noisings amplify
+rounding differences. The int8 lane against bf16 at the same seed reads 17.6 dB on text-to-image (the
+details differ) and 21.7 dB on an edit, with no grain visible at 1× or 2×.
+
+| s/step | bf16 | int8 |
+|---|---|---|
+| `generate`, text-to-image (CFG) | 0.81–0.88 | 0.67 |
+| `generate`, one-reference edit (CFG) | 1.97 | 1.65 |
+| `generate_turbo`, text-to-image | 0.44 | 0.31 (all-projection lane) |
+
+Upstream's own code ran at 1.02 and 0.51. The first step adds 1.4–3.5 s. The model's known issues
+appear in upstream's own images too: a faint 32 px grid (upstream #1) and black dots in some edits (#13).
 
 ## Licence
 
