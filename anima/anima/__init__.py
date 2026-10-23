@@ -8,8 +8,6 @@ import secrets
 from enum import IntEnum
 from typing import Annotated
 
-import cozy_runtime.derive as derive
-from cozy_runtime.derive.operations import QuantizationPlan, quantize_into
 import msgspec
 import torch
 from cozy_runtime.author import (
@@ -19,17 +17,14 @@ from cozy_runtime.author import (
     Context,
     ImageAsset,
     ImageFrame,
-    MemoDistribution,
     Memoize,
-    ModelArtifact,
     ModelDefault,
     Outputs,
+    QuantizationPlan,
+    Recipe,
     Shape,
     Telemetry,
     UnsupportedInput,
-    Weights,
-    WeightsOutput,
-    invocable,
 )
 
 from .model import _SAVE, AnimaModel, _Phases
@@ -195,58 +190,32 @@ def generate(
 # ------------------------------------------------------------------ quantized lanes
 
 # The Anima recipes: which weights each lane encodes; every other tensor inherits unchanged.
-# `cozy model quantize <model> --int8|--fp8` runs the function whose weights output is
-# that lane. `cozy_runtime.derive` owns the encodings and the round-trip tripwire.
-_LANE_BYTES = 16 << 30
-_QUANTIZER = (  # the Runtime code and native libraries that decide a lane's bytes
-    "cozy_runtime.derive.facade",
-    "cozy_runtime.derive.quantization",
-    "cozy_runtime.derive.microscale",
-    "cozy_runtime.derive.safetensors_io",
-    "cozy_runtime.weights_store",
-    MemoDistribution("tensorfs"),
-    MemoDistribution("numpy"),
-)
-
+# `cozy model quantize <model> --int8|--fp8 --package <this>` runs the one for that lane.
+# `cozy_runtime.derive` owns the encodings and the round-trip tripwire.
 
 #: The fp8 lane: the DiT's block-aligned rank-2 weights, row-wise.
-FP8 = ("transformer",)
-
-
-@invocable(memo_dependencies=_QUANTIZER)
-async def fp8(
-    ctx: Context,
-    *,
-    source: Weights[AnimaModel],
-    max_relative_frobenius: float | None = None,
-    tel: Telemetry,
-) -> ModelArtifact:
-    """Row-wise FP8 DiT weights from one BF16/F16 source; everything else inherits."""
-    plan = derive.plan(FP8, "fp8.rowwise", max_relative_frobenius=max_relative_frobenius)
-    return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output="fp8")
-
-
-#: The int8 lane: every attention and MLP linear of the 28 DiT blocks and of the Qwen3 text
-#: encoder's 28 layers. The AdaLN modulation, embeddings, the text conditioner and the VAE keep
-#: their source bytes.
-INT8 = QuantizationPlan(
-    components=("transformer", "text_encoder"),
-    include=(
-        "transformer.transformer_blocks.*.attn[12].to_[qkv].weight",
-        "transformer.transformer_blocks.*.attn[12].to_out.0.weight",
-        "transformer.transformer_blocks.*.ff.net.*weight",
-        "text_encoder.layers.*.self_attn.[qkvo]_proj.weight",
-        "text_encoder.layers.*.mlp.*_proj.weight",
-    ),
-    output_precision="preserve",
+FP8 = Recipe(
+    lane="fp8",
+    model=AnimaModel,
+    plan=QuantizationPlan(encoding="fp8.rowwise", components=("transformer",)),
 )
 
-
-@invocable(memo_version="anima-int8/1")
-async def int8(ctx: Context, *, source: Weights[AnimaModel], tel: Telemetry) -> ModelArtifact:
-    """The int8 lane (`int8.convrot`): W8A8 on int8 tensor cores; see `INT8`."""
-    return quantize_into(ctx, tel, source=source, plan=INT8, encoding="int8.convrot", output="int8")
-
-
-app.entrypoint(int8, name="int8", weights=(WeightsOutput("int8", max_new_bytes=_LANE_BYTES),), accelerator=False)
-app.entrypoint(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=_LANE_BYTES),), accelerator=False)
+#: The int8 lane (`int8.convrot`, W8A8 on int8 tensor cores): every attention and MLP linear of
+#: the 28 DiT blocks and of the Qwen3 text encoder's 28 layers. The AdaLN modulation, embeddings,
+#: the text conditioner and the VAE keep their source bytes.
+INT8 = Recipe(
+    lane="int8",
+    model=AnimaModel,
+    plan=QuantizationPlan(
+        encoding="int8.convrot",
+        components=("transformer", "text_encoder"),
+        include=(
+            "transformer.transformer_blocks.*.attn[12].to_[qkv].weight",
+            "transformer.transformer_blocks.*.attn[12].to_out.0.weight",
+            "transformer.transformer_blocks.*.ff.net.*weight",
+            "text_encoder.layers.*.self_attn.[qkvo]_proj.weight",
+            "text_encoder.layers.*.mlp.*_proj.weight",
+        ),
+        output_precision="preserve",
+    ),
+)

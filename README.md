@@ -13,7 +13,7 @@ dependencies or qualifying a worker image.
 | path | responsibility |
 |---|---|
 | `minimax-h3/` | MiniMax H3 dual-task package over AdaLN-pruned weights |
-| `sdxl/` | SDXL text-to-image package plus the family's `int8`/`fp8` quantizers (se-008, cr-073, se-023) |
+| `sdxl/` | SDXL text-to-image package plus the family's `int8`/`fp8`/`w4a8` recipes (se-008, cr-073, se-023) |
 | `anima/` | Anima text-to-image package for local development and benchmarking (se-009; model license is non-commercial) |
 | `minimax-h3-tools/` | H3 timestep-table and structural precompute functions (cr-071) |
 | `qwen-image-2/` | Qwen-Image-2.1 image generation and reference editing with native Runtime execution (research model licence) |
@@ -77,29 +77,24 @@ reference. `cozy model quantize` (below) writes its quantized lanes.
 
 ## Quantization
 
-Each family package owns its quantization recipe; `cozy_runtime.derive` owns the encodings
-(`int8.convrot`, `fp8.rowwise`), the checkpoint transaction and the round-trip tripwire. A
-quantizer is a function that takes the family's raw checkpoint (`Weights[M]`, never constructed)
-and declares one weights output named for the lane it writes. A writer is never memoized;
-`memo_dependencies` names the code that decides its bytes, so a committed derivation replays
-only for the same code:
+Each family package declares its quantization recipes as data; `cozy_runtime` owns the encodings
+(`int8.convrot`, `fp8.rowwise`, `nvfp4`, `w4a8.convrot`), the checkpoint transaction and the
+round-trip tripwire. A recipe names the lane it writes, the model it reads and its plan:
 
 ```python
-@invocable(memo_dependencies=_QUANTIZER)
-async def fp8(ctx: Context, *, source: Weights[SdxlModel], max_relative_frobenius: float | None = None, tel: Telemetry) -> ModelArtifact:
-    plan = derive.plan(("unet",), "fp8.rowwise", max_relative_frobenius=max_relative_frobenius)
-    return derive.quantize_artifact(source, plan, ctx=ctx, tel=tel, output="fp8")
-
-app.entrypoint(fp8, name="fp8", weights=(WeightsOutput("fp8", max_new_bytes=16 << 30),), accelerator=False)
+INT8 = Recipe(lane="int8", model=SdxlModel, plan=QuantizationPlan(
+    encoding="int8.convrot", components=("unet", "text_encoder", "text_encoder_2"),
+    include=("unet.*.attn1.to_q.weight", ...), output_precision="preserve"))
 ```
 
-`cozy model quantize <model> --int8` (or `--fp8`) finds that recipe by its output name and runs
-it on the machine holding the checkpoint; `--recipe <name>` runs one by name. A recipe is not a
-function: one per lane, applied to whichever of the package's models it is given, and `cozy run`
-refuses it. SDXL encodes the UNet's block-aligned rank-2 weights, Anima its transformer's; every
-other component inherits unchanged. H3 uses `h3_tables.operations.quantize`, which binds its
-reviewed geometry and canonical order and preserves source precision. Native checkpoints let
-an interrupted run resume from its completed tensor groups.
+The static describe records every recipe a package's modules bind (`recipes` in its interface).
+`cozy model quantize <model> --int8 --package <org>/<package>[@release]` runs the package's
+recipe for that lane and model on the machine holding the checkpoint (`--recipe <name>` names
+one); the package is always named, since packages that serve the same model can each declare
+one. The written lane's header records its provenance: package, release, recipe, fingerprint
+(the digest of its plan), the source checkpoint and the plan. A lane that needs code is a
+`DerivationHook` (H3's, `h3_tables.job`). SDXL's fp8 encodes the UNet's block-aligned rank-2
+weights, Anima's its transformer's; every other component inherits unchanged.
 
 ## MiniMax H3
 
