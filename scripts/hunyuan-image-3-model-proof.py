@@ -19,8 +19,10 @@ import json
 import random
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+from typing import Any
 
 import numpy as np
 import torch
@@ -31,8 +33,9 @@ UPSTREAM, FILES = Path(sys.argv[1]), Path(sys.argv[2])
 PORT = Path(__file__).resolve().parent.parent / "hunyuan-image-3" / "hunyuan_image_3" / "tencent"
 
 
-def load_package(name: str, path: Path):
+def load_package(name: str, path: Path) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, path / "__init__.py", submodule_search_locations=[str(path)])
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
@@ -44,12 +47,12 @@ torch.cuda.set_device = lambda *a, **k: None
 torch.cuda.nvtx.range = lambda *a, **k: contextlib.nullcontext()
 
 
-class CpuAutocast(torch.autocast):
+class CpuAutocast(torch.autocast):  # type: ignore[misc]
     """Both models wrap their forwards in `torch.autocast("cuda", ...)`; on this CPU the same regions
     autocast on the CPU, so the bfloat16 modules take float32 latents as they do on a GPU. The VAE's float16
     regions run in bfloat16: CPU group norm takes no float16 input beside bfloat16 weights."""
 
-    def __init__(self, device_type, dtype=None, *args, **kwargs):
+    def __init__(self, device_type: str, dtype: Any = None, *args: Any, **kwargs: Any) -> None:
         if device_type == "cuda":
             device_type, dtype = "cpu", torch.bfloat16 if dtype == torch.float16 else dtype
         super().__init__(device_type, dtype, *args, **kwargs)
@@ -59,7 +62,7 @@ torch.autocast = CpuAutocast
 
 
 @contextlib.contextmanager
-def cpu_empty():
+def cpu_empty() -> Iterator[None]:
     """Tencent's VAE allocates an empty CUDA tensor in its constructor; build it on CPU instead. Only
     for that construction: `torch.device("meta")` recognizes the real `torch.empty` only."""
     empty = torch.empty
@@ -69,17 +72,18 @@ def cpu_empty():
     finally:
         torch.empty = empty
 
+
+# Both trees are packages named `hunyuan_image_3`, so each is loaded under its own name.
 sys.path.insert(0, str(UPSTREAM))
 load_package("tencent_upstream", UPSTREAM / "hunyuan_image_3")
-from tencent_upstream.modeling_hunyuan_image_3 import HunyuanImage3ForCausalMM as Reference  # noqa: E402
-from tencent_upstream.configuration_hunyuan_image_3 import HunyuanImage3Config  # noqa: E402
-from transformers import GenerationConfig  # noqa: E402
-
 load_package("hunyuan_port", PORT)
-from hunyuan_port.modeling_hunyuan_image_3 import HunyuanImage3ForCausalMM as Port  # noqa: E402
-from hunyuan_port.configuration_hunyuan_image_3 import HunyuanImage3Config as PortConfig  # noqa: E402
-from hunyuan_port.system_prompt import get_system_prompt  # noqa: E402
-from hunyuan_port.tokenization_hunyuan_image_3 import HunyuanImage3TokenizerFast as PortTokenizer  # noqa: E402
+Reference: Any = importlib.import_module("tencent_upstream.modeling_hunyuan_image_3").HunyuanImage3ForCausalMM
+HunyuanImage3Config: Any = importlib.import_module("tencent_upstream.configuration_hunyuan_image_3").HunyuanImage3Config
+Port: Any = importlib.import_module("hunyuan_port.modeling_hunyuan_image_3").HunyuanImage3ForCausalMM
+PortConfig: Any = importlib.import_module("hunyuan_port.configuration_hunyuan_image_3").HunyuanImage3Config
+get_system_prompt: Any = importlib.import_module("hunyuan_port.system_prompt").get_system_prompt
+PortTokenizer: Any = importlib.import_module("hunyuan_port.tokenization_hunyuan_image_3").HunyuanImage3TokenizerFast
+GenerationConfig: Any = importlib.import_module("transformers").GenerationConfig
 
 FULL = json.loads((FILES / "config.json").read_text())
 GENERATION = json.loads((FILES / "generation_config.json").read_text())
@@ -95,11 +99,11 @@ TINY = {
 }
 
 
-def tiny(distilled: bool) -> dict:
+def tiny(distilled: bool) -> dict[str, Any]:
     return {**FULL, **TINY, "cfg_distilled": distilled, "use_meanflow": distilled}
 
 
-def build(distilled: bool) -> tuple[Reference, Port]:
+def build(distilled: bool) -> tuple[Any, Any]:
     torch.manual_seed(0)
     config = HunyuanImage3Config(**tiny(distilled))
     config._attn_implementation = "sdpa"
@@ -144,13 +148,13 @@ def picture(seed: int, size: tuple[int, int]) -> Image.Image:
 
 
 @contextlib.contextmanager
-def biased_ends(*models: torch.nn.Module):
+def biased_ends(*models: Any) -> Iterator[None]:
     """With random weights a thought never ends: make `</think>` and `</recaption>` the likely tokens, alike in
     both models, so the stage transitions and the size pick after the recaption run."""
     tokenizer = models[1]._tokenizer
     ends = [tokenizer.end_of_think_token_id, tokenizer.end_of_recaption_token_id]
 
-    def hook(module, inputs, output):
+    def hook(module: Any, inputs: Any, output: Any) -> Any:
         output = output.clone()
         output[..., ends] += 1e4
         return output
@@ -163,7 +167,7 @@ def biased_ends(*models: torch.nn.Module):
             handle.remove()
 
 
-def case(name: str, reference: Reference, port: Port, *, images: list[Image.Image], bot_task: str,
+def case(name: str, reference: Any, port: Any, *, images: list[Image.Image], bot_task: str,
          image_size: str, steps: int, seed: int, ends: bool = False) -> None:
     started = time.monotonic()
     prompt = f"A red fox in fresh snow, case {name}"

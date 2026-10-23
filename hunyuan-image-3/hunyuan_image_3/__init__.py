@@ -19,7 +19,7 @@ from cozy_runtime.author import (
     WeightsOutput,
 )
 
-from .model import GENERATION, HunyuanImage3, caption
+from .model import MAX_NEW_TOKENS, HunyuanImage3, caption
 from .quantize import int8, nvfp4
 from .tencent.tokenization_hunyuan_image_3 import Resolution, ResolutionGroup
 
@@ -116,7 +116,7 @@ def _generate(ctx: Context, payload: GenerateInput | TurboInput, steps: int, mod
         with tel.stage("thinking", overall_range=(0.0, 0.3)):
             cot, picked = model.think(payload.prompt, references, seed=seed, pick_size=size is None,
                                       cancel=ctx.raise_if_cancelled,
-                                      on_token=tel.step_callback(GENERATION["max_new_tokens"], stage="thinking",
+                                      on_token=tel.step_callback(MAX_NEW_TOKENS, stage="thinking",
                                                                  overall_range=(0.0, 0.3)))
         size = size or picked
         tel.log("rewritten prompt", caption=caption(cot, payload.prompt)[:2000])

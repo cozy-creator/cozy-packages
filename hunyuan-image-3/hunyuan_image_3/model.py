@@ -29,7 +29,9 @@ COMPONENT = "model"
 
 #: Tencent's `generation_config.json`, the same in both checkpoints but for the step count, which each
 #: function sets (`diff_infer_steps`: 50 Instruct, 8 Distil).
-GENERATION = {
+#: The text stage stops after this many tokens.
+MAX_NEW_TOKENS = 2048
+GENERATION: dict[str, object] = {
     "do_sample": True,
     "top_k": 1024,
     "top_p": 0.95,
@@ -41,7 +43,7 @@ GENERATION = {
     "use_system_prompt": "en_unified",
     "drop_think": False,
     "bot_task": "think_recaption",
-    "max_new_tokens": 2048,
+    "max_new_tokens": MAX_NEW_TOKENS,
 }
 #: `prompt_upsampling` on: Tencent's default stage, think then recaption; off: straight to the image.
 UPSAMPLED, DIRECT = "think_recaption", "image"
@@ -130,4 +132,5 @@ class HunyuanImage3(Model[Graph], encoded_leaves="accept"):
             latents = model.denoise(prompt, self._cond(references), _system(UPSAMPLED if cot else DIRECT), cot,
                                     image_size=f"{height}x{width}", steps=steps, guidance_scale=guidance, seed=seed,
                                     on_step=on_step, cancel=cancel)
-            return model.decode_latents(latents)
+            image: Image.Image = model.decode_latents(latents)
+        return image
