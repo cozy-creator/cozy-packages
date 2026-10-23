@@ -3,9 +3,11 @@ which weights each encoding takes is this package's; the encodings and their ker
 
 from __future__ import annotations
 
-from cozy_runtime.author import EncodingRule, QuantizationPlan, Recipe, SelectionPlan
+from typing import Any
 
-from .klein import Klein
+from cozy_runtime.author import Context, EncodingRule, QuantizationPlan, Recipe, SelectionPlan, Telemetry
+
+from .klein import Klein, prepare_reference
 from .upsampler import Drafter, Upsampler
 
 #: Every linear of the 43 DiT blocks, the six modulation heads, the context embedder and the output
@@ -62,6 +64,65 @@ W4A8 = Recipe(
         encodings=(EncodingRule("transformer.*blocks.*", "w4a8.convrot"),),
         output_precision="preserve",
     ),
+)
+
+#: What the svdq-nvfp4 lane is fitted to: upsampler-length captions across subjects, styles and lighting; each
+#: image is then edited by its instruction in `EDITS`, which runs the reference blocks (`image_cond`).
+CALIBRATION = (
+    "A weathered fisherman mending a red net on a wooden dock at dawn, low mist over the harbor, gulls on "
+    "the pilings, soft golden side light, shot on 35mm film with visible grain.",
+    "A minimalist product photo of a matte ceramic coffee cup on a pale concrete slab, a single hard shadow "
+    "falling to the left, a sprig of rosemary beside it, studio lighting.",
+    "A dense cyberpunk street market at night in heavy rain, neon signs in Japanese and English reflected in "
+    "puddles, steam rising from food stalls, a crowd holding transparent umbrellas.",
+    "An isometric 3D render of a tiny cozy library inside a hollow tree trunk, warm lamps, spiral stairs, "
+    "books stacked on every shelf, a cat on a reading chair.",
+)
+EDITS = (
+    "Turn the scene into a loose watercolor painting with visible paper texture.",
+    "Replace the cup with a glass teapot full of green tea, keeping the shadow and lighting.",
+    "Make it a clear sunny afternoon with no rain, keeping the market and the crowd.",
+    "Add a small sign above the door that reads \"OPEN LATE\" in hand-painted letters.",
+)
+
+
+def calibrate(ctx: Context, tel: Telemetry, model: Klein, record: Any) -> None:
+    """Klein at 16 bits generates each of `CALIBRATION` at 1 MP and edits it by its `EDITS` instruction while
+    each svdq linear's inputs are recorded."""
+    steps, guidance = (16, None) if model.flow_map else (24, 4.0)
+    runs = 2 * len(CALIBRATION)
+    with record(model.graph.components), tel.stage("calibrating", overall_range=(0.0, 0.3)):
+        for seed, (prompt, edit) in enumerate(zip(CALIBRATION, EDITS, strict=True)):
+            references, size = None, (1024, 1024)
+            for n, text in enumerate((prompt, edit)):
+                span = (0.3 * (2 * seed + n) / runs, 0.3 * (2 * seed + n + 1) / runs)
+                embeds = model.encode(text)
+                negative = model.encode("") if guidance is not None else None
+                tokens = model.denoise(embeds, negative, references, width=size[0], height=size[1], steps=steps,
+                                       guidance=guidance, seed=seed,
+                                       on_step=tel.step_callback(steps, stage="calibrating", overall_range=span),
+                                       cancel=ctx.raise_if_cancelled)
+                if references is None:
+                    image = model.decode(tokens, width=size[0], height=size[1])
+                    reference = prepare_reference(image)[0]
+                    references, size = model.encode_references([reference]), reference.size
+
+
+#: Blackwell's 4-bit lane (xs-066): the nvfp4 lane with its DiT blocks in SVDQuant (`svdq.nvfp4`: per-channel
+#: smoothing, a 16-bit rank-32 branch holding the outliers, an nvfp4 residual), fitted to Klein's own activations
+#: (`calibrate`, from the 16-bit source). 7.4% per linear against plain nvfp4's 8.7% on Klein's prompts and
+#: edits (xs-066). What the nvfp4 lane keeps int8 stays int8.
+SVDQ_NVFP4 = Recipe(
+    lane="svdq-nvfp4",
+    model=Klein,
+    plan=QuantizationPlan(
+        encoding="int8.convrot",
+        components=INT8.plan.components,
+        include=INT8.plan.include,
+        encodings=(EncodingRule("transformer.*blocks.*", "svdq.nvfp4"),),
+        output_precision="preserve",
+    ),
+    calibrate=calibrate,
 )
 
 _LM = "model.model.language_model.layers.*"
