@@ -16,7 +16,7 @@ Numerics are eager's. Every float16 rounding eager makes is made here too (`_rh`
 the compiler cannot fold), the scale-add is a separate IEEE multiply and add, and SiLU is
 torch's `x / (1 + exp(-x))`. The norms reduce in another order than torch's kernel and may
 differ by one ulp. Installed by `H3Model.execution_plan` when the decoder has the release
-shape and float16 linears. Otherwise, or while its kernels build, eager serves.
+shape and float16 or int8.convrot linears. Otherwise, or while its kernels build, eager serves.
 
 Measured 2026-10-18 on an RTX 4090 with the release weights and a real 124-frame latent,
 weights resident: 1.93-2.10 s a chunk against 2.45-2.54 s (5 s decode 13.8 s against 17.3 s).
@@ -42,7 +42,7 @@ from diffusers.models.autoencoders.autoencoder_kl_minimax_h3 import (
 )
 from triton.language.extra import libdevice
 
-from cozy_runtime.author.kernels import KernelsUnavailable, Launch, Plan, TritonEntry, TritonKernels
+from cozy_runtime.author.kernels import INT8_CONVROT, KernelsUnavailable, Launch, Plan, TritonEntry, TritonKernels
 
 #: The release decoder's widths: the only ones compiled.
 HIDDEN, HEAD_DIM, ROTARY, FFN = 2048, 64, 48, 8192
@@ -302,6 +302,14 @@ def _fusable(hidden_states: Any, rotary_emb: Any) -> bool:
     )
 
 
+def _linear(module: Any) -> bool:
+    """A float16 `nn.Linear`, or the int8 lane's encoded leaf (it casts from and to the autocast dtype)."""
+    if getattr(module, "provider", None) == INT8_CONVROT:
+        return True
+    weight = getattr(module, "weight", None)
+    return weight is not None and weight.dtype is torch.float16
+
+
 def _matches(block: Any) -> bool:
     attn, ff = block.attn, block.ff
     return (
@@ -320,7 +328,7 @@ def _matches(block: Any) -> bool:
         and block.scale1.dtype is torch.float32
         and block.scale2.dtype is torch.float32
         and ff.net[0].proj.out_features == 2 * FFN
-        and all(m.weight.dtype is torch.float16 for m in (attn.to_q, attn.to_k, attn.to_v, attn.to_out[0], ff.net[0].proj, ff.net[2]))
+        and all(_linear(m) for m in (attn.to_q, attn.to_k, attn.to_v, attn.to_out[0], ff.net[0].proj, ff.net[2]))
         and not any(
             m._forward_hooks or m._forward_pre_hooks
             for m in (attn, ff, ff.net[0], block.norm1, block.norm2, attn.norm_q, attn.norm_k)

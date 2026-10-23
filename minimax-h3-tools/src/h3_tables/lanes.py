@@ -176,6 +176,10 @@ NVFP4_DIT_KEEP: tuple[str, ...] = (
 #: sit far below the video rows' amax, so one per-call activation scale gives 56-100 % of their
 #: 16-element groups a subnormal E4M3 scale (block 1: W4A4 audio error 0.14-0.16, int8 0.01).
 NVFP4_DIT_INT8: tuple[str, ...] = tuple(f"transformer_blocks.{block}.ff.net.2.weight" for block in range(3))
+#: The int8 lane's video VAE: the decoder ViT's 216 block linears serve int8.convrot (on consumer
+#: cards int8 runs at 4x the f16-with-f32-accumulate rate the f16 decode gets). Its pixel
+#: projection `proj_out` stays f16; `proj_in` (24 columns) is never selected.
+VAE_INT8_KEEP: tuple[str, ...] = ("decoder.proj_out.weight",)
 
 #: The video VAE's stored form is not a lane choice. `MiniMaxH3VideoDecodeStep` decodes inside
 #: `torch.autocast(float16)`, so the decoder's conv/linear operands are rounded to f16 on every

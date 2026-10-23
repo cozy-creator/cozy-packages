@@ -4,7 +4,8 @@
 `--pruned` is a released AdaLN-pruned bf16 lane's header and `--full` a bf16-full lane's, both
 with D4's component names. Everything that decides an output's tensors runs on them: the rows a
 lane copies and computes, every treatment's selection, the recipes' per-component counts (the
-production lanes': 313/313/350, nvfp4 276/276 plus the conditioner at int8.convrot) and the
+production lanes': 313/313/350, int8 also the video VAE decoder's 216, nvfp4 300/300 plus the
+conditioner at int8.convrot) and the
 refusals. No weight byte is read.
 """
 
@@ -65,6 +66,8 @@ def recipes(pruned: tensorfs.Checkpoint) -> None:
     ):
         got = counts(job.quantizer_selections(pruned, encoding))
         want = {dit: (dit_scheme, dit_rows) for dit in dits} | {"text_encoder": (te_scheme, 350)}
+        if encoding == "int8.convrot":
+            want["vae"] = ("int8.convrot", 216)
         assert got == want, f"{encoding}: {got}"
         if encoding == "nvfp4":
             for selection in job.quantizer_selections(pruned, encoding):

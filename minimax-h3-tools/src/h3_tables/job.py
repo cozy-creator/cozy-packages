@@ -399,13 +399,19 @@ app.entrypoint(
 #: W4A4 at prompt length, and the conditioner runs once a request); `NVFP4_DIT_INT8` serve int8.convrot.
 #: w4a8 (xs-062) takes nvfp4's kept keys with every other DiT linear in W4A8 (its per-token
 #: activation scales have none of nvfp4's subnormal-scale hazard), the conditioner int8.convrot.
+#: int8 also takes the video VAE decoder's block linears minus `VAE_INT8_KEEP`.
 QUANTIZER_RECIPES: Mapping[str, Mapping[str, _lanes.Treatment]] = {
-    encoding: {
-        component: _lanes.Treatment(encode=encoding, keep=treatment.keep)
+    "fp8.rowwise": {
+        component: _lanes.Treatment(encode="fp8.rowwise", keep=treatment.keep)
         for component, treatment in LANES["fp8"].components.items()
-    }
-    for encoding in ("fp8.rowwise", "int8.convrot")
-} | {
+    },
+    "int8.convrot": {
+        **{
+            component: _lanes.Treatment(encode="int8.convrot", keep=treatment.keep)
+            for component, treatment in LANES["fp8"].components.items()
+        },
+        "vae": _lanes.Treatment(encode="int8.convrot", keep=_lanes.VAE_INT8_KEEP),
+    },
     "nvfp4": {
         **{dit: _lanes.Treatment(
                encode="nvfp4", keep=_lanes.NVFP4_DIT_KEEP,
@@ -419,8 +425,9 @@ QUANTIZER_RECIPES: Mapping[str, Mapping[str, _lanes.Treatment]] = {
         "text_encoder": _lanes.Treatment(encode="int8.convrot", keep=_lanes.TEXT_ENCODER_KEEP),
     },
 }
-#: Both DiTs and the conditioner at most; the output's own accounting is exact.
+#: Both DiTs and the conditioner at most (int8: and the video VAE); the output's own accounting is exact.
 MAX_QUANTIZER_BYTES = 2 * MAX_DIT_BYTES + MAX_TEXT_ENCODER_BYTES
+MAX_INT8_QUANTIZER_BYTES = MAX_QUANTIZER_BYTES + MAX_VIDEO_VAE_BYTES
 
 
 def quantizer_selections(source: Checkpoint, encoding: _lanes.Encoding) -> list[Selection]:
@@ -548,7 +555,7 @@ app.entrypoint(
 app.entrypoint(
     int8,
     name="int8",
-    weights=(WeightsOutput("int8", max_new_bytes=MAX_QUANTIZER_BYTES),),
+    weights=(WeightsOutput("int8", max_new_bytes=MAX_INT8_QUANTIZER_BYTES),),
     accelerator=False,
 )
 app.entrypoint(
