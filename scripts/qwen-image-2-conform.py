@@ -12,7 +12,7 @@ from pathlib import Path
 import msgspec
 import torch
 from cozy_runtime.author import ImageAsset, canonical_json, describe
-from cozy_runtime.author.fakes import fake_attempt, fake_outputs, file_input
+from cozy_runtime.author.fakes import fake_adjustments, fake_attempt, fake_outputs, file_input
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,10 +32,18 @@ from qwen_image_2 import (  # noqa: E402
 
 payload = msgspec.json.decode(b'{"prompt":"An explorer in a blue coat"}', type=GenerateInput)
 assert payload.seed is None and payload.steps is None
-assert payload.shape() == (Megapixels.MP4, "1:1")
+assert payload.size(fake_adjustments()) == (2048, 2048)
 assert output_size(Megapixels.MP4, "1:1") == (2048, 2048, False)
-assert payload.shape((1200, 800)) == (Megapixels.MP1, "1200:800")
-assert GenerateInput("x", "16:9", Megapixels.MP2).shape((4000, 3000)) == (Megapixels.MP2, "16:9")
+# With references, what is not given is the FIRST reference's: its ratio, and its pixel count
+# inside 1-4 MP (raised to 1 MP here, with a clamp row); a given tier or ratio wins.
+adj = fake_adjustments()
+assert payload.size(adj, (1200, 800)) == calculate_dimensions(1 << 20, 1.5)[:2]
+assert [row.field for row in adj.rows] == ["megapixels"]
+adj = fake_adjustments()
+assert payload.size(adj, (1600, 1200)) == (1600, 1216) and not adj.rows
+assert GenerateInput("x", "16:9").size(adj, (1600, 1200)) == calculate_dimensions(1600 * 1200, 16 / 9)[:2]
+assert GenerateInput("x", None, Megapixels.MP2).size(adj, (1600, 1200)) == output_size(Megapixels.MP2, "1600:1200")[:2]
+assert GenerateInput("x", "16:9", Megapixels.MP2).size(adj, (4000, 3000)) == output_size(Megapixels.MP2, "16:9")[:2]
 assert _DEMAND[None] == _DEMAND[Megapixels.MP4]
 # Every W:H from 1:10^4 to 10^4:1 stays inside the rotary range, 32 px sides and the demand
 # admission declared. Up to 13:1 that is upstream's own size; past the range it is held.
@@ -92,13 +100,14 @@ reference = file_input(ImageAsset, pngs[1], max_decoded_bytes=1 << 20)
 assert reference.read().getpixel((0, 0)) == (255, 255, 255)
 assert reference.read(mode="RGBA").getpixel((0, 0)) == (255, 0, 0, 0)
 surfaces = {surface.name: surface for surface in describe(app)}
-assert set(surfaces) == {"generate_image", "generate_image_turbo", "int8"}, sorted(surfaces)
-for name in ("generate_image", "generate_image_turbo"):
+assert set(surfaces) == {"generate", "generate_turbo", "int8", "w4a8"}, sorted(surfaces)
+for name in ("generate", "generate_turbo"):
     surface = surfaces[name]
     assert not surface.weights_outputs and surface.accelerator
     assert [(b.param, b.weights) for b in surface.model_bindings] == [("model", False)]
-quantizer = surfaces["int8"]
-assert [o.name for o in quantizer.weights_outputs] == ["int8"] and not quantizer.accelerator
-assert [(b.param, b.weights) for b in quantizer.model_bindings] == [("source", True)]
-assert quantizer.memoize is None
-print("qwen-image-2: any W:H inside the demand, seeds, RGB and RGBA PNGs passed")
+for lane in ("int8", "w4a8"):
+    quantizer = surfaces[lane]
+    assert [o.name for o in quantizer.weights_outputs] == [lane] and not quantizer.accelerator
+    assert [(b.param, b.weights) for b in quantizer.model_bindings] == [("source", True)]
+    assert quantizer.memoize is None
+print("qwen-image-2: any W:H inside the demand, first-reference sizing, seeds, RGB and RGBA PNGs passed")

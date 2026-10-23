@@ -1,8 +1,9 @@
 #!/usr/bin/env python
-"""Real tiny Klein modules on CPU: the staged model matches Diffusers' Flux3 modular pipeline.
+"""Real tiny Klein modules on CPU: each function makes the image Diffusers' Flux3 modular pipeline
+for its checkpoint makes, `generate` Klein Base's with CFG and `generate_turbo` the distilled flow
+map's, text to image and with one or two references, through the Runtime test harness.
 
-Run with the package's own interpreter. Both checkpoints' samplers (the distilled flow map and the
-base model with CFG), text-to-image and two references, through the Runtime test harness.
+Run with the package's own interpreter.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -29,7 +31,7 @@ from transformers import PreTrainedTokenizerFast
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "flux-3-klein"))
 
-from flux_3_klein import _DEMAND, Megapixels, app, output_size  # noqa: E402
+from flux_3_klein import _BASE, _DEMAND, _DISTILLED, Megapixels, app, output_size  # noqa: E402
 from flux_3_klein.upsampler import Drafter, Upsampler  # noqa: E402
 from flux_3_klein.klein import (  # noqa: E402
     PATCH,
@@ -41,6 +43,9 @@ from flux_3_klein.klein import (  # noqa: E402
     prepare_reference,
     reference_canvas,
 )
+
+#: Each function's checkpoint: Klein Base (CFG) or the distilled flow map.
+CHECKPOINTS = {"generate": (_BASE, False), "generate_turbo": (_DISTILLED, True)}
 
 CHAT = (
     '{% for message in messages %}{{"<|im_start|>" + message["role"] + "\\n"}}'
@@ -101,23 +106,39 @@ def graph(flow_map: bool) -> KleinGraph:
     return built
 
 
-def proof(flow_map: bool, references: list[Image.Image]) -> None:
+def run(function: str, flow_map: bool, references: list[Path], root: Path,
+        **given: object) -> tuple[Any, Path]:
+    """`function` through the real kernel on tiny real modules, the upsampler off."""
+    models = {
+        "model": Klein.for_test(graph=graph(flow_map), processor=build_processor(assets())),
+        "upsampler": Upsampler.for_test(),
+        "drafter": Drafter.for_test(),
+    }
+    grants = {
+        f"reference_images.{n}": granted_input(path, input_id=f"reference_images.{n}", order=n)
+        for n, path in enumerate(references)
+    }
+    wire = {"prompt": "a red fox in snow", "seed": 11, "prompt_upsampling": False, **given,
+            "reference_images": [grant.digest for grant in grants.values()]}
+    spool = root / f"{function}-{len(references)}-{len(list(root.iterdir()))}"
+    return invoke_with_fakes(app.get(function), wire, request_id=spool.name, spool=spool, models=models,
+                             assets=grants), spool / "image-0001"
+
+
+def proof(function: str, references: list[Path], root: Path) -> None:
+    defaults, flow_map = CHECKPOINTS[function]
+    assert app.get(function).model_defaults["model"] == defaults["model"], app.get(function).model_defaults
+    invoked, png = run(function, flow_map, references, root, steps=3)
+    width, height = invoked.result.width, invoked.result.height
+    with Image.open(png) as image:
+        actual = np.asarray(image.convert("RGB")).astype(np.float32) / 255
+
     built = graph(flow_map)
     model = Klein.for_test(graph=built, processor=build_processor(assets()))
-    width = height = 64
-    prepared = ([prepare_reference(references[0])[0]] if len(references) == 1
-                else [prepare_multi_reference(r) for r in references])
-    encoded = model.encode_references(prepared) if references else None
-    embeds = model.encode("a red fox in snow")
-    negative = None if flow_map else model.encode("")
-    tokens = model.denoise(embeds, negative, encoded, width=width, height=height, steps=3,
-                           guidance=None if flow_map else 3.5, seed=11,
-                           on_step=lambda _: None, cancel=lambda: None)
-    image = model.decode(tokens, width=width, height=height)
-    assert image.size == (width, height)
-
-    blocks = Flux3DistilledAutoBlocks() if flow_map else Flux3AutoBlocks()
-    pipe = blocks.init_pipeline()
+    pictures = [Image.open(path) for path in references]
+    prepared = ([prepare_reference(pictures[0])[0]] if len(pictures) == 1
+                else [prepare_multi_reference(p) for p in pictures])
+    pipe = (Flux3DistilledAutoBlocks() if flow_map else Flux3AutoBlocks()).init_pipeline()
     # Diffusers' own blocks, on the same weights: Klein runs every block as one stream.
     reference = copy.deepcopy(built.components["transformer"])
     for block in reference.single_transformer_blocks:
@@ -125,18 +146,21 @@ def proof(flow_map: bool, references: list[Image.Image]) -> None:
     for block in (*reference.txt_mode_blocks, *(b for m in reference.mode_blocks.values() for b in m)):
         block.__class__ = Flux3ModeTransformerBlock
     pipe.update_components(**{**built.components, "transformer": reference}, tokenizer=model.processor)
-    rows = width // PATCH
-    noise = torch.randn((rows * rows, 8), generator=torch.Generator().manual_seed(11))
-    latents = noise.to(torch.bfloat16).float().view(rows, rows, 8).permute(2, 0, 1)[None]
+    # An edit generates on the first reference's 16 px canvas (64 px sides at least) and crops back.
+    fit, (width, height) = reference_canvas(*pictures[0].size) if pictures else ((width, height),) * 2
+    left, top = (width - fit[0]) // 2, (height - fit[1]) // 2
+    rows, columns = height // PATCH, width // PATCH
+    noise = torch.randn((rows * columns, 8), generator=torch.Generator().manual_seed(11))
+    latents = noise.to(torch.bfloat16).float().view(rows, columns, 8).permute(2, 0, 1)[None]
     kwargs = dict(prompt="a red fox in snow", height=height, width=width, num_inference_steps=3,
                   latents=latents, output="images", output_type="np")
-    if references:
+    if prepared:
         kwargs["image"] = prepared
-    expected = pipe(**kwargs)[0]
-    actual = np.asarray(image).astype(np.float32) / 255
+    expected = pipe(**kwargs)[0][top:top + fit[1], left:left + fit[0]]
     difference = float(np.abs(actual - expected).mean())
-    print(f"flow_map={flow_map} references={len(references)}: mean |Δ| = {difference:.4f}")
-    assert difference < 0.02, difference
+    print(f"{function} references={len(references)} {fit[0]}x{fit[1]}: mean |Δ| = {difference:.4f}")
+    # Matching is 0.002 here; the same base model without CFG is 0.005 off, so this tells them apart.
+    assert difference < 0.0035, difference
 
 
 def sizes() -> None:
@@ -162,50 +186,46 @@ def sizes() -> None:
     assert prepare_multi_reference(Image.new("RGB", (2000, 1000))).size == (1440, 720)
 
 
-def edits(root: Path) -> None:
-    """`edit` through the real kernel on real PNGs. Given no size, the output is BFL's: the first
-    prepared reference's own size, a lone one's padding cropped off. Explicit inputs win."""
-    # `prompt_upsampling=False` never calls the upsampler or its drafter: unloaded stand-ins.
-    models = {
-        "model": Klein.for_test(graph=graph(True), processor=build_processor(assets())),
-        "upsampler": Upsampler.for_test(),
-        "drafter": Drafter.for_test(),
-    }
+def sizing(root: Path) -> None:
+    """With references, what is not given is the first reference's: given neither, its own size
+    (generated on the 16 px grid and cropped back); given one, its ratio or its pixel count."""
     rng = np.random.default_rng(5)
     paths = []
-    for index, size in enumerate(((100, 60), (90, 50), (200, 200))):
+    for index, size in enumerate(((100, 60), (90, 50), (200, 200), (40, 40))):
         path = root / f"reference-{index}.png"
         Image.fromarray(rng.integers(0, 255, (size[1], size[0], 3), dtype=np.uint8)).save(path)
         paths.append(path)
-    cases: list[tuple[list[Path], dict[str, object], tuple[int, int]]] = [
-        ([paths[0]], {}, (100, 60)),  # canvas 112x64, cropped back to the fit
-        ([paths[1], paths[2]], {}, (80, 48)),  # several: the first, cropped to the 16 px grid
-        ([paths[0]], {"aspect_ratio": "2:1", "megapixels": 1}, (1440, 736)),
-        ([paths[0]], {"megapixels": 1}, (1312, 800)),  # its 5:3 at the tier given
+    cases: list[tuple[list[Path], dict[str, object], tuple[int, int], set[str]]] = [
+        ([paths[0]], {}, (100, 60), set()),  # canvas 112x64, cropped back to the reference
+        ([paths[1], paths[2]], {}, (90, 50), set()),  # several: the first's own size too
+        ([paths[0]], {"aspect_ratio": "2:1", "megapixels": 1}, (1440, 736), set()),
+        ([paths[0]], {"megapixels": 1}, (1312, 800), set()),  # its 5:3 at the tier given
+        ([paths[2]], {"aspect_ratio": "2:1"}, (288, 128), set()),  # its 40,000 px at the ratio given
+        ([paths[3]], {"aspect_ratio": "1:1"}, (64, 64), {"megapixels"}),  # raised to 64x64
     ]
-    for index, (references, given, expected) in enumerate(cases):
-        grants = {
-            f"reference_images.{n}": granted_input(path, input_id=f"reference_images.{n}", order=n)
-            for n, path in enumerate(references)
-        }
-        wire = {"prompt": "a fox", "steps": 1, "seed": 3, "prompt_upsampling": False, **given}
-        wire["reference_images"] = [grant.digest for grant in grants.values()]
-        spool = root / f"edit-{index}"
-        result = invoke_with_fakes(
-            app.get("edit"), wire, request_id=f"edit-{index}", spool=spool, models=models, assets=grants
-        )
-        assert (result.result.width, result.result.height) == expected, (given, result.result)
-        with Image.open(spool / "image-0001") as png:
-            assert png.size == expected, png.size
+    root = root / "sizing"
+    root.mkdir()
+    for references, given, expected, clamped in cases:
+        for function, (_, flow_map) in CHECKPOINTS.items():
+            invoked, png = run(function, flow_map, references, root, steps=1, **given)
+            assert (invoked.result.width, invoked.result.height) == expected, (function, given, invoked.result)
+            with Image.open(png) as image:
+                assert image.size == expected, image.size
+            assert {row.field for row in invoked.adjustments} == clamped, invoked.adjustments
 
 
 if __name__ == "__main__":
     sizes()
     with tempfile.TemporaryDirectory() as scratch:
-        edits(Path(scratch))
-    rng = np.random.default_rng(3)
-    pictures = [Image.fromarray(rng.integers(0, 255, (48, 64, 3), dtype=np.uint8)) for _ in range(2)]
-    for flow_map in (True, False):
-        for count in (0, 1, 2):
-            proof(flow_map, pictures[:count])
+        root = Path(scratch)
+        sizing(root)
+        rng = np.random.default_rng(3)
+        pictures = []
+        for index in range(2):
+            path = root / f"picture-{index}.png"
+            Image.fromarray(rng.integers(0, 255, (48, 64, 3), dtype=np.uint8)).save(path)
+            pictures.append(path)
+        for function in CHECKPOINTS:
+            for count in (0, 1, 2):
+                proof(function, pictures[:count], root)
     print("flux-3-klein model proof passed")

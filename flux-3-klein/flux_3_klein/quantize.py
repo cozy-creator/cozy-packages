@@ -1,9 +1,12 @@
-"""Klein's quantized lanes: which weights each encoding takes is this package's recipe; the encodings
-and their kernels are Runtime's."""
+"""Klein's quantized lanes: which weights each encoding takes is this package's recipe, one per lane for
+both its checkpoints (Klein and the upsampler); the encodings and their kernels are Runtime's."""
 
 from __future__ import annotations
 
-from cozy_runtime.author import Context, ModelArtifact, Telemetry, Weights, invocable
+from collections.abc import Iterable
+from typing import Any
+
+from cozy_runtime.author import Context, ModelArtifact, Telemetry, UnsupportedInput, Weights, invocable
 from cozy_runtime.derive.operations import (
     EncodingRule,
     QuantizationPlan,
@@ -12,8 +15,7 @@ from cozy_runtime.derive.operations import (
     select_into,
 )
 
-from .klein import Klein
-from .upsampler import Drafter, Upsampler
+from .upsampler import Drafter
 
 #: Every linear of the 43 DiT blocks, the six modulation heads, the context embedder and the output
 #: norm, and the q/k/v/o and MLP projections of the 32 text-encoder layers the pipeline reads. On real
@@ -91,51 +93,52 @@ UPSAMPLER_NVFP4 = QuantizationPlan(
 )
 
 
+#: Each lane's plan and base encoding by the component that tells the checkpoints apart: Klein's
+#: `transformer`, the upsampler's one `model`.
+_CHECKPOINTS = {"transformer": "Klein (`transformer`)", "model": "its upsampler (`model`)"}
+_LANES: dict[str, dict[str, tuple[QuantizationPlan, str]]] = {
+    "int8": {"transformer": (INT8, "int8.convrot"), "model": (UPSAMPLER_INT8, "int8.convrot")},
+    "nvfp4": {"transformer": (NVFP4, "int8.convrot"), "model": (UPSAMPLER_NVFP4, "nvfp4")},
+    "w4a8": {"transformer": (W4A8, "int8.convrot")},
+}
+
+
+def lane_plan(lane: str, components: Iterable[str]) -> tuple[QuantizationPlan, str]:
+    """`lane`'s plan and base encoding for the checkpoint holding `components`."""
+    held = set(components)
+    found = [plan for component, plan in _LANES[lane].items() if component in held]
+    if len(found) != 1:
+        raise UnsupportedInput(
+            f"{lane} quantizes {' or '.join(_CHECKPOINTS[c] for c in _LANES[lane])}; this checkpoint holds {sorted(held)}",
+            code="quantization_source",
+        )
+    return found[0]
+
+
+def _quantize(ctx: Context, tel: Telemetry, source: Weights[Any], lane: str) -> ModelArtifact:
+    plan, encoding = lane_plan(lane, source.components())
+    return quantize_into(ctx, tel, source=source, plan=plan, encoding=encoding, output=lane)
+
+
 @invocable(memo_version="flux-3-klein-int8/1")
-async def int8(ctx: Context, *, source: Weights[Klein], tel: Telemetry) -> ModelArtifact:
-    """The int8 lane (`int8.convrot`): W8A8 on int8 tensor cores, the default lane. The VAE and
-    every unlisted weight keep their source precision."""
-    return quantize_into(
-        ctx, tel, source=source, plan=INT8, encoding="int8.convrot", output="int8"
-    )
+async def int8(ctx: Context, *, source: Weights[Any], tel: Telemetry) -> ModelArtifact:
+    """The int8 lane (`int8.convrot`) of Klein or its upsampler: W8A8 on int8 tensor cores, the default
+    lane. The VAE and every unlisted weight keep their source precision."""
+    return _quantize(ctx, tel, source, "int8")
 
 
 @invocable(memo_version="flux-3-klein-nvfp4/1")
-async def nvfp4(ctx: Context, *, source: Weights[Klein], tel: Telemetry) -> ModelArtifact:
-    """The nvfp4 lane: the DiT blocks as W4A4 on Blackwell's FP4 tensor cores, everything else as
-    the int8 lane has it."""
-    return quantize_into(
-        ctx, tel, source=source, plan=NVFP4, encoding="int8.convrot", output="nvfp4"
-    )
+async def nvfp4(ctx: Context, *, source: Weights[Any], tel: Telemetry) -> ModelArtifact:
+    """The nvfp4 lane: Klein's DiT blocks as W4A4 on Blackwell's FP4 tensor cores, everything else as the
+    int8 lane has it; the upsampler's linears in NVFP4, W4A16 for its token loop."""
+    return _quantize(ctx, tel, source, "nvfp4")
 
 
 @invocable(memo_version="flux-3-klein-w4a8/1")
-async def w4a8(ctx: Context, *, source: Weights[Klein], tel: Telemetry) -> ModelArtifact:
-    """The w4a8 lane: the DiT blocks as W4A8 on int8 tensor cores (Ampere, Ada, Hopper),
-    everything else as the int8 lane has it."""
-    return quantize_into(
-        ctx, tel, source=source, plan=W4A8, encoding="int8.convrot", output="w4a8"
-    )
-
-
-@invocable(memo_version="flux-3-klein-upsampler-int8/1")
-async def upsampler_int8(
-    ctx: Context, *, source: Weights[Upsampler], tel: Telemetry
-) -> ModelArtifact:
-    """The upsampler's int8 lane (`int8.convrot`)."""
-    return quantize_into(
-        ctx, tel, source=source, plan=UPSAMPLER_INT8, encoding="int8.convrot", output="int8"
-    )
-
-
-@invocable(memo_version="flux-3-klein-upsampler-nvfp4/1")
-async def upsampler_nvfp4(
-    ctx: Context, *, source: Weights[Upsampler], tel: Telemetry
-) -> ModelArtifact:
-    """The upsampler's 4-bit lane (`nvfp4`, W4A16 for its token loop)."""
-    return quantize_into(
-        ctx, tel, source=source, plan=UPSAMPLER_NVFP4, encoding="nvfp4", output="nvfp4"
-    )
+async def w4a8(ctx: Context, *, source: Weights[Any], tel: Telemetry) -> ModelArtifact:
+    """The w4a8 lane: Klein's DiT blocks as W4A8 on int8 tensor cores (Ampere, Ada, Hopper),
+    everything else as the int8 lane has it. Klein only: the upsampler's 4-bit lane is nvfp4."""
+    return _quantize(ctx, tel, source, "w4a8")
 
 
 #: The drafter's lane: Qwen3.5-9B's multi-token-prediction head alone, 0.5 GB of the 18 GB model.

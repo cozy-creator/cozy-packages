@@ -5,31 +5,26 @@ to ten reference images. Its text encoder is Qwen3-VL-4B.
 
 | function | checkpoint | default steps | guidance |
 | --- | --- | --- | --- |
-| `generate` | Klein (distilled flow map) | 16 | none |
-| `edit` | Klein (distilled flow map) | 16 | none |
-| `generate_base` | Klein Base | 50 | `guidance` 3.5 (CFG) |
-| `edit_base` | Klein Base | 50 | `guidance` 3.5 (CFG) |
+| `generate` | Klein Base | 50 | `guidance` 3.5 (CFG) |
+| `generate_turbo` | Klein (distilled flow map) | 16 | none |
 
-Use the distilled functions for generation. The base checkpoint is meant for fine-tuning and research.
+Each makes an image from the prompt, or edits and composes up to ten ordered `reference_images`.
 
 ```sh
-cozy run fidika/flux-3-klein/generate prompt='A lighthouse on a basalt cliff in a winter storm' \
+cozy run fidika/flux-3-klein/generate_turbo prompt='A lighthouse on a basalt cliff in a winter storm' \
   aspect_ratio=16:9 seed=7
-cozy run fidika/flux-3-klein/edit prompt='Make it night, the lamp lit' \
+cozy run fidika/flux-3-klein/generate prompt='Make it night, the lamp lit' \
   --asset reference_images.0=lighthouse.png
 ```
 
-Fields: `prompt`, `seed` (random when omitted, returned), `steps`, and `prompt_upsampling`
-(default `true`). Text-to-image takes any `aspect_ratio` `W:H` (default `1:1`) and `megapixels`
-(1, 2 or 4; 1024² pixels each). The default is 1024×1024, the size BFL's reference code makes
-(`default_size`); the model card names no native size, and BFL's README says up to 4K. The size is
-the tier's area at that ratio, rounded to 32 px. Sides stay within BFL's 64–4096 px. A ratio past that
-is served at the nearest size it allows, reported as a `clamp` adjustment. Editing takes
-`reference_images` in order. As in BFL's code, with no size given the output is the first prepared
-reference's own size: a lone reference fitted to at most 4 MP, or the first of several at up to 1 MP on
-the 16 px grid. An `aspect_ratio` or `megapixels` sets the size instead; a missing one comes from the
-first reference (its ratio, or the tier nearest its pixel count). The result returns the image, its size, the seed and `prompt`: the caption
-the image was made from.
+Fields: `prompt`, `reference_images`, `aspect_ratio` (any `W:H`), `megapixels` (1, 2 or 4; 1024² pixels
+each), `seed` (random when omitted, returned), `steps`, and `prompt_upsampling` (default `true`). Without
+references the default is 1:1 at 1 MP (1024×1024, BFL's `default_size`); the size is the tier's area at
+that ratio, rounded to 32 px. With references, what is not given is the first reference's: given neither,
+its own size (fitted to at most 4 MP, generated on the 16 px grid and cropped back); given one, its ratio
+or its pixel count. Sides stay within BFL's 64–4096 px; a size moved to fit is reported as a `clamp`
+adjustment. The result returns the image, its size, the seed and `prompt`: the caption the image was made
+from.
 
 ## Prompt upsampling
 
@@ -82,7 +77,8 @@ cozy model quantize <account>/flux-3-klein@0.1.0/bf16 --int8 --on <machine>
 cozy model publish <account>/flux-3-klein --release 0.1.0 --lane int8=sha256:<checkpoint>
 ```
 
-Do the same for `flux-3-klein-base`. Warm 1 MP seconds per step (16-step distilled; 50-step base
+Do the same for `flux-3-klein-base` and `flux-3-klein-upsampler`: each lane is one recipe that reads
+which checkpoint it was given (`--nvfp4` writes the 4-bit lane the same way). Warm 1 MP seconds per step (16-step distilled; 50-step base
 with CFG), and the weights the lane holds:
 
 | card | distilled bf16 → int8 | base bf16 → int8 | weights |

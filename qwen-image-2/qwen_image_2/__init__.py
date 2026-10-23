@@ -49,27 +49,37 @@ _DEMAND: dict[Megapixels | None, tuple[int, int]] = {
 }
 
 
-def _nearest_tier(pixels: int) -> Megapixels:
-    return min(Megapixels, key=lambda tier: abs(tier * 1024 * 1024 - pixels))
+#: An edit with no tier keeps its first reference's pixel count inside upstream's 1 MP default and
+#: the 4 MP tier.
+_EDIT_PIXELS = (Megapixels.MP1 << 20, Megapixels.MP4 << 20)
+
+
+def _bound(tier: Megapixels | None) -> int:
+    return _DEMAND[tier][0] * _DEMAND[tier][1]
+
+
+def fitted_size(pixels: int, ratio: str, bound: int) -> tuple[int, int, bool]:
+    """Upstream's `calculate_dimensions` at `pixels`, held inside the rotary range, 32 px sides and
+    `bound` pixels; True when that moved it off upstream's size."""
+    w, h = map(int, ratio.split(":"))
+    widest = min(_MAX_SIDE**2 / pixels, pixels / 32**2)
+    width, height, _ = calculate_dimensions(pixels, min(max(w / h, 1 / widest), widest))
+    width, height = min(max(width, 32), _MAX_SIDE), min(max(height, 32), _MAX_SIDE)
+    while width * height > bound:
+        width, height = (width - 32, height) if width >= height else (width, height - 32)
+    return width, height, (width, height) != calculate_dimensions(pixels, w / h)[:2]
 
 
 def output_size(tier: Megapixels, ratio: str) -> tuple[int, int, bool]:
-    """Upstream's `calculate_dimensions` at the tier's area, held inside the rotary range, 32 px
-    sides and the tier's demand; True when that moved it off upstream's size."""
-    area, (w, h) = tier * 1024 * 1024, map(int, ratio.split(":"))
-    widest = min(_MAX_SIDE**2 / area, area / 32**2)
-    width, height, _ = calculate_dimensions(area, min(max(w / h, 1 / widest), widest))
-    width, height = min(max(width, 32), _MAX_SIDE), min(max(height, 32), _MAX_SIDE)
-    while width * height > _DEMAND[tier][0] * _DEMAND[tier][1]:
-        width, height = (width - 32, height) if width >= height else (width, height - 32)
-    return width, height, (width, height) != calculate_dimensions(area, w / h)[:2]
+    """The tier's area at `W:H`, inside the rotary range and the tier's demand."""
+    return fitted_size(tier << 20, ratio, _bound(tier))
 
 
 class GenerateInput(msgspec.Struct):
     prompt: str
-    # Any W:H. None: the last reference's ratio, else 1:1.
+    # Any W:H. None: the first reference's ratio, else 1:1.
     aspect_ratio: Annotated[str, msgspec.Meta(pattern=r"^[1-9][0-9]*:[1-9][0-9]*$")] | None = None
-    # None: the tier nearest the last reference's pixel count, else 4 MP, the model's native 2K.
+    # None: the first reference's pixel count (1-4 MP), else 4 MP, the model's native 2K.
     megapixels: Annotated[Megapixels | None, Shape(pixels=_DEMAND)] = None
     # None: the checkpoint's own schedule (Turbo's 8 steps), else 40.
     steps: Annotated[int, msgspec.Meta(ge=1, le=100)] | None = None
@@ -84,14 +94,22 @@ class GenerateInput(msgspec.Struct):
     def resolved_seed(self) -> int:
         return self.seed if self.seed is not None else secrets.randbits(53)
 
-    def shape(self, reference: tuple[int, int] | None = None) -> tuple[Megapixels, str]:
-        """The tier and W:H asked for; `reference` is the last reference's displayed size."""
-        if self.megapixels is not None:
-            tier = self.megapixels
+    def size(self, adj: Adjustments, first: tuple[int, int] | None = None) -> tuple[int, int]:
+        """The output size; `first` is the first reference's displayed size. What is not given is the
+        first reference's: its ratio, and its pixel count inside 1-4 MP. Upstream takes the LAST
+        reference's; every Cozy image package takes the first, the image being edited."""
+        if first is None:
+            ratio, pixels = self.aspect_ratio or "1:1", (self.megapixels or Megapixels.MP4) << 20
         else:
-            tier = _nearest_tier(reference[0] * reference[1]) if reference else Megapixels.MP4
-        ratio = f"{reference[0]}:{reference[1]}" if reference else "1:1"
-        return tier, self.aspect_ratio or ratio
+            ratio, own = self.aspect_ratio or f"{first[0]}:{first[1]}", first[0] * first[1]
+            pixels = self.megapixels << 20 if self.megapixels else min(max(own, _EDIT_PIXELS[0]), _EDIT_PIXELS[1])
+            if not self.megapixels and pixels != own:
+                adj.clamp("megapixels", f"{own / (1 << 20):.2f}", f"{pixels / (1 << 20):.2f}",
+                          "the first reference's pixel count, inside the 1-4 MP Qwen admits")
+        width, height, held = fitted_size(pixels, ratio, _bound(self.megapixels))
+        if held:
+            adj.clamp("aspect_ratio", ratio, f"{width}:{height}", "nearest size the model admits")
+        return width, height
 
 
 class ImageOutput(msgspec.Struct):
@@ -147,10 +165,7 @@ def _generate(
             reference_images = [asset.read(mode="RGBA") for asset in payload.reference_images]
             conditioning_images, reference_latents = model.encode_reference_images(reference_images)
         ctx.raise_if_cancelled()
-    tier, ratio = payload.shape(reference_images[-1].size if reference_images else None)
-    width, height, held = output_size(tier, ratio)
-    if held:
-        adj.clamp("aspect_ratio", ratio, f"{width}:{height}", "nearest size the model admits")
+    width, height = payload.size(adj, reference_images[0].size if reference_images else None)
     with tel.stage("encoding prompt", overall_range=(0.08 if reference_images else 0.0, 0.1)):
         if reference_images is None:
             embeds, mask = model.encode(payload.prompt)
@@ -189,7 +204,7 @@ _MEMO = ("qwen_image_2", "qwen_image_2.model")
     memoize=Memoize(requires=["seed"]),
     memo_dependencies=_MEMO,
 )
-def generate_image(
+def generate(
     ctx: Context,
     payload: GenerateInput,
     model: QwenImage21Model,
@@ -206,7 +221,7 @@ def generate_image(
     memoize=Memoize(requires=["seed"]),
     memo_dependencies=_MEMO,
 )
-def generate_image_turbo(
+def generate_turbo(
     ctx: Context,
     payload: GenerateInput,
     model: QwenImage21Model,
