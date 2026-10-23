@@ -137,11 +137,7 @@ this package's full/pruned construction-order digests for the single Runtime-own
 `cozy_runtime.derive.operations.quantize` operation. Its compact plan contains no
 model bytes or executable policy. Noncanonical source order refuses; the lane
 functions and AdaLN producers already emit the accepted orders. These are not
-Creator-supplied assets. Run
-`scripts/lane-proof.py` covers the lanes and recipes without a GPU, a rental or one weight
-byte: on real cozytensors/1 headers of a released bf16-full and AdaLN-pruned lane it checks
-each lane's rows, every treatment's selection (313/313/350; nvfp4 276/276 plus 350 int8) and
-every refusal.
+Creator-supplied assets.
 
 The result preserves the Runtime quantizer's existing weight measurements in
 `weight_fidelity_this_run`, a list of rows naming output slot, component, the treatment that

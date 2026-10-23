@@ -44,9 +44,7 @@ with an fp32 state across steps. BFL raised alpha from the release's 6.93 and CF
 The distilled model also embeds the timestep each step jumps to. The base model runs CFG with an empty
 negative prompt. A lone reference is padded to the 16-pixel grid at up to 4 MP, with no upscaling.
 With several references, each is cropped to the grid at up to 1 MP. The modules are Diffusers'
-(main `7ecb1e1b`; Flux3 is in no release yet). `scripts/flux-3-klein-model-proof.py` checks the
-package's constants and denoised tokens against BFL's code, and its images against Diffusers' Flux3
-modular pipelines, on tiny real modules.
+(main `7ecb1e1b`; Flux3 is in no release yet).
 
 ## Prepare the models
 

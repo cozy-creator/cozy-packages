@@ -6,13 +6,11 @@ Publish a merged package, and everything that locks it, to both Hubs:
 task publish -- qwen-image-2
 ```
 
-It fast-forwards the checkout to `origin/master`, runs the package's CPU conformance
-(`task conform -- <package>`), and publishes a `git archive` of it to each of `HUBS`.
+It fast-forwards the checkout to `origin/master` and publishes a `git archive` of the package to each of `HUBS`.
 Then, in dependency order, each package whose `uv.lock` holds a republished package is
 relocked to it (`cozy package lock --tensorhub tensorhub --upgrade-package <it>`, plus
 `cozy-runtime` or `tensorfs` when its floor is above the dependent's lock),
-patch-bumped, conformed, pushed to master and published the same way. A failed
-conformance stops the cascade before that package is committed. A dependent whose
+patch-bumped, pushed to master and published the same way. A dependent whose
 master version is unpublished stops it too: its merged changes are not released yet.
 Republishing a release is a no-op, so rerun the same command after a fix.
 
@@ -39,8 +37,7 @@ release; `task publish` makes it. The exception is `cozy-runtime` and `tensorfs`
 package runs on its machine's Runtime, so the package only declares the minimum its
 `cozy-runtime>=` bound admits.
 
-`scripts/bind-account-index.sh` writes the same index for the CI lock checks. Each
-publication rebinds the committed lock to its target: `cozy package publish --root` to the
+Each publication rebinds the committed lock to its target: `cozy package publish --root` to the
 local Hub relocks a private copy against the root's index there and refuses
 (`account_index_lock_drift`) unless every locked version exists unchanged, which is
 why `task publish` releases dependencies before dependents on each Hub.
@@ -56,7 +53,7 @@ When a package starts using a new Runtime API:
 
 1. Release and verify Runtime, including its public wheel artifacts.
 2. Set the package's minimum Runtime version to the oldest version that supplies
-   the APIs it actually uses, relock, and run package conformance.
+   the APIs it actually uses, and relock.
 3. Publish with `task publish`.
 4. Install the published release with the local Creator CLI and verify its input
    and callable interface. Include execution qualification appropriate to the change.

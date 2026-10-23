@@ -53,8 +53,7 @@ run per component. Euler from sigma 1 to 1/steps, shifted by the image size; flo
 from the seed on the CPU. Dev runs CFG 5 at 50 steps (the model card; Diffusers' default is 30), with
 the card's text-to-image negative prompt, or the empty caption the model was trained with for edits.
 Turbo runs 4 steps at guidance 1. The caption's text is also drawn and shown to Qwen3-VL, in the fonts
-training used (`fibo_2/fonts`). `scripts/fibo-2-model-proof.py` checks that the package makes
-Diffusers' image on tiny real modules. On an L40S, its 16-bit images are 37–54 dB PSNR from Diffusers'
+training used (`fibo_2/fonts`). On an L40S, its 16-bit images are 37–54 dB PSNR from Diffusers'
 own bf16 pipeline (same caption, seed and size, five cases: runs 14911–14923 against 14925/14926); the
 int8 lane's are 22.6–27.6 dB from them, the same pictures by eye (14929–14951). The VAE's BatchNorm
 statistics need Runtime ≥ 0.30.16 (cozy-runtime #1700).

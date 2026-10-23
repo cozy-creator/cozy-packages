@@ -47,9 +47,3 @@ and banks also refuse: recompute them from a migrated full model. An existing
 rewritten when adding assets; its bank and body binding need recomputation. This
 release retains the existing exact approved-plan digest boundary. It does not
 claim retabling to a newly approved schedule across that older binding format.
-
-`minimax-h3-tools/scripts/model-assets-proof.py` checks native asset reads,
-refusals, derivation identity and asset retention with tiny CPU tensors.
-`scripts/h3-adaln-interface-proof.py` checks the installed helper's source-bound
-selection and child-call routing. These do not establish full-model GPU
-numerical quality or paid remote pipeline qualification.
