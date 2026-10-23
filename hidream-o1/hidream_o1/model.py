@@ -44,12 +44,10 @@ NOISE_SCALE = 8.0
 FIX_POINT = 4096
 CONDITION_IMAGE_SIZE = 384
 T_EPS = 1e-3
-#: The last fifth of the steps, where each patch's colour settles. ComfyUI's patch-seam smoothing
-#: (`HiDreamO1PatchSeamSmoothing`) predicts there on the image rolled half a patch too and blends.
-TAIL = 0.2
-SEAM_SHIFT = PATCH // 2
-#: The roll wraps this close to the borders, so there the natural grid's prediction stays.
-SEAM_EDGE, SEAM_FEATHER = PATCH, 4
+#: `generate`'s CFG stops for the last fifth of the steps (limited-interval guidance,
+#: Kynkäänniemi et al. 2024). There each patch's colour settles, and CFG 5 multiplies the pixel
+#: head's small per-patch colour error into a visible 32 px grid (upstream #1).
+GUIDED = 0.8
 BOI, TMS = "<|boi_token|>", "<|tms_token|>"
 
 
@@ -220,44 +218,6 @@ def unpatch(rows: torch.Tensor, height: int, width: int) -> torch.Tensor:
     """[1, n, 3·32·32] patches back to [3, height, width]."""
     h, w = height // PATCH, width // PATCH
     return rows[0].view(h, w, 3, PATCH, PATCH).permute(2, 0, 3, 1, 4).reshape(3, height, width)
-
-
-def seam_weights(height: int, width: int, method: str) -> tuple[torch.Tensor, torch.Tensor]:
-    """Per-pixel weights of the natural grid's prediction and of the half-patch-rolled one, as rows.
-    `average` is ComfyUI's: equal, except within `SEAM_EDGE` px of a border, feathered over
-    `SEAM_FEATHER`, where the roll wraps. `window` weighs each by a Hann window that peaks at its own
-    patch centres and vanishes on its own patch edges, so neither grid's steps survive."""
-    def ramp(n: int) -> torch.Tensor:
-        edge = torch.minimum(torch.arange(n), n - 1 - torch.arange(n)).float()
-        return ((edge - SEAM_EDGE) / SEAM_FEATHER).clamp(0, 1)
-
-    inner = ramp(height)[:, None] * ramp(width)[None, :]
-    if method == "average":
-        rolled = 0.5 * inner
-    else:
-        def hann(n: int, centre: int) -> torch.Tensor:
-            d = (torch.arange(n) - centre + PATCH // 2) % PATCH - PATCH // 2
-            return 0.5 * (1 + torch.cos(math.pi * d / (PATCH // 2)))
-
-        natural = hann(height, PATCH // 2)[:, None] * hann(width, PATCH // 2)[None, :]
-        shifted = hann(height, PATCH // 2 - SEAM_SHIFT)[:, None] * hann(width, PATCH // 2 - SEAM_SHIFT)[None, :]
-        total = natural + shifted
-        share = torch.where(total < 1e-3, torch.full_like(total, 0.5), shifted / total.clamp_min(1e-8))
-        rolled = share * inner
-    rolled = to_rows(rolled.expand(3, -1, -1).contiguous())
-    return 1 - rolled, rolled
-
-
-def seam_smoothed(predict: Callable[[torch.Tensor], torch.Tensor], z: torch.Tensor, height: int, width: int,
-                  weights: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
-    """`predict` (rows to f32 rows) of `z`, blended with its prediction of `z` rolled half a patch
-    and rolled back (ComfyUI's patch-seam smoothing)."""
-    def roll(rows: torch.Tensor, by: int) -> torch.Tensor:
-        return to_rows(torch.roll(unpatch(rows, height, width), (by, by), (1, 2)))
-
-    natural = predict(z)
-    rolled = roll(predict(roll(z, SEAM_SHIFT)), -SEAM_SHIFT)
-    return natural * weights[0] + rolled * weights[1]
 
 
 # ---------------------------------------------------------------- sequences
@@ -462,14 +422,10 @@ class HiDreamO1(Model[O1Graph], encoded_leaves="accept"):
         seed: int,
         on_step: Callable[[int], None],
         cancel: Callable[[], None],
-        seams: str = "off",
-        tail_guidance: bool = True,
-        rescale: float = 0.0,
+        interval: bool,
     ) -> Image.Image:
         """Upstream's `generate_image` from prepared references (each on the 32 px grid): CFG
-        against `negative` when it is given. Over the last `TAIL` of the steps: `seams` blends in
-        the half-patch-rolled prediction (`off`, `average`, `window`), `tail_guidance` False drops
-        CFG. `rescale` is CFG-rescale's phi (Lin et al. 2023) on the guided x0, every step."""
+        against `negative` when it is given, over the first `GUIDED` of the steps if `interval`."""
         body = self.body
         image_token = self.processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
         device = next(body.language_model.parameters()).device
@@ -491,7 +447,6 @@ class HiDreamO1(Model[O1Graph], encoded_leaves="accept"):
                     if references else None)
             noise = recipe.noise * torch.randn((1, 3, height, width), generator=torch.Generator().manual_seed(seed + 1))
             z = to_rows(noise[0].to(device, torch.bfloat16))
-            weights = None if seams == "off" else tuple(w.to(device) for w in seam_weights(height, width, seams))
             sampler: Euler | UniPC
             if recipe.sampler == "unipc":
                 sampler = UniPC(steps, recipe.shift)
@@ -505,26 +460,14 @@ class HiDreamO1(Model[O1Graph], encoded_leaves="accept"):
                 cancel()
                 t = torch.tensor(float(step), device=device) / 1000.0
                 sigma = t.clamp_min(T_EPS)
-                tail = index >= count - round(TAIL * count)
-
-                def predict(rows: torch.Tensor, prefix: Prefix, t: torch.Tensor = t) -> torch.Tensor:
-                    inputs = rows if refs is None else torch.cat([rows, refs], dim=1)
-                    return _predict(body, prefix, 1.0 - t, inputs, n).float()
-
-                guided = prefixes if tail_guidance or not tail else prefixes[:1]
-                if tail and weights is not None:
-                    x0s = [seam_smoothed(lambda r, p=prefix: predict(r, p), z, height, width, weights)
-                           for prefix in guided]
-                else:
-                    x0s = [predict(z, prefix) for prefix in guided]
-                velocities = [(x0 - z.float()) / sigma for x0 in x0s]
+                inputs = z if refs is None else torch.cat([z, refs], dim=1)
+                guided = prefixes if not interval or index < round(GUIDED * count) else prefixes[:1]
+                velocities = [
+                    (_predict(body, prefix, 1.0 - t, inputs, n).float() - z.float()) / sigma for prefix in guided
+                ]
                 velocity = velocities[0]
                 if len(velocities) == 2:
                     velocity = velocities[1] + guidance * (velocities[0] - velocities[1])
-                    if rescale:
-                        x0 = x0s[1] + guidance * (x0s[0] - x0s[1])
-                        x0 = rescale * x0 * (x0s[0].std() / x0.std()) + (1 - rescale) * x0
-                        velocity = (x0 - z.float()) / sigma
                 z = sampler.step(index, -velocity, z.float()).to(torch.bfloat16)
                 on_step(index)
             image = unpatch((z + 1) / 2, height, width).cpu().float()
