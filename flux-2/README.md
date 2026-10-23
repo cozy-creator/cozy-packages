@@ -67,22 +67,19 @@ The Turbo LoRA stays one separate 16-bit model: Runtime bakes it into [dev]'s re
 
 ## Lanes
 
-`int8` (the default lane) writes every linear of the DiT's blocks, its modulation heads, context embedder
-and output norm, and the text encoder's layer projections ([dev]'s LM head too) as `int8.convrot`, W8A8
-on int8 tensor cores. `nvfp4` (`--lane 4`, Blackwell) puts the DiT blocks in NVFP4 beside the same int8
-rest. The VAE, embedders and output projection keep their bytes. Each lane is written from the 16-bit
-upload:
+`int8` (the default lane) writes the linears of the DiT's blocks and the text encoder's layer projections
+([dev]'s LM head too) as `int8.convrot`, W8A8 on int8 tensor cores. `nvfp4` (`--lane 4`, Blackwell) puts the
+DiT blocks in NVFP4, except the double blocks' text attention, beside the same int8 rest. As in BFL's own
+8-bit and NVFP4 FLUX.2 files, the modulation heads, the embedders and the final layer keep their bf16, and so
+do the VAE and Mistral's vision tower. Each lane is written from the 16-bit upload:
 
 ```sh
 cozy model quantize fidika/flux-2-dev@0.1.0 --int8 --on <machine>
 cozy model quantize fidika/flux-2-dev@0.1.0 --nvfp4 --on <machine>
 ```
 
-Measured on an A40 (int8 W8A8), seconds per step at 1 MP: [dev] 1.93, [klein] 4B 0.82 (bf16) → 0.62,
-[klein] 9B Base with CFG 1.20. Against Diffusers' own bf16 pipeline on the same weights and noise, this
-package's bf16 is 40.6 dB (4B edit) and 30.9 dB (9B, two references), int8 31.6 and 27.0 dB: the same
-images. A 4-step [klein] text-to-image differs more (21 dB: the same composition, slightly shifted):
-it embeds the timestep as BFL does, in bf16, where Diffusers rounds `t·1000` first.
+Measured on an A40 (int8), seconds per step at 1 MP: [dev] 1.93, [klein] 4B 0.62 (bf16 0.82), [klein] 9B
+Base with CFG 1.20.
 
 ## Licence
 
