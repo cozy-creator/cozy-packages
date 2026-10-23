@@ -831,8 +831,8 @@ wheels = [
 ]
 
 [[package]]
-name = "qwen-image-edit"
-version = "0.1.1"
+name = "qwen-image"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },

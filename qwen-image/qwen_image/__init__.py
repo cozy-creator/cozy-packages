@@ -1,0 +1,192 @@
+"""Qwen-Image: Qwen-Image-2512 text-to-image and Qwen-Image-Edit-2511 editing, full and Lightning,
+Runtime-executed."""
+
+from __future__ import annotations
+
+import math
+from functools import partial
+from typing import Annotated
+
+import msgspec
+from cozy_runtime.author import (
+    MEGAPIXEL,
+    Adjustments,
+    App,
+    Context,
+    ImageRequest,
+    ImageResult,
+    Memoize,
+    Outputs,
+    ReferenceImages,
+    Telemetry,
+    held,
+)
+
+from . import quantize as quantize  # its recipes
+from .model import PATCH, QwenImage, QwenImageLoRA, QwenImageTransformer
+
+app = App()
+
+#: The sizes the model serves: 256² to 2 MiP (Qwen-Image trains from 256² up to 1328², 1.7 MiP),
+#: sides of 128-4096 px on its 16 px grid.
+MIN_SIDE, MAX_SIDE = 128, 4096
+MIN_PIXELS, MAX_PIXELS = 256 * 256, 2 << 20
+#: Text to image defaults to Qwen-Image-2512's 1328² at 1:1.
+TEXT_MEGAPIXELS = 1328 * 1328 / MEGAPIXEL
+#: `generate`'s recommended steps and negative prompt per DiT (each model card's), at true CFG 4.0.
+TEXT_STEPS, EDIT_STEPS, TURBO_STEPS = 50, 40, 8
+TEXT_NEGATIVE = (
+    "低分辨率，低画质，肢体畸形，手指畸形，画面过饱和，蜡像感，人脸无细节，过度光滑，画面具有AI感。"  # noqa: RUF001
+    "构图混乱。文字模糊，扭曲。"  # noqa: RUF001
+)
+EDIT_NEGATIVE, GUIDANCE = " ", 4.0
+
+
+
+def output_size(pixels: float, ratio: float) -> tuple[int, int, float]:
+    """(width, height) on the 16 px grid for `pixels` at `ratio`, with the ratio actually served:
+    what keeps both sides within 128-4096 px."""
+    widest = min(MAX_SIDE**2 / pixels, pixels / MIN_SIDE**2)
+    kept = min(max(ratio, 1 / widest), widest)
+    width = round(math.sqrt(pixels * kept) / PATCH) * PATCH
+    height = round(math.sqrt(pixels / kept) / PATCH) * PATCH
+    return min(max(width, MIN_SIDE), MAX_SIDE), min(max(height, MIN_SIDE), MAX_SIDE), kept
+
+
+def sized(adj: Adjustments, payload: ImageRequest, first: tuple[int, int] | None) -> tuple[int, int]:
+    """The output size: a ratio or size given, else the first reference's ratio and pixel count,
+    else 1328². Anything outside the model's range is a `clamp` adjustment."""
+    target = payload.target(first, megapixels=TEXT_MEGAPIXELS)
+    megapixels = held(adj, "megapixels", target.pixels / MEGAPIXEL, MIN_PIXELS / MEGAPIXEL,
+                      MAX_PIXELS / MEGAPIXEL, "the model serves 0.06-2 MiP")
+    (w, h) = target.ratio
+    width, height, kept = output_size(megapixels * MEGAPIXEL, w / h)
+    if kept != w / h:
+        adj.clamp("aspect_ratio", f"{w}:{h}", f"{width}:{height}", "nearest ratio the model serves")
+    return width, height
+
+
+#: A placement on the output canvas: corners [x0, y0, x1, y1], normalized 0-1, origin top-left.
+Box = tuple[
+    Annotated[float, msgspec.Meta(ge=0, le=1)], Annotated[float, msgspec.Meta(ge=0, le=1)],
+    Annotated[float, msgspec.Meta(ge=0, le=1)], Annotated[float, msgspec.Meta(ge=0, le=1)],
+]
+
+
+class GenerateInput(ImageRequest):
+    #: Given, Qwen-Image-Edit-2511 edits or composes them, in order ("Picture 1", "Picture 2", ...);
+    #: else Qwen-Image-2512 generates from the prompt.
+    reference_images: Annotated[ReferenceImages, msgspec.Meta(max_length=10)] = msgspec.field(
+        default_factory=list
+    )
+    #: The shared layout input (one box or null per reference). Qwen-Image has no layout control.
+    reference_boxes: list[Box | None] | None = None
+
+
+def _render(
+    ctx: Context,
+    model: QwenImage,
+    dit: QwenImage | QwenImageTransformer,
+    lora: QwenImageLoRA | None,
+    out: Outputs,
+    tel: Telemetry,
+    adj: Adjustments,
+    payload: GenerateInput,
+    *,
+    steps: int,
+    guidance: float,
+    negative: str,
+) -> ImageResult:
+    seed = payload.drawn_seed()
+    payload.ignored(adj, "prompt_upsampling", reason="Qwen-Image has no prompt upsampler")
+    payload.ignored(adj, "reference_boxes", reason="Qwen-Image has no layout control")
+    # Upright, with any transparency over white, as upstream's RGB references.
+    images = [asset.read() for asset in payload.reference_images]
+    width, height = sized(adj, payload, images[0].size if images else None)
+    ctx.raise_if_cancelled()
+    references = None
+    if images:
+        with tel.stage("encoding reference images", overall_range=(0.0, 0.05)):
+            references = model.encode_references(images)
+    with tel.stage("encoding prompt", overall_range=(0.05, 0.1)):
+        embeds, mask = model.encode(payload.prompt, images)
+        unconditional = model.encode(negative, images) if guidance > 1 else None
+    ctx.raise_if_cancelled()
+    with tel.stage("generating image", overall_range=(0.1, 0.95)):
+        denoise = dit.denoise if lora is None else partial(lora.denoise, dit)
+        latents = denoise(
+            embeds, mask, unconditional, references, width=width, height=height, steps=steps,
+            guidance=guidance, seed=seed, cancel=ctx.raise_if_cancelled,
+            on_step=tel.step_callback(steps, stage="generating image", overall_range=(0.1, 0.95)),
+        )
+    ctx.raise_if_cancelled()
+    with tel.stage("decoding image", overall_range=(0.95, 0.99)):
+        image = model.decode(latents, width=width, height=height)
+    with tel.stage("saving image", overall_range=(0.99, 1.0)):
+        asset = out.save_image(image, format="png")
+    return ImageResult(asset, width, height, seed, payload.prompt)
+
+
+_MEMO = ("qwen_image", "qwen_image.model")
+
+
+# The edit DiT is all `edit_model` binds: the text encoder, VAE and tokenizer are `model`'s. It, and
+# its LoRA, are fetched and built by the first request with references.
+@app.entrypoint(
+    defaults={"model": "qwen-image-2512@0.1.0", "edit_model": "qwen-image-edit-2511@0.1.0"},
+    components={"edit_model": ("transformer",)},
+    on_demand=("edit_model",),
+    memoize=Memoize(requires=["seed"]),
+    memo_dependencies=_MEMO,
+)
+def generate(
+    ctx: Context,
+    payload: GenerateInput,
+    model: QwenImage,
+    edit_model: QwenImageTransformer,
+    out: Outputs,
+    tel: Telemetry,
+    adj: Adjustments,
+) -> ImageResult:
+    """Qwen-Image-2512 from text (50 steps), Qwen-Image-Edit-2511 with references (40 steps), both
+    with true CFG 4.0."""
+    edit = bool(payload.reference_images)
+    steps = held(adj, "steps", payload.steps or (EDIT_STEPS if edit else TEXT_STEPS), 2, 100,
+                 "at least 2 (the schedule stretches its last step to the terminal sigma), at most 100")
+    guidance = held(adj, "guidance", GUIDANCE if payload.guidance is None else payload.guidance, 1.0, 20.0)
+    negative = payload.negative_prompt
+    if negative is None:
+        negative = EDIT_NEGATIVE if edit else TEXT_NEGATIVE
+    return _render(ctx, model, edit_model if edit else model, None, out, tel, adj, payload,
+                   steps=steps, guidance=guidance, negative=negative)
+
+
+@app.entrypoint(
+    defaults={
+        "model": "qwen-image-2512@0.1.0",
+        "edit_model": "qwen-image-edit-2511@0.1.0",
+        "turbo_lora": "qwen-image-2512-lightning-lora@0.1.0",
+        "edit_turbo_lora": "qwen-image-edit-2511-lightning-lora@0.1.0",
+    },
+    components={"edit_model": ("transformer",)},
+    on_demand=("edit_model", "edit_turbo_lora"),
+    memoize=Memoize(requires=["seed"]),
+    memo_dependencies=_MEMO,
+)
+def generate_turbo(
+    ctx: Context,
+    payload: GenerateInput,
+    model: QwenImage,
+    edit_model: QwenImageTransformer,
+    turbo_lora: QwenImageLoRA,
+    edit_turbo_lora: QwenImageLoRA,
+    out: Outputs,
+    tel: Telemetry,
+    adj: Adjustments,
+) -> ImageResult:
+    """Each DiT with lightx2v's 8-step Lightning LoRA for it: 8 steps, no CFG."""
+    payload.ignored(adj, "guidance", "negative_prompt", reason="the Lightning LoRA samples without CFG")
+    steps = held(adj, "steps", payload.steps or TURBO_STEPS, 1, 100)
+    edit = bool(payload.reference_images)
+    dit, lora = (edit_model, edit_turbo_lora) if edit else (model, turbo_lora)
+    return _render(ctx, model, dit, lora, out, tel, adj, payload, steps=steps, guidance=1.0, negative="")
