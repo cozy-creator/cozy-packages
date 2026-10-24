@@ -12,6 +12,19 @@ speed generates an image, or edits when `reference_images` are given (up to ten,
 The checkpoint sets the defaults, so any model runs correctly in either function. Klein 4B (Apache-2.0,
 8 GB of weights at int8) is the choice for consumer cards:
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: A lighthouse on a basalt cliff in a winter storm
+aspect_ratio: "16:9"
+```
+
+```sh
+cozy run flux-2/generate_turbo --input request.yaml model.model=flux-2-klein-4b
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run flux-2/generate_turbo model.model=flux-2-klein-4b \
   prompt='A lighthouse on a basalt cliff in a winter storm' aspect_ratio=16:9
@@ -73,8 +86,8 @@ DiT blocks in NVFP4, except the double blocks' text attention, beside the same i
 do the VAE and Mistral's vision tower. Each lane is written from the 16-bit upload:
 
 ```sh
-cozy model quantize flux-2-dev@0.1.0 --int8 --package flux-2 --on <machine>
-cozy model quantize flux-2-dev@0.1.0 --nvfp4 --package flux-2 --on <machine>
+cozy model quantize flux-2-dev@0.1.0 --format int8 --package flux-2 --on <machine>
+cozy model quantize flux-2-dev@0.1.0 --format nvfp4 --package flux-2 --on <machine>
 ```
 
 Measured on an A40 (int8), seconds per step at 1 MP: [dev] 1.93, [klein] 4B 0.62 (bf16 0.82), [klein] 9B

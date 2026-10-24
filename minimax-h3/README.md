@@ -14,6 +14,19 @@ The model's timestep plans set the step counts: `fl2va` and `ref2va` take `steps
 default to `minimax-h3@1.0.0-rc.5` and `minimax-h3-turbo-lora@1.0.1`. Releases before
 `minimax-h3@1.0.0-rc.4` carry no plans and refuse with `model_asset_missing`.
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: The camera pulls back from a lighthouse as a storm rolls in.
+duration_s: 6
+```
+
+```sh
+cozy run minimax-h3/fl2va_turbo --input request.yaml --asset first=./first.png --asset last=./last.png
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run minimax-h3/fl2va_turbo prompt='The camera pulls back from a lighthouse as a storm rolls in.' \
   duration_s=6 --asset first=./first.png --asset last=./last.png

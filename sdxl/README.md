@@ -2,6 +2,20 @@
 
 `generate` makes one image from a text prompt with Stable Diffusion XL 1.0 (VAE fix).
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: a lighthouse at dusk, oil painting
+aspect_ratio: "16:9"
+seed: 7
+```
+
+```sh
+cozy run sdxl/generate --input request.yaml
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run sdxl/generate prompt='a lighthouse at dusk, oil painting' seed=7
 cozy run sdxl/generate prompt='a fox in fresh snow' aspect_ratio=16:9 megapixels=2 steps=30
@@ -20,4 +34,4 @@ RTX 4090 and 17 s on an 8 GB RTX 4070 Laptop. Without an NVIDIA GPU, add `--on n
 one.
 
 Its recipes write the model's `fp8`, `int8` and `w4a8` lanes, for model authors
-(`cozy model quantize <model> --int8 --package sdxl`).
+(`cozy model quantize <model> --format int8 --package sdxl`).

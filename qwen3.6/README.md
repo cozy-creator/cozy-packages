@@ -4,6 +4,18 @@
 multimodal model (Apache-2.0). Decoding is greedy unless `temperature` is set; a sampled answer
 replays from its `seed`, so the same request always gives the same answer, and it is memoized.
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: Describe this character's clothing.
+```
+
+```sh
+cozy run qwen3.6/ask --input request.yaml --asset images=./character.png
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run qwen3.6/ask "Describe this character's clothing." --asset images=./character.png
 cozy run qwen3.6/ask "What happens, and when?" --asset videos=./clip.mp4
@@ -42,8 +54,8 @@ stores 35B-A3B's fused experts one per expert at ingest.
 ```sh
 cozy model upload hf://Qwen/Qwen3.6-35B-A3B@995ad96eacd98c81ed38be0c5b274b04031597b0 qwen3.6-35b-a3b --on <name>
 cozy model upload hf://Qwen/Qwen3.6-27B@6a9e13bd6fc8f0983b9b99948120bc37f49c13e9 qwen3.6-27b --on <name>
-cozy model quantize qwen3.6-35b-a3b@0.1.0/bf16 --int8 --package qwen3.6 --on <name>
-cozy model quantize qwen3.6-35b-a3b@0.1.0/bf16 --w4a8 --package qwen3.6 --on <name>
+cozy model quantize qwen3.6-35b-a3b@0.1.0/bf16 --format int8 --package qwen3.6 --on <name>
+cozy model quantize qwen3.6-35b-a3b@0.1.0/bf16 --format w4a8 --package qwen3.6 --on <name>
 ```
 
 The `int8` recipe writes every attention, gated-delta-net, MLP and expert projection of the

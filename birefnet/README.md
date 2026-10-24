@@ -5,6 +5,18 @@ It uses the standard BiRefNet checkpoint and upstream architecture, torchvision'
 input transforms, and Pillow compositing. The image geometry is preserved. Runtime
 owns weight loading, placement and residency; the model never fetches a backbone.
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+image: ./character.png   # a file named here is relative to this file
+```
+
+```sh
+cozy run birefnet/remove_background --input request.yaml
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy model upload hf://ZhengPeng7/BiRefNet@e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4 birefnet
 cozy model publish birefnet --release 0.1.0 --lane fp16=sha256:<checkpoint-from-upload>
