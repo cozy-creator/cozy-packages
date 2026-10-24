@@ -16,7 +16,8 @@ tasks:
     cmds:
       - |
         set -euo pipefail; roots=" {{.CLI_ARGS}} "; changed=$roots
-        for r in $roots; do test -f "$r/package.toml" || { echo "usage: task publish -- <package>..." >&2; exit 2; }; done
+        pkg() { grep -qs cozy.application "$1/pyproject.toml"; }
+        for r in $roots; do pkg "$r" || { echo "usage: task publish -- <package>..." >&2; exit 2; }; done
         git diff --quiet HEAD || { echo "commit or discard tracked changes first" >&2; exit 1; }
         git fetch -q origin master; git merge -q --ff-only FETCH_HEAD
         work=$(mktemp -d); trap 'git checkout -q -- .; rm -rf "$work"' EXIT
@@ -54,8 +55,8 @@ tasks:
           fi
           ship "$1"
         }
-        for p in $(for p in */package.toml; do p=${p%/package.toml}; echo "$p $p"; deps "$p" | sed "s|\$| $p|"; done | tsort); do
-          [ -f "$p/package.toml" ] || continue
+        for p in $(for p in */pyproject.toml; do p=${p%/pyproject.toml}; pkg "$p" || continue; echo "$p $p"; deps "$p" | sed "s|\$| $p|"; done | tsort); do
+          pkg "$p" || continue
           case $roots in *" $p "*) up=; release "$p"; continue ;; esac
           up=$(for q in $(deps "$p"); do case $changed in *" $q "*) echo "$q" ;; esac; done)
           [ -n "$up" ] || continue
