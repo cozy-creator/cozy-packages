@@ -21,7 +21,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from cozy_runtime.author import Config, Loader, Model, ModelAssets, uses_components
-from PIL import Image
+from PIL import Image, ImageDraw
 from tokenizers import Tokenizer
 from transformers import (
     PreTrainedTokenizerFast,
@@ -190,6 +190,54 @@ def reference_size(target_side: int, count: int) -> int:
     if count <= 8:
         return target_side * 24 // 64
     return target_side // 4
+
+
+#: Upstream's layout (`models/utils.py`): the five largest boxes are drawn, each in its colour, on a
+#: black canvas of the output's size, which follows the references; each reference is framed in its
+#: box's colour.
+MAX_BOXES = 5
+COLOURS = ((255, 0, 0), (0, 180, 0), (0, 0, 255), (204, 180, 0), (255, 0, 255), (0, 255, 255), (128, 0, 0),
+           (0, 128, 0), (0, 0, 128), (128, 128, 0))
+
+
+def canvas_box(box: list[float], width: int, height: int) -> tuple[int, int, int, int] | None:
+    """`[x0, y0, x1, y1]` (0-1) in pixels as upstream rounds and clamps them; None if it vanishes."""
+    x0, x1 = (max(0, min(width - 1, round(v * width))) for v in (box[0], box[2]))
+    y0, y1 = (max(0, min(height - 1, round(v * height))) for v in (box[1], box[3]))
+    return (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else None
+
+
+def placed(references: list[Image.Image], boxes: list[tuple[int, int, int, int] | None], width: int,
+           height: int, side: float) -> list[Image.Image]:
+    """Upstream's `create_layout_reference_images` and `generate_image`'s resize: each reference
+    resized to `side`² and framed in its box's colour (a reference without a drawn box takes an
+    unused one), then the layout canvas. `boxes` are pixel boxes on the `width` x `height` output."""
+    ranked = sorted((i for i, box in enumerate(boxes) if box), key=lambda i: _area(boxes[i]), reverse=True)
+    line = int(math.sqrt(width * height) * 0.05)
+    canvas = Image.new("RGB", (width, height), (0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    colours: dict[int, tuple[int, int, int]] = {}
+    for rank, index in enumerate(ranked[:MAX_BOXES]):
+        colours[index] = COLOURS[rank % len(COLOURS)]
+        draw.rectangle(boxes[index], outline=colours[index], width=max(line - rank * max(1, line // MAX_BOXES), 5))
+    used = set(colours.values())
+    framed = []
+    for index, reference in enumerate(references):
+        colour = colours.get(index)
+        if colour is None:
+            colour = next(c for c in (COLOURS[index % len(COLOURS)], *COLOURS) if c not in used)
+            used.add(colour)
+        image = area_resize(reference.convert("RGB"), side)
+        frame = ImageDraw.Draw(image)
+        w, h = image.size
+        for t in range(int(math.sqrt(w * h) * 0.04)):
+            frame.rectangle([t, t, w - 1 - t, h - 1 - t], outline=colour)
+        framed.append(area_resize(image, side))
+    return [*framed, area_resize(canvas, side)]
+
+
+def _area(box: tuple[int, int, int, int] | None) -> int:
+    return (box[2] - box[0]) * (box[3] - box[1]) if box else 0
 
 
 def condition_image(reference: Image.Image, count: int) -> Image.Image:
