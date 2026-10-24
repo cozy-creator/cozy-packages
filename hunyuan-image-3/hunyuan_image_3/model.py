@@ -106,25 +106,33 @@ class HunyuanImage3(Model[Graph], encoded_leaves="accept"):
         return size.width, size.height
 
     @contextmanager
-    def _routing(self) -> Iterator[moe.Routing]:
+    def _routing(self, on_layer: Callable[[float], None]) -> Iterator[moe.Routing]:
+        """The stage's routing record, and `on_layer(fraction of the layers done)` after each decoder layer: a forward
+        that pages its experts in runs for tens of seconds, and that is its progress."""
         routing = moe.Routing()
-        layers = [m for m in self.graph.components[COMPONENT].modules() if isinstance(m, moe.Experts)]
-        for experts in layers:
-            experts.trace = routing
+        model = self.graph.components[COMPONENT]
+        experts = [m for m in model.modules() if isinstance(m, moe.Experts)]
+        layers = model.model.layers
+        for each in experts:
+            each.trace = routing
+        hooks = [layer.register_forward_hook(lambda *_, done=(i + 1) / len(layers): on_layer(done))
+                 for i, layer in enumerate(layers)]
         try:
             yield routing
         finally:
-            for experts in layers:
-                experts.trace = None
+            for each in experts:
+                each.trace = None
+            for hook in hooks:
+                hook.remove()
 
     @uses_components(COMPONENT)
     def think(self, prompt: str, references: list[Image.Image], *, seed: int, pick_size: bool,
-              on_token: Callable[[int], None],
+              on_token: Callable[[int], None], on_layer: Callable[[float], None],
               cancel: Callable[[], None]) -> tuple[str, tuple[int, int] | None, dict[str, float]]:
         """Tencent's think-then-recaption stage: the chain of thought and rewritten prompt the image is made from,
         with `pick_size` the size (width, height) the model then picks (`image_size="auto"`), and its routing."""
         model = self.graph.components[COMPONENT]
-        with torch.inference_mode(), self._routing() as routing:
+        with torch.inference_mode(), self._routing(on_layer) as routing:
             generator = torch.Generator(model.device).manual_seed(seed)
             cot, ratio = model.generate_cot(prompt, self._cond(references), _system(UPSAMPLED), UPSAMPLED, seed=seed,
                                             generator=generator, need_ratio=pick_size, on_token=on_token,
@@ -132,21 +140,22 @@ class HunyuanImage3(Model[Graph], encoded_leaves="accept"):
         return cot, None if ratio is None else self._size(ratio), routing.summary()
 
     @uses_components(COMPONENT)
-    def pick_size(self, prompt: str, references: list[Image.Image], *, seed: int) -> tuple[int, int]:
+    def pick_size(self, prompt: str, references: list[Image.Image], *, seed: int,
+                  on_layer: Callable[[float], None]) -> tuple[int, int]:
         """The size (width, height) the model picks for a prompt it draws directly (`image_size="auto"`)."""
         model = self.graph.components[COMPONENT]
-        with torch.inference_mode():
+        with torch.inference_mode(), self._routing(on_layer):
             return self._size(model.predict_ratio(prompt, self._cond(references), _system(DIRECT), seed=seed))
 
     @uses_components(COMPONENT)
     def paint(self, prompt: str, references: list[Image.Image], cot: str | None, *, size: tuple[int, int],
               steps: int, guidance: float, seed: int, on_step: Callable[[int], None],
-              cancel: Callable[[], None]) -> tuple[Image.Image, dict[str, float]]:
+              on_layer: Callable[[float], None], cancel: Callable[[], None]) -> tuple[Image.Image, dict[str, float]]:
         """Tencent's image stage at an explicit `size` (width, height), after `think` or without it, and its
         routing."""
         model = self.graph.components[COMPONENT]
         width, height = size
-        with torch.inference_mode(), self._routing() as routing:
+        with torch.inference_mode(), self._routing(on_layer) as routing:
             latents = model.denoise(prompt, self._cond(references), _system(UPSAMPLED if cot else DIRECT), cot,
                                     image_size=f"{height}x{width}", steps=steps, guidance_scale=guidance, seed=seed,
                                     on_step=on_step, cancel=cancel)

@@ -3,6 +3,8 @@ model's own think-and-rewrite stage. `generate_turbo` is Instruct-Distil (8 step
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from typing import Annotated
 
 import msgspec
@@ -56,6 +58,24 @@ def check_pixels(adj: Adjustments, megapixels: float | None, size: tuple[int, in
         adj.clamp("megapixels", megapixels, round(made / (1 << 20), 2), "HunyuanImage 3.0 makes about 1 MP")
 
 
+class Pulse:
+    """A stage's progress between its counted units: a forward that pages its experts in runs for tens of seconds
+    on a small card, so each decoder layer done moves the stage's fraction, at most once a second."""
+
+    def __init__(self, tel: Telemetry, stage: str, total: int, count: Callable[[int], None]) -> None:
+        self.tel, self.stage, self.total, self.count, self.done, self.last = tel, stage, total, count, 0, 0.0
+
+    def unit(self, n: int) -> None:
+        self.count(n)
+        self.done = n + 1
+
+    def layer(self, fraction: float) -> None:
+        now = time.monotonic()
+        if now - self.last >= 1.0 and self.done < self.total:
+            self.last = now
+            self.tel.progress((self.done + fraction) / self.total, stage=self.stage)
+
+
 def _generate(ctx: Context, payload: HunyuanRequest, steps: int, model: HunyuanImage3, out: Outputs,
               tel: Telemetry, adj: Adjustments) -> ImageResult:
     payload.ignored(adj, "negative_prompt", reason="HunyuanImage 3.0's unconditional branch is the prompt dropped")
@@ -68,21 +88,25 @@ def _generate(ctx: Context, payload: HunyuanRequest, steps: int, model: HunyuanI
     cot = None
     if payload.prompt_upsampling is not False:
         with tel.stage("thinking", overall_range=(0.0, 0.3)):
+            pulse = Pulse(tel, "thinking", MAX_NEW_TOKENS,
+                          tel.step_callback(MAX_NEW_TOKENS, stage="thinking", overall_range=(0.0, 0.3)))
             cot, picked, routing = model.think(
                 payload.prompt, references, seed=seed, pick_size=size is None, cancel=ctx.raise_if_cancelled,
-                on_token=tel.step_callback(MAX_NEW_TOKENS, stage="thinking", overall_range=(0.0, 0.3)))
+                on_token=pulse.unit, on_layer=pulse.layer)
         tel.log("thinking routing", **routing)
         tel.log("rewritten prompt", caption=caption(cot, payload.prompt)[:2000])
         size = size or picked
     if size is None:
         with tel.stage("picking size", overall_range=(0.0, 0.05)):
-            size = model.pick_size(payload.prompt, references, seed=seed)
+            size = model.pick_size(payload.prompt, references, seed=seed,
+                                   on_layer=Pulse(tel, "picking size", 1, lambda n: None).layer)
     check_pixels(adj, payload.megapixels, size)
     with tel.stage("generating image", overall_range=(0.3, 0.97)):
+        pulse = Pulse(tel, "generating image", steps,
+                      tel.step_callback(steps, stage="generating image", overall_range=(0.3, 0.95)))
         image, routing = model.paint(
             payload.prompt, references, cot, size=size, steps=steps, guidance=guidance, seed=seed,
-            cancel=ctx.raise_if_cancelled,
-            on_step=tel.step_callback(steps, stage="generating image", overall_range=(0.3, 0.95)))
+            cancel=ctx.raise_if_cancelled, on_step=pulse.unit, on_layer=pulse.layer)
     tel.log("denoising routing", **routing)
     with tel.stage("saving image", overall_range=(0.97, 1.0)):
         asset = out.save_image(image, format="png")
