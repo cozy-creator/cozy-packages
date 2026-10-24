@@ -19,13 +19,34 @@ cozy run hidream-o1/generate_turbo prompt='A dog holds a sign that says "HiDream
 cozy run hidream-o1/generate prompt='remove the earphones' --asset reference_images.0=photo.jpg
 ```
 
-Inputs are the shared image request, the same in every image package: `prompt`, `reference_images`, `aspect_ratio` (any W:H), `megapixels` (any size, 1024² pixels each), `steps`, `guidance`, `negative_prompt`, `seed` and `prompt_upsampling`. `reference_images` are up to 10; HiDream-O1 adds `guidance_interval` (below). Left out, each
+Inputs are the shared image request, the same in every image package: `prompt`, `reference_images`, `aspect_ratio` (any W:H), `megapixels` (any size, 1024² pixels each), `steps`, `guidance`, `negative_prompt`, `seed` and `prompt_upsampling`. `reference_images` are up to 10, and `reference_boxes` places them (below). HiDream-O1 adds `guidance_interval` (below). Left out, each
 is the model's default: 50 steps (1–200) at guidance 5.0 (1–20) for `generate`, upstream's unconditional
 caption (a single space) as the negative prompt, and a random seed. `generate_turbo` runs its 28 distilled
 steps and ignores `guidance`, `negative_prompt` and `guidance_interval` with a warning; neither has a prompt
 upsampler. Unknown fields are dropped with a warning.
 
 The result has the image, its `width` and `height`, the `seed`, and `prompt`: the caption used.
+
+## Placing references
+
+`reference_boxes` has one entry per reference, in order: `[x0, y0, x1, y1]`, corners from 0 to 1 on the
+output, origin top-left, or `null` for a reference the model places itself. This is upstream's layout
+pipeline (`--layout_bboxes`), exactly: each reference is framed in its box's colour, and a black canvas
+with the coloured boxes follows the references as one more. Only the five largest boxes are drawn.
+Placed references are elements, not the canvas: the output is 1:1 at 4 MP unless `aspect_ratio` or
+`megapixels` says otherwise, and the full model samples at shift 1.
+
+Placement is soft. HiDream-O1 matches references to boxes mostly by their order, not by the frame
+colours, so list the references in the boxes' left-to-right order. In three two-person tests that
+asked for the opposite of the reference order, the right person landed in each box once in three as
+upstream orders them, and twice in three with the references sorted by their boxes. Our layout inputs
+are pixel-identical to upstream's, and a single pass matches upstream's own code at 40–57 dB.
+
+```sh
+cozy run hidream-o1/generate prompt='City council members pose on a sunlit terrace' \
+  --asset reference_images.0=a.jpg --asset reference_images.1=b.jpg \
+  'reference_boxes:=[[0.205, 0.488, 0.439, 0.742], [0.576, 0.088, 0.801, 0.342]]'
+```
 
 ## Sizes
 
@@ -46,7 +67,8 @@ side, smaller when there are more references (upstream's `generate_image`).
 All recipes are upstream's latest (HiDream-ai/HiDream-O1-Image `main` at 2c2d29f, `inference.py`):
 
 - **`generate`:** Wan's flow UniPC (bh2, order 2) at shift 3, with CFG against a single-space caption.
-  With two or more references it uses shift 1, as upstream's README runs subject-driven generation.
+  With two or more references, or boxes, it uses shift 1, as upstream's README runs subject-driven
+  generation.
   The initial noise is 8 standard normals per pixel. CFG stops for the last 10 of the 50 steps
   (`guidance_interval`, limited-interval guidance; `false` keeps upstream's CFG to the end).
 - **`generate_turbo`:** the 28 fixed Dev timesteps. Text-to-image and two or more references use the
