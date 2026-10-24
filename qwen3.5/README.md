@@ -30,9 +30,9 @@ Concurrent calls spread over the run's GPUs.
 
 ## Sizes
 
-Any Qwen3.5 checkpoint loads in the `model` slot:
-- dense: 0.8B, 2B, 4B, 9B and 27B;
-- MoE: 35B-A3B, 122B-A10B and 397B-A17B.
+A dense Qwen3.5 checkpoint (0.8B, 2B, 4B, 9B or 27B) loads in the `model` slot as uploaded. The MoE
+sizes (35B-A3B, 122B-A10B, 397B-A17B) store their MTP experts per expert, with gate and up
+projections apart, and need their own converter before they load.
 
 `qwen3.5-9b@0.2.0` is the default and the only published release. Pick another uploaded size with
 `model.model=<account>/qwen3.5-27b@<release>`.
