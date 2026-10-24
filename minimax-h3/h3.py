@@ -53,6 +53,7 @@ from cozy_runtime.author import (
 )
 from msgspec.structs import asdict, replace
 
+import describe
 from assembly import CutJoin, ScanAhead, assemble_video
 from gates import MediaFacts, refuse_before_encode
 from long_form_state import (
@@ -99,15 +100,7 @@ from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate as generate_reference
 from birefnet import RemoveBackgroundOutput
 from birefnet import remove_background
-from character_describer import (
-    DescribeCharactersOutput,
-    DescribeClipOutput,
-    WriteTextsOutput,
-    describe_characters,
-    describe_clip,
-    describe_places,
-    write_texts,
-)
+from qwen3_5 import AskOutput, Prompt, ask
 from seedvr2 import Resolution as RestorationResolution
 from seedvr2 import UpscaleOutput as RestorationOutput
 from seedvr2 import upscale as restore_video
@@ -1713,7 +1706,7 @@ async def _create_references(
 ) -> tuple[dict[str, Reference], list[StoryReference], list[str], dict[str, str]]:
     """Prepare, generate and describe references concurrently: the images, the described list,
     warnings, and each motion clip's description by name. Describing fills a supplied
-    character's or place's missing description and describes every clip (`describe_clip`)."""
+    character's or place's missing description and describes every clip (`describe.clip`)."""
     reference_steps = 40
     # Managed dependencies install an asynchronous flat caller for the source
     # entrypoint, whose own annotations describe its injected implementation.
@@ -1800,18 +1793,15 @@ async def _describe_images(
     wanted = [ref for ref in references if ref.kind == kind and ref.image is not None and not ref.description.strip()]
     if not wanted:
         return {}, []
-    describe = cast(
-        Callable[..., Awaitable[DescribeCharactersOutput]],
-        describe_characters if kind == "character" else describe_places,
-    )
     names = ", ".join(ref.name for ref in wanted)
+    images = [ref.image for ref in wanted if ref.image is not None]
     try:
         with tel.scope(f"Describing {names}"):
-            result = await describe(images=[ref.image for ref in wanted])
+            texts = await (describe.characters(images, tel) if kind == "character" else describe.places(images))
     except Exception as exc:
         tel.log("h3 reference descriptions skipped", level="warning", subjects=names, error=str(exc)[:400])
         return {}, [f"the descriptions of {names} were skipped: {str(exc)[:200]}"]
-    described = dict(zip((ref.name for ref in wanted), result.descriptions, strict=True))
+    described = dict(zip((ref.name for ref in wanted), texts, strict=True))
     for name, description in described.items():
         if description:
             tel.log(f"h3 {kind} description", subject=name, description=description[:400])
@@ -1824,14 +1814,14 @@ async def _describe_images(
 async def _describe_clips(
     references: list[StoryReference], tel: Telemetry
 ) -> tuple[dict[str, str], list[str]]:
-    """Each clip's people, beats, camera and cuts, watched as video (`describe_clip`); a clip
+    """Each clip's people, beats, camera and cuts, watched as video (`describe.clip`); a clip
     that fails is left undescribed, with a warning."""
     clips = [ref for ref in references if ref.kind == "video" and ref.video is not None]
-    describe = cast(Callable[..., Awaitable[DescribeClipOutput]], describe_clip)
 
     async def one(ref: StoryReference) -> str:
+        assert ref.video is not None
         with tel.scope(f"Describing {ref.name}"):
-            return (await describe(video=ref.video)).description
+            return await describe.clip(ref.video, tel)
 
     results = await asyncio.gather(*(one(ref) for ref in clips), return_exceptions=True)
     described, warnings = {}, []
@@ -1866,10 +1856,10 @@ async def _write_prompts(
     ]
     if not asks:
         return prompts, []
-    write = cast(Callable[..., Awaitable[WriteTextsOutput]], write_texts)
+    write = cast(Callable[..., Awaitable[AskOutput]], ask)
     try:
         with tel.scope("Writing the prompts"):
-            result = await write(prompts=[request for _, request in asks], max_new_tokens=WRITER_TOKENS)
+            result = await write(prompts=[Prompt(request) for _, request in asks], max_tokens=WRITER_TOKENS)
     except Exception as exc:
         tel.log("h3 prompt writing skipped", level="warning", error=str(exc)[:400])
         return prompts, [f"the prompts were sent as written: writing them failed: {str(exc)[:200]}"]
@@ -2169,3 +2159,4 @@ async def long_form(
 app.entrypoint(long_form, emits_media=True, accelerator=False)
 app.entrypoint(long_form_cuts, emits_media=True, accelerator=False)
 app.entrypoint(assemble_video, emits_media=True, accelerator=False)
+app.entrypoint(internal=True, accelerator=False)(describe.find_cuts)

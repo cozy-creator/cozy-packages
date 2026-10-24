@@ -36,7 +36,7 @@ cozy run minimax-h3/long_form --input story.json
 ```
 
 Supplied character images have their backgrounds removed (BiRefNet) and are described in one
-sentence (character-describer); `clean_references=false` and `describe_references=false` turn
+sentence (Qwen3.5); `clean_references=false` and `describe_references=false` turn
 either off. Write prompts in MiniMax's
 [full-reference format](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md);
 `resolution` and `upscale` are in [UPSCALE.md](UPSCALE.md). The video is an MP4 in
