@@ -56,12 +56,12 @@ _RECAPTION = re.compile(r"<recaption>(.*?)(?:</recaption>|$)", re.DOTALL)
 
 class Graph:
     def __init__(self, config: Config) -> None:
-        # As Tencent's `from_pretrained(torch_dtype="auto")` builds it: every module in bfloat16 (the
-        # VAE's float32 weights included) but the experts' routers, which are float32.
+        # Each module in the dtype the checkpoint stores: bfloat16, but the VAE's float32 (Tencent's
+        # `from_pretrained(torch_dtype="auto")` casts it to bfloat16; its convolutions run under fp16 autocast
+        # either way). The routers are stored bfloat16 and compute in float32, as Tencent's upcast does.
         model = HunyuanImage3ForCausalMM(HunyuanImage3Config(**config.mapping()))
         model = model.to(torch.bfloat16).eval()
-        for layer in model.model.layers:
-            layer.mlp.gate.wg.float()
+        model.vae.float()
         self.components: dict[str, torch.nn.Module] = {COMPONENT: model}
 
 

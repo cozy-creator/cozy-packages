@@ -113,15 +113,15 @@ def build(distilled: bool) -> tuple[Any, Any]:
     reference.load_tokenizer(str(FILES))
     reference.generation_config = GenerationConfig(**GENERATION)
     port = Port(PortConfig(**tiny(distilled))).eval()
-    # The served dtypes, as `from_pretrained(torch_dtype="auto")` and the package's Graph make them:
-    # bfloat16 throughout but the float32 expert routers.
+    # The served dtypes: bfloat16 throughout, and Tencent's float32 expert routers (`from_pretrained` upcasts the
+    # stored bfloat16); the package holds them as stored and computes in float32.
+    # The VAE keeps float32 weights, as the package stores and builds it (CPU autocast has no float32 rule for
+    # group norm either). Tencent's `dtype` is its first parameter's, the VAE's: report the backbone's as served.
     for model in (reference, port):
         model.to(torch.bfloat16)
-        for layer in model.model.layers:
-            layer.mlp.gate.wg.float()
-        # CPU autocast has no float32 rule for group norm, so the VAE keeps float32 weights here (on a GPU it
-        # is bfloat16). Tencent's `dtype` is its first parameter's, the VAE's: report the backbone's as served.
         model.vae.float()
+    for layer in reference.model.layers:
+        layer.mlp.gate.wg.float()
     type(reference).dtype = property(lambda self: self.model.wte.weight.dtype)
     port.load_state_dict(reference.state_dict(), strict=True)
     tokenizer_config = json.loads((FILES / "tokenizer_config.json").read_text())

@@ -939,9 +939,9 @@ class HunyuanTopKGate(nn.Module):
     def forward(self, hidden_states, topk_impl='easy'):
         bsz, seq_len, hidden_size = hidden_states.shape
         hidden_states = hidden_states.reshape(-1, hidden_size)
-        if self.wg.weight.dtype == torch.float32:
-            hidden_states = hidden_states.float()
-        logits = self.wg(hidden_states)
+        # In float32, as Tencent serves the router (`from_pretrained` upcasts its stored bfloat16 weight): the
+        # weight is held as stored and upcast here.
+        logits = F.linear(hidden_states.float(), self.wg.weight.float())
         if topk_impl != 'easy':
             raise ValueError(f"Unsupported topk_impl: {topk_impl}")
         return self.easy_topk(logits, self.moe_topk)
