@@ -5,7 +5,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from cozy_runtime.author import Context, EncodingRule, QuantizationPlan, Recipe, SelectionPlan, Telemetry
+from cozy_runtime.author import (
+    Context,
+    EncodingRule,
+    QuantizationPlan,
+    Recipe,
+    SelectionPlan,
+    Telemetry,
+)
 
 from .klein import Klein, prepare_reference
 from .upsampler import Drafter, Upsampler
@@ -82,7 +89,7 @@ EDITS = (
     "Turn the scene into a loose watercolor painting with visible paper texture.",
     "Replace the cup with a glass teapot full of green tea, keeping the shadow and lighting.",
     "Make it a clear sunny afternoon with no rain, keeping the market and the crowd.",
-    "Add a small sign above the door that reads \"OPEN LATE\" in hand-painted letters.",
+    'Add a small sign above the door that reads "OPEN LATE" in hand-painted letters.',
 )
 
 
@@ -98,10 +105,18 @@ def calibrate(ctx: Context, tel: Telemetry, model: Klein, record: Any) -> None:
                 span = (0.3 * (2 * seed + n) / runs, 0.3 * (2 * seed + n + 1) / runs)
                 embeds = model.encode(text)
                 negative = model.encode("") if guidance is not None else None
-                tokens = model.denoise(embeds, negative, references, width=size[0], height=size[1], steps=steps,
-                                       guidance=guidance, seed=seed,
-                                       on_step=tel.step_callback(steps, stage="calibrating", overall_range=span),
-                                       cancel=ctx.raise_if_cancelled)
+                tokens = model.denoise(
+                    embeds,
+                    negative,
+                    references,
+                    width=size[0],
+                    height=size[1],
+                    steps=steps,
+                    guidance=guidance,
+                    seed=seed,
+                    on_step=tel.step_callback(steps, stage="calibrating", overall_range=span),
+                    cancel=ctx.raise_if_cancelled,
+                )
                 if references is None:
                     image = model.decode(tokens, width=size[0], height=size[1])
                     reference = prepare_reference(image)[0]

@@ -51,7 +51,7 @@ CALIBRATION = (
     'reading "FRESH SOURDOUGH 6.50", flour dust in the window light, documentary photography.',
     "A lone lighthouse on black basalt cliffs during a storm, waves exploding into white spray, "
     "lightning splitting a purple sky, a long-exposure photograph.",
-    "A flat vector infographic titled \"How Bees Make Honey\" with five numbered steps, simple "
+    'A flat vector infographic titled "How Bees Make Honey" with five numbered steps, simple '
     "icons, a warm yellow and charcoal palette, clean sans-serif labels.",
     "An oil painting of a quiet canal in a European city at dusk, gondolas moored by striped poles, "
     "lamplight on the water, thick impasto brushstrokes.",
