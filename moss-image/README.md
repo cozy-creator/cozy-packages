@@ -68,6 +68,20 @@ cores) takes the DiT blocks' q, k, v, o and FFN projections, as Comfy-Org's int8
 projection of Qwen3.5's 32 language layers. The text refiner, embedders, modulation, token embedding
 and VAE keep their bytes.
 
+## Measured (one RTX 4090, 1 MP, 50 steps, CFG 3)
+
+Against upstream's own pipeline at the same seed (bf16, its model-offload mode), the bf16 lane's images
+are bit-identical in all three cases: plain text-to-image, text in boxes, and objects in boxes. The int8
+lane reads 29.1, 31.0 and 37.9 dB against bf16, with the same pictures and legible text. Its encoded
+weights equal Comfy-Org's int8 ConvRot files (per-weight error equal to 1e-10 over 118 sampled weights).
+
+| s/step | bf16 | int8 |
+|---|---|---|
+| `generate` (CFG, two forwards) | 0.95–0.98 | 0.62 |
+
+Upstream's pipeline took 57–63 s an image. The text encoder and the DiT take turns on the GPU: 15 and
+9.5 GiB at bf16, 8.4 and 5.0 GiB at int8.
+
 ## Licence
 
 MOSS-Image's weights and code are Apache-2.0 (`moss_image/LICENSE.model`). The DiT and sampler here
