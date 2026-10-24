@@ -38,6 +38,7 @@ from cozy_runtime.author import (
     Image,
     ImageAsset,
     ImagePreparation,
+    ImageResult,
     InvalidRequest,
     OutputError,
     Outputs,
@@ -95,8 +96,6 @@ from minimax_h3.official import (
     reference_video_vision_tokens,
     validate_reference_policy,
 )
-from qwen_image_2 import ImageOutput as ReferenceImageOutput
-from qwen_image_2 import Megapixels as ReferenceMegapixels
 from qwen_image_2 import generate as generate_reference
 from birefnet import RemoveBackgroundOutput
 from birefnet import remove_background
@@ -1710,7 +1709,7 @@ async def _create_references(
     reference_steps = 40
     # Managed dependencies install an asynchronous flat caller for the source
     # entrypoint, whose own annotations describe its injected implementation.
-    reference_generator = cast(Callable[..., Awaitable[ReferenceImageOutput]], generate_reference)
+    reference_generator = cast(Callable[..., Awaitable[ImageResult]], generate_reference)
     background_remover = cast(Callable[..., Awaitable[RemoveBackgroundOutput]], remove_background)
 
     async def prepare_character(reference: StoryReference) -> ImageAsset:
@@ -1731,7 +1730,7 @@ async def _create_references(
             result = await reference_generator(
                 prompt=image_prompt(reference, style),
                 aspect_ratio="16:9" if sheet else "1:1",
-                megapixels=ReferenceMegapixels.MP2 if sheet else ReferenceMegapixels.MP1,
+                megapixels=2.0 if sheet else 1.0,
                 steps=reference_steps,
                 seed=reference_seed(reference, ctx.request_id),
             )
