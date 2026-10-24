@@ -66,21 +66,12 @@ def sized(adj: Adjustments, payload: ImageRequest, first: tuple[int, int] | None
     return width, height
 
 
-#: A placement on the output canvas: corners [x0, y0, x1, y1], normalized 0-1, origin top-left.
-Box = tuple[
-    Annotated[float, msgspec.Meta(ge=0, le=1)], Annotated[float, msgspec.Meta(ge=0, le=1)],
-    Annotated[float, msgspec.Meta(ge=0, le=1)], Annotated[float, msgspec.Meta(ge=0, le=1)],
-]
-
-
 class GenerateInput(ImageRequest):
     #: Given, Qwen-Image-Edit-2511 edits or composes them, in order ("Picture 1", "Picture 2", ...);
     #: else Qwen-Image-2512 generates from the prompt.
     reference_images: Annotated[ReferenceImages, msgspec.Meta(max_length=10)] = msgspec.field(
         default_factory=list
     )
-    #: The shared layout input (one box or null per reference). Qwen-Image has no layout control.
-    reference_boxes: list[Box | None] | None = None
 
 
 def _render(
