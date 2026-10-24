@@ -3,7 +3,9 @@ which weights each encoding takes is this package's recipe; the encodings and th
 
 from __future__ import annotations
 
-from cozy_runtime.author import EncodingRule, Model, QuantizationPlan, Recipe
+from cozy_runtime.author import EncodingRule, QuantizationPlan, Recipe
+
+from .model import HunyuanImage3
 
 _LAYERS = "model.model.layers.*"
 
@@ -13,7 +15,7 @@ _LAYERS = "model.model.layers.*"
 #: vision tower, VAE and the image patch/timestep layers keep their source bytes.
 INT8 = Recipe(
     lane="int8",
-    model=Model,
+    model=HunyuanImage3,
     plan=QuantizationPlan(
         encoding="int8.convrot",
         components=("model",),
@@ -31,12 +33,27 @@ INT8 = Recipe(
 #: The int8 lane with the routed experts in NVFP4 (Blackwell's FP4 tensor cores): ~45 GB instead of ~83.
 NVFP4 = Recipe(
     lane="nvfp4",
-    model=Model,
+    model=HunyuanImage3,
     plan=QuantizationPlan(
         encoding="int8.convrot",
         components=INT8.plan.components,
         include=INT8.plan.include,
         encodings=(EncodingRule(f"{_LAYERS}.mlp.experts.*", "nvfp4"),),
+        output_precision="preserve",
+    ),
+)
+
+#: The 4-bit lane before Blackwell (xs-062): the routed experts in W4A8 (`w4a8.convrot`, 4-bit codes multiplied
+#: on the int8 tensor cores, an RTX 4090's), everything else as the int8 lane has it: half the expert bytes a
+#: paged step moves.
+W4A8 = Recipe(
+    lane="w4a8",
+    model=HunyuanImage3,
+    plan=QuantizationPlan(
+        encoding="int8.convrot",
+        components=INT8.plan.components,
+        include=INT8.plan.include,
+        encodings=(EncodingRule(f"{_LAYERS}.mlp.experts.*", "w4a8.convrot"),),
         output_precision="preserve",
     ),
 )
