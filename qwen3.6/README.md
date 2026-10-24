@@ -43,11 +43,14 @@ stores 35B-A3B's fused experts one per expert at ingest.
 cozy model upload hf://Qwen/Qwen3.6-35B-A3B@995ad96eacd98c81ed38be0c5b274b04031597b0 qwen3.6-35b-a3b --on <name>
 cozy model upload hf://Qwen/Qwen3.6-27B@6a9e13bd6fc8f0983b9b99948120bc37f49c13e9 qwen3.6-27b --on <name>
 cozy model quantize qwen3.6-35b-a3b@0.1.0/bf16 --int8 --package qwen3.6 --on <name>
+cozy model quantize qwen3.6-35b-a3b@0.1.0/bf16 --w4a8 --package qwen3.6 --on <name>
 ```
 
 The `int8` recipe writes every attention, gated-delta-net, MLP and expert projection of the
 language layers and of the multi-token-prediction layer as `int8.convrot`. The vision tower,
-embeddings, routers and LM head keep their bytes.
+embeddings, routers and LM head keep their bytes. The 4-bit lanes keep that and write every MLP (35B-A3B's
+routed and shared experts) in 4 bits: `w4a8` before Blackwell (int8 tensor cores), `nvfp4` on
+Blackwell. Decoding serves a release's 4-bit lane where it has one (`min_bits=4`).
 
 `scripts/qwen3.6-model-proof.py` checks the model code against Transformers on CPU with small
 random-weight models, dense and MoE.
