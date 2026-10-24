@@ -185,7 +185,10 @@ def _vae(graph: Graph) -> Any:
 
 
 def _device() -> torch.device:
-    return torch.device("cuda", torch.cuda.current_device())
+    """This process's device: its current GPU, or the CPU where it has none (degraded)."""
+    if torch.cuda.is_available():
+        return torch.device("cuda", torch.cuda.current_device())
+    return torch.device("cpu")
 
 
 def restore(
