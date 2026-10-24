@@ -24,12 +24,12 @@ Its quantized lanes are recipes (`FP8`, `INT8`, `NVFP4`, `W4A8` in `h3_tables.jo
 DiTs and the text conditioner's 350 decoder linears, encoding what is still plain; CPU:
 
 ```sh
-cozy model quantize minimax-h3@<release>/<pruned lane> --fp8 --package minimax-h3-tools --on NAME
+cozy model quantize minimax-h3@<release>/<pruned lane> --format fp8 --package minimax-h3-tools --on NAME
 ```
 
 The conditioner keeps `embed_tokens` and its vision tower at bf16 (`lanes.TEXT_ENCODER_KEEP`); a
 component already carrying the requested encoding is inherited and one carrying the other
-encoding refuses, so `fp8 --fp8` encodes only the conditioner. The lane functions run on the
+encoding refuses, so `fp8 --format fp8` encodes only the conditioner. The lane functions run on the
 ingest rental:
 
 ```sh

@@ -13,6 +13,19 @@ Qwen3-VL-8B-Instruct (13 of its layers' hidden states, concatenated); the VAE is
 There is no distilled checkpoint, so no `generate_turbo`; Ideogram's 20- and 12-step presets are
 `steps=20` and `steps=12`.
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: A jazz festival poster with a saxophone made of brass leaves
+aspect_ratio: "2:3"
+```
+
+```sh
+cozy run ideogram-4/generate --input request.yaml
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run ideogram-4/generate prompt='A jazz festival poster with a saxophone made of brass leaves' aspect_ratio=2:3
 cozy run ideogram-4/generate prompt='A bakery storefront at dawn' \
@@ -62,8 +75,8 @@ cozy model upload hf://ideogram-ai/ideogram-4-fp8@ee79a7237b519f1402ceacf952f30c
 cozy model upload hf://Qwen/Qwen3-VL-8B-Instruct@0c351dd01ed87e9c1b53cbc748cba10e6187ff3b <account>/qwen3-vl-8b-instruct --on <machine>
 cozy package install ./ideogram-4 --on <machine>
 cozy model quantize <account>/ideogram-4 --recipe bf16 --on <machine>
-cozy model quantize <account>/ideogram-4 --int8 --on <machine>
-cozy model quantize <account>/qwen3-vl-8b-instruct --int8 --on <machine>
+cozy model quantize <account>/ideogram-4 --format int8 --on <machine>
+cozy model quantize <account>/qwen3-vl-8b-instruct --format int8 --on <machine>
 ```
 
 The `bf16` lane is the fp8 weights decoded exactly (f32 code × scale, rounded once). `int8` puts the

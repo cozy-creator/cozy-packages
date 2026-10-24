@@ -89,7 +89,7 @@ INT8 = Recipe(lane="int8", model=SdxlModel, plan=QuantizationPlan(
 ```
 
 The static describe records every recipe a package's modules bind (`recipes` in its interface).
-`cozy model quantize <model> --int8 --package <org>/<package>[@release]` runs the package's
+`cozy model quantize <model> --format int8 --package <org>/<package>[@release]` runs the package's
 recipe for that lane and model on the machine holding the checkpoint (`--recipe <name>` names
 one); the package is always named, since packages that serve the same model can each declare
 one. The written lane's header records its provenance: package, release, recipe, fingerprint

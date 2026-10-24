@@ -14,6 +14,18 @@ One function does both jobs: with `reference_images`, it edits them, or composes
 HiDream recommends the full model, `generate`, for editing. A pose is one more reference: upstream's
 try-on example passes a face, a background, an OpenPose skeleton and three garments, in that order.
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: 'A dog holds a sign that says "HiDream-O1-Image release."'
+```
+
+```sh
+cozy run hidream-o1/generate_turbo --input request.yaml
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run hidream-o1/generate_turbo prompt='A dog holds a sign that says "HiDream-O1-Image release."'
 cozy run hidream-o1/generate prompt='remove the earphones' --asset reference_images.0=photo.jpg
@@ -104,7 +116,7 @@ Keeping v, o and down in bf16 was the best of nine measured keep-lists (23/28/36
 
 ```sh
 cozy model quantize <account>/hidream-o1 --recipe bf16 --package hidream-o1 --on <machine>
-cozy model quantize <account>/hidream-o1 --int8 --package hidream-o1 --on <machine>
+cozy model quantize <account>/hidream-o1 --format int8 --package hidream-o1 --on <machine>
 ```
 
 ## Measured (one L40S, 4 MP)

@@ -5,6 +5,18 @@ multimodal model. Decoding is greedy unless `temperature` is set; a sampled answ
 its `seed`, so the same request always gives the same answer, and the answer is memoized. The
 request and the model code are Runtime's shared Qwen-VL ones (`cozy_runtime.vlm`), as `qwen3.6`'s.
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: Describe this character's clothing.
+```
+
+```sh
+cozy run qwen3.5/ask --input request.yaml --asset images=./character.png
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run qwen3.5/ask "Describe this character's clothing." --asset images=./character.png
 cozy run qwen3.5/ask "What happens, and when?" --asset videos=./clip.mp4
@@ -57,6 +69,6 @@ language layers as `int8.convrot` (W8A8 on the int8 tensor cores). The vision to
 LM head keep their bytes. The 9B drops from 17.5 to 11.1 GiB, so it fits a 16 GB card.
 
 ```sh
-cozy model quantize qwen3.5-9b@0.2.0/bf16 --int8 --package qwen3.5 --on <name>
+cozy model quantize qwen3.5-9b@0.2.0/bf16 --format int8 --package qwen3.5 --on <name>
 cozy model publish qwen3.5-9b --release 0.2.0 --lane int8=sha256:<checkpoint>
 ```

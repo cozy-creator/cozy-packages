@@ -23,6 +23,21 @@ range (a 32768 px side) is served at the nearest size it admits, reported as a `
 Qwen-Image-2.1 generates RGBA natively when the prompt asks for it in the wording its model card
 recommends; "on a transparent background" alone draws a white one:
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: >-
+  This is an RGBA image with transparency. A cute cartoon dragon sticker.
+  The image has alpha channel and the background is transparent.
+seed: 42
+```
+
+```sh
+cozy run qwen-image-2/generate --input request.yaml
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run qwen-image-2/generate seed=42 \
   prompt='This is an RGBA image with transparency. A cute cartoon dragon sticker. The image has alpha channel and the background is transparent.'
@@ -99,7 +114,7 @@ Hadamard, int8 per output row), served as W8A8 on the int8 tensor cores. Embeddi
 tower, the input/output projections, the modulation and the VAE keep their source bytes.
 
 ```sh
-cozy model quantize qwen-image-2.1@0.1.0/bf16 --int8 --package qwen-image-2 --on YOUR_MACHINE
+cozy model quantize qwen-image-2.1@0.1.0/bf16 --format int8 --package qwen-image-2 --on YOUR_MACHINE
 cozy model publish qwen-image-2.1 --release 0.1.0 --lane int8=sha256:CHECKPOINT_DIGEST
 ```
 

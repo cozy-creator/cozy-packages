@@ -10,6 +10,19 @@ DiT changes between requests.
 | `generate` | `qwen-image-2512@0.1.0` | `qwen-image-edit-2511@0.1.0` | 50 / 40 | true CFG 4.0 |
 | `generate_turbo` | the same, with `qwen-image-2512-lightning-lora@0.1.0` | the same, with `qwen-image-edit-2511-lightning-lora@0.1.0` | 8 | none |
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: A red vintage bicycle against a pastel wall
+aspect_ratio: "3:2"
+```
+
+```sh
+cozy run qwen-image/generate --input request.yaml
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run qwen-image/generate prompt='A red vintage bicycle against a pastel wall' aspect_ratio=3:2
 cozy run qwen-image/generate prompt='Make him play a violin instead of the guitar' \
@@ -85,8 +98,8 @@ cozy model upload hf://Qwen/Qwen-Image-2512@25468b98e3276ca6700de15c6628e51b7de5
 cozy model upload hf://lightx2v/Qwen-Image-2512-Lightning@4609161e308ce82018a42c2a0c9b107e865bb751/Qwen-Image-2512-Lightning-8steps-V1.0-fp32.safetensors \
   <account>/qwen-image-2512-lightning-lora --on <machine>
 cozy model upload <account>/qwen-image-2512#<bf16 checkpoint> <account>/qwen-image-2512@<tag> --on <machine>
-cozy model quantize <account>/qwen-image-2512#<bf16 checkpoint> <account>/qwen-image-2512@<tag> --int8 --package qwen-image --on <machine>
-cozy model quantize <account>/qwen-image-2512#<bf16 checkpoint> <account>/qwen-image-2512@<tag> --nvfp4 --package qwen-image --on <machine>
+cozy model quantize <account>/qwen-image-2512#<bf16 checkpoint> <account>/qwen-image-2512@<tag> --format int8 --package qwen-image --on <machine>
+cozy model quantize <account>/qwen-image-2512#<bf16 checkpoint> <account>/qwen-image-2512@<tag> --format nvfp4 --package qwen-image --on <machine>
 ```
 
 The edit checkpoint is `hf://Qwen/Qwen-Image-Edit-2511@6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9`, its

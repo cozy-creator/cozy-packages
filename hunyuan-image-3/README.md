@@ -11,6 +11,19 @@ three ordered reference images. Use `generate_turbo`.
 | `generate_turbo` | Instruct-Distil | 8 | the value the distilled model is conditioned on |
 | `generate` | Instruct | 50 | classifier-free (both halves run every step) |
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: A paper boat sailing down a rain gutter at dusk
+seed: 7
+```
+
+```sh
+cozy run hunyuan-image-3/generate_turbo --input request.yaml
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run hunyuan-image-3/generate_turbo prompt='A paper boat sailing down a rain gutter at dusk' seed=7
 cozy run hunyuan-image-3/generate_turbo prompt='Put the cat in a tiny astronaut suit' \

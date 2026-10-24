@@ -11,6 +11,18 @@ hidden state, decoded by FLUX.2's VAE with its small decoder.
 Upstream ships no distilled checkpoint, so there is no `generate_turbo`. MOSS-Image-Base, the LoRA
 training base, runs with the same function: `model.model=<account>/moss-image-base@<release>`.
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: 'A sticky note on a fridge, handwritten: "Buy milk and eggs"'
+```
+
+```sh
+cozy run moss-image/generate --input request.yaml
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run moss-image/generate prompt='A sticky note on a fridge, handwritten: "Buy milk and eggs"'
 cozy run moss-image/generate prompt='A minimalist travel poster, cream background' megapixels=1 \
@@ -60,7 +72,7 @@ equals upstream's pipeline's exactly (max |Δ| = 0, CPU).
 
 ```sh
 cozy model upload hf://OpenMOSS-Team/MOSS-Image-SFT@f972bd4b4b9e3852133cc5da954d87bc32cd8fb9 <account>/moss-image --on <machine>
-cozy model quantize <account>/moss-image --int8 --on <machine>
+cozy model quantize <account>/moss-image --format int8 --on <machine>
 ```
 
 The upload is the bf16 lane (the VAE stays f32). The `int8` lane (`int8.convrot`, W8A8 on int8 tensor

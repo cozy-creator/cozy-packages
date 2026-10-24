@@ -10,6 +10,20 @@ to ten reference images. Its text encoder is Qwen3-VL-4B.
 
 Each makes an image from the prompt, or edits and composes up to ten ordered `reference_images`.
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: A lighthouse on a basalt cliff in a winter storm
+aspect_ratio: "16:9"
+seed: 7
+```
+
+```sh
+cozy run flux-3-klein/generate_turbo --input request.yaml
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run flux-3-klein/generate_turbo prompt='A lighthouse on a basalt cliff in a winter storm' \
   aspect_ratio=16:9 seed=7
@@ -101,12 +115,12 @@ the image and joint blocks declare 8-bit attention (`attention_bits`; Runtime's 
 RTX 30/40); the text and reference early blocks, and `--lane 16`, keep exact attention.
 
 ```sh
-cozy model quantize <account>/flux-3-klein@0.1.0/bf16 --int8 --package flux-3-klein --on <machine>
+cozy model quantize <account>/flux-3-klein@0.1.0/bf16 --format int8 --package flux-3-klein --on <machine>
 cozy model publish <account>/flux-3-klein --release 0.1.0 --lane int8=sha256:<checkpoint>
 ```
 
 Do the same for `flux-3-klein-base` and `flux-3-klein-upsampler`: each lane is one recipe that reads
-which checkpoint it was given (`--nvfp4` writes the 4-bit lane the same way). Warm 1 MP seconds per step (16-step distilled; 50-step base
+which checkpoint it was given (`--format nvfp4` writes the 4-bit lane the same way). Warm 1 MP seconds per step (16-step distilled; 50-step base
 with CFG), and the weights the lane holds:
 
 | card | distilled bf16 → int8 | base bf16 → int8 | weights |

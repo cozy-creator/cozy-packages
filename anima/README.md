@@ -5,6 +5,19 @@ licence is non-commercial.
 
 The model card's quality tags open the prompt; the package adds nothing to it:
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: masterpiece, best quality, 1girl, silver hair, rain, neon city at night
+seed: 11
+```
+
+```sh
+cozy run anima/generate --input request.yaml
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run anima/generate prompt='masterpiece, best quality, 1girl, silver hair, rain, neon city at night' seed=11
 cozy run anima/generate prompt='masterpiece, best quality, a cat samurai under cherry blossoms' aspect_ratio=16:9 megapixels=1

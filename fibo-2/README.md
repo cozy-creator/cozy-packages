@@ -14,6 +14,20 @@ open-weights models on Artificial Analysis (2026-10-20).
 Both generate from text, or edit when `reference_images` are given (up to four, `<image_1>`…`<image_4>`).
 Bria ships Edit Turbo for editing; it also renders text-to-image.
 
+Write the request in a file, `request.yaml`:
+
+```yaml
+prompt: An origami whale swimming through paper clouds
+aspect_ratio: "16:9"
+seed: 7
+```
+
+```sh
+cozy run fibo-2/generate --input request.yaml
+```
+
+Inline inputs work too, and override the file's:
+
 ```sh
 cozy run fibo-2/generate prompt='An origami whale swimming through paper clouds' aspect_ratio=16:9 seed=7
 cozy run fibo-2/generate_turbo prompt='Replace the jacket with a red leather one' \
@@ -83,7 +97,7 @@ also pads the FFN to 9,728 to quantize its down projection (xs-070). `nvfp4` put
 included, in NVFP4 (Blackwell), and a VLM's linears in NVFP4 (W4A16 decode).
 
 ```sh
-cozy model quantize <account>/fibo-2-dev@0.1.0/bf16 --int8 --package fibo-2 --on <machine>
+cozy model quantize <account>/fibo-2-dev@0.1.0/bf16 --format int8 --package fibo-2 --on <machine>
 cozy model publish <account>/fibo-2-dev --release 0.1.0 --commit sha256:<commit>
 ```
 
