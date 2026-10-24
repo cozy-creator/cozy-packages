@@ -31,7 +31,18 @@ build-backend = "hatchling.build"
 packages = ["anima"]
 
 [tool.uv]
-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'", "sys_platform == 'linux' and platform_machine == 'aarch64'"]
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
+
+# PyPI's torch is CUDA on Linux and MPS on macOS but CPU-only on Windows: Windows takes PyTorch's CUDA build.
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [dependency-groups]
 dev = ["mypy>=2.3.1", "ruff>=0.16.4"]
@@ -42,3 +53,7 @@ files = ["anima"]
 strict = true
 ignore_missing_imports = true
 disallow_untyped_calls = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130", marker = "sys_platform == 'win32'" }
+torchvision = { index = "pytorch-cu130", marker = "sys_platform == 'win32'" }
