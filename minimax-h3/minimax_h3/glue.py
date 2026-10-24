@@ -35,7 +35,7 @@ import inspect
 import json
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -850,11 +850,24 @@ def _require_calls() -> None:
     _require_call(FeedForward.forward, ("self", "hidden_states"))
 
 
-def _record(model: object, result: Applied) -> Applied:
-    document = result.document()
+def record(model: object, plan: Plan, name: str, document: Mapping[str, object]) -> None:
+    """One part of the execution plan's outcome, named by its kernel set (`GLUE.name`): on the
+    model (`_cozy_fusion_report[name]`), in the executor's log, and in the construction's
+    receipts where the Runtime's plan takes reports (0.31: `measurements.execution.plan_reports`),
+    so `run show` names a refusal. An install deferred to a request boundary reports again,
+    through the same plan, when it lands; one whose build fails never reaches the package, and
+    Runtime reports that under the same kernel-set name. A plan without `report` (before 0.31)
+    keeps the log line."""
     if hasattr(model, "__dict__"):
-        vars(model)["_cozy_fusion_report"] = document
-    print(f"[minimax-h3] glue fusion: {json.dumps(document, sort_keys=True)}", file=sys.stderr)
+        vars(model).setdefault("_cozy_fusion_report", {})[name] = dict(document)
+    print(f"[minimax-h3] {name} fusion: {json.dumps(document, sort_keys=True)}", file=sys.stderr)
+    report = getattr(plan, "report", None)
+    if report is not None:
+        report(name, document)
+
+
+def _record(model: object, plan: Plan, result: Applied) -> Applied:
+    record(model, plan, GLUE.name, result.document())
     return result
 
 
@@ -1013,8 +1026,8 @@ def _transformers(pipe: Any) -> Iterator[tuple[str, Any]]:
             yield str(name), member
 
 
-def _eager(model: object, code: str, reason: str) -> str:
-    _record(model, Applied(False, reason, (), 0, 0.0, code))
+def _eager(model: object, plan: Plan, code: str, reason: str) -> str:
+    _record(model, plan, Applied(False, reason, (), 0, 0.0, code))
     return ""
 
 
@@ -1027,11 +1040,14 @@ def install(model: object, pipe: Any, plan: Plan) -> str:
             _release_qkv(block.attn)
     device = torch.device(plan.device)
     if device.type != "cuda":
-        return _eager(model, "fusion_device_incapable", f"fused glue serves CUDA, not {device}")
+        return _eager(
+            model, plan, "fusion_device_incapable", f"fused glue serves CUDA, not {device}"
+        )
     major, _ = torch.cuda.get_device_capability(device)
     if major < 8:
         return _eager(
             model,
+            plan,
             "fusion_device_incapable",
             f"fused glue needs bf16 tensor cores (sm80+); this device is sm{major}x",
         )
@@ -1042,17 +1058,17 @@ def install(model: object, pipe: Any, plan: Plan) -> str:
             _widths(transformer, name)
             _validate_transformer(transformer, name)
         if not transformers:
-            return _eager(model, "fusion_no_transformer", "no MiniMax-H3 transformer to fuse")
+            return _eager(model, plan, "fusion_no_transformer", "no MiniMax-H3 transformer to fuse")
         glue = plan.load(GLUE)
     except KernelsUnavailable as exc:
         if exc.code == "kernels_corrupt":
             raise GlueRefusal("fusion_kernels_corrupt", str(exc)) from exc
-        return _eager(model, f"fusion_{exc.code}", str(exc))
+        return _eager(model, plan, f"fusion_{exc.code}", str(exc))
     except GlueRefusal as exc:
         if exc.code not in NOT_INSTALLABLE:
             raise
         # NOTHING HAS BEEN SUBSTITUTED: the eager model serves.
-        return _eager(model, exc.code, str(exc))
+        return _eager(model, plan, exc.code, str(exc))
     substitutions: list[tuple[str, str, str]] = []
     fp8_sites = 0
     warm_ms = 0.0
@@ -1069,5 +1085,5 @@ def install(model: object, pipe: Any, plan: Plan) -> str:
         # PAST THE POINT OF NO RETURN: the forwards are substituted, so a failure refuses.
         heads = int(transformer.config.num_attention_heads)
         warm_ms += warm(glue, device, heads=heads, fp8=sites > 0)
-    _record(model, Applied(True, "", tuple(substitutions), fp8_sites, warm_ms))
+    _record(model, plan, Applied(True, "", tuple(substitutions), fp8_sites, warm_ms))
     return identity()

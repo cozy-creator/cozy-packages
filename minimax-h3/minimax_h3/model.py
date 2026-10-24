@@ -110,7 +110,10 @@ class H3Model(
         producer's rotary hook."""
         for component in self.pipe.components.values():
             producer.retain_rotary(component)
-        plans = (glue.install(self, self.pipe, plan), vae_glue.install(self.pipe.components["vae"], plan))
+        plans = (
+            glue.install(self, self.pipe, plan),
+            vae_glue.install(self, self.pipe.components["vae"], plan),
+        )
         return "+".join(identity for identity in plans if identity)
 
     @uses_components("text_encoder")
