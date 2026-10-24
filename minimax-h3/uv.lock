@@ -562,7 +562,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3"
-version = "1.46.2"
+version = "1.47.0"
 source = { editable = "." }
 dependencies = [
     { name = "birefnet" },

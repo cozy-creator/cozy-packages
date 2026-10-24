@@ -99,7 +99,8 @@ from minimax_h3.official import (
 from qwen_image_2 import generate as generate_reference
 from birefnet import RemoveBackgroundOutput
 from birefnet import remove_background
-from qwen3_5 import AskOutput, Prompt, ask
+from cozy_runtime.vlm import AskPrompt, AskResult
+from qwen3_5 import ask
 from seedvr2 import Resolution as RestorationResolution
 from seedvr2 import UpscaleOutput as RestorationOutput
 from seedvr2 import upscale as restore_video
@@ -1855,10 +1856,10 @@ async def _write_prompts(
     ]
     if not asks:
         return prompts, []
-    write = cast(Callable[..., Awaitable[AskOutput]], ask)
+    write = cast(Callable[..., Awaitable[AskResult]], ask)
     try:
         with tel.scope("Writing the prompts"):
-            result = await write(prompts=[Prompt(request) for _, request in asks], max_tokens=WRITER_TOKENS)
+            result = await write(prompts=[AskPrompt(request) for _, request in asks], max_tokens=WRITER_TOKENS)
     except Exception as exc:
         tel.log("h3 prompt writing skipped", level="warning", error=str(exc)[:400])
         return prompts, [f"the prompts were sent as written: writing them failed: {str(exc)[:200]}"]
