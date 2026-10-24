@@ -14,7 +14,7 @@ so the workflow copies the global information into it.
   appears in the reference outputs and is reused for every segment; `false` sends it as
   supplied. Supplied backgrounds, audio and videos are used as supplied. References generated
   from descriptions keep their existing path.
-- `describe_references` (default `true`): a vision-language model (character-describer)
+- `describe_references` (default `true`): a vision-language model (Qwen3.5, `qwen3.5/ask`)
   writes one sentence about each supplied character or background image that has no
   `description` (a character's identity, hair, face, clothing and items; a place's look,
   people left out), and watches each clip as video for its people, beats, camera and cuts.
