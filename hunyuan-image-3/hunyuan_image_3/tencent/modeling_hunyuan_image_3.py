@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
+from cozy_runtime import moe
 from einops import rearrange
 from PIL import Image
 from torch import nn
@@ -956,15 +957,7 @@ class HunyuanTopKGate(nn.Module):
         return topk_weight, expert_index
 
 
-class HunyuanExpert(HunyuanMLP):
-    """A routed expert: its own class so Runtime's weight paging takes each one as a block (`_no_split_modules`),
-    resident or paged on its own; the shared expert stays with the layer's always-resident weights."""
-
-
 class HunyuanMoE(nn.Module):
-    #: Set to `trace(layer_idx, counts)` to observe routing: tokens per expert, every forward.
-    trace: Optional[Callable[[int, list[int]], None]] = None
-
     def __init__(self, config: HunyuanImage3Config, layer_idx: Optional[int] = None):
         super().__init__()
         self.config = config
@@ -974,8 +967,13 @@ class HunyuanMoE(nn.Module):
         if config.use_mixed_mlp_moe:
             self.shared_mlp = HunyuanMLP(config, layer_idx=layer_idx, is_shared_mlp=True)
         self.gate = HunyuanTopKGate(config, layer_idx=layer_idx)
-        self.experts = nn.ModuleList(
-            [HunyuanExpert(config, layer_idx=layer_idx, is_shared_mlp=False, is_moe=True) for _ in range(self.num_experts)]
+        # Runtime's routed experts (`gate_and_up_proj`, `down_proj`; `first * silu(second)`): each one a paging
+        # block, resident or paged on its own; the shared expert stays with the layer's always-resident weights.
+        intermediate = config.moe_intermediate_size if isinstance(config.moe_intermediate_size, int) \
+            else config.moe_intermediate_size[layer_idx]
+        self.experts = moe.Experts(
+            (moe.RoutedExpert(config.hidden_size, intermediate, gate_first=False) for _ in range(self.num_experts)),
+            layer=layer_idx,
         )
 
 
@@ -986,32 +984,12 @@ class HunyuanMoE(nn.Module):
         if self.config.use_mixed_mlp_moe:
             hidden_states_mlp = self.shared_mlp(hidden_states)
 
-        # Upstream's "eager" (DeepSeekMoE) routing and combine, with each expert's rows gathered by
-        # one stable sort instead of a boolean mask per expert: every expert multiplies the same
-        # rows in the same order, and the host waits once per layer, not once per expert.
+        # Upstream's "eager" (DeepSeekMoE) routing and combine; Runtime's `Experts` gathers each expert's rows by
+        # one stable sort, in upstream's order, and sums them by the top-k weights in the outputs' dtype.
         with torch.autocast('cuda', enabled=False):
             topk_weights, topk_idx = self.gate(hidden_states, topk_impl='easy')
         topk_weights = topk_weights.to(hidden_states.dtype)
-
-        flat_topk_idx = topk_idx.view(-1)
-        hidden_states_flat = input_hidden_states.view(-1, hidden_size)    # (bsz * seq_len, hidden_size)
-        order = torch.argsort(flat_topk_idx, stable=True)
-        counts = torch.bincount(flat_topk_idx, minlength=self.num_experts).tolist()
-        if self.trace is not None:
-            self.trace(self.layer_idx, counts)
-        selected = hidden_states_flat[order // self.moe_topk]
-        outputs = []
-        start = 0
-        for i, count in enumerate(counts):
-            if count:
-                outputs.append(self.experts[i](selected[start:start + count]))
-            start += count
-        expert_outputs = torch.empty_like(selected, dtype=outputs[0].dtype)
-        expert_outputs[order] = torch.cat(outputs)
-
-        # Weighted sum of expert outputs
-        combined_output = (expert_outputs.view(
-            bsz * seq_len, self.moe_topk, hidden_size) * topk_weights.unsqueeze(-1)).sum(dim=1)
+        combined_output = self.experts(input_hidden_states.view(-1, hidden_size), topk_idx, topk_weights)
         combined_output = combined_output.to(hidden_states.dtype).view(bsz, seq_len, hidden_size)
 
         if self.config.use_mixed_mlp_moe:
@@ -1259,7 +1237,7 @@ class HunyuanImage3ForCausalMM(nn.Module):
     # Runtime's weight paging takes these as its blocks: each routed expert is one, so it is resident or paged on
     # its own; attention, the shared expert, the router, norms and the image layers stay resident (upstream's
     # PreTrainedModel names HunyuanImage3DecoderLayer here, for accelerate's device maps).
-    _no_split_modules = ["HunyuanExpert"]
+    _no_split_modules = ["RoutedExpert"]
 
     def __init__(self, config: HunyuanImage3Config):
         super().__init__()

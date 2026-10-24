@@ -1,10 +1,10 @@
 """HunyuanImage 3.0: the package's model code against Tencent's, on CPU, with a small random-weight model.
 
-    python scripts/hunyuan-image-3-model-proof.py <HunyuanImage-3.0 checkout> <checkpoint files dir>
+    python scripts/hunyuan-image-3-model-proof.py <HunyuanImage-3.0 checkout> <checkpoint files dir> [--distil | --routing]
 
 The checkout is `Tencent-Hunyuan/HunyuanImage-3.0` at 6e9113a6; the files dir holds the Instruct
 checkpoint's `config.json`, `generation_config.json`, `tokenizer.json` and `tokenizer_config.json`.
-Run it in Tencent's environment (torch, transformers 4.57.1, diffusers 0.35.2, einops). Both models are
+Run it in Tencent's environment (torch, transformers 4.57.1, diffusers 0.35.2, einops) with cozy-runtime. Both models are
 built from one shrunken config and share weights; each case compares Tencent's `generate_image` with
 the package's `generate_cot` / `denoise` / `decode_latents`: the chain of thought must be identical
 (same seeds) and the images equal within float32 noise. It also checks that the package's full-size
@@ -27,6 +27,7 @@ from typing import Any
 import numpy as np
 import torch
 from PIL import Image
+from cozy_runtime import moe
 from tokenizers import Tokenizer
 
 UPSTREAM, FILES = Path(sys.argv[1]), Path(sys.argv[2])
@@ -84,10 +85,6 @@ PortConfig: Any = importlib.import_module("hunyuan_port.configuration_hunyuan_im
 get_system_prompt: Any = importlib.import_module("hunyuan_port.system_prompt").get_system_prompt
 PortTokenizer: Any = importlib.import_module("hunyuan_port.tokenization_hunyuan_image_3").HunyuanImage3TokenizerFast
 GenerationConfig: Any = importlib.import_module("transformers").GenerationConfig
-_routing_spec = importlib.util.spec_from_file_location("hunyuan_routing", PORT.parent / "routing.py")
-assert _routing_spec is not None and _routing_spec.loader is not None
-routing_module = importlib.util.module_from_spec(_routing_spec)
-_routing_spec.loader.exec_module(routing_module)
 
 FULL = json.loads((FILES / "config.json").read_text())
 GENERATION = json.loads((FILES / "generation_config.json").read_text())
@@ -256,9 +253,9 @@ def routing_replay(port: Any) -> None:
         for stage in ("denoise", "think"):
             calls.clear()
             forwards[0] = 0
-            record = routing_module.Routing(experts=experts, caches=caches)
+            record = moe.Routing(experts=experts, caches=caches)
             for decoder in port.model.layers:
-                decoder.mlp.trace = record
+                decoder.mlp.experts.trace = record
             prompt = f"A lantern festival on a river, routing replay {stage}"
             if stage == "denoise":
                 port.denoise(prompt, None, get_system_prompt("en_unified", "image").strip(), None,
@@ -268,7 +265,7 @@ def routing_replay(port: Any) -> None:
                 port.generate_cot(prompt, None, get_system_prompt("en_unified", "think_recaption").strip(),
                                   "think_recaption", seed=22, generator=torch.Generator().manual_seed(23))
             for decoder in port.model.layers:
-                decoder.mlp.trace = None
+                decoder.mlp.experts.trace = None
             sequence = [layer * experts + index for layer, index, _ in calls]
             assert list(record.sequence) == sequence, stage
             assert list(record.tokens_per_hit) == [rows for _, _, rows in calls], stage
@@ -290,7 +287,8 @@ def main() -> None:
     if "--routing" in sys.argv:
         routing_replay(build(True)[1])
         return
-    for distilled in (False, True):
+    # `--distil`: the main model's cases only.
+    for distilled in (True,) if "--distil" in sys.argv else (False, True):
         reference, port = build(distilled)
         label = "distil" if distilled else "instruct"
         case(f"{label} t2i 2:1", reference, port, images=[], bot_task="image", image_size="352x176", steps=3,

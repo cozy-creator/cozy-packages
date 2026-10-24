@@ -402,12 +402,12 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.31,<0.32" },
+    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.32" },
     { name = "einops", specifier = ">=0.8" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=12" },
-    { name = "tensorfs", specifier = ">=0.13,<0.15" },
+    { name = "tensorfs", specifier = ">=0.15" },
     { name = "tokenizers", specifier = ">=0.22,<0.23" },
     { name = "torch", marker = "sys_platform != 'win32'", specifier = ">=2.13" },
     { name = "torch", marker = "sys_platform == 'win32'", specifier = ">=2.13", index = "https://download.pytorch.org/whl/cu130" },

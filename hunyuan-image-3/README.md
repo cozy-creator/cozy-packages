@@ -55,8 +55,8 @@ stages' routing: experts hit per layer, tokens per expert, and how often an expe
 checkpoints' remote code), vendored because it is not importable as a package (its `__init__` imports a
 top-level `utils`, and its requirements pin Gradio). The changes are in its git history: no Transformers
 model/generation/cache classes, the token and denoising loops written out over Tencent's own input preparation
-and logits processors, the next token's logits only, routed experts as their own class (the paging blocks),
-and routing that gathers each expert's rows with one sort instead of a mask per expert. As Tencent's
+and logits processors, the next token's logits only, and the routed experts as Runtime's `cozy_runtime.moe`
+experts (each its own paging block, every expert's rows gathered by one sort instead of a mask per expert). As Tencent's
 `from_pretrained(torch_dtype="auto")` builds it, every module runs in bfloat16, the VAE included, except the
 expert routers (float32). `scripts/hunyuan-image-3-model-proof.py` checks the port against Tencent's code on CPU
 with a small random-weight model: images bit-identical, the same thought and the same picked size.
@@ -76,12 +76,14 @@ cozy model upload hf://tencent/HunyuanImage-3.0-Instruct@2ec2c78bee7d4b94157341f
 
 `int8` writes the default lane from the 16-bit checkpoint: every linear of the 32 decoder layers (attention, the
 shared and the 64 routed experts: 99% of the parameters) and the LM head as `int8.convrot`, about 85 GB in all.
-`nvfp4` puts the routed experts in NVFP4, 43.5 GB of experts instead of 77.3. The routers, embedding, vision
-tower, VAE and image layers keep their source bytes.
+`nvfp4` puts the routed experts in NVFP4 (Blackwell), 43.5 GB of experts instead of 77.3; `w4a8` puts them in
+4-bit ConvRot codes on int8 tensor cores (an RTX 4090's), the same size. The routers, embedding, vision tower,
+VAE and image layers keep their source bytes.
 
 ```sh
-cozy run ./hunyuan-image-3/int8 <account>/hunyuan-image-3-instruct-distil#<checkpoint> <account>/hunyuan-image-3-instruct-distil --on <machine>
-cozy run ./hunyuan-image-3/nvfp4 <account>/hunyuan-image-3-instruct-distil#<checkpoint> <account>/hunyuan-image-3-instruct-distil --on <machine>
+cozy model quantize <account>/hunyuan-image-3-instruct-distil@<tag> --int8 --package ./hunyuan-image-3 --on <machine>
+cozy model quantize <account>/hunyuan-image-3-instruct-distil@<tag> --w4a8 --package ./hunyuan-image-3 --on <machine>
+cozy model quantize <account>/hunyuan-image-3-instruct-distil@<tag> --nvfp4 --package ./hunyuan-image-3 --on <machine>
 ```
 
 ## Licence

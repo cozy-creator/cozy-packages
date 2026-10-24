@@ -17,11 +17,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import torch
+from cozy_runtime import moe
 from cozy_runtime.author import Config, Loader, Model, uses_components
 from PIL import Image
 from tokenizers import Tokenizer
 
-from .routing import Routing
 from .tencent.configuration_hunyuan_image_3 import HunyuanImage3Config
 from .tencent.modeling_hunyuan_image_3 import HunyuanImage3ForCausalMM
 from .tencent.system_prompt import get_system_prompt
@@ -106,16 +106,16 @@ class HunyuanImage3(Model[Graph], encoded_leaves="accept"):
         return size.width, size.height
 
     @contextmanager
-    def _routing(self) -> Iterator[Routing]:
-        routing = Routing()
-        layers = [layer.mlp for layer in self.graph.components[COMPONENT].model.layers]
-        for moe in layers:
-            moe.trace = routing
+    def _routing(self) -> Iterator[moe.Routing]:
+        routing = moe.Routing()
+        layers = [m for m in self.graph.components[COMPONENT].modules() if isinstance(m, moe.Experts)]
+        for experts in layers:
+            experts.trace = routing
         try:
             yield routing
         finally:
-            for moe in layers:
-                moe.trace = None
+            for experts in layers:
+                experts.trace = None
 
     @uses_components(COMPONENT)
     def think(self, prompt: str, references: list[Image.Image], *, seed: int, pick_size: bool,
