@@ -417,3 +417,7 @@ Turn it on per request when throughput matters more than faces.
   goes murky and then degraded; that is a scheduler and checkpoint limit, not a default to
   tune.
 
+
+## Merging
+
+PRs into `master` merge through the merge queue: `gh pr merge <n>` (the queue squashes; never `--admin`). CI runs there, on the final PR + branch state; nothing runs on a push.
