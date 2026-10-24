@@ -39,8 +39,9 @@ Placed references are elements, not the canvas: the output is 1:1 at 4 MP unless
 Placement is soft. HiDream-O1 matches references to boxes mostly by their order, not by the frame
 colours, so list the references in the boxes' left-to-right order. In three two-person tests that
 asked for the opposite of the reference order, the right person landed in each box once in three as
-upstream orders them, and twice in three with the references sorted by their boxes. Our layout inputs
-are pixel-identical to upstream's, and a single pass matches upstream's own code at 40–57 dB.
+upstream orders them, and twice in three with the references sorted by their boxes. Upstream's own code
+puts the same people in the same wrong boxes, and its examples only place references in their own order.
+Our layout inputs are pixel-identical to upstream's, and a single pass matches its code at 40–57 dB.
 
 ```sh
 cozy run hidream-o1/generate prompt='City council members pose on a sunlit terrace' \
