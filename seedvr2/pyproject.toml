@@ -1,6 +1,6 @@
 [project]
 name = "seedvr2"
-version = "0.7.3"
+version = "0.7.4"
 description = "SeedVR2 7B temporally consistent video restoration"
 requires-python = ">=3.12"
 dependencies = [
