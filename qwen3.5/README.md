@@ -1,8 +1,9 @@
 # Qwen3.5
 
 `ask` answers a single-turn question about text, images and videos with Qwen3.5, a natively
-multimodal model. Decoding is greedy, so the same request always gives the same answer, and the
-answer is memoized.
+multimodal model. Decoding is greedy unless `temperature` is set; a sampled answer replays from
+its `seed`, so the same request always gives the same answer, and the answer is memoized. The
+request and the model code are Runtime's shared Qwen-VL ones (`cozy_runtime.vlm`), as `qwen3.6`'s.
 
 ```sh
 cozy run qwen3.5/ask "Describe this character's clothing." --asset images=./character.png
@@ -15,6 +16,8 @@ Inputs:
   in one pass: one prefill and one decode for all of them.
 - `system`, `max_tokens` (default 1024), `presence_penalty`, and `stop`, where an answer ends before
   the first stop string.
+- `temperature` (default 0: greedy), `top_p` and `seed`.
+- `thinking`: the model reasons first; only the answer after its thought is returned.
 - Video reading, as Qwen-VL defines it:
   - about `fps` frames a second, at least `min_frames` and at most `max_frames`, an even count;
   - each frame is the one showing at the middle of its slot, stamped with its `<t seconds>`;

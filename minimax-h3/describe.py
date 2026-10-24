@@ -21,7 +21,8 @@ from cozy_runtime.author import (
     VideoAsset,
     invocable,
 )
-from qwen3_5 import AskOutput, Prompt, ask
+from cozy_runtime.vlm import AskPrompt, AskResult
+from qwen3_5 import ask
 
 IDENTITY_PROMPT = (
     "Describe only how the single main character in this image looks, in exactly one concise "
@@ -82,9 +83,9 @@ class CutsOutput(msgspec.Struct):
     cuts: list[float] | None
 
 
-def _ask() -> Callable[..., Awaitable[AskOutput]]:
+def _ask() -> Callable[..., Awaitable[AskResult]]:
     # Managed dependencies install an asynchronous caller for the source entrypoint.
-    return cast(Callable[..., Awaitable[AskOutput]], ask)
+    return cast(Callable[..., Awaitable[AskResult]], ask)
 
 
 async def characters(images: list[ImageAsset], tel: Telemetry) -> list[str]:
@@ -92,7 +93,7 @@ async def characters(images: list[ImageAsset], tel: Telemetry) -> list[str]:
     none. A sentence naming a setting or pose word is asked again once with those words pointed
     out, and any clause still naming one is dropped."""
     asked = await _ask()(
-        prompts=[Prompt(IDENTITY_PROMPT, images=[image]) for image in images], max_tokens=SENTENCE_TOKENS
+        prompts=[AskPrompt(IDENTITY_PROMPT, images=[image]) for image in images], max_tokens=SENTENCE_TOKENS
     )
     texts = [" ".join(text.split()) for text in asked.texts]
     named = {i: sorted({w.lower() for w in SCENE_OR_POSE.findall(text)}) for i, text in enumerate(texts)}
@@ -102,7 +103,7 @@ async def characters(images: list[ImageAsset], tel: Telemetry) -> list[str]:
     for i, words in named.items():
         tel.log("description named setting or pose; regenerating", words=", ".join(words), first=texts[i][:400])
     retries = [
-        Prompt(
+        AskPrompt(
             f'{IDENTITY_PROMPT} An earlier answer was "{texts[i]}". It mentioned {", ".join(words)}, which '
             "describe the pose or surroundings, not the character. Rewrite it without them.",
             images=[images[i]],
@@ -118,7 +119,7 @@ async def characters(images: list[ImageAsset], tel: Telemetry) -> list[str]:
 async def places(images: list[ImageAsset]) -> list[str]:
     """One sentence on each place's look, people left out, all in one call."""
     asked = await _ask()(
-        prompts=[Prompt(PLACE_PROMPT, images=[image]) for image in images], max_tokens=SENTENCE_TOKENS
+        prompts=[AskPrompt(PLACE_PROMPT, images=[image]) for image in images], max_tokens=SENTENCE_TOKENS
     )
     return [" ".join(text.split()) for text in asked.texts]
 
