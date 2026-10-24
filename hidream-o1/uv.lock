@@ -289,7 +289,7 @@ wheels = [
 
 [[package]]
 name = "hidream-o1"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
@@ -305,11 +305,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.31,<0.32" },
+    { name = "cozy-runtime", extras = ["media"], specifier = ">=0.31" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=12" },
-    { name = "tensorfs", specifier = ">=0.13,<0.15" },
+    { name = "tensorfs", specifier = ">=0.13" },
     { name = "tokenizers", specifier = ">=0.23.1" },
     { name = "torch", specifier = ">=2.13" },
     { name = "torchvision", specifier = ">=0.28" },
