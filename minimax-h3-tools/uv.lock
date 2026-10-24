@@ -299,7 +299,7 @@ wheels = [
 
 [[package]]
 name = "minimax-h3-tools"
-version = "2.26.0"
+version = "2.26.1"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime" },
@@ -317,10 +317,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cozy-runtime", specifier = ">=0.31,<0.32" },
+    { name = "cozy-runtime", specifier = ">=0.31" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "tensorfs", specifier = ">=0.13,<0.15" },
+    { name = "tensorfs", specifier = ">=0.13" },
     { name = "torch", specifier = ">=2.14" },
 ]
 

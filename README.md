@@ -312,8 +312,10 @@ Packages declare Python 3.12 or newer; workers select a compatible interpreter f
 current supported window (3.12, 3.13, and 3.14). A lock records the resolved dependencies,
 not a restriction to one Python minor version. Locks pin released Diffusers, Transformers, and the
 PyTorch 2.14/CUDA 13.0 family. Cozy Runtime, TensorFS, and Cozy Eval resolve from PyPI like any
-dependency; each package declares ranges for image-owned names and the lock records the exact
-resolution. The five minimal tokenizer/processor data files are bundled from the pinned official
+dependency; the lock records the exact resolution. `cozy-runtime` and `tensorfs` take a floor
+only, never an upper bound (`cozy-runtime>=0.31`, `tensorfs>=` what the package needs): a machine
+runs every package on its own Runtime/TensorFS pair, so an upper bound can only refuse a run, and a
+real break shows as a named import error instead. The five minimal tokenizer/processor data files are bundled from the pinned official
 MiniMax snapshot and are the sole unweighted authority; the bound artifact owns only weighted
 component configs.
 
