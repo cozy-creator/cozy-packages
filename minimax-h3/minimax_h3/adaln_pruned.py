@@ -167,8 +167,10 @@ class _AdaLNPrunedBlockTable(nn.Module):  # type: ignore[misc]
         indices = source.table_index.index_select(0, timestep_rows).reshape(-1)
         # The transformer's pre-hook proves every selected pair is present. Missing cells
         # are never observed by Diffusers' existing `adaln_indices`; row zero is only the
-        # placeholder needed to preserve that dense local indexing convention.
-        rows = source.table.index_select(0, indices.clamp_min(0))
+        # placeholder needed to preserve that dense local indexing convention. An armed
+        # turbo table is read through its own forward: it is a piece of its overlay.
+        index = indices.clamp_min(0)
+        rows = self.table.index_select(0, index) if self._armed is None else source(index)
         return cast(
             "tuple[torch.Tensor, ...]",
             rows.reshape(-1, 6 * self.hidden_size).chunk(6, dim=-1),
@@ -190,8 +192,11 @@ class _AdaLNPrunedOutputTable(nn.Module):  # type: ignore[misc]
         timestep_rows: torch.Tensor,
         timestep_indices: torch.Tensor,
     ) -> torch.Tensor:
-        table = self.table if self._armed is None else self._armed.source.table
-        shift, scale = table.index_select(0, timestep_rows).unbind(dim=1)
+        if self._armed is None:
+            rows = self.table.index_select(0, timestep_rows)
+        else:  # an armed turbo table is read through its own forward (a piece of its overlay)
+            rows = self._armed.source(timestep_rows)
+        shift, scale = rows.unbind(dim=1)
         hidden_states = self.norm(hidden_states)
         return hidden_states * (1.0 + scale.index_select(0, timestep_indices)) + shift.index_select(
             0, timestep_indices
