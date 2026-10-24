@@ -832,7 +832,7 @@ wheels = [
 
 [[package]]
 name = "qwen-image"
-version = "0.1.0rc1"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cozy-runtime", extra = ["media"] },
